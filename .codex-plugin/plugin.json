@@ -1,0 +1,23 @@
+{
+  "name": "codex-repo-work",
+  "version": "0.1.0",
+  "description": "Coordinate one repository-owned work ledger with validated state transitions.",
+  "author": {
+    "name": "Vincent Alsteen",
+    "url": "https://github.com/valsteen"
+  },
+  "repository": "https://github.com/valsteen/codex-repo-work",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Repository Work",
+    "shortDescription": "Coordinate one validated repository work ledger.",
+    "longDescription": "Keep repository work globally queued, knowledge thematically organized, and execution attempts bounded through discoverable validated actions.",
+    "developerName": "Vincent Alsteen",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Show the legal next repository work actions.",
+      "Propose this finding to the repository coordinator."
+    ]
+  }
+}

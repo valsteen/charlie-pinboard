@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import json
+import tempfile
+from pathlib import Path
+
+
+QUEUE_TEMPLATE = """\
+---
+kind: work-queue
+schema: repo-work/v1
+updated: "2026-08-16"
+---
+
+# Work Queue
+
+| Item | State | Timing | Depends on | Attempt | Source | Next action | Reopen when / notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+{rows}
+"""
+
+CURRENT_TEMPLATE = """\
+---
+kind: work-current
+schema: repo-work/v1
+updated: "2026-08-16"
+active_item: {active_item}
+active_attempt: {active_attempt}
+next_action: {next_action}
+---
+
+# Current Work
+"""
+
+ITEM_TEMPLATE = """\
+---
+kind: work-item
+schema: repo-work/v1
+item: {item}
+user_label: "{label}"
+updated: "2026-08-16"
+---
+
+# {label}
+
+## Context arc
+
+Before and trigger. Why it matters. After and trajectory.
+"""
+
+ATTEMPT_TEMPLATE = """\
+---
+kind: work-attempt
+schema: repo-work/v1
+attempt: {attempt}
+item: {item}
+state: active
+branch: codex/{item}
+base_revision: abc123
+owner: worker-task
+updated: "2026-08-16"
+---
+
+# Attempt
+"""
+
+
+def create_state(
+    rows: list[str],
+    *,
+    active_item: str = "null",
+    active_attempt: str = "null",
+    create_active_attempt: bool = False,
+) -> tuple[Path, Path]:
+    project = Path(tempfile.mkdtemp()).resolve()
+    work = project / ".codex" / "work"
+    (work / "items").mkdir(parents=True)
+    (work / "attempts").mkdir()
+    (work / "inbox").mkdir()
+    (work / "history" / "items").mkdir(parents=True)
+    (work / "queue.md").write_text(QUEUE_TEMPLATE.format(rows="\n".join(rows)), encoding="utf-8")
+    (work / "current.md").write_text(
+        CURRENT_TEMPLATE.format(
+            active_item=active_item,
+            active_attempt=active_attempt,
+            next_action="continue" if active_item != "null" else "select",
+        ),
+        encoding="utf-8",
+    )
+    for row in rows:
+        item = row.split("|")[1].strip()
+        (work / "items" / f"{item}.md").write_text(
+            ITEM_TEMPLATE.format(item=item, label=item.replace("-", " ").title()),
+            encoding="utf-8",
+        )
+    (work / "coordinator.json").write_text(
+        json.dumps(
+            {
+                "schema": "repo-work/v1",
+                "project_root": str(project),
+                "task_id": "coordinator-task",
+                "host_id": "local-host",
+                "generation": 1,
+                "registered_at": "2026-08-16T12:00:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if create_active_attempt:
+        attempt_dir = work / "attempts" / active_attempt
+        attempt_dir.mkdir()
+        (attempt_dir / "attempt.md").write_text(
+            ATTEMPT_TEMPLATE.format(attempt=active_attempt, item=active_item),
+            encoding="utf-8",
+        )
+    return project, work

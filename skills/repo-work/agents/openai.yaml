@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repository Work"
+  short_description: "Coordinate one repository work ledger"
+  default_prompt: "Use $repo-work to inspect the repository work state and show the legal next actions."

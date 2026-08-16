@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-repo-work"
+version = "0.1.0"
+description = "Validated coordination for one repository-owned work ledger"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+repo-work = "repo_work.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
