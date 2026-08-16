@@ -24,8 +24,8 @@ CURRENT_TEMPLATE = """\
 kind: work-current
 schema: repo-work/v1
 updated: "2026-08-16"
-active_item: {active_item}
-active_attempt: {active_attempt}
+focus_item: {focus_item}
+focus_attempt: {focus_attempt}
 next_action: {next_action}
 ---
 
@@ -68,8 +68,8 @@ updated: "2026-08-16"
 def create_state(
     rows: list[str],
     *,
-    active_item: str = "null",
-    active_attempt: str = "null",
+    focus_item: str = "null",
+    focus_attempt: str = "null",
     create_active_attempt: bool = False,
 ) -> tuple[Path, Path]:
     project = Path(tempfile.mkdtemp()).resolve()
@@ -81,9 +81,9 @@ def create_state(
     (work / "queue.md").write_text(QUEUE_TEMPLATE.format(rows="\n".join(rows)), encoding="utf-8")
     (work / "current.md").write_text(
         CURRENT_TEMPLATE.format(
-            active_item=active_item,
-            active_attempt=active_attempt,
-            next_action="continue" if active_item != "null" else "select",
+            focus_item=focus_item,
+            focus_attempt=focus_attempt,
+            next_action="continue" if focus_item != "null" else "select",
         ),
         encoding="utf-8",
     )
@@ -108,10 +108,10 @@ def create_state(
         encoding="utf-8",
     )
     if create_active_attempt:
-        attempt_dir = work / "attempts" / active_attempt
+        attempt_dir = work / "attempts" / focus_attempt
         attempt_dir.mkdir()
         (attempt_dir / "attempt.md").write_text(
-            ATTEMPT_TEMPLATE.format(attempt=active_attempt, item=active_item),
+            ATTEMPT_TEMPLATE.format(attempt=focus_attempt, item=focus_item),
             encoding="utf-8",
         )
     return project, work

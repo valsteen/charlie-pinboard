@@ -22,34 +22,34 @@ class AvailableActionsTest(unittest.TestCase):
         self.assertTrue(all(action.expected_revision for action in actions))
         self.assertTrue(all(action.coordinator_generation == 1 for action in actions))
 
-    def test_active_coordinator_sees_attempt_actions_not_new_activation(self) -> None:
+    def test_active_coordinator_sees_attempt_actions_and_disjoint_activation(self) -> None:
         project, work = create_state(
             [
                 "| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |",
                 "| mapping-create | ready | — | — | — | design | activate | Ready. |",
             ],
-            active_item="reveal-core",
-            active_attempt="reveal-core-1",
+            focus_item="reveal-core",
+            focus_attempt="reveal-core-1",
             create_active_attempt=True,
         )
 
         action_ids = {action.action_id for action in actions_for(work, project, role="coordinator")}
 
-        self.assertEqual(
+        self.assertTrue(
             {
                 "continue:reveal-core-1",
                 "pause:reveal-core-1",
                 "block:reveal-core-1",
                 "complete:reveal-core-1",
-            },
-            action_ids,
+                "activate:mapping-create",
+            }.issubset(action_ids)
         )
 
     def test_worker_sees_only_actions_for_active_attempt(self) -> None:
         project, work = create_state(
             ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],
-            active_item="reveal-core",
-            active_attempt="reveal-core-1",
+            focus_item="reveal-core",
+            focus_attempt="reveal-core-1",
             create_active_attempt=True,
         )
 

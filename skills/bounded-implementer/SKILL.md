@@ -11,8 +11,8 @@ Implement one accepted attempt, verify it, and leave a result the registered coo
 
 1. Resolve the repository-work executable relative to the installed plugin as `../../scripts/repo-work`.
 2. Run `repo-work status --json` and `repo-work actions --role worker --json`.
-3. Require one active item and one active attempt. Stop if state is invalid, idle, or names a different attempt than the user supplied.
-4. Read the active `attempt.md` fully, then read only the project guidance, item context, accepted knowledge, and source authorities it names.
+3. Require the user-supplied attempt to be present and active. Other disjoint attempts may also be active. Stop if state is invalid, the supplied attempt is absent, or its queue and attempt records disagree.
+4. Read that attempt's `attempt.md` fully, then read only the project guidance, item context, accepted knowledge, and source authorities it names.
 5. Inspect the checkout, branch/worktree, base revision, and unrelated user changes before editing.
 
 Restate the objective, non-goals, affected boundaries, testing mode, acceptance criteria, and completion checks briefly. Ask only when missing information would change product behavior, architecture, scope, compatibility, or verification expectations.

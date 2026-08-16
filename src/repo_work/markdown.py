@@ -203,18 +203,21 @@ def parse_item(path: Path) -> WorkItemRecord:
 
 def parse_current(path: Path) -> CurrentPointer:
     header = require_document_header(path, "work-current")
-    active_item = header.get("active_item")
-    active_attempt = header.get("active_attempt")
-    if active_item is not None and (not isinstance(active_item, str) or not ITEM_PATTERN.fullmatch(active_item)):
-        raise ParseError("CURRENT_ITEM_INVALID", path, "active_item must be null or a work item identity.")
-    if active_attempt is not None and (
-        not isinstance(active_attempt, str) or not ITEM_PATTERN.fullmatch(active_attempt)
+    for field in ("focus_item", "focus_attempt"):
+        if field not in header:
+            raise ParseError("HEADER_FIELD_REQUIRED", path, f"Header field '{field}' must be present.")
+    focus_item = header.get("focus_item")
+    focus_attempt = header.get("focus_attempt")
+    if focus_item is not None and (not isinstance(focus_item, str) or not ITEM_PATTERN.fullmatch(focus_item)):
+        raise ParseError("CURRENT_ITEM_INVALID", path, "focus_item must be null or a work item identity.")
+    if focus_attempt is not None and (
+        not isinstance(focus_attempt, str) or not ITEM_PATTERN.fullmatch(focus_attempt)
     ):
-        raise ParseError("CURRENT_ATTEMPT_INVALID", path, "active_attempt must be null or an attempt identity.")
+        raise ParseError("CURRENT_ATTEMPT_INVALID", path, "focus_attempt must be null or an attempt identity.")
     return CurrentPointer(
         path=path,
-        active_item=active_item,
-        active_attempt=active_attempt,
+        focus_item=focus_item,
+        focus_attempt=focus_attempt,
         next_action=_required_string(header, path, "next_action"),
     )
 
@@ -272,15 +275,15 @@ def render_queue(queue: Queue, items: tuple[QueueItem, ...]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_current(active_item: str | None, active_attempt: str | None, next_action: str) -> str:
+def render_current(focus_item: str | None, focus_attempt: str | None, next_action: str) -> str:
     updated = date.today().isoformat()
     return (
         "---\n"
         "kind: work-current\n"
         f"schema: {SCHEMA_V1}\n"
         f'updated: "{updated}"\n'
-        f"active_item: {active_item or 'null'}\n"
-        f"active_attempt: {active_attempt or 'null'}\n"
+        f"focus_item: {focus_item or 'null'}\n"
+        f"focus_attempt: {focus_attempt or 'null'}\n"
         f"next_action: {next_action}\n"
         "---\n\n"
         "# Current Work\n"

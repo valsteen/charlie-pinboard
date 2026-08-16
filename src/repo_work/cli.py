@@ -89,8 +89,9 @@ def _status(work: Path, project: Path) -> dict[str, object]:
         "project_root": str(project),
         "work_root": str(work),
         "revision": state_revision(work),
-        "active_item": current.active_item,
-        "active_attempt": current.active_attempt,
+        "focus_item": current.focus_item,
+        "focus_attempt": current.focus_attempt,
+        "active_attempts": [item.attempt for item in queue.items if item.state.value == "active"],
         "next_action": current.next_action,
         "counts": dict(Counter(item.state.value for item in queue.items)),
         "inbox_count": len(list((work / "inbox").glob("*.json"))),
@@ -125,7 +126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"project_root": str(project), "work_root": str(work)}, sort_keys=True))
             return 0
         if arguments.command == "init":
-            initialized = initialize_work_state(project, arguments.coordinator_task_id, arguments.host_id)
+            initialized = initialize_work_state(project, arguments.coordinator_task_id, arguments.host_id, work)
             print(f"OK WORK_STATE_INITIALIZED {initialized}")
             return 0
         if arguments.command == "validate":
@@ -138,7 +139,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(json.dumps(value, indent=2, sort_keys=True))
             else:
                 print(f"OK WORK_STATE_VALID revision={value['revision']}")
-                print(f"active_item={value['active_item'] or 'none'} active_attempt={value['active_attempt'] or 'none'}")
+                print(f"focus_item={value['focus_item'] or 'none'} focus_attempt={value['focus_attempt'] or 'none'}")
                 print(f"next_action={value['next_action']} inbox={value['inbox_count']}")
             return 0
         if arguments.command == "actions":

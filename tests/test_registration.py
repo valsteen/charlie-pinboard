@@ -31,6 +31,16 @@ class RegistrationTest(unittest.TestCase):
 
         self.assertEqual(before, (work / "queue.md").read_bytes())
 
+    def test_initializes_explicit_shadow_root_without_claiming_canonical_path(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        shadow = project / ".codex" / "work-shadow"
+
+        initialized = initialize_work_state(project, "coordinator-task", "local-host", shadow)
+
+        self.assertEqual(shadow.resolve(), initialized)
+        self.assertFalse((project / ".codex" / "work").exists())
+        self.assertTrue(validate_work_state(shadow, project).valid)
+
     def test_transfer_increments_generation_and_stales_old_actions(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         work = initialize_work_state(project, "coordinator-task", "local-host")

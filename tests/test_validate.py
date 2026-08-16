@@ -27,8 +27,8 @@ CURRENT_TEMPLATE = """\
 kind: work-current
 schema: repo-work/v1
 updated: "2026-08-16"
-active_item: {active_item}
-active_attempt: {active_attempt}
+focus_item: {focus_item}
+focus_attempt: {focus_attempt}
 next_action: {next_action}
 ---
 
@@ -73,8 +73,8 @@ class WorkStateValidationTest(unittest.TestCase):
         self,
         rows: list[str],
         *,
-        active_item: str = "null",
-        active_attempt: str = "null",
+        focus_item: str = "null",
+        focus_attempt: str = "null",
     ) -> tuple[Path, Path]:
         project = Path(tempfile.mkdtemp()).resolve()
         work = project / ".codex" / "work"
@@ -87,9 +87,9 @@ class WorkStateValidationTest(unittest.TestCase):
         )
         (work / "current.md").write_text(
             CURRENT_TEMPLATE.format(
-                active_item=active_item,
-                active_attempt=active_attempt,
-                next_action="continue" if active_item != "null" else "select",
+                focus_item=focus_item,
+                focus_attempt=focus_attempt,
+                next_action="continue" if focus_item != "null" else "select",
             ),
             encoding="utf-8",
         )
@@ -165,20 +165,35 @@ class WorkStateValidationTest(unittest.TestCase):
 
         self.assertIn("DEPENDENCY_CYCLE", self.codes(work, project))
 
-    def test_rejects_current_pointer_without_active_queue_item(self) -> None:
+    def test_rejects_focus_pointer_without_active_queue_item(self) -> None:
         project, work = self.make_state(
             ["| reveal-core | ready | — | — | — | accepted design | activate | First item. |"],
-            active_item="reveal-core",
-            active_attempt="attempt-1",
+            focus_item="reveal-core",
+            focus_attempt="attempt-1",
         )
 
-        self.assertIn("CURRENT_ACTIVE_MISMATCH", self.codes(work, project))
+        self.assertIn("CURRENT_FOCUS_MISMATCH", self.codes(work, project))
+
+    def test_rejects_legacy_active_pointer_fields(self) -> None:
+        project, work = self.make_state(
+            ["| reveal-core | ready | — | — | — | accepted design | activate | First item. |"]
+        )
+        (work / "current.md").write_text(
+            CURRENT_TEMPLATE.format(
+                focus_item="null",
+                focus_attempt="null",
+                next_action="select",
+            ).replace("focus_item", "active_item").replace("focus_attempt", "active_attempt"),
+            encoding="utf-8",
+        )
+
+        self.assertIn("HEADER_FIELD_REQUIRED", self.codes(work, project))
 
     def test_accepts_matching_active_attempt(self) -> None:
         project, work = self.make_state(
             ["| reveal-core | active | — | — | attempt-1 | accepted design | continue | Active. |"],
-            active_item="reveal-core",
-            active_attempt="attempt-1",
+            focus_item="reveal-core",
+            focus_attempt="attempt-1",
         )
         attempt_dir = work / "attempts" / "attempt-1"
         attempt_dir.mkdir()
@@ -186,6 +201,26 @@ class WorkStateValidationTest(unittest.TestCase):
             ATTEMPT_TEMPLATE.format(attempt="attempt-1", item="reveal-core"),
             encoding="utf-8",
         )
+
+        report = validate_work_state(work, project)
+
+        self.assertTrue(report.valid, report.render())
+
+    def test_accepts_multiple_active_attempts_with_one_optional_focus(self) -> None:
+        project, work = self.make_state(
+            [
+                "| reveal-core | active | — | — | attempt-1 | design | continue | Active. |",
+                "| mapping-create | active | — | — | attempt-2 | design | continue | Active. |",
+            ],
+            focus_item="mapping-create",
+            focus_attempt="attempt-2",
+        )
+        for attempt, item in (("attempt-1", "reveal-core"), ("attempt-2", "mapping-create")):
+            attempt_dir = work / "attempts" / attempt
+            attempt_dir.mkdir()
+            (attempt_dir / "attempt.md").write_text(
+                ATTEMPT_TEMPLATE.format(attempt=attempt, item=item), encoding="utf-8"
+            )
 
         report = validate_work_state(work, project)
 

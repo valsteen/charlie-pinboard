@@ -53,8 +53,8 @@ class WorkItemRecord:
 @dataclass(frozen=True, slots=True)
 class CurrentPointer:
     path: Path
-    active_item: str | None
-    active_attempt: str | None
+    focus_item: str | None
+    focus_attempt: str | None
     next_action: str
 
 

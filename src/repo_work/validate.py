@@ -205,49 +205,28 @@ def validate_work_state(work_root: Path, project_root: Path) -> ValidationReport
             diagnostics.append(_error("CURRENT_UNREADABLE", current_path, str(error)))
         return ValidationReport(tuple(diagnostics))
 
-    active = [item for item in queue.items if item.state == WorkState.ACTIVE]
-    if len(active) > 1:
-        diagnostics.append(_error("QUEUE_MULTIPLE_ACTIVE", queue.path, "Only one queue item may be active."))
-    expected_active = active[0].item if len(active) == 1 else None
-    if current.active_item != expected_active:
-        diagnostics.append(
-            _error(
-                "CURRENT_ACTIVE_MISMATCH",
-                current.path,
-                f"current.md names '{current.active_item}', queue names '{expected_active}'.",
-            )
-        )
-    if expected_active is None:
-        if current.active_attempt is not None:
+    active = {item.item: item for item in queue.items if item.state == WorkState.ACTIVE}
+    if current.focus_item is None:
+        if current.focus_attempt is not None:
             diagnostics.append(
-                _error("CURRENT_ATTEMPT_WITHOUT_ITEM", current.path, "Idle state cannot name an active attempt.")
+                _error("CURRENT_ATTEMPT_WITHOUT_ITEM", current.path, "A focus attempt requires a focus item.")
             )
-    elif current.active_attempt is None:
-        diagnostics.append(_error("CURRENT_ATTEMPT_MISSING", current.path, "Active item requires an active attempt."))
     else:
-        if len(active) == 1 and active[0].attempt != current.active_attempt:
+        focused = active.get(current.focus_item)
+        if focused is None:
             diagnostics.append(
                 _error(
-                    "QUEUE_ATTEMPT_MISMATCH",
-                    queue.path,
-                    f"Queue attempt '{active[0].attempt}' disagrees with current attempt '{current.active_attempt}'.",
+                    "CURRENT_FOCUS_MISMATCH",
+                    current.path,
+                    f"Focused item '{current.focus_item}' is not active in queue.md.",
                 )
             )
-        attempt_path = work_root / "attempts" / current.active_attempt / "attempt.md"
-        if not attempt_path.is_file():
-            diagnostics.append(_error("ATTEMPT_RECORD_MISSING", attempt_path, "Active attempt record is missing."))
-        else:
-            try:
-                attempt = parse_attempt(attempt_path)
-            except ParseError as error:
-                diagnostics.append(_parse_error(error))
-            else:
-                if attempt.attempt != current.active_attempt or attempt.item != expected_active or attempt.state != "active":
-                    diagnostics.append(
-                        _error(
-                            "ATTEMPT_ACTIVE_MISMATCH",
-                            attempt_path,
-                            "Attempt identity, item, or state disagrees with current.md and queue.md.",
-                        )
-                    )
+        elif current.focus_attempt != focused.attempt:
+            diagnostics.append(
+                _error(
+                    "CURRENT_FOCUS_MISMATCH",
+                    current.path,
+                    f"Focused attempt '{current.focus_attempt}' disagrees with queue attempt '{focused.attempt}'.",
+                )
+            )
     return ValidationReport(tuple(diagnostics))

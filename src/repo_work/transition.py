@@ -133,10 +133,10 @@ def apply_action(
             atomic_write_text(work_root / "queue.md", render_queue(queue, tuple(items)))
             atomic_write_text(work_root / "current.md", render_current(action.subject, attempt, "continue"))
         elif action.kind in {"pause", "block"}:
-            if current.active_attempt != action.subject or current.active_item is None:
+            index = next((i for i, item in enumerate(items) if item.attempt == action.subject), None)
+            if index is None or items[index].state != WorkState.ACTIVE:
                 raise TransitionError("ACTION_NOT_AVAILABLE", "The named attempt is not active.")
             target = WorkState.PAUSED if action.kind == "pause" else WorkState.BLOCKED
-            index = next(i for i, item in enumerate(items) if item.item == current.active_item)
             items[index] = replace(
                 items[index],
                 state=target,
@@ -156,12 +156,14 @@ def apply_action(
             )
             atomic_write_text(attempt_path, attempt_text)
             atomic_write_text(work_root / "queue.md", render_queue(queue, tuple(items)))
-            atomic_write_text(work_root / "current.md", render_current(None, None, "select"))
+            if current.focus_attempt == action.subject:
+                atomic_write_text(work_root / "current.md", render_current(None, None, "select"))
         elif action.kind == "complete":
-            if current.active_attempt != action.subject or current.active_item is None:
+            index = next((i for i, item in enumerate(items) if item.attempt == action.subject), None)
+            if index is None or items[index].state != WorkState.ACTIVE:
                 raise TransitionError("ACTION_NOT_AVAILABLE", "The named attempt is not active.")
             _required(payload, "evidence")
-            item_id = current.active_item
+            item_id = items[index].item
             item_path = work_root / "items" / f"{item_id}.md"
             history_path = work_root / "history" / "items" / f"{item_id}.md"
             if history_path.exists():
@@ -180,7 +182,8 @@ def apply_action(
             atomic_write_text(history_path, history_text)
             atomic_write_text(attempt_path, attempt_text)
             atomic_write_text(work_root / "queue.md", render_queue(queue, remaining))
-            atomic_write_text(work_root / "current.md", render_current(None, None, "select"))
+            if current.focus_attempt == action.subject:
+                atomic_write_text(work_root / "current.md", render_current(None, None, "select"))
             item_path.unlink()
         elif action.kind == "resume":
             index = next((i for i, item in enumerate(items) if item.item == action.subject), None)

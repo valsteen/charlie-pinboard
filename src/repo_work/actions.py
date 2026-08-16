@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from repo_work.markdown import parse_current, parse_queue
+from repo_work.markdown import parse_queue
 from repo_work.model import WorkState
 from repo_work.validate import validate_work_state
 
@@ -71,8 +71,6 @@ def actions_for(work_root: Path, project_root: Path, role: str) -> tuple[Action,
     revision = state_revision(work_root)
     generation = coordinator_generation(work_root)
     queue = parse_queue(work_root / "queue.md")
-    current = parse_current(work_root / "current.md")
-
     def action(kind: str, subject: str, label: str, subject_revision: str | None = None) -> Action:
         return Action(
             action_id=f"{kind}:{subject}",
@@ -86,26 +84,36 @@ def actions_for(work_root: Path, project_root: Path, role: str) -> tuple[Action,
 
     if role == "observer":
         return (action("inspect", "ledger", "Inspect current work"),)
+    active_items = [item for item in queue.items if item.state == WorkState.ACTIVE]
     if role == "worker":
-        if current.active_attempt is None:
-            return ()
-        return (
-            action("continue", current.active_attempt, "Continue the active attempt"),
-            action("report-blocker", current.active_attempt, "Report a blocker"),
-            action("submit-review", current.active_attempt, "Submit the attempt for review"),
-        )
-    if current.active_attempt is not None:
-        return (
-            action("continue", current.active_attempt, "Continue the active attempt"),
-            action("pause", current.active_attempt, "Pause and preserve the attempt"),
-            action("block", current.active_attempt, "Block the attempt on a named condition"),
-            action("complete", current.active_attempt, "Accept and complete the item"),
-        )
+        worker_actions: list[Action] = []
+        for item in active_items:
+            if item.attempt is None:
+                continue
+            worker_actions.extend(
+                (
+                    action("continue", item.attempt, f"Continue {item.item}"),
+                    action("report-blocker", item.attempt, f"Report a blocker for {item.item}"),
+                    action("submit-review", item.attempt, f"Submit {item.item} for review"),
+                )
+            )
+        return tuple(worker_actions)
 
-    result: list[Action] = []
+    coordinator_actions: list[Action] = []
+    for item in active_items:
+        if item.attempt is None:
+            continue
+        coordinator_actions.extend(
+            (
+                action("continue", item.attempt, f"Continue {item.item}"),
+                action("pause", item.attempt, f"Pause and preserve {item.item}"),
+                action("block", item.attempt, f"Block {item.item} on a named condition"),
+                action("complete", item.attempt, f"Accept and complete {item.item}"),
+            )
+        )
     for item in queue.items:
         if item.state == WorkState.INTAKE:
-            result.extend(
+            coordinator_actions.extend(
                 (
                     action("mark-ready", item.item, f"Mark {item.item} ready"),
                     action("block-item", item.item, f"Block {item.item} on a named condition"),
@@ -113,22 +121,22 @@ def actions_for(work_root: Path, project_root: Path, role: str) -> tuple[Action,
                 )
             )
         elif item.state == WorkState.READY:
-            result.append(action("activate", item.item, f"Activate {item.item}"))
-            result.append(action("defer", item.item, f"Defer {item.item} with a reopen condition"))
+            coordinator_actions.append(action("activate", item.item, f"Activate {item.item}"))
+            coordinator_actions.append(action("defer", item.item, f"Defer {item.item} with a reopen condition"))
         elif item.state in {WorkState.PAUSED, WorkState.BLOCKED} and not any(
             dependency in queue.by_id() for dependency in item.depends_on
         ):
-            result.append(action("resume", item.item, f"Return {item.item} to ready"))
+            coordinator_actions.append(action("resume", item.item, f"Return {item.item} to ready"))
             if item.attempt is None:
-                result.append(action("defer", item.item, f"Defer {item.item} with a reopen condition"))
+                coordinator_actions.append(action("defer", item.item, f"Defer {item.item} with a reopen condition"))
         elif item.state == WorkState.DEFERRED:
-            result.append(action("reopen", item.item, f"Reopen {item.item} for intake"))
+            coordinator_actions.append(action("reopen", item.item, f"Reopen {item.item} for intake"))
     inbox = work_root / "inbox"
     if inbox.is_dir():
         for path in sorted(inbox.glob("*.json")):
             proposal_id = path.stem
             proposal_revision = hashlib.sha256(path.read_bytes()).hexdigest()
-            result.extend(
+            coordinator_actions.extend(
                 (
                     action("accept-proposal", proposal_id, f"Accept proposal {proposal_id}", proposal_revision),
                     action("merge-proposal", proposal_id, f"Merge proposal {proposal_id}", proposal_revision),
@@ -136,5 +144,5 @@ def actions_for(work_root: Path, project_root: Path, role: str) -> tuple[Action,
                     action("reject-proposal", proposal_id, f"Reject proposal {proposal_id}", proposal_revision),
                 )
             )
-    result.append(action("transfer-coordinator", "ledger", "Transfer coordinator ownership"))
-    return tuple(result)
+    coordinator_actions.append(action("transfer-coordinator", "ledger", "Transfer coordinator ownership"))
+    return tuple(coordinator_actions)

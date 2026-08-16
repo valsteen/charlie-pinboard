@@ -29,7 +29,7 @@ Use these nonterminal states:
 
 - `intake`: admitted but not yet ready for selection;
 - `ready`: eligible for activation;
-- `active`: one current execution attempt;
+- `active`: one current execution attempt for that item; several disjoint items may be active concurrently;
 - `paused`: preserved attempt intentionally preempted;
 - `blocked`: waiting for named work, evidence, or a decision;
 - `deferred`: deliberately unscheduled with a concrete reopen condition.

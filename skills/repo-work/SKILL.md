@@ -20,7 +20,7 @@ Do not infer work from arbitrary Markdown, historical plans, topic folders, unch
 ## Ownership
 
 - Let `queue.md` own every nonterminal item's state, dependencies, current attempt, source, and next action.
-- Let `current.md` remain a validated hot pointer, never a second queue.
+- Let `current.md` remain an optional validated coordinator-focus pointer, never a second queue or a limit on concurrent attempts.
 - Let `items/<item>.md` own the context arc and semantic rationale without duplicating lifecycle state.
 - Let `attempts/<attempt>/` own the execution brief, branch/worktree, result, blocker, and review evidence.
 - Let `inbox/` hold immutable proposals that have been delivered but not admitted.

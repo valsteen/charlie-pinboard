@@ -29,9 +29,14 @@ def _registration(project_root: Path, task_id: str, host_id: str, generation: in
     }
 
 
-def initialize_work_state(project_root: Path, task_id: str, host_id: str) -> Path:
+def initialize_work_state(
+    project_root: Path,
+    task_id: str,
+    host_id: str,
+    work_root: Path | None = None,
+) -> Path:
     project_root = project_root.resolve()
-    work_root = project_root / ".codex" / "work"
+    work_root = work_root.resolve() if work_root is not None else project_root / ".codex" / "work"
     if work_root.exists():
         raise RegistrationError("WORK_STATE_ALREADY_EXISTS", f"'{work_root}' already exists.")
     for directory in (

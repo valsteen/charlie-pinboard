@@ -41,8 +41,52 @@ class TransitionTest(unittest.TestCase):
         )
 
         self.assertEqual(WorkState.ACTIVE, parse_queue(work / "queue.md").items[0].state)
-        self.assertEqual("reveal-core", parse_current(work / "current.md").active_item)
+        self.assertEqual("reveal-core", parse_current(work / "current.md").focus_item)
         self.assertTrue((work / "attempts" / "reveal-core-1" / "attempt.md").is_file())
+        self.assertTrue(validate_work_state(work, project).valid)
+
+    def test_two_disjoint_attempts_can_be_active_and_one_can_pause_independently(self) -> None:
+        project, work = create_state(
+            [
+                "| reveal-core | ready | — | — | — | design | activate | Ready. |",
+                "| mapping-create | ready | — | — | — | design | activate | Ready. |",
+            ]
+        )
+        payloads = {
+            "reveal-core": {
+                "attempt": "reveal-core-1",
+                "branch": "codex/reveal-core",
+                "base_revision": "abc123",
+                "owner": "worker-one",
+            },
+            "mapping-create": {
+                "attempt": "mapping-create-1",
+                "branch": "codex/mapping-create",
+                "base_revision": "abc123",
+                "owner": "worker-two",
+            },
+        }
+        for item in ("reveal-core", "mapping-create"):
+            action = next(
+                candidate
+                for candidate in actions_for(work, project, role="coordinator")
+                if candidate.action_id == f"activate:{item}"
+            )
+            apply_action(work, project, action, payloads[item])
+
+        active = [item for item in parse_queue(work / "queue.md").items if item.state == WorkState.ACTIVE]
+        self.assertEqual({"reveal-core", "mapping-create"}, {item.item for item in active})
+        self.assertEqual("mapping-create-1", parse_current(work / "current.md").focus_attempt)
+        self.assertTrue(validate_work_state(work, project).valid)
+
+        pause = next(
+            candidate
+            for candidate in actions_for(work, project, role="coordinator")
+            if candidate.action_id == "pause:reveal-core-1"
+        )
+        apply_action(work, project, pause, {"reason": "A prerequisite needs attention."})
+
+        self.assertEqual("mapping-create-1", parse_current(work / "current.md").focus_attempt)
         self.assertTrue(validate_work_state(work, project).valid)
 
     def test_stale_action_changes_no_state(self) -> None:
@@ -89,8 +133,8 @@ class TransitionTest(unittest.TestCase):
     def test_pause_preserves_attempt_and_clears_active_pointer(self) -> None:
         project, work = create_state(
             ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],
-            active_item="reveal-core",
-            active_attempt="reveal-core-1",
+            focus_item="reveal-core",
+            focus_attempt="reveal-core-1",
             create_active_attempt=True,
         )
         action = next(
@@ -102,7 +146,7 @@ class TransitionTest(unittest.TestCase):
         apply_action(work, project, action, {"reason": "A prerequisite needs attention."})
 
         self.assertEqual(WorkState.PAUSED, parse_queue(work / "queue.md").items[0].state)
-        self.assertIsNone(parse_current(work / "current.md").active_item)
+        self.assertIsNone(parse_current(work / "current.md").focus_item)
         self.assertIn(
             "state: paused",
             (work / "attempts" / "reveal-core-1" / "attempt.md").read_text(encoding="utf-8"),
@@ -112,8 +156,8 @@ class TransitionTest(unittest.TestCase):
     def test_complete_removes_live_item_and_preserves_history(self) -> None:
         project, work = create_state(
             ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],
-            active_item="reveal-core",
-            active_attempt="reveal-core-1",
+            focus_item="reveal-core",
+            focus_attempt="reveal-core-1",
             create_active_attempt=True,
         )
         action = next(
@@ -160,7 +204,7 @@ updated: "2026-08-16"
         apply_action(work, project, action, {})
 
         self.assertEqual(WorkState.ACTIVE, parse_queue(work / "queue.md").items[0].state)
-        self.assertEqual("reveal-core-1", parse_current(work / "current.md").active_attempt)
+        self.assertEqual("reveal-core-1", parse_current(work / "current.md").focus_attempt)
         self.assertIn("state: active", attempt_path.read_text(encoding="utf-8"))
         self.assertTrue(validate_work_state(work, project).valid)
 
