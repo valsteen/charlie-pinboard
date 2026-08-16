@@ -231,6 +231,138 @@ class WorkStateValidationTest(unittest.TestCase):
 
         self.assertIn("COORDINATOR_PROJECT_MISMATCH", self.codes(work, project))
 
+    def test_rejects_queue_contract_and_orphaned_item_records(self) -> None:
+        project, work = self.make_state(
+            ["| reveal-core | ready | — | — | — | accepted design | activate | First item. |"]
+        )
+        (work / "items" / "orphan.md").write_text(ITEM_TEMPLATE.format(item="orphan", label="Orphan"), encoding="utf-8")
+        queue_text = (work / "queue.md").read_text(encoding="utf-8").replace("kind: work-queue", "kind: wrong")
+        (work / "queue.md").write_text(queue_text, encoding="utf-8")
+
+        codes = self.codes(work, project)
+
+        self.assertIn("DOCUMENT_KIND_INVALID", codes)
+        self.assertIn("ITEM_RECORD_ORPHANED", codes)
+
+    def test_reports_unreadable_queue_and_current_documents(self) -> None:
+        project, work = self.make_state([])
+        (work / "queue.md").unlink()
+        self.assertIn("QUEUE_UNREADABLE", self.codes(work, project))
+
+        project, work = self.make_state([])
+        (work / "current.md").unlink()
+        self.assertIn("CURRENT_UNREADABLE", self.codes(work, project))
+
+        project, work = self.make_state([])
+        (work / "queue.md").write_text("not a queue", encoding="utf-8")
+        self.assertIn("HEADER_MISSING", self.codes(work, project))
+
+    def test_rejects_invalid_history_and_coordinator_records(self) -> None:
+        project, work = self.make_state(
+            ["| reveal-core | ready | — | complete-item | — | accepted design | activate | Ready. |"]
+        )
+        (work / "history" / "items" / "complete-item.md").write_text("not a header", encoding="utf-8")
+        (work / "coordinator.json").write_text("[]", encoding="utf-8")
+
+        codes = self.codes(work, project)
+
+        self.assertIn("HEADER_MISSING", codes)
+        self.assertIn("COORDINATOR_INVALID", codes)
+
+    def test_rejects_attempt_presence_record_and_state_mismatches(self) -> None:
+        cases = (
+            (
+                "| reveal-core | active | — | — | — | design | continue | Active. |",
+                None,
+                "QUEUE_ATTEMPT_MISSING",
+            ),
+            (
+                "| reveal-core | ready | — | — | attempt-1 | design | activate | Ready. |",
+                None,
+                "QUEUE_ATTEMPT_UNEXPECTED",
+            ),
+            (
+                "| reveal-core | active | — | — | attempt-1 | design | continue | Active. |",
+                None,
+                "ATTEMPT_RECORD_MISSING",
+            ),
+            (
+                "| reveal-core | active | — | — | attempt-1 | design | continue | Active. |",
+                "invalid",
+                "HEADER_MISSING",
+            ),
+            (
+                "| reveal-core | active | — | — | attempt-1 | design | continue | Active. |",
+                "mismatch",
+                "ATTEMPT_QUEUE_MISMATCH",
+            ),
+        )
+        for row, attempt_kind, expected in cases:
+            with self.subTest(expected=expected):
+                project, work = self.make_state([row])
+                if attempt_kind is not None:
+                    attempt_dir = work / "attempts" / "attempt-1"
+                    attempt_dir.mkdir()
+                    text = (
+                        "invalid"
+                        if attempt_kind == "invalid"
+                        else ATTEMPT_TEMPLATE.format(attempt="attempt-1", item="different-item")
+                    )
+                    (attempt_dir / "attempt.md").write_text(text, encoding="utf-8")
+                self.assertIn(expected, self.codes(work, project))
+
+    def test_rejects_current_attempt_without_item_and_attempt_mismatch(self) -> None:
+        project, work = self.make_state([], focus_attempt="attempt-1")
+        self.assertIn("CURRENT_ATTEMPT_WITHOUT_ITEM", self.codes(work, project))
+
+        project, work = self.make_state(
+            ["| reveal-core | active | — | — | attempt-1 | design | continue | Active. |"],
+            focus_item="reveal-core",
+            focus_attempt="attempt-2",
+        )
+        attempt_dir = work / "attempts" / "attempt-1"
+        attempt_dir.mkdir()
+        (attempt_dir / "attempt.md").write_text(
+            ATTEMPT_TEMPLATE.format(attempt="attempt-1", item="reveal-core"), encoding="utf-8"
+        )
+        self.assertIn("CURRENT_FOCUS_MISMATCH", self.codes(work, project))
+
+    def test_rejects_schema_item_record_and_missing_coordinator_contracts(self) -> None:
+        project, work = self.make_state(["| reveal-core | ready | — | — | — | accepted design | activate | Ready. |"])
+        (work / "queue.md").write_text(
+            (work / "queue.md").read_text(encoding="utf-8").replace("schema: repo-work/v1", "schema: repo-work/v2"),
+            encoding="utf-8",
+        )
+        item_path = work / "items" / "reveal-core.md"
+        item_path.write_text(
+            item_path.read_text(encoding="utf-8").replace("item: reveal-core", "item: other"), encoding="utf-8"
+        )
+        (work / "coordinator.json").unlink()
+
+        codes = self.codes(work, project)
+
+        self.assertIn("DOCUMENT_SCHEMA_INVALID", codes)
+        self.assertIn("ITEM_RECORD_MISMATCH", codes)
+        self.assertIn("COORDINATOR_NOT_REGISTERED", codes)
+
+        item_path.write_text("not a record", encoding="utf-8")
+        self.assertIn("HEADER_MISSING", self.codes(work, project))
+
+    def test_detects_pending_transaction_without_mutating_it(self) -> None:
+        project, work = self.make_state([])
+        journal = work.parent / ".work.repo-work-journal"
+        journal.mkdir()
+
+        self.assertIn("COMMIT_RECOVERY_REQUIRED", self.codes(work, project))
+        self.assertTrue(journal.is_dir())
+
+    def test_accepts_state_without_optional_history_directory(self) -> None:
+        project, work = self.make_state([])
+        (work / "history" / "items").rmdir()
+        (work / "history").rmdir()
+
+        self.assertTrue(validate_work_state(work, project).valid)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -79,6 +79,33 @@ class MarkdownParsingTest(unittest.TestCase):
         with self.assertRaisesRegex(ParseError, "QUEUE_ROW_COLUMNS"):
             parse_queue(self.write(malformed))
 
+    def test_rejects_missing_table_separator_and_invalid_item_identity(self) -> None:
+        cases = (
+            (
+                VALID_QUEUE.replace(
+                    "| Item | State | Timing | Depends on | Attempt | Source | Next action | Reopen when / notes |",
+                    "No table",
+                ),
+                "QUEUE_TABLE_MISSING",
+            ),
+            (
+                VALID_QUEUE.replace("| --- | --- | --- | --- | --- | --- | --- | --- |", "not a separator"),
+                "QUEUE_SEPARATOR_MISSING",
+            ),
+            (VALID_QUEUE.replace("| reveal-core | ready |", "| Bad Item | ready |"), "QUEUE_ITEM_INVALID"),
+        )
+
+        for text, code in cases:
+            with self.subTest(code=code), self.assertRaisesRegex(ParseError, code):
+                parse_queue(self.write(text))
+
+    def test_queue_parser_stops_at_following_prose(self) -> None:
+        text = VALID_QUEUE + "Following section\n| ignored | ready | — | — | — | source | activate | ignored |\n"
+
+        queue = parse_queue(self.write(text))
+
+        self.assertEqual(3, len(queue.items))
+
 
 if __name__ == "__main__":
     unittest.main()

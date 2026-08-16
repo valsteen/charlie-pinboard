@@ -1,39 +1,43 @@
 import os
+import sys
 import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Final
+
+SUPPORTED_PLATFORMS: Final = frozenset({"darwin", "linux"})
+
+
+class PlatformNotSupportedError(RuntimeError):
+    pass
+
+
+def _require_supported_platform() -> None:
+    if sys.platform not in SUPPORTED_PLATFORMS:
+        supported = ", ".join(sorted(SUPPORTED_PLATFORMS))
+        raise PlatformNotSupportedError(
+            f"PLATFORM_NOT_SUPPORTED: repo-work supports {supported}; found {sys.platform}."
+        )
+
+
+def lock_path_for(work_root: Path) -> Path:
+    return work_root.parent / f".{work_root.name}.repo-work.lock"
 
 
 @contextmanager
 def transition_lock(work_root: Path) -> Generator[None]:
-    lock_path = work_root / ".transition.lock"
+    _require_supported_platform()
+    import fcntl
+
+    lock_path = lock_path_for(work_root)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as handle:
-        if os.name == "nt":
-            import msvcrt
-
-            locking = msvcrt.locking
-            lock_mode = msvcrt.LK_LOCK
-            unlock_mode = msvcrt.LK_UNLCK
-            handle.seek(0)
-            if handle.tell() == 0:
-                handle.write(b"0")
-                handle.flush()
-            locking(handle.fileno(), lock_mode, 1)
-            try:
-                yield
-            finally:
-                handle.seek(0)
-                locking(handle.fileno(), unlock_mode, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def atomic_write(path: Path, data: bytes) -> None:
@@ -47,12 +51,11 @@ def atomic_write(path: Path, data: bytes) -> None:
             os.fsync(handle.fileno())
         temporary.replace(path)
     finally:
-        if temporary.exists():
-            temporary.unlink()
+        temporary.unlink(missing_ok=True)
 
 
 def atomic_write_text(path: Path, text: str) -> None:
-    atomic_write(path, text.encode("utf-8"))
+    atomic_write(path, text.encode())
 
 
 def atomic_create(path: Path, data: bytes) -> None:

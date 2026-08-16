@@ -22,7 +22,10 @@ line-length = 120
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["ANN", "B", "C4", "E4", "E7", "E9", "F", "I", "PIE", "PTH", "RET", "RUF", "SIM", "UP", "W"]
+select = ["ANN", "ARG", "B", "BLE", "C4", "C90", "E4", "E7", "E9", "F", "I", "PERF", "PGH", "PIE", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PTH", "RET", "RUF", "SIM", "T10", "UP", "W"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
 
 [tool.ruff.lint.isort]
 known-first-party = ["repo_work", "tests"]
@@ -34,8 +37,26 @@ search-path = ["."]
 preset = "strict"
 min-severity = "warn"
 
+[[tool.pyrefly.sub-config]]
+matches = "src/**"
+
+[tool.pyrefly.sub-config.errors]
+unknown-argument-type = "warn"
+unknown-attribute-type = "warn"
+unknown-variable-type = "warn"
+
+[tool.coverage.run]
+branch = true
+source = ["repo_work"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+
 [dependency-groups]
 dev = [
+    "coverage>=7.10.4",
+    "hypothesis>=6.138.7",
     "pyrefly>=1.2.0",
     "ruff>=0.16.3",
 ]

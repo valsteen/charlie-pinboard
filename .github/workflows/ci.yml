@@ -4,14 +4,24 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    name: Checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install uv and Python
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
@@ -25,9 +35,19 @@ jobs:
         run: uv run --locked ruff check .
       - name: Type-check
         run: uv run --locked pyrefly check
-      - name: Test
-        run: uv run --locked python -m unittest discover -v
+      - name: Check strict type coverage
+        run: uv run --locked pyrefly coverage check src --strict --fail-under 100
+      - name: Test with branch coverage
+        run: |
+          uv run --locked coverage run -m unittest discover -v
+          uv run --locked coverage report
       - name: Compile
         run: uv run --locked python -m compileall -q src tests
-      - name: Build
-        run: uv build
+      - name: Validate plugin and skill metadata
+        run: uv run --locked python scripts/validate-metadata.py
+      - name: Build without workspace sources
+        run: uv build --no-sources
+      - name: Smoke-test the isolated wheel
+        run: |
+          uv run --isolated --no-project --with ./dist/*.whl repo-work --version
+          uv run --isolated --no-project --with ./dist/*.whl repo-work --help

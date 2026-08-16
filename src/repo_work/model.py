@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Final
 
-SCHEMA_V1 = "repo-work/v1"
+SCHEMA_V1: Final = "repo-work/v1"
 
 
 class WorkState(StrEnum):
@@ -14,7 +15,7 @@ class WorkState(StrEnum):
     DEFERRED = "deferred"
 
 
-TERMINAL_STATES = frozenset({"done", "superseded", "dropped"})
+TERMINAL_STATES: Final = frozenset({"done", "superseded", "dropped"})
 
 
 @dataclass(frozen=True, slots=True)

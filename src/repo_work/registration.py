@@ -1,30 +1,39 @@
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from repo_work.atomic import atomic_write_text, transition_lock
+from repo_work.atomic import atomic_write, atomic_write_text, transition_lock
+from repo_work.coordinator import CoordinatorRegistration, read_coordinator
 from repo_work.markdown import render_current, render_queue
 from repo_work.model import SCHEMA_V1, Queue
+from repo_work.transaction_store import (
+    ChangeSet,
+    commit_change_set,
+    recover_pending_commit,
+    validate_change_set,
+    write_bytes_change,
+)
 from repo_work.validate import validate_work_state
 
 
 class RegistrationError(RuntimeError):
+    code: str
+
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
 
 
-def _registration(project_root: Path, task_id: str, host_id: str, generation: int) -> dict[str, object]:
+def _registration(project_root: Path, task_id: str, host_id: str, generation: int) -> CoordinatorRegistration:
     if not task_id or not host_id:
         raise RegistrationError("COORDINATOR_IDENTITY_INVALID", "task_id and host_id must be non-empty.")
-    return {
-        "schema": SCHEMA_V1,
-        "project_root": str(project_root.resolve()),
-        "task_id": task_id,
-        "host_id": host_id,
-        "generation": generation,
-        "registered_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-    }
+    return CoordinatorRegistration(
+        schema=SCHEMA_V1,
+        project_root=str(project_root.resolve()),
+        task_id=task_id,
+        host_id=host_id,
+        generation=generation,
+        registered_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    )
 
 
 def initialize_work_state(
@@ -48,10 +57,7 @@ def initialize_work_state(
     queue = Queue(path=work_root / "queue.md", header={}, items=(), revision="")
     atomic_write_text(work_root / "queue.md", render_queue(queue, ()))
     atomic_write_text(work_root / "current.md", render_current(None, None, "select"))
-    atomic_write_text(
-        work_root / "coordinator.json",
-        json.dumps(_registration(project_root, task_id, host_id, 1), indent=2, sort_keys=True) + "\n",
-    )
+    atomic_write(work_root / "coordinator.json", _registration(project_root, task_id, host_id, 1).render())
     report = validate_work_state(work_root, project_root)
     if not report.valid:
         raise RegistrationError("INITIALIZATION_POSTCONDITION_FAILED", report.render())
@@ -66,15 +72,21 @@ def transfer_coordinator(
     host_id: str,
 ) -> None:
     with transition_lock(work_root):
+        recover_pending_commit(work_root)
         report = validate_work_state(work_root, project_root)
         if not report.valid:
             raise RegistrationError("WORK_STATE_INVALID", report.render())
-        path = work_root / "coordinator.json"
-        current = json.loads(path.read_text(encoding="utf-8"))
-        if current.get("generation") != expected_generation:
+        current = read_coordinator(work_root / "coordinator.json")
+        if current.generation != expected_generation:
             raise RegistrationError(
                 "COORDINATOR_OWNERSHIP_CONFLICT",
-                f"Expected generation {expected_generation}, found {current.get('generation')}.",
+                f"Expected generation {expected_generation}, found {current.generation}.",
             )
-        replacement = _registration(project_root, task_id, host_id, expected_generation + 1)
-        atomic_write_text(path, json.dumps(replacement, indent=2, sort_keys=True) + "\n")
+        changes = ChangeSet.of(
+            write_bytes_change(
+                "coordinator.json",
+                _registration(project_root, task_id, host_id, expected_generation + 1).render(),
+            )
+        )
+        validate_change_set(work_root, project_root, changes)
+        commit_change_set(work_root, project_root, changes)

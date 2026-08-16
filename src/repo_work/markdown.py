@@ -2,6 +2,7 @@ import hashlib
 import re
 from datetime import date
 from pathlib import Path
+from typing import Final
 
 from repo_work.model import (
     SCHEMA_V1,
@@ -14,7 +15,7 @@ from repo_work.model import (
     WorkState,
 )
 
-ITEM_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+ITEM_PATTERN: Final = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 QUEUE_COLUMNS = (
     "Item",
     "State",
@@ -25,10 +26,14 @@ QUEUE_COLUMNS = (
     "Next action",
     "Reopen when / notes",
 )
-EMPTY_CELLS = frozenset({"", "—", "-", "none", "null"})
+EMPTY_CELLS: Final = frozenset({"", "—", "-", "none", "null"})
 
 
 class ParseError(ValueError):
+    code: str
+    path: Path
+    line: int | None
+
     def __init__(self, code: str, path: Path, message: str, line: int | None = None) -> None:
         self.code = code
         self.path = path
@@ -87,22 +92,51 @@ def _optional(cell: str) -> str | None:
     return None if cell.casefold() in EMPTY_CELLS else cell
 
 
+def _queue_table_start(lines: list[str], path: Path) -> int:
+    start = next((index for index, line in enumerate(lines) if tuple(_cells(line)) == QUEUE_COLUMNS), None)
+    if start is None:
+        raise ParseError("QUEUE_TABLE_MISSING", path, "The canonical queue table was not found.")
+    if start + 1 >= len(lines) or len(_cells(lines[start + 1])) != len(QUEUE_COLUMNS):
+        raise ParseError("QUEUE_SEPARATOR_MISSING", path, "The queue table separator is missing.", start + 2)
+    return start
+
+
+def _parse_queue_row(cells: list[str], path: Path, line: int, identities: set[str]) -> QueueItem:
+    if len(cells) != len(QUEUE_COLUMNS):
+        raise ParseError("QUEUE_ROW_COLUMNS", path, f"Expected {len(QUEUE_COLUMNS)} cells, found {len(cells)}.", line)
+    item_id, state_value, timing, dependencies, attempt, source, next_action, notes = cells
+    if not ITEM_PATTERN.fullmatch(item_id):
+        raise ParseError("QUEUE_ITEM_INVALID", path, f"Invalid item identity '{item_id}'.", line)
+    if item_id in identities:
+        raise ParseError("QUEUE_ITEM_DUPLICATE", path, f"Duplicate item '{item_id}'.", line)
+    identities.add(item_id)
+    if state_value in TERMINAL_STATES:
+        raise ParseError("QUEUE_TERMINAL_STATE", path, f"Terminal state '{state_value}' is not nonterminal.", line)
+    try:
+        state = WorkState(state_value)
+    except ValueError as error:
+        raise ParseError("QUEUE_STATE_INVALID", path, f"Unknown state '{state_value}'.", line) from error
+    depends_on = tuple(
+        dependency.strip() for dependency in dependencies.split(",") if _optional(dependency.strip()) is not None
+    )
+    return QueueItem(
+        item=item_id,
+        state=state,
+        timing=_optional(timing),
+        depends_on=depends_on,
+        attempt=_optional(attempt),
+        source=source,
+        next_action=_optional(next_action),
+        notes=notes,
+    )
+
+
 def parse_queue(path: Path) -> Queue:
     raw = path.read_bytes()
     text = raw.decode("utf-8")
     header = parse_header(path)
     lines = text.splitlines()
-
-    table_start: int | None = None
-    for index, line in enumerate(lines):
-        if tuple(_cells(line)) == QUEUE_COLUMNS:
-            table_start = index
-            break
-    if table_start is None:
-        raise ParseError("QUEUE_TABLE_MISSING", path, "The canonical queue table was not found.")
-    if table_start + 1 >= len(lines) or len(_cells(lines[table_start + 1])) != len(QUEUE_COLUMNS):
-        raise ParseError("QUEUE_SEPARATOR_MISSING", path, "The queue table separator is missing.", table_start + 2)
-
+    table_start = _queue_table_start(lines, path)
     items: list[QueueItem] = []
     identities: set[str] = set()
     for index in range(table_start + 2, len(lines)):
@@ -111,46 +145,7 @@ def parse_queue(path: Path) -> Queue:
             continue
         if not line.lstrip().startswith("|"):
             break
-        cells = _cells(line)
-        if len(cells) != len(QUEUE_COLUMNS):
-            raise ParseError(
-                "QUEUE_ROW_COLUMNS",
-                path,
-                f"Expected {len(QUEUE_COLUMNS)} cells, found {len(cells)}.",
-                index + 1,
-            )
-        item_id, state_value, timing, dependencies, attempt, source, next_action, notes = cells
-        if not ITEM_PATTERN.fullmatch(item_id):
-            raise ParseError("QUEUE_ITEM_INVALID", path, f"Invalid item identity '{item_id}'.", index + 1)
-        if item_id in identities:
-            raise ParseError("QUEUE_ITEM_DUPLICATE", path, f"Duplicate item '{item_id}'.", index + 1)
-        identities.add(item_id)
-        if state_value in TERMINAL_STATES:
-            raise ParseError(
-                "QUEUE_TERMINAL_STATE",
-                path,
-                f"Terminal state '{state_value}' does not belong in the nonterminal queue.",
-                index + 1,
-            )
-        try:
-            state = WorkState(state_value)
-        except ValueError as error:
-            raise ParseError("QUEUE_STATE_INVALID", path, f"Unknown state '{state_value}'.", index + 1) from error
-        depends_on = tuple(
-            dependency.strip() for dependency in dependencies.split(",") if _optional(dependency.strip()) is not None
-        )
-        items.append(
-            QueueItem(
-                item=item_id,
-                state=state,
-                timing=_optional(timing),
-                depends_on=depends_on,
-                attempt=_optional(attempt),
-                source=source,
-                next_action=_optional(next_action),
-                notes=notes,
-            )
-        )
+        items.append(_parse_queue_row(_cells(line), path, index + 1, identities))
 
     return Queue(
         path=path,
@@ -237,7 +232,7 @@ def parse_attempt(path: Path) -> Attempt:
     )
 
 
-def render_queue(queue: Queue, items: tuple[QueueItem, ...]) -> str:
+def render_queue(_queue: Queue, items: tuple[QueueItem, ...]) -> str:
     updated = date.today().isoformat()
     lines = [
         "---",

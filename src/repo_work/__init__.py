@@ -1,3 +1,6 @@
 """Repository work coordination primitives."""
 
-__version__ = "0.1.0"
+from importlib.metadata import version
+from typing import Final
+
+__version__: Final = version("codex-repo-work")

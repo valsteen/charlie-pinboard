@@ -1,14 +1,16 @@
 import hashlib
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from repo_work.coordinator import read_coordinator
 from repo_work.markdown import parse_queue
-from repo_work.model import WorkState
+from repo_work.model import Queue, QueueItem, WorkState
 from repo_work.validate import validate_work_state
 
 
 class ActionError(RuntimeError):
+    code: str
+
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
@@ -57,11 +59,108 @@ def state_revision(work_root: Path) -> str:
 
 
 def coordinator_generation(work_root: Path) -> int:
-    value = json.loads((work_root / "coordinator.json").read_text(encoding="utf-8"))
-    generation = value.get("generation")
-    if not isinstance(generation, int) or generation < 1:
-        raise ActionError("COORDINATOR_GENERATION_INVALID", "Coordinator generation is not a positive integer.")
-    return generation
+    return read_coordinator(work_root / "coordinator.json").generation
+
+
+@dataclass(frozen=True, slots=True)
+class ActionFactory:
+    revision: str
+    generation: int
+
+    def make(self, kind: str, subject: str, label: str, subject_revision: str | None = None) -> Action:
+        return Action(
+            action_id=f"{kind}:{subject}",
+            kind=kind,
+            subject=subject,
+            label=label,
+            expected_revision=self.revision,
+            coordinator_generation=self.generation,
+            subject_revision=subject_revision,
+        )
+
+
+def _worker_actions(items: tuple[QueueItem, ...], factory: ActionFactory) -> tuple[Action, ...]:
+    result: list[Action] = []
+    for item in items:
+        if item.state == WorkState.ACTIVE and item.attempt is not None:
+            result.extend(
+                (
+                    factory.make("continue", item.attempt, f"Continue {item.item}"),
+                    factory.make("report-blocker", item.attempt, f"Report a blocker for {item.item}"),
+                    factory.make("submit-review", item.attempt, f"Submit {item.item} for review"),
+                )
+            )
+    return tuple(result)
+
+
+def _active_coordinator_actions(items: tuple[QueueItem, ...], factory: ActionFactory) -> list[Action]:
+    result: list[Action] = []
+    for item in items:
+        if item.state != WorkState.ACTIVE or item.attempt is None:
+            continue
+        result.extend(
+            (
+                factory.make("continue", item.attempt, f"Continue {item.item}"),
+                factory.make("pause", item.attempt, f"Pause and preserve {item.item}"),
+                factory.make("block", item.attempt, f"Block {item.item} on a named condition"),
+                factory.make("complete", item.attempt, f"Accept and complete {item.item}"),
+            )
+        )
+    return result
+
+
+def _intake_actions(item: QueueItem, factory: ActionFactory) -> list[Action]:
+    return [
+        factory.make("mark-ready", item.item, f"Mark {item.item} ready"),
+        factory.make("block-item", item.item, f"Block {item.item} on a named condition"),
+        factory.make("defer", item.item, f"Defer {item.item} with a reopen condition"),
+    ]
+
+
+def _item_actions(item: QueueItem, queue: Queue, factory: ActionFactory) -> list[Action]:
+    if item.state == WorkState.INTAKE:
+        return _intake_actions(item, factory)
+    if item.state == WorkState.READY:
+        return [
+            factory.make("activate", item.item, f"Activate {item.item}"),
+            factory.make("defer", item.item, f"Defer {item.item} with a reopen condition"),
+        ]
+    dependencies_live = any(dependency in queue.by_id() for dependency in item.depends_on)
+    if item.state in {WorkState.PAUSED, WorkState.BLOCKED} and not dependencies_live:
+        result = [factory.make("resume", item.item, f"Return {item.item} to ready")]
+        if item.attempt is None:
+            result.append(factory.make("defer", item.item, f"Defer {item.item} with a reopen condition"))
+        return result
+    if item.state == WorkState.DEFERRED:
+        return [factory.make("reopen", item.item, f"Reopen {item.item} for intake")]
+    return []
+
+
+def _proposal_actions(work_root: Path, factory: ActionFactory) -> list[Action]:
+    result: list[Action] = []
+    inbox = work_root / "inbox"
+    if inbox.is_dir():
+        for path in sorted(inbox.glob("*.json")):
+            proposal_id = path.stem
+            proposal_revision = hashlib.sha256(path.read_bytes()).hexdigest()
+            result.extend(
+                (
+                    factory.make("accept-proposal", proposal_id, f"Accept proposal {proposal_id}", proposal_revision),
+                    factory.make("merge-proposal", proposal_id, f"Merge proposal {proposal_id}", proposal_revision),
+                    factory.make("return-proposal", proposal_id, f"Return proposal {proposal_id}", proposal_revision),
+                    factory.make("reject-proposal", proposal_id, f"Reject proposal {proposal_id}", proposal_revision),
+                )
+            )
+    return result
+
+
+def _coordinator_actions(work_root: Path, queue: Queue, factory: ActionFactory) -> tuple[Action, ...]:
+    result = _active_coordinator_actions(queue.items, factory)
+    for item in queue.items:
+        result.extend(_item_actions(item, queue, factory))
+    result.extend(_proposal_actions(work_root, factory))
+    result.append(factory.make("transfer-coordinator", "ledger", "Transfer coordinator ownership"))
+    return tuple(result)
 
 
 def actions_for(work_root: Path, project_root: Path, role: str) -> tuple[Action, ...]:
@@ -70,82 +169,10 @@ def actions_for(work_root: Path, project_root: Path, role: str) -> tuple[Action,
         raise ActionError("WORK_STATE_INVALID", report.render())
     if role not in {"coordinator", "worker", "observer"}:
         raise ActionError("ROLE_INVALID", f"Unsupported role '{role}'.")
-    revision = state_revision(work_root)
-    generation = coordinator_generation(work_root)
+    factory = ActionFactory(state_revision(work_root), coordinator_generation(work_root))
     queue = parse_queue(work_root / "queue.md")
-
-    def action(kind: str, subject: str, label: str, subject_revision: str | None = None) -> Action:
-        return Action(
-            action_id=f"{kind}:{subject}",
-            kind=kind,
-            subject=subject,
-            label=label,
-            expected_revision=revision,
-            coordinator_generation=generation,
-            subject_revision=subject_revision,
-        )
-
     if role == "observer":
-        return (action("inspect", "ledger", "Inspect current work"),)
-    active_items = [item for item in queue.items if item.state == WorkState.ACTIVE]
+        return (factory.make("inspect", "ledger", "Inspect current work"),)
     if role == "worker":
-        worker_actions: list[Action] = []
-        for item in active_items:
-            if item.attempt is None:
-                continue
-            worker_actions.extend(
-                (
-                    action("continue", item.attempt, f"Continue {item.item}"),
-                    action("report-blocker", item.attempt, f"Report a blocker for {item.item}"),
-                    action("submit-review", item.attempt, f"Submit {item.item} for review"),
-                )
-            )
-        return tuple(worker_actions)
-
-    coordinator_actions: list[Action] = []
-    for item in active_items:
-        if item.attempt is None:
-            continue
-        coordinator_actions.extend(
-            (
-                action("continue", item.attempt, f"Continue {item.item}"),
-                action("pause", item.attempt, f"Pause and preserve {item.item}"),
-                action("block", item.attempt, f"Block {item.item} on a named condition"),
-                action("complete", item.attempt, f"Accept and complete {item.item}"),
-            )
-        )
-    for item in queue.items:
-        if item.state == WorkState.INTAKE:
-            coordinator_actions.extend(
-                (
-                    action("mark-ready", item.item, f"Mark {item.item} ready"),
-                    action("block-item", item.item, f"Block {item.item} on a named condition"),
-                    action("defer", item.item, f"Defer {item.item} with a reopen condition"),
-                )
-            )
-        elif item.state == WorkState.READY:
-            coordinator_actions.append(action("activate", item.item, f"Activate {item.item}"))
-            coordinator_actions.append(action("defer", item.item, f"Defer {item.item} with a reopen condition"))
-        elif item.state in {WorkState.PAUSED, WorkState.BLOCKED} and not any(
-            dependency in queue.by_id() for dependency in item.depends_on
-        ):
-            coordinator_actions.append(action("resume", item.item, f"Return {item.item} to ready"))
-            if item.attempt is None:
-                coordinator_actions.append(action("defer", item.item, f"Defer {item.item} with a reopen condition"))
-        elif item.state == WorkState.DEFERRED:
-            coordinator_actions.append(action("reopen", item.item, f"Reopen {item.item} for intake"))
-    inbox = work_root / "inbox"
-    if inbox.is_dir():
-        for path in sorted(inbox.glob("*.json")):
-            proposal_id = path.stem
-            proposal_revision = hashlib.sha256(path.read_bytes()).hexdigest()
-            coordinator_actions.extend(
-                (
-                    action("accept-proposal", proposal_id, f"Accept proposal {proposal_id}", proposal_revision),
-                    action("merge-proposal", proposal_id, f"Merge proposal {proposal_id}", proposal_revision),
-                    action("return-proposal", proposal_id, f"Return proposal {proposal_id}", proposal_revision),
-                    action("reject-proposal", proposal_id, f"Reject proposal {proposal_id}", proposal_revision),
-                )
-            )
-    coordinator_actions.append(action("transfer-coordinator", "ledger", "Transfer coordinator ownership"))
-    return tuple(coordinator_actions)
+        return _worker_actions(queue.items, factory)
+    return _coordinator_actions(work_root, queue, factory)

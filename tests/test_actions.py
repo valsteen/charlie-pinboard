@@ -1,6 +1,6 @@
 import unittest
 
-from repo_work.actions import actions_for
+from repo_work.actions import ActionError, actions_for
 
 from .support import create_state
 
@@ -113,6 +113,23 @@ updated: "2026-08-16"
                 "defer:reveal-core",
             }.issubset(action_ids)
         )
+
+    def test_actions_reject_invalid_roles_and_invalid_ledgers(self) -> None:
+        project, work = create_state([])
+        with self.assertRaisesRegex(ActionError, "ROLE_INVALID"):
+            actions_for(work, project, role="invented")
+
+        (work / "current.md").unlink()
+        with self.assertRaisesRegex(ActionError, "WORK_STATE_INVALID"):
+            actions_for(work, project, role="coordinator")
+
+    def test_coordinator_actions_work_without_optional_inbox_directory(self) -> None:
+        project, work = create_state([])
+        (work / "inbox").rmdir()
+
+        action_ids = {action.action_id for action in actions_for(work, project, role="coordinator")}
+
+        self.assertEqual({"transfer-coordinator:ledger"}, action_ids)
 
 
 if __name__ == "__main__":

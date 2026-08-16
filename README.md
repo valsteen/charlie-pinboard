@@ -32,19 +32,21 @@ Markdown remains readable and reviewable. The command enforces structural validi
 
 ## Runtime and development
 
-The package targets Python 3.14 only and has no runtime dependencies outside the standard library. `.python-version` pins the current stable 3.14 patch release. uv owns Python acquisition, the project environment, dependency resolution, and the checked-in lockfile.
+The package targets Python 3.14 only and has no runtime dependencies outside the standard library. `.python-version` pins the current stable 3.14 patch release. uv owns Python acquisition, the project environment, dependency resolution, the checked-in lockfile, and installed-package execution. The command and launcher support macOS and Linux.
 
 ```sh
 uv sync --locked
 uv run --locked ruff format --check .
 uv run --locked ruff check .
 uv run --locked pyrefly check
-uv run --locked python -m unittest discover -v
+uv run --locked pyrefly coverage check src --strict --fail-under 100
+uv run --locked coverage run -m unittest discover -v
+uv run --locked coverage report
 uv run --locked python -m compileall -q src tests
-uv build
+uv build --no-sources
 scripts/repo-work --help
 ```
 
-Do not inject `PYTHONPATH`, run an ambient interpreter, or maintain parallel requirements files. The uv-installed package must resolve normally in local checks, CI, and the plugin launcher.
+Local checks, CI, and the plugin launcher all resolve the uv-installed package directly. The checked-in uv lockfile is the single development dependency record.
 
-Plugin and skill metadata must also pass the current Codex plugin and skill validators before release.
+Repository-owned metadata checks and the current Codex plugin and skill validators provide release evidence for the plugin bundle.

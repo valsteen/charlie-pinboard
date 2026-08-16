@@ -1,7 +1,7 @@
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from repo_work.coordinator import CoordinatorError, read_coordinator
 from repo_work.diagnostics import Diagnostic, Severity
 from repo_work.markdown import (
     ParseError,
@@ -11,7 +11,7 @@ from repo_work.markdown import (
     parse_queue,
     require_document_header,
 )
-from repo_work.model import SCHEMA_V1, Queue, WorkState
+from repo_work.model import SCHEMA_V1, Queue, QueueItem, WorkState
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,100 +36,24 @@ def _parse_error(error: ParseError) -> Diagnostic:
     return _error(error.code, error.path, str(error))
 
 
-def _validate_dependencies(queue: Queue, work_root: Path) -> list[Diagnostic]:
-    diagnostics: list[Diagnostic] = []
-    by_id = queue.by_id()
-    completed: set[str] = set()
-    history_root = work_root / "history" / "items"
-    if history_root.is_dir():
-        for path in history_root.glob("*.md"):
-            try:
-                header = require_document_header(path, "work-history")
-            except ParseError as error:
-                diagnostics.append(_parse_error(error))
-                continue
-            item = header.get("item")
-            if isinstance(item, str) and header.get("state") == "done":
-                completed.add(item)
-
-    graph: dict[str, tuple[str, ...]] = {}
-    for item in queue.items:
-        graph[item.item] = tuple(dependency for dependency in item.depends_on if dependency in by_id)
-        for dependency in item.depends_on:
-            if dependency not in by_id and dependency not in completed:
-                diagnostics.append(
-                    _error(
-                        "DEPENDENCY_UNKNOWN",
-                        queue.path,
-                        f"Item '{item.item}' depends on unknown item '{dependency}'.",
-                    )
-                )
-
-    visiting: set[str] = set()
-    visited: set[str] = set()
-
-    def visit(item_id: str, path: tuple[str, ...]) -> None:
-        if item_id in visited:
-            return
-        if item_id in visiting:
-            cycle = (*path[path.index(item_id) :], item_id)
-            diagnostics.append(_error("DEPENDENCY_CYCLE", queue.path, f"Dependency cycle: {' -> '.join(cycle)}."))
-            return
-        visiting.add(item_id)
-        for dependency in graph.get(item_id, ()):
-            visit(dependency, (*path, dependency))
-        visiting.remove(item_id)
-        visited.add(item_id)
-
-    for item_id in graph:
-        visit(item_id, (item_id,))
-    return diagnostics
-
-
-def _validate_coordinator(work_root: Path, project_root: Path) -> list[Diagnostic]:
-    path = work_root / "coordinator.json"
-    if not path.is_file():
-        return [_error("COORDINATOR_NOT_REGISTERED", path, "No coordinator registration exists.")]
+def _read_queue(work_root: Path) -> tuple[Queue | None, list[Diagnostic]]:
+    path = work_root / "queue.md"
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        return [_error("COORDINATOR_INVALID", path, f"Cannot parse coordinator registration: {error}")]
+        queue = parse_queue(path)
+    except OSError as error:
+        return None, [_error("QUEUE_UNREADABLE", path, str(error))]
+    except ParseError as error:
+        return None, [_parse_error(error)]
     diagnostics: list[Diagnostic] = []
-    if value.get("schema") != SCHEMA_V1:
-        diagnostics.append(_error("COORDINATOR_SCHEMA_INVALID", path, "Unsupported coordinator schema."))
-    registered_root = value.get("project_root")
-    if not isinstance(registered_root, str) or Path(registered_root).resolve() != project_root.resolve():
-        diagnostics.append(
-            _error(
-                "COORDINATOR_PROJECT_MISMATCH",
-                path,
-                f"Registered project '{registered_root}' does not match '{project_root.resolve()}'.",
-            )
-        )
-    if not isinstance(value.get("task_id"), str) or not value["task_id"]:
-        diagnostics.append(_error("COORDINATOR_TASK_INVALID", path, "task_id must be a non-empty string."))
-    if not isinstance(value.get("generation"), int) or value["generation"] < 1:
-        diagnostics.append(_error("COORDINATOR_GENERATION_INVALID", path, "generation must be a positive integer."))
-    return diagnostics
+    if queue.header.get("kind") != "work-queue":
+        diagnostics.append(_error("DOCUMENT_KIND_INVALID", path, "queue.md must have kind work-queue."))
+    if queue.header.get("schema") != SCHEMA_V1:
+        diagnostics.append(_error("DOCUMENT_SCHEMA_INVALID", path, "queue.md must use repo-work/v1."))
+    return queue, diagnostics
 
 
-def validate_work_state(work_root: Path, project_root: Path) -> ValidationReport:
+def _validate_item_records(queue: Queue, work_root: Path) -> list[Diagnostic]:
     diagnostics: list[Diagnostic] = []
-    queue_path = work_root / "queue.md"
-    current_path = work_root / "current.md"
-    try:
-        queue = parse_queue(queue_path)
-        if queue.header.get("kind") != "work-queue":
-            diagnostics.append(_error("DOCUMENT_KIND_INVALID", queue_path, "queue.md must have kind work-queue."))
-        if queue.header.get("schema") != SCHEMA_V1:
-            diagnostics.append(_error("DOCUMENT_SCHEMA_INVALID", queue_path, "queue.md must use repo-work/v1."))
-    except (OSError, ParseError) as error:
-        if isinstance(error, ParseError):
-            diagnostics.append(_parse_error(error))
-        else:
-            diagnostics.append(_error("QUEUE_UNREADABLE", queue_path, str(error)))
-        return ValidationReport(tuple(diagnostics))
-
     item_root = work_root / "items"
     queue_ids = {item.item for item in queue.items}
     for item in queue.items:
@@ -147,83 +71,171 @@ def validate_work_state(work_root: Path, project_root: Path) -> ValidationReport
                 _error("ITEM_RECORD_MISMATCH", path, f"Record names '{record.item}', expected '{item.item}'.")
             )
     if item_root.is_dir():
-        for path in item_root.glob("*.md"):
-            if path.stem not in queue_ids:
-                diagnostics.append(
-                    _error("ITEM_RECORD_ORPHANED", path, "Nonterminal item record has no canonical queue row.")
-                )
+        diagnostics.extend(
+            _error("ITEM_RECORD_ORPHANED", path, "Nonterminal item record has no canonical queue row.")
+            for path in item_root.glob("*.md")
+            if path.stem not in queue_ids
+        )
+    return diagnostics
 
-    diagnostics.extend(_validate_dependencies(queue, work_root))
-    diagnostics.extend(_validate_coordinator(work_root, project_root))
 
-    for item in queue.items:
-        if item.state in {WorkState.ACTIVE, WorkState.PAUSED} and item.attempt is None:
-            diagnostics.append(
-                _error(
-                    "QUEUE_ATTEMPT_MISSING", queue.path, f"Item '{item.item}' in state '{item.state}' needs an attempt."
-                )
-            )
-            continue
-        if item.attempt is None:
-            continue
-        if item.state in {WorkState.READY, WorkState.INTAKE, WorkState.DEFERRED}:
-            diagnostics.append(
-                _error(
-                    "QUEUE_ATTEMPT_UNEXPECTED",
-                    queue.path,
-                    f"Item '{item.item}' in state '{item.state}' cannot name an attempt.",
-                )
-            )
-            continue
-        attempt_path = work_root / "attempts" / item.attempt / "attempt.md"
-        if not attempt_path.is_file():
-            diagnostics.append(_error("ATTEMPT_RECORD_MISSING", attempt_path, "Queue attempt record is missing."))
-            continue
+def _completed_items(work_root: Path) -> tuple[set[str], list[Diagnostic]]:
+    completed: set[str] = set()
+    diagnostics: list[Diagnostic] = []
+    history_root = work_root / "history" / "items"
+    if not history_root.is_dir():
+        return completed, diagnostics
+    for path in history_root.glob("*.md"):
         try:
-            attempt = parse_attempt(attempt_path)
+            header = require_document_header(path, "work-history")
         except ParseError as error:
             diagnostics.append(_parse_error(error))
             continue
-        if attempt.item != item.item or attempt.attempt != item.attempt or attempt.state != item.state.value:
-            diagnostics.append(
-                _error(
-                    "ATTEMPT_QUEUE_MISMATCH",
-                    attempt_path,
-                    "Attempt identity, item, or state disagrees with queue.md.",
-                )
-            )
+        item = header.get("item")
+        if isinstance(item, str) and header.get("state") == "done":
+            completed.add(item)
+    return completed, diagnostics
 
+
+def _dependency_graph(queue: Queue, completed: set[str]) -> tuple[dict[str, tuple[str, ...]], list[Diagnostic]]:
+    diagnostics: list[Diagnostic] = []
+    by_id = queue.by_id()
+    graph: dict[str, tuple[str, ...]] = {}
+    for item in queue.items:
+        graph[item.item] = tuple(dependency for dependency in item.depends_on if dependency in by_id)
+        diagnostics.extend(
+            _error("DEPENDENCY_UNKNOWN", queue.path, f"Item '{item.item}' depends on unknown item '{dependency}'.")
+            for dependency in item.depends_on
+            if dependency not in by_id and dependency not in completed
+        )
+    return graph, diagnostics
+
+
+def _dependency_cycles(graph: dict[str, tuple[str, ...]], path: Path) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(item_id: str, route: tuple[str, ...]) -> None:
+        if item_id in visited:
+            return
+        if item_id in visiting:
+            cycle = (*route[route.index(item_id) :], item_id)
+            diagnostics.append(_error("DEPENDENCY_CYCLE", path, f"Dependency cycle: {' -> '.join(cycle)}."))
+            return
+        visiting.add(item_id)
+        for dependency in graph.get(item_id, ()):
+            visit(dependency, (*route, dependency))
+        visiting.remove(item_id)
+        visited.add(item_id)
+
+    for item_id in graph:
+        visit(item_id, (item_id,))
+    return diagnostics
+
+
+def _validate_dependencies(queue: Queue, work_root: Path) -> list[Diagnostic]:
+    completed, diagnostics = _completed_items(work_root)
+    graph, graph_diagnostics = _dependency_graph(queue, completed)
+    diagnostics.extend(graph_diagnostics)
+    diagnostics.extend(_dependency_cycles(graph, queue.path))
+    return diagnostics
+
+
+def _validate_coordinator(work_root: Path, project_root: Path) -> list[Diagnostic]:
+    path = work_root / "coordinator.json"
+    if not path.is_file():
+        return [_error("COORDINATOR_NOT_REGISTERED", path, "No coordinator registration exists.")]
     try:
-        current = parse_current(current_path)
-    except (OSError, ParseError) as error:
-        if isinstance(error, ParseError):
-            diagnostics.append(_parse_error(error))
-        else:
-            diagnostics.append(_error("CURRENT_UNREADABLE", current_path, str(error)))
-        return ValidationReport(tuple(diagnostics))
+        registration = read_coordinator(path)
+    except CoordinatorError as error:
+        return [_error(error.code, path, str(error))]
+    if Path(registration.project_root).resolve() == project_root.resolve():
+        return []
+    return [
+        _error(
+            "COORDINATOR_PROJECT_MISMATCH",
+            path,
+            f"Registered project '{registration.project_root}' does not match '{project_root.resolve()}'.",
+        )
+    ]
 
-    active = {item.item: item for item in queue.items if item.state == WorkState.ACTIVE}
+
+def _validate_attempt(item: QueueItem, work_root: Path) -> list[Diagnostic]:
+    if item.state in {WorkState.ACTIVE, WorkState.PAUSED} and item.attempt is None:
+        return [_error("QUEUE_ATTEMPT_MISSING", work_root / "queue.md", f"Item '{item.item}' needs an attempt.")]
+    if item.attempt is None:
+        return []
+    if item.state in {WorkState.READY, WorkState.INTAKE, WorkState.DEFERRED}:
+        return [
+            _error("QUEUE_ATTEMPT_UNEXPECTED", work_root / "queue.md", f"Item '{item.item}' cannot name an attempt.")
+        ]
+    path = work_root / "attempts" / item.attempt / "attempt.md"
+    if not path.is_file():
+        return [_error("ATTEMPT_RECORD_MISSING", path, "Queue attempt record is missing.")]
+    try:
+        attempt = parse_attempt(path)
+    except ParseError as error:
+        return [_parse_error(error)]
+    matches = attempt.item == item.item and attempt.attempt == item.attempt and attempt.state == item.state.value
+    return [] if matches else [_error("ATTEMPT_QUEUE_MISMATCH", path, "Attempt disagrees with queue.md.")]
+
+
+def _validate_attempts(queue: Queue, work_root: Path) -> list[Diagnostic]:
+    return [diagnostic for item in queue.items for diagnostic in _validate_attempt(item, work_root)]
+
+
+def _validate_current(queue: Queue, work_root: Path) -> list[Diagnostic]:
+    path = work_root / "current.md"
+    try:
+        current = parse_current(path)
+    except OSError as error:
+        return [_error("CURRENT_UNREADABLE", path, str(error))]
+    except ParseError as error:
+        return [_parse_error(error)]
     if current.focus_item is None:
-        if current.focus_attempt is not None:
-            diagnostics.append(
-                _error("CURRENT_ATTEMPT_WITHOUT_ITEM", current.path, "A focus attempt requires a focus item.")
-            )
-    else:
-        focused = active.get(current.focus_item)
-        if focused is None:
-            diagnostics.append(
-                _error(
-                    "CURRENT_FOCUS_MISMATCH",
-                    current.path,
-                    f"Focused item '{current.focus_item}' is not active in queue.md.",
-                )
-            )
-        elif current.focus_attempt != focused.attempt:
-            diagnostics.append(
-                _error(
-                    "CURRENT_FOCUS_MISMATCH",
-                    current.path,
-                    f"Focused attempt '{current.focus_attempt}' disagrees with queue attempt '{focused.attempt}'.",
-                )
-            )
+        return (
+            [_error("CURRENT_ATTEMPT_WITHOUT_ITEM", current.path, "A focus attempt requires a focus item.")]
+            if current.focus_attempt is not None
+            else []
+        )
+    active = {item.item: item for item in queue.items if item.state == WorkState.ACTIVE}
+    focused = active.get(current.focus_item)
+    if focused is None:
+        return [_error("CURRENT_FOCUS_MISMATCH", current.path, f"Focused item '{current.focus_item}' is not active.")]
+    if current.focus_attempt != focused.attempt:
+        return [_error("CURRENT_FOCUS_MISMATCH", current.path, "Focused attempt disagrees with the queue attempt.")]
+    return []
+
+
+def _validate_no_pending_transaction(work_root: Path) -> list[Diagnostic]:
+    from repo_work.transaction_store import journal_path_for
+
+    journal = journal_path_for(work_root)
+    if not journal.exists():
+        return []
+    return [
+        _error("COMMIT_RECOVERY_REQUIRED", journal, "A prior transition journal requires recovery before mutation.")
+    ]
+
+
+def _validate_work_state(work_root: Path, project_root: Path, *, check_pending: bool) -> ValidationReport:
+    queue, diagnostics = _read_queue(work_root)
+    if check_pending:
+        diagnostics.extend(_validate_no_pending_transaction(work_root))
+    if queue is None:
+        return ValidationReport(tuple(diagnostics))
+    diagnostics.extend(_validate_item_records(queue, work_root))
+    diagnostics.extend(_validate_dependencies(queue, work_root))
+    diagnostics.extend(_validate_coordinator(work_root, project_root))
+    diagnostics.extend(_validate_attempts(queue, work_root))
+    diagnostics.extend(_validate_current(queue, work_root))
     return ValidationReport(tuple(diagnostics))
+
+
+def validate_work_state(work_root: Path, project_root: Path) -> ValidationReport:
+    return _validate_work_state(work_root, project_root, check_pending=True)
+
+
+def validate_work_state_during_commit(work_root: Path, project_root: Path) -> ValidationReport:
+    return _validate_work_state(work_root, project_root, check_pending=False)
