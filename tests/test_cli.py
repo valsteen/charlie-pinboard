@@ -197,7 +197,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(12, registration_result)
         self.assertIn("WORK_STATE_ALREADY_EXISTS", registration_stderr)
         self.assertEqual(2, proposal_result)
-        self.assertIn("root must be an object", proposal_stderr)
+        self.assertIn("Expected `object`, got `array`", proposal_stderr)
         self.assertEqual(2, root_result)
         self.assertIn("PROJECT_ROOT_NOT_FOUND", root_stderr)
 

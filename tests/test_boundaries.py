@@ -1,11 +1,13 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import msgspec
+
 from repo_work.atomic import PlatformNotSupportedError, transition_lock
 from repo_work.coordinator import CoordinatorError, parse_coordinator, read_coordinator
-from repo_work.json_values import JsonObjectError, parse_json_object, read_json_object
 from repo_work.markdown import (
     ParseError,
     parse_attempt,
@@ -17,24 +19,61 @@ from repo_work.markdown import (
 )
 from repo_work.model import Queue, QueueItem, WorkState
 from repo_work.proposals import ProposalError, parse_proposal, read_proposal
-from repo_work.transition_input import TransitionInputError, parse_transition_input
+from repo_work.transition_input import ActivateInput, TransitionInputError, parse_transition_input
 
+from .support import JsonObject
 from .test_transition import proposal
 
 
 class JsonBoundaryTest(unittest.TestCase):
+    def test_json_boundaries_decode_exact_models_without_raw_mapping_contracts(self) -> None:
+        coordinator = {
+            "schema": "repo-work/v1",
+            "project_root": "/project",
+            "task_id": "task",
+            "host_id": "local",
+            "generation": 1,
+            "registered_at": "2026-08-16T12:00:00Z",
+        }
+        self.assertEqual("task", parse_coordinator(json.dumps(coordinator)).task_id)
+        with self.assertRaises(CoordinatorError):
+            parse_coordinator(json.dumps({**coordinator, "unexpected": True}))
+
+        proposal_value = proposal()
+        self.assertEqual("finding-1", parse_proposal(json.dumps(proposal_value)).proposal_id)
+        with self.assertRaises(ProposalError):
+            parse_proposal(json.dumps({**proposal_value, "unexpected": True}))
+
+        transition = parse_transition_input(
+            "activate",
+            json.dumps(
+                {
+                    "attempt": "attempt-1",
+                    "branch": "codex/attempt-1",
+                    "base_revision": "abc123",
+                    "owner": "worker",
+                }
+            ),
+        )
+        self.assertIsInstance(transition, ActivateInput)
+        if not isinstance(transition, ActivateInput):
+            self.fail("activate payload did not produce ActivateInput")
+        self.assertEqual("attempt-1", transition.attempt)
+        with self.assertRaises(TransitionInputError):
+            parse_transition_input("resume", '{"unexpected": true}')
+
     def test_json_reader_reports_syntax_root_and_io_failures(self) -> None:
         missing = Path(tempfile.mkdtemp()) / "missing.json"
 
-        with self.assertRaisesRegex(JsonObjectError, "Cannot parse"):
-            parse_json_object("{", code="INVALID", subject="document")
-        with self.assertRaisesRegex(JsonObjectError, "root must be an object"):
-            parse_json_object("[]", code="INVALID", subject="document")
-        with self.assertRaisesRegex(JsonObjectError, "Cannot read"):
-            read_json_object(missing, code="INVALID", subject="document")
+        with self.assertRaisesRegex(CoordinatorError, "Cannot decode"):
+            parse_coordinator("{")
+        with self.assertRaisesRegex(CoordinatorError, "Expected `object`, got `array`"):
+            parse_coordinator("[]")
+        with self.assertRaisesRegex(CoordinatorError, "Cannot read"):
+            read_coordinator(missing)
 
-    def test_coordinator_parser_rejects_invalid_exact_fields(self) -> None:
-        valid: dict[str, object] = {
+    def test_coordinator_decoder_preserves_msgspec_validation_provenance(self) -> None:
+        valid: JsonObject = {
             "schema": "repo-work/v1",
             "project_root": "/project",
             "task_id": "task",
@@ -43,37 +82,50 @@ class JsonBoundaryTest(unittest.TestCase):
             "registered_at": "2026-08-16T12:00:00Z",
         }
         cases = (
-            ({**valid, "schema": "repo-work/v2"}, "COORDINATOR_SCHEMA_INVALID"),
-            ({**valid, "generation": 0}, "COORDINATOR_GENERATION_INVALID"),
-            ({**valid, "generation": True}, "COORDINATOR_GENERATION_INVALID"),
-            ({**valid, "task_id": ""}, "COORDINATOR_FIELD_INVALID"),
+            ({**valid, "schema": "repo-work/v2"}, "$.schema"),
+            ({**valid, "generation": 0}, "$.generation"),
+            ({**valid, "generation": True}, "$.generation"),
+            ({**valid, "task_id": ""}, "$.task_id"),
         )
 
-        for value, code in cases:
-            with self.subTest(code=code), self.assertRaisesRegex(CoordinatorError, code):
-                parse_coordinator(value)
+        for value, path in cases:
+            with self.subTest(path=path), self.assertRaisesRegex(CoordinatorError, "COORDINATOR_INVALID") as caught:
+                parse_coordinator(json.dumps(value))
+            self.assertIsInstance(caught.exception.__cause__, msgspec.ValidationError)
+            self.assertIn(path, str(caught.exception.__cause__))
 
         path = Path(tempfile.mkdtemp()) / "coordinator.json"
         path.write_text("[]", encoding="utf-8")
         with self.assertRaisesRegex(CoordinatorError, "COORDINATOR_INVALID"):
             read_coordinator(path)
 
-    def test_proposal_parser_rejects_invalid_boundary_shapes(self) -> None:
+    def test_proposal_decoder_rejects_invalid_boundary_shapes(self) -> None:
         valid = proposal()
+        missing_trigger = valid.copy()
+        del missing_trigger["trigger"]
+        missing_proposal_id = valid.copy()
+        del missing_proposal_id["proposal_id"]
         cases = (
-            ({**valid, "schema": "repo-work/v2"}, "PROPOSAL_SCHEMA_INVALID"),
-            ({**valid, "proposal_id": "Not Valid"}, "PROPOSAL_ID_INVALID"),
-            ({**valid, "trigger": ""}, "PROPOSAL_FIELD_REQUIRED"),
-            ({**valid, "trigger": "line\nbreak"}, "PROPOSAL_FIELD_INVALID"),
-            ({**valid, "evidence": "source"}, "PROPOSAL_FIELD_INVALID"),
-            ({**valid, "relation": None}, "PROPOSAL_RELATION_INVALID"),
-            ({**valid, "relation": {"kind": "invented", "item": None}}, "PROPOSAL_RELATION_INVALID"),
-            ({**valid, "relation": {"kind": "duplicate", "item": "Bad Item"}}, "PROPOSAL_RELATION_INVALID"),
+            ({**valid, "schema": "repo-work/v2"}, "schema"),
+            ({**valid, "proposal_id": "Not Valid"}, "proposal_id"),
+            (missing_proposal_id, "proposal_id"),
+            ({**valid, "proposal_id": 1}, "proposal_id"),
+            (missing_trigger, "trigger"),
+            ({**valid, "trigger": 1}, "trigger"),
+            ({**valid, "trigger": ""}, "trigger"),
+            ({**valid, "trigger": "line\nbreak"}, "trigger"),
+            ({**valid, "evidence": "source"}, "evidence"),
+            ({**valid, "evidence": [""]}, "evidence[0]"),
+            ({**valid, "relation": None}, "relation"),
+            ({**valid, "relation": {"kind": "invented", "item": None}}, "relation.kind"),
+            ({**valid, "relation": {"kind": "duplicate", "item": "Bad Item"}}, "relation.item"),
         )
 
-        for value, code in cases:
-            with self.subTest(code=code), self.assertRaisesRegex(ProposalError, code):
-                parse_proposal(value)
+        for value, field in cases:
+            with self.subTest(field=field), self.assertRaisesRegex(ProposalError, "PROPOSAL_INVALID") as caught:
+                parse_proposal(json.dumps(value))
+            self.assertIsInstance(caught.exception.__cause__, msgspec.ValidationError)
+            self.assertIn(field, str(caught.exception.__cause__))
 
         path = Path(tempfile.mkdtemp()) / "proposal.json"
         path.write_text("[]", encoding="utf-8")
@@ -90,17 +142,21 @@ class JsonBoundaryTest(unittest.TestCase):
             self.fail("unsupported platform acquired a transition lock")
 
     def test_transition_input_parser_rejects_invalid_closed_choices(self) -> None:
-        cases: tuple[tuple[str, dict[str, object], str], ...] = (
-            ("activate", {"attempt": "line\nbreak"}, "TRANSITION_INPUT_INVALID"),
+        cases: tuple[tuple[str, JsonObject, str], ...] = (
+            (
+                "activate",
+                {"attempt": "line\nbreak", "branch": "codex/work", "base_revision": "abc123", "owner": "worker"},
+                "TRANSITION_INPUT_INVALID",
+            ),
             ("block", {"reason": "blocked", "depends_on": "item"}, "TRANSITION_INPUT_INVALID"),
             (
                 "accept-proposal",
-                {"item": "new", "state": "invented", "next_action": "review", "depends_on": list[str]()},
+                {"item": "new", "state": "invented", "next_action": "review", "depends_on": []},
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 "accept-proposal",
-                {"item": "new", "state": "active", "next_action": "review", "depends_on": list[str]()},
+                {"item": "new", "state": "active", "next_action": "review", "depends_on": []},
                 "TRANSITION_INPUT_INVALID",
             ),
             (
@@ -110,15 +166,28 @@ class JsonBoundaryTest(unittest.TestCase):
                     "state": "intake",
                     "timing": 1,
                     "next_action": "review",
-                    "depends_on": list[str](),
+                    "depends_on": [],
                 },
                 "TRANSITION_INPUT_INVALID",
             ),
             ("unknown", {}, "ACTION_NOT_MUTATING"),
         )
         for kind, value, code in cases:
-            with self.subTest(kind=kind), self.assertRaisesRegex(TransitionInputError, code):
-                parse_transition_input(kind, value)
+            with self.subTest(kind=kind), self.assertRaisesRegex(TransitionInputError, code) as caught:
+                parse_transition_input(kind, json.dumps(value))
+            if kind != "unknown":
+                self.assertIsInstance(caught.exception.__cause__, msgspec.ValidationError)
+
+    def test_transition_input_errors_include_the_native_json_path(self) -> None:
+        with self.assertRaises(TransitionInputError) as caught:
+            parse_transition_input(
+                "activate",
+                '{"attempt":"attempt-1","branch":"codex/work","base_revision":"abc","owner":1}',
+            )
+
+        cause = caught.exception.__cause__
+        self.assertIsInstance(cause, msgspec.ValidationError)
+        self.assertIn("$.owner", str(cause))
 
 
 class MarkdownBoundaryTest(unittest.TestCase):

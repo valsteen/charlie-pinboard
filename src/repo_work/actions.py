@@ -26,17 +26,6 @@ class Action:
     coordinator_generation: int
     subject_revision: str | None = None
 
-    def as_dict(self) -> dict[str, str | int]:
-        return {
-            "action_id": self.action_id,
-            "kind": self.kind,
-            "subject": self.subject,
-            "label": self.label,
-            "expected_revision": self.expected_revision,
-            "coordinator_generation": self.coordinator_generation,
-            "subject_revision": self.subject_revision or "",
-        }
-
 
 def state_revision(work_root: Path) -> str:
     paths: list[Path] = [work_root / "queue.md", work_root / "current.md", work_root / "coordinator.json"]

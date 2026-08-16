@@ -1,13 +1,13 @@
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from copy import replace
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
 from repo_work.actions import Action
 from repo_work.coordinator import CoordinatorRegistration
-from repo_work.json_values import render_json_object
 from repo_work.markdown import (
     CurrentPointer,
     parse_current,
@@ -17,11 +17,12 @@ from repo_work.markdown import (
     replace_header_fields,
 )
 from repo_work.model import SCHEMA_V1, Queue, QueueItem, WorkState
-from repo_work.proposals import Proposal, read_proposal
+from repo_work.proposals import Proposal, ProposalDispositionKind, ProposalHistory, read_proposal
 from repo_work.transaction_store import ChangeSet, FileChange, delete_change, write_bytes_change, write_change
 from repo_work.transition_input import (
     AcceptProposalInput,
     ActivateInput,
+    BlockInput,
     DeferInput,
     EvidenceInput,
     MergeProposalInput,
@@ -108,14 +109,14 @@ def _activate(context: PlanContext, action: Action, value: TransitionInput) -> C
 
 
 def _pause_or_block(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(ReasonInput, value)
+    value = cast(ReasonInput | BlockInput, value)
     items = context.items
     index = _attempt_index(items, action.subject)
     if items[index].state != WorkState.ACTIVE:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", "The named attempt is not active.")
     target = WorkState.PAUSED if action.kind == "pause" else WorkState.BLOCKED
     dependencies = items[index].depends_on
-    if action.kind == "block":
+    if isinstance(value, BlockInput):
         dependencies = tuple(dict.fromkeys((*dependencies, *value.depends_on)))
     items[index] = replace(
         items[index],
@@ -219,7 +220,7 @@ def _mark_ready(context: PlanContext, action: Action, value: TransitionInput) ->
 
 
 def _block_item(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(ReasonInput, value)
+    value = cast(BlockInput, value)
     items = context.items
     index = _item_index(items, action.subject)
     if items[index].state not in {WorkState.INTAKE, WorkState.READY}:
@@ -232,8 +233,6 @@ def _block_item(context: PlanContext, action: Action, value: TransitionInput) ->
 
 def _defer(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
     value = cast(DeferInput, value)
-    if value.timing not in {"must-now", "cheaper-now", "safe-to-defer"}:
-        raise TransitionPlanError("TRANSITION_INPUT_INVALID", f"Unsupported timing '{value.timing}'.")
     items = context.items
     index = _item_index(items, action.subject)
     item = items[index]
@@ -245,13 +244,18 @@ def _defer(context: PlanContext, action: Action, value: TransitionInput) -> Chan
     return ChangeSet.of(_queue_change(context, items))
 
 
-def _proposal_history(proposal: Proposal, disposition: str, target: str | None, reason: str | None = None) -> bytes:
-    result = proposal.as_json()
-    result["disposition"] = disposition
-    result["target"] = target
-    if reason is not None:
-        result["coordinator_reason"] = reason
-    return render_json_object(result)
+def _proposal_history(
+    proposal: Proposal,
+    disposition: ProposalDispositionKind,
+    target: str | None,
+    reason: str | None = None,
+) -> bytes:
+    return ProposalHistory(
+        proposal=proposal,
+        disposition=disposition,
+        target=target,
+        coordinator_reason=reason,
+    ).render()
 
 
 def _proposal_paths(context: PlanContext, action: Action) -> tuple[str, str, Proposal]:
@@ -270,7 +274,7 @@ def _accept_proposal(context: PlanContext, action: Action, value: TransitionInpu
     inbox, history, proposal = _proposal_paths(context, action)
     item = QueueItem(
         item=value.item,
-        state=value.state,
+        state=WorkState(value.state.value),
         timing=value.timing,
         depends_on=value.depends_on,
         attempt=None,
@@ -295,7 +299,7 @@ def _accept_proposal(context: PlanContext, action: Action, value: TransitionInpu
     return ChangeSet.of(
         write_change(f"items/{value.item}.md", item_text),
         _queue_change(context, [*items, item]),
-        write_bytes_change(history, _proposal_history(proposal, "accepted", value.item)),
+        write_bytes_change(history, _proposal_history(proposal, ProposalDispositionKind.ACCEPTED, value.item)),
         delete_change(inbox),
     )
 
@@ -313,7 +317,7 @@ def _merge_proposal(context: PlanContext, action: Action, value: TransitionInput
     item_text += f"\n## Intake evidence: {action.subject}\n\n{proposal.trigger}\n"
     return ChangeSet.of(
         write_change(item_path, item_text),
-        write_bytes_change(history, _proposal_history(proposal, "merged", value.target)),
+        write_bytes_change(history, _proposal_history(proposal, ProposalDispositionKind.MERGED, value.target)),
         delete_change(inbox),
     )
 
@@ -321,7 +325,9 @@ def _merge_proposal(context: PlanContext, action: Action, value: TransitionInput
 def _dispose_proposal(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
     value = cast(ReasonInput, value)
     inbox, history, proposal = _proposal_paths(context, action)
-    disposition = "returned" if action.kind == "return-proposal" else "rejected"
+    disposition = (
+        ProposalDispositionKind.RETURNED if action.kind == "return-proposal" else ProposalDispositionKind.REJECTED
+    )
     return ChangeSet.of(
         write_bytes_change(history, _proposal_history(proposal, disposition, None, value.reason)),
         delete_change(inbox),

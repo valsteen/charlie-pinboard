@@ -1,8 +1,12 @@
-from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Annotated
 
-from repo_work.json_values import JsonObjectError, read_json_object, render_json_object
-from repo_work.model import SCHEMA_V1
+import msgspec
+
+from repo_work.model import SchemaV1
+
+type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
+type PositiveGeneration = Annotated[int, msgspec.Meta(ge=1)]
 
 
 class CoordinatorError(ValueError):
@@ -13,45 +17,29 @@ class CoordinatorError(ValueError):
         super().__init__(f"{code}: {message}")
 
 
-@dataclass(frozen=True, slots=True)
-class CoordinatorRegistration:
-    schema: str
-    project_root: str
-    task_id: str
-    host_id: str
-    generation: int
-    registered_at: str
+class CoordinatorRegistration(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: SchemaV1
+    project_root: NonEmptyString
+    task_id: NonEmptyString
+    host_id: NonEmptyString
+    generation: PositiveGeneration
+    registered_at: NonEmptyString
 
     def render(self) -> bytes:
-        return render_json_object(asdict(self))
+        encoded = msgspec.json.encode(self, order="sorted")
+        return msgspec.json.format(encoded, indent=2) + b"\n"
 
 
-def _required_string(value: dict[str, object], field: str) -> str:
-    result = value.get(field)
-    if not isinstance(result, str) or not result:
-        raise CoordinatorError("COORDINATOR_FIELD_INVALID", f"'{field}' must be a non-empty string.")
-    return result
-
-
-def parse_coordinator(value: dict[str, object]) -> CoordinatorRegistration:
-    schema = _required_string(value, "schema")
-    if schema != SCHEMA_V1:
-        raise CoordinatorError("COORDINATOR_SCHEMA_INVALID", f"Coordinator must use '{SCHEMA_V1}'.")
-    generation = value.get("generation")
-    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
-        raise CoordinatorError("COORDINATOR_GENERATION_INVALID", "generation must be a positive integer.")
-    return CoordinatorRegistration(
-        schema=schema,
-        project_root=_required_string(value, "project_root"),
-        task_id=_required_string(value, "task_id"),
-        host_id=_required_string(value, "host_id"),
-        generation=generation,
-        registered_at=_required_string(value, "registered_at"),
-    )
+def parse_coordinator(data: bytes | str) -> CoordinatorRegistration:
+    try:
+        return msgspec.json.decode(data, type=CoordinatorRegistration)
+    except msgspec.DecodeError as error:
+        raise CoordinatorError("COORDINATOR_INVALID", f"Cannot decode coordinator JSON: {error}") from error
 
 
 def read_coordinator(path: Path) -> CoordinatorRegistration:
     try:
-        return parse_coordinator(read_json_object(path, code="COORDINATOR_INVALID", subject="coordinator registration"))
-    except JsonObjectError as error:
-        raise CoordinatorError(error.code, str(error).partition(": ")[2]) from error
+        data = path.read_bytes()
+    except OSError as error:
+        raise CoordinatorError("COORDINATOR_INVALID", f"Cannot read JSON at '{path}': {error}") from error
+    return parse_coordinator(data)

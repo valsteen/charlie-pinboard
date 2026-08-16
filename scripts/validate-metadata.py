@@ -1,43 +1,94 @@
-import json
 import re
 from pathlib import Path
 from typing import Final
+
+import msgspec
 
 ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
 PLUGIN_NAME: Final = "codex-repo-work"
 
 
+class PluginAuthor(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    name: str
+    url: str
+
+
+class PluginInterface(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    display_name: str = msgspec.field(name="displayName")
+    short_description: str = msgspec.field(name="shortDescription")
+    long_description: str = msgspec.field(name="longDescription")
+    developer_name: str = msgspec.field(name="developerName")
+    category: str
+    website_url: str = msgspec.field(name="websiteURL")
+    capabilities: tuple[str, ...]
+    default_prompt: tuple[str, ...] = msgspec.field(name="defaultPrompt")
+
+
+class PluginManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    name: str
+    version: str
+    description: str
+    author: PluginAuthor
+    homepage: str
+    repository: str
+    license: str
+    keywords: tuple[str, ...]
+    skills: str
+    interface: PluginInterface
+
+
+class MarketplaceInterface(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    display_name: str = msgspec.field(name="displayName")
+
+
+class PluginSource(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    source: str
+    path: str
+
+
+class PluginPolicy(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    installation: str
+    authentication: str
+
+
+class MarketplacePlugin(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    name: str
+    source: PluginSource
+    policy: PluginPolicy
+    category: str
+
+
+class MarketplaceManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    name: str
+    interface: MarketplaceInterface
+    plugins: tuple[MarketplacePlugin, ...]
+
+
 def validate_plugin() -> None:
     path = ROOT / ".codex-plugin" / "plugin.json"
-    value: object = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError("plugin manifest root must be an object")
-    required = {"name", "version", "description", "author", "skills", "interface"}
-    missing = required - value.keys()
-    if missing:
-        raise ValueError(f"plugin manifest is missing: {', '.join(sorted(missing))}")
-    if value.get("name") != PLUGIN_NAME or value.get("skills") != "./skills/":
+    value = msgspec.json.decode(path.read_bytes(), type=PluginManifest)
+    if value.name != PLUGIN_NAME or value.skills != "./skills/":
         raise ValueError("plugin manifest identity or skill root is invalid")
-    if value.get("license") != "MIT":
+    if value.license != "MIT":
         raise ValueError("plugin manifest license must match the repository license")
 
 
 def validate_marketplace() -> None:
     path = ROOT / ".agents" / "plugins" / "marketplace.json"
-    value: object = json.loads(path.read_text(encoding="utf-8"))
-    expected = {
-        "name": PLUGIN_NAME,
-        "interface": {"displayName": "Codex Repository Work"},
-        "plugins": [
-            {
-                "name": PLUGIN_NAME,
-                "source": {"source": "local", "path": "."},
-                "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-                "category": "Productivity",
-            }
-        ],
-    }
+    value = msgspec.json.decode(path.read_bytes(), type=MarketplaceManifest)
+    expected = MarketplaceManifest(
+        name=PLUGIN_NAME,
+        interface=MarketplaceInterface(display_name="Codex Repository Work"),
+        plugins=(
+            MarketplacePlugin(
+                name=PLUGIN_NAME,
+                source=PluginSource(source="local", path="."),
+                policy=PluginPolicy(installation="AVAILABLE", authentication="ON_INSTALL"),
+                category="Productivity",
+            ),
+        ),
+    )
     if value != expected:
         raise ValueError("marketplace metadata must install the repository-root plugin")
 

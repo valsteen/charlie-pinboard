@@ -4,14 +4,13 @@ import unittest
 from repo_work.actions import actions_for
 from repo_work.markdown import parse_queue
 from repo_work.model import WorkState
-from repo_work.proposals import ProposalError, create_proposal
-from repo_work.transition import apply_action
+from repo_work.proposals import ProposalError
 from repo_work.validate import validate_work_state
 
-from .support import create_state
+from .support import JsonObject, apply_action, create_proposal, create_state
 
 
-def proposal(proposal_id: str = "finding-1") -> dict[str, object]:
+def proposal(proposal_id: str = "finding-1") -> JsonObject:
     return {
         "schema": "repo-work/v1",
         "proposal_id": proposal_id,
@@ -66,7 +65,8 @@ class ProposalTest(unittest.TestCase):
 
     def test_accept_moves_proposal_into_canonical_intake(self) -> None:
         project, work = create_state([])
-        create_proposal(work, project, proposal())
+        submitted = proposal()
+        create_proposal(work, project, submitted)
         action = next(
             action
             for action in actions_for(work, project, role="coordinator")
@@ -90,8 +90,11 @@ class ProposalTest(unittest.TestCase):
         self.assertEqual("universal-reveal-core", queue.items[0].item)
         self.assertEqual(WorkState.INTAKE, queue.items[0].state)
         self.assertFalse((work / "inbox" / "finding-1.json").exists())
-        disposition = json.loads((work / "history" / "proposals" / "finding-1.json").read_text(encoding="utf-8"))
-        self.assertEqual("accepted", disposition["disposition"])
+        history = json.loads((work / "history" / "proposals" / "finding-1.json").read_text(encoding="utf-8"))
+        self.assertEqual("accepted", history["disposition"])
+        self.assertEqual("universal-reveal-core", history["target"])
+        self.assertEqual(submitted, history["proposal"])
+        self.assertNotIn("coordinator_reason", history)
         self.assertTrue(validate_work_state(work, project).valid)
 
 

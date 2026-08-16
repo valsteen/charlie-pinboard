@@ -12,6 +12,7 @@ from repo_work.markdown import (
     require_document_header,
 )
 from repo_work.model import SCHEMA_V1, Queue, QueueItem, WorkState
+from repo_work.storage_layout import journal_path_for
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,8 +210,6 @@ def _validate_current(queue: Queue, work_root: Path) -> list[Diagnostic]:
 
 
 def _validate_no_pending_transaction(work_root: Path) -> list[Diagnostic]:
-    from repo_work.transaction_store import journal_path_for
-
     journal = journal_path_for(work_root)
     if not journal.exists():
         return []

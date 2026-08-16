@@ -17,7 +17,7 @@ from repo_work.transaction_store import (
 )
 from repo_work.validate import ValidationReport
 
-from .support import create_state
+from .support import JsonValue, create_state
 
 
 def snapshot(work: Path) -> dict[str, bytes]:
@@ -69,7 +69,7 @@ class TransactionStoreTest(unittest.TestCase):
 
     def test_invalid_journal_entries_are_typed_rejections(self) -> None:
         _, work = create_state([])
-        cases: tuple[object, ...] = (
+        cases: tuple[JsonValue, ...] = (
             "not-an-object",
             {"path": "../outside", "existed": True, "data": ""},
             {"path": "queue.md", "existed": "yes", "data": ""},
@@ -84,6 +84,23 @@ class TransactionStoreTest(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(AtomicCommitError, "COMMIT_JOURNAL_INVALID"):
                     recover_pending_commit(work)
+                (journal / "manifest.json").unlink()
+                journal.rmdir()
+
+    def test_journal_originals_must_be_a_json_array(self) -> None:
+        _, work = create_state([])
+        invalid_originals: tuple[JsonValue, ...] = ({"unexpected": True}, "")
+        for originals in invalid_originals:
+            with self.subTest(originals=originals):
+                journal = journal_path_for(work)
+                journal.mkdir()
+                manifest = json.dumps({"schema": "repo-work-journal/v1", "originals": originals})
+                (journal / "manifest.json").write_text(manifest, encoding="utf-8")
+
+                with self.assertRaisesRegex(AtomicCommitError, "COMMIT_JOURNAL_INVALID"):
+                    recover_pending_commit(work)
+
+                self.assertEqual(manifest, (journal / "manifest.json").read_text(encoding="utf-8"))
                 (journal / "manifest.json").unlink()
                 journal.rmdir()
 

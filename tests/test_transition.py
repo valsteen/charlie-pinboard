@@ -1,17 +1,18 @@
+import json
 import unittest
+from copy import replace
 from pathlib import Path
 
 from repo_work.actions import actions_for
 from repo_work.markdown import parse_current, parse_queue
 from repo_work.model import WorkState
-from repo_work.proposals import create_proposal
-from repo_work.transition import TransitionError, apply_action
+from repo_work.transition import TransitionError
 from repo_work.validate import validate_work_state
 
-from .support import create_state
+from .support import JsonObject, apply_action, create_proposal, create_state
 
 
-def proposal(proposal_id: str = "finding-1") -> dict[str, object]:
+def proposal(proposal_id: str = "finding-1") -> JsonObject:
     return {
         "schema": "repo-work/v1",
         "proposal_id": proposal_id,
@@ -69,7 +70,7 @@ class TransitionTest(unittest.TestCase):
                 "| mapping-create | ready | — | — | — | design | activate | Ready. |",
             ]
         )
-        payloads: dict[str, dict[str, object]] = {
+        payloads: dict[str, JsonObject] = {
             "reveal-core": {
                 "attempt": "reveal-core-1",
                 "branch": "codex/reveal-core",
@@ -135,7 +136,7 @@ class TransitionTest(unittest.TestCase):
     def test_wrong_coordinator_generation_changes_no_state(self) -> None:
         project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
         action = actions_for(work, project, role="coordinator")[0]
-        object.__setattr__(action, "coordinator_generation", 2)
+        action = replace(action, coordinator_generation=2)
         before = self.snapshot(work)
 
         with self.assertRaisesRegex(TransitionError, "COORDINATOR_OWNERSHIP_CONFLICT"):
@@ -341,7 +342,11 @@ updated: "2026-08-16"
             apply_action(work, project, action, {"reason": "The evidence does not support admission."})
 
             self.assertFalse((work / "inbox" / f"{proposal_id}.json").exists())
-            self.assertTrue((work / "history" / "proposals" / f"{proposal_id}.json").is_file())
+            history_path = work / "history" / "proposals" / f"{proposal_id}.json"
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+            self.assertEqual("returned" if kind == "return-proposal" else "rejected", history["disposition"])
+            self.assertEqual("The evidence does not support admission.", history["coordinator_reason"])
+            self.assertEqual(proposal_id, history["proposal"]["proposal_id"])
 
     def test_transfer_coordinator_is_a_revision_checked_action(self) -> None:
         project, work = create_state([])

@@ -57,7 +57,7 @@ def apply_action(
     work_root: Path,
     project_root: Path,
     action: Action,
-    payload: dict[str, object],
+    payload: bytes | str,
     *,
     failpoint: CommitFailpoint | None = None,
 ) -> None:
