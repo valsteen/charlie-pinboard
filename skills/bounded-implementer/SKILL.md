@@ -26,6 +26,9 @@ Restate the objective, non-goals, affected boundaries, testing mode, acceptance 
 - Treat a stale instruction as an instruction defect before reshaping working code around it.
 - Do not edit `queue.md`, `current.md`, or `coordinator.json`.
 - Do not accept or complete your own item.
+- Return the stable candidate to the registered coordinator for independent review. Do not invoke a generic reviewer-dispatch workflow or launch another reviewer from the worker role.
+
+Worker diff inspection, requirement mapping, and fresh verification are pre-review evidence. They do not replace the coordinator's independent review.
 
 If additional work is useful but not required, invoke `$repo-work-intake` only when the user explicitly wants it preserved. Otherwise mention it in the result without creating shared state.
 

@@ -29,6 +29,18 @@ Do not infer work from arbitrary Markdown, historical plans, topic folders, unch
 
 One registered coordinator generation owns canonical transitions. Multiple tasks may create unique intake proposals. Multiple workers may execute disjoint accepted attempts in separate worktrees.
 
+## Coordinate delegated attempts
+
+When the coordinator launches a worker for an active attempt:
+
+1. Retain coordinator ownership and the worker identifier.
+2. Wait until the worker finishes or needs attention. A wait timeout, progress update, or successful launch is not a terminal result.
+3. Do not end the coordinator turn merely because implementation started. End with a running worker only when the user explicitly requested background execution; report that coordinator review remains pending and resume it before any acceptance transition.
+4. Do not edit the worker's checkout or review candidate while it is still changing.
+5. After completion, read `result.md` or `blocker.md`, inspect the stable candidate, and perform the review described below.
+
+The registered coordinator owns independent review. If an additional reviewer is useful, the coordinator launches it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
+
 ## Interpret the available actions
 
 Translate executable actions into ordinary repository and product language. Retain the exact action record privately for execution.

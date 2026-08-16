@@ -1,6 +1,6 @@
 {
   "name": "codex-repo-work",
-  "version": "0.1.0+codex.20260816163717",
+  "version": "0.1.0+codex.20260816181740",
   "description": "Coordinate one repository-owned work ledger with validated state transitions.",
   "author": {
     "name": "Vincent Alsteen",
