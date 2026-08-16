@@ -33,6 +33,8 @@ jobs:
         run: uv run --locked ruff format --check .
       - name: Lint
         run: uv run --locked ruff check .
+      - name: Check typing policy
+        run: uv run --locked python scripts/check-typing-policy.py
       - name: Type-check
         run: uv run --locked pyrefly check
       - name: Check strict type coverage

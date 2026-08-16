@@ -6,12 +6,12 @@ from pathlib import Path
 from repo_work.actions import Action, actions_for
 from repo_work.atomic import transition_lock
 from repo_work.transaction_store import CommitFailpoint, FileChange, journal_path_for, recover_pending_commit
-from repo_work.transition import TransitionError, apply_action
+from repo_work.transition import TransitionError
 from repo_work.validate import validate_work_state
 
-from .support import create_state
+from .support import JsonObject, apply_action, create_state
 
-ACTIVATE_PAYLOAD: dict[str, object] = {
+ACTIVATE_PAYLOAD: JsonObject = {
     "attempt": "reveal-core-1",
     "branch": "codex/reveal-core",
     "base_revision": "abc123",

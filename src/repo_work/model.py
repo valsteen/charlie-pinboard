@@ -1,12 +1,13 @@
-from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 from typing import Final
+
+from attrs import frozen
 
 SCHEMA_V1: Final = "repo-work/v1"
 
 
-class WorkState(StrEnum):
+class WorkState(Enum):
     INTAKE = "intake"
     READY = "ready"
     ACTIVE = "active"
@@ -18,7 +19,11 @@ class WorkState(StrEnum):
 TERMINAL_STATES: Final = frozenset({"done", "superseded", "dropped"})
 
 
-@dataclass(frozen=True, slots=True)
+type HeaderValue = str | bool | None
+type Header = dict[str, HeaderValue]
+
+
+@frozen
 class QueueItem:
     item: str
     state: WorkState
@@ -30,10 +35,10 @@ class QueueItem:
     notes: str
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class Queue:
     path: Path
-    header: dict[str, object]
+    header: Header
     items: tuple[QueueItem, ...]
     revision: str
 
@@ -41,14 +46,14 @@ class Queue:
         return {item.item: item for item in self.items}
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class WorkItemRecord:
     path: Path
     item: str
     user_label: str
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class CurrentPointer:
     path: Path
     focus_item: str | None
@@ -56,7 +61,7 @@ class CurrentPointer:
     next_action: str
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class Attempt:
     path: Path
     attempt: str

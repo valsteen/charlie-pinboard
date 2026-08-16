@@ -1,3 +1,4 @@
+import fcntl
 import os
 import sys
 import tempfile
@@ -5,6 +6,8 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
+
+from repo_work.storage_layout import lock_path_for
 
 SUPPORTED_PLATFORMS: Final = frozenset({"darwin", "linux"})
 
@@ -21,15 +24,9 @@ def _require_supported_platform() -> None:
         )
 
 
-def lock_path_for(work_root: Path) -> Path:
-    return work_root.parent / f".{work_root.name}.repo-work.lock"
-
-
 @contextmanager
 def transition_lock(work_root: Path) -> Generator[None]:
     _require_supported_platform()
-    import fcntl
-
     lock_path = lock_path_for(work_root)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as handle:

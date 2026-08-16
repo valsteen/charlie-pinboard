@@ -8,7 +8,10 @@ version = "0.1.0"
 description = "Validated coordination for one repository-owned work ledger"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
-dependencies = []
+dependencies = [
+    "attrs>=26.1.0",
+    "cattrs>=26.1.0",
+]
 
 [project.scripts]
 repo-work = "repo_work.cli:main"
@@ -22,7 +25,12 @@ line-length = 120
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["ANN", "ARG", "B", "BLE", "C4", "C90", "E4", "E7", "E9", "F", "I", "PERF", "PGH", "PIE", "PLR0912", "PLR0915", "PTH", "RET", "RUF", "SIM", "T10", "UP", "W"]
+select = ["ANN", "ARG", "B", "BLE", "C4", "C90", "E4", "E7", "E9", "F", "I", "PERF", "PGH", "PIE", "PLC0415", "PLR0912", "PLR0915", "PTH", "RET", "RUF", "SIM", "T10", "TID", "UP", "W"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"builtins.object".msg = "Use the concrete boundary or domain type."
+"enum.StrEnum".msg = "Use Enum so string behavior remains explicit."
+"typing.Any".msg = "Use a concrete type or a closed union."
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12

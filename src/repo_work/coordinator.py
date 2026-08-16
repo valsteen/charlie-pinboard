@@ -1,7 +1,17 @@
-from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from repo_work.json_values import JsonObjectError, read_json_object, render_json_object
+from attrs import frozen
+from cattrs.errors import BaseValidationError
+
+from repo_work.json_codec import (
+    JsonCodecError,
+    decode_json,
+    encode_json,
+    nested_exception,
+    read_json,
+    validation_message,
+    validation_paths,
+)
 from repo_work.model import SCHEMA_V1
 
 
@@ -13,7 +23,7 @@ class CoordinatorError(ValueError):
         super().__init__(f"{code}: {message}")
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class CoordinatorRegistration:
     schema: str
     project_root: str
@@ -22,36 +32,47 @@ class CoordinatorRegistration:
     generation: int
     registered_at: str
 
+    def __attrs_post_init__(self) -> None:
+        if self.schema != SCHEMA_V1:
+            raise CoordinatorError("COORDINATOR_SCHEMA_INVALID", f"Coordinator must use '{SCHEMA_V1}'.")
+        if self.generation < 1:
+            raise CoordinatorError("COORDINATOR_GENERATION_INVALID", "generation must be a positive integer.")
+        fields = (
+            ("project_root", self.project_root),
+            ("task_id", self.task_id),
+            ("host_id", self.host_id),
+            ("registered_at", self.registered_at),
+        )
+        for name, value in fields:
+            if not value:
+                raise CoordinatorError("COORDINATOR_FIELD_INVALID", f"'{name}' must be a non-empty string.")
+
     def render(self) -> bytes:
-        return render_json_object(asdict(self))
+        return encode_json(self)
 
 
-def _required_string(value: dict[str, object], field: str) -> str:
-    result = value.get(field)
-    if not isinstance(result, str) or not result:
-        raise CoordinatorError("COORDINATOR_FIELD_INVALID", f"'{field}' must be a non-empty string.")
-    return result
+def _coordinator_validation_error(error: BaseValidationError) -> CoordinatorError:
+    domain_error = nested_exception(error, CoordinatorError)
+    if domain_error is not None:
+        return domain_error
+    if any(path and path[0] == "generation" for path in validation_paths(error)):
+        return CoordinatorError("COORDINATOR_GENERATION_INVALID", "generation must be a positive integer.")
+    return CoordinatorError("COORDINATOR_FIELD_INVALID", validation_message(error))
 
 
-def parse_coordinator(value: dict[str, object]) -> CoordinatorRegistration:
-    schema = _required_string(value, "schema")
-    if schema != SCHEMA_V1:
-        raise CoordinatorError("COORDINATOR_SCHEMA_INVALID", f"Coordinator must use '{SCHEMA_V1}'.")
-    generation = value.get("generation")
-    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
-        raise CoordinatorError("COORDINATOR_GENERATION_INVALID", "generation must be a positive integer.")
-    return CoordinatorRegistration(
-        schema=schema,
-        project_root=_required_string(value, "project_root"),
-        task_id=_required_string(value, "task_id"),
-        host_id=_required_string(value, "host_id"),
-        generation=generation,
-        registered_at=_required_string(value, "registered_at"),
-    )
+def parse_coordinator(data: bytes | str) -> CoordinatorRegistration:
+    try:
+        return decode_json(data, CoordinatorRegistration)
+    except JsonCodecError as error:
+        raise CoordinatorError("COORDINATOR_INVALID", error.message) from error
+    except BaseValidationError as error:
+        raise _coordinator_validation_error(error) from error
 
 
 def read_coordinator(path: Path) -> CoordinatorRegistration:
     try:
-        return parse_coordinator(read_json_object(path, code="COORDINATOR_INVALID", subject="coordinator registration"))
-    except JsonObjectError as error:
-        raise CoordinatorError(error.code, str(error).partition(": ")[2]) from error
+        return read_json(path, CoordinatorRegistration)
+    except JsonCodecError as error:
+        raise CoordinatorError("COORDINATOR_INVALID", error.message) from error
+    except BaseValidationError as error:
+        raise _coordinator_validation_error(error) from error

@@ -1,43 +1,104 @@
-import json
 import re
 from pathlib import Path
 from typing import Final
+
+from attrs import frozen
+
+from repo_work.json_codec import read_json
 
 ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
 PLUGIN_NAME: Final = "codex-repo-work"
 
 
+@frozen
+class PluginAuthor:
+    name: str
+    url: str
+
+
+@frozen
+class PluginInterface:
+    displayName: str
+    shortDescription: str
+    longDescription: str
+    developerName: str
+    category: str
+    websiteURL: str
+    capabilities: tuple[str, ...]
+    defaultPrompt: tuple[str, ...]
+
+
+@frozen
+class PluginManifest:
+    name: str
+    version: str
+    description: str
+    author: PluginAuthor
+    homepage: str
+    repository: str
+    license: str
+    keywords: tuple[str, ...]
+    skills: str
+    interface: PluginInterface
+
+
+@frozen
+class MarketplaceInterface:
+    displayName: str
+
+
+@frozen
+class PluginSource:
+    source: str
+    path: str
+
+
+@frozen
+class PluginPolicy:
+    installation: str
+    authentication: str
+
+
+@frozen
+class MarketplacePlugin:
+    name: str
+    source: PluginSource
+    policy: PluginPolicy
+    category: str
+
+
+@frozen
+class MarketplaceManifest:
+    name: str
+    interface: MarketplaceInterface
+    plugins: tuple[MarketplacePlugin, ...]
+
+
 def validate_plugin() -> None:
     path = ROOT / ".codex-plugin" / "plugin.json"
-    value: object = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict):
-        raise ValueError("plugin manifest root must be an object")
-    required = {"name", "version", "description", "author", "skills", "interface"}
-    missing = required - value.keys()
-    if missing:
-        raise ValueError(f"plugin manifest is missing: {', '.join(sorted(missing))}")
-    if value.get("name") != PLUGIN_NAME or value.get("skills") != "./skills/":
+    value = read_json(path, PluginManifest)
+    if value.name != PLUGIN_NAME or value.skills != "./skills/":
         raise ValueError("plugin manifest identity or skill root is invalid")
-    if value.get("license") != "MIT":
+    if value.license != "MIT":
         raise ValueError("plugin manifest license must match the repository license")
 
 
 def validate_marketplace() -> None:
     path = ROOT / ".agents" / "plugins" / "marketplace.json"
-    value: object = json.loads(path.read_text(encoding="utf-8"))
-    expected = {
-        "name": PLUGIN_NAME,
-        "interface": {"displayName": "Codex Repository Work"},
-        "plugins": [
-            {
-                "name": PLUGIN_NAME,
-                "source": {"source": "local", "path": "."},
-                "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
-                "category": "Productivity",
-            }
-        ],
-    }
+    value = read_json(path, MarketplaceManifest)
+    expected = MarketplaceManifest(
+        name=PLUGIN_NAME,
+        interface=MarketplaceInterface(displayName="Codex Repository Work"),
+        plugins=(
+            MarketplacePlugin(
+                name=PLUGIN_NAME,
+                source=PluginSource(source="local", path="."),
+                policy=PluginPolicy(installation="AVAILABLE", authentication="ON_INSTALL"),
+                category="Productivity",
+            ),
+        ),
+    )
     if value != expected:
         raise ValueError("marketplace metadata must install the repository-root plugin")
 

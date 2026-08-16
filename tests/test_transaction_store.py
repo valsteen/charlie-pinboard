@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from repo_work.actions import actions_for
 from repo_work.diagnostics import Diagnostic, Severity
+from repo_work.json_codec import JsonValue
 from repo_work.transaction_store import (
     AtomicCommitError,
     ChangeSet,
@@ -69,7 +70,7 @@ class TransactionStoreTest(unittest.TestCase):
 
     def test_invalid_journal_entries_are_typed_rejections(self) -> None:
         _, work = create_state([])
-        cases: tuple[object, ...] = (
+        cases: tuple[JsonValue, ...] = (
             "not-an-object",
             {"path": "../outside", "existed": True, "data": ""},
             {"path": "queue.md", "existed": "yes", "data": ""},

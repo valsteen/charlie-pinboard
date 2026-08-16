@@ -2,11 +2,15 @@ import base64
 import shutil
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from attrs import frozen
+from cattrs.errors import BaseValidationError
+
+from repo_work import validate as work_validation
 from repo_work.atomic import atomic_write
-from repo_work.json_values import read_json_object, render_json_object
+from repo_work.json_codec import JsonCodecError, encode_json, nested_exception, read_json, validation_message
+from repo_work.storage_layout import journal_path_for
 
 
 class AtomicCommitError(RuntimeError):
@@ -17,17 +21,17 @@ class AtomicCommitError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class FileChange:
     path: PurePosixPath
     data: bytes | None
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class ChangeSet:
     changes: tuple[FileChange, ...]
 
-    def __post_init__(self) -> None:
+    def __attrs_post_init__(self) -> None:
         paths: set[PurePosixPath] = set()
         for change in self.changes:
             if change.path.is_absolute() or ".." in change.path.parts or not change.path.parts:
@@ -41,11 +45,28 @@ class ChangeSet:
         return cls(tuple(changes))
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class OriginalFile:
     path: PurePosixPath
     existed: bool
     data: bytes
+
+
+@frozen
+class JournalOriginal:
+    path: str
+    existed: bool
+    data: str
+
+
+@frozen
+class JournalManifest:
+    schema: str
+    originals: tuple[JournalOriginal, ...]
+
+    def __attrs_post_init__(self) -> None:
+        if self.schema != "repo-work-journal/v1":
+            raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Unsupported transaction journal schema.")
 
 
 type CommitFailpoint = Callable[[int, FileChange], None]
@@ -93,22 +114,18 @@ def _capture_originals(work_root: Path, changes: ChangeSet) -> tuple[OriginalFil
     return tuple(originals)
 
 
-def journal_path_for(work_root: Path) -> Path:
-    return work_root.parent / f".{work_root.name}.repo-work-journal"
-
-
-def _journal_value(originals: tuple[OriginalFile, ...]) -> dict[str, object]:
-    return {
-        "schema": "repo-work-journal/v1",
-        "originals": [
-            {
-                "path": str(original.path),
-                "existed": original.existed,
-                "data": base64.b64encode(original.data).decode("ascii"),
-            }
+def _journal_manifest(originals: tuple[OriginalFile, ...]) -> JournalManifest:
+    return JournalManifest(
+        schema="repo-work-journal/v1",
+        originals=tuple(
+            JournalOriginal(
+                path=str(original.path),
+                existed=original.existed,
+                data=base64.b64encode(original.data).decode("ascii"),
+            )
             for original in originals
-        ],
-    }
+        ),
+    )
 
 
 def _write_journal(work_root: Path, originals: tuple[OriginalFile, ...]) -> Path:
@@ -117,7 +134,7 @@ def _write_journal(work_root: Path, originals: tuple[OriginalFile, ...]) -> Path
         raise AtomicCommitError("COMMIT_RECOVERY_REQUIRED", f"Pending transaction journal exists at '{journal}'.")
     temporary = Path(tempfile.mkdtemp(prefix=f".{journal.name}.", dir=journal.parent))
     try:
-        atomic_write(temporary / "manifest.json", render_json_object(_journal_value(originals)))
+        atomic_write(temporary / "manifest.json", encode_json(_journal_manifest(originals)))
         temporary.replace(journal)
     finally:
         if temporary.exists():
@@ -125,33 +142,30 @@ def _write_journal(work_root: Path, originals: tuple[OriginalFile, ...]) -> Path
     return journal
 
 
-def _parse_original(value: object) -> OriginalFile:
-    if not isinstance(value, dict):
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Journal original entry must be an object.")
-    path = value.get("path")
-    existed = value.get("existed")
-    data = value.get("data")
-    if not isinstance(path, str) or not path or not isinstance(existed, bool) or not isinstance(data, str):
+def _parse_original(value: JournalOriginal) -> OriginalFile:
+    if not value.path:
         raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Journal original entry has invalid fields.")
-    relative = PurePosixPath(path)
+    relative = PurePosixPath(value.path)
     if relative.is_absolute() or ".." in relative.parts:
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Journal path '{path}' escapes the work root.")
+        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Journal path '{value.path}' escapes the work root.")
     try:
-        decoded = base64.b64decode(data, validate=True)
+        decoded = base64.b64decode(value.data, validate=True)
     except ValueError as error:
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Journal data for '{path}' is not base64.") from error
-    return OriginalFile(relative, existed, decoded)
+        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Journal data for '{value.path}' is not base64.") from error
+    return OriginalFile(relative, value.existed, decoded)
 
 
 def _read_journal(journal: Path) -> tuple[OriginalFile, ...]:
-    value = read_json_object(journal / "manifest.json", code="COMMIT_JOURNAL_INVALID", subject="transaction journal")
-    if value.get("schema") != "repo-work-journal/v1":
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Unsupported transaction journal schema.")
-    entries = value.get("originals")
-    if not isinstance(entries, list):
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Journal originals must be a list.")
-    typed_entries: list[object] = list(entries)
-    return tuple(_parse_original(entry) for entry in typed_entries)
+    try:
+        manifest = read_json(journal / "manifest.json", JournalManifest)
+    except JsonCodecError as error:
+        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", error.message) from error
+    except BaseValidationError as error:
+        domain_error = nested_exception(error, AtomicCommitError)
+        if domain_error is not None:
+            raise domain_error from error
+        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", validation_message(error)) from error
+    return tuple(_parse_original(entry) for entry in manifest.originals)
 
 
 def _rollback(work_root: Path, originals: tuple[OriginalFile, ...]) -> None:
@@ -175,14 +189,12 @@ def recover_pending_commit(work_root: Path) -> bool:
 
 
 def validate_change_set(work_root: Path, project_root: Path, changes: ChangeSet) -> None:
-    from repo_work.validate import validate_work_state
-
     with tempfile.TemporaryDirectory(prefix="repo-work-prospective-") as temporary:
         prospective = Path(temporary) / "work"
         shutil.copytree(work_root, prospective)
         for change in changes.changes:
             _apply_change(prospective, change)
-        report = validate_work_state(prospective, project_root)
+        report = work_validation.validate_work_state(prospective, project_root)
         if not report.valid:
             raise AtomicCommitError("TRANSITION_POSTCONDITION_FAILED", report.render())
 
@@ -194,8 +206,6 @@ def commit_change_set(
     *,
     failpoint: CommitFailpoint | None = None,
 ) -> None:
-    from repo_work.validate import validate_work_state_during_commit
-
     originals = _capture_originals(work_root, changes)
     journal = _write_journal(work_root, originals)
     try:
@@ -203,7 +213,7 @@ def commit_change_set(
             _apply_change(work_root, change)
             if failpoint is not None:
                 failpoint(boundary, change)
-        report = validate_work_state_during_commit(work_root, project_root)
+        report = work_validation.validate_work_state_during_commit(work_root, project_root)
         if not report.valid:
             raise AtomicCommitError("TRANSITION_POSTCONDITION_FAILED", report.render())
     except Exception, KeyboardInterrupt, SystemExit:

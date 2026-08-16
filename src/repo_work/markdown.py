@@ -9,6 +9,8 @@ from repo_work.model import (
     TERMINAL_STATES,
     Attempt,
     CurrentPointer,
+    Header,
+    HeaderValue,
     Queue,
     QueueItem,
     WorkItemRecord,
@@ -42,7 +44,7 @@ class ParseError(ValueError):
         super().__init__(f"{code} {location}: {message}")
 
 
-def _scalar(raw: str) -> object:
+def _scalar(raw: str) -> HeaderValue:
     value = raw.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
         return value[1:-1]
@@ -55,7 +57,7 @@ def _scalar(raw: str) -> object:
     return value
 
 
-def parse_header(path: Path) -> dict[str, object]:
+def parse_header(path: Path) -> Header:
     lines = path.read_text(encoding="utf-8").splitlines()
     if not lines or lines[0] != "---":
         raise ParseError("HEADER_MISSING", path, "The file must start with '---'.", 1)
@@ -65,7 +67,7 @@ def parse_header(path: Path) -> dict[str, object]:
     except ValueError as error:
         raise ParseError("HEADER_UNTERMINATED", path, "The header has no closing '---'.") from error
 
-    header: dict[str, object] = {}
+    header: Header = {}
     for index, line in enumerate(lines[1:end], start=2):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
@@ -155,14 +157,14 @@ def parse_queue(path: Path) -> Queue:
     )
 
 
-def _required_string(header: dict[str, object], path: Path, field: str) -> str:
+def _required_string(header: Header, path: Path, field: str) -> str:
     value = header.get(field)
     if not isinstance(value, str) or not value:
         raise ParseError("HEADER_FIELD_REQUIRED", path, f"Header field '{field}' must be a non-empty string.")
     return value
 
 
-def require_document_header(path: Path, expected_kind: str) -> dict[str, object]:
+def require_document_header(path: Path, expected_kind: str) -> Header:
     header = parse_header(path)
     if header.get("kind") != expected_kind:
         raise ParseError(

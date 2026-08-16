@@ -1,6 +1,7 @@
 import hashlib
-from dataclasses import dataclass
 from pathlib import Path
+
+from attrs import frozen
 
 from repo_work.coordinator import read_coordinator
 from repo_work.markdown import parse_queue
@@ -16,7 +17,7 @@ class ActionError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class Action:
     action_id: str
     kind: str
@@ -25,17 +26,6 @@ class Action:
     expected_revision: str
     coordinator_generation: int
     subject_revision: str | None = None
-
-    def as_dict(self) -> dict[str, str | int]:
-        return {
-            "action_id": self.action_id,
-            "kind": self.kind,
-            "subject": self.subject,
-            "label": self.label,
-            "expected_revision": self.expected_revision,
-            "coordinator_generation": self.coordinator_generation,
-            "subject_revision": self.subject_revision or "",
-        }
 
 
 def state_revision(work_root: Path) -> str:
@@ -62,7 +52,7 @@ def coordinator_generation(work_root: Path) -> int:
     return read_coordinator(work_root / "coordinator.json").generation
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class ActionFactory:
     revision: str
     generation: int

@@ -1,14 +1,15 @@
-from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 from pathlib import Path
 
+from attrs import frozen
 
-class Severity(StrEnum):
+
+class Severity(Enum):
     ERROR = "error"
     WARNING = "warning"
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class Diagnostic:
     code: str
     severity: Severity

@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,13 +7,13 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from repo_work.actions import Action, actions_for
+from repo_work.json_codec import JsonValue
 from repo_work.markdown import parse_queue, render_queue
 from repo_work.model import Queue, QueueItem, WorkState
-from repo_work.transition import apply_action
 from repo_work.transition_input import TransitionInputError, parse_transition_input
 from repo_work.validate import validate_work_state
 
-from .support import create_state
+from .support import apply_action, create_state
 
 ITEM_IDS = st.from_regex(r"[a-z][a-z0-9]{0,7}(?:-[a-z0-9]{1,8})?", fullmatch=True)
 
@@ -43,8 +44,8 @@ class ParseRenderProperties(unittest.TestCase):
 
     @settings(max_examples=50)
     @given(invalid=st.one_of(st.none(), st.integers(), st.lists(st.integers()), st.dictionaries(st.text(), st.text())))
-    def test_transition_input_rejects_non_string_attempt(self, invalid: object) -> None:
-        value: dict[str, object] = {
+    def test_transition_input_rejects_non_string_attempt(self, invalid: JsonValue) -> None:
+        value: dict[str, JsonValue] = {
             "attempt": invalid,
             "branch": "codex/reveal-core",
             "base_revision": "abc123",
@@ -52,7 +53,7 @@ class ParseRenderProperties(unittest.TestCase):
         }
 
         with self.assertRaises(TransitionInputError):
-            parse_transition_input("activate", value)
+            parse_transition_input("activate", json.dumps(value))
 
 
 class WorkLedgerLifecycleTest(unittest.TestCase):

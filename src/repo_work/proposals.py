@@ -1,15 +1,25 @@
 import re
-from dataclasses import asdict, dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Final
+from typing import Final, override
+
+from attrs import frozen
+from cattrs.errors import BaseValidationError
 
 from repo_work.atomic import atomic_create
-from repo_work.json_values import JsonObjectError, read_json_object, render_json_object
+from repo_work.json_codec import (
+    JsonCodecError,
+    decode_json,
+    encode_json,
+    nested_exception,
+    read_json,
+    validation_message,
+    validation_paths,
+)
 from repo_work.model import SCHEMA_V1
 from repo_work.validate import validate_work_state
 
 IDENTITY_PATTERN: Final = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-RELATIONS: Final = frozenset({"independent", "prerequisite", "follow-up", "duplicate", "contradiction"})
 
 
 class ProposalError(RuntimeError):
@@ -20,13 +30,32 @@ class ProposalError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-@dataclass(frozen=True, slots=True)
+class RelationKind(Enum):
+    INDEPENDENT = "independent"
+    PREREQUISITE = "prerequisite"
+    FOLLOW_UP = "follow-up"
+    DUPLICATE = "duplicate"
+    CONTRADICTION = "contradiction"
+
+
+class ProposalDispositionKind(Enum):
+    ACCEPTED = "accepted"
+    MERGED = "merged"
+    RETURNED = "returned"
+    REJECTED = "rejected"
+
+
+@frozen
 class ProposalRelation:
-    kind: str
+    kind: RelationKind
     item: str | None
 
+    def __attrs_post_init__(self) -> None:
+        if self.item is not None and not IDENTITY_PATTERN.fullmatch(self.item):
+            raise ProposalError("PROPOSAL_RELATION_INVALID", "relation.item must be null or a work item identity.")
 
-@dataclass(frozen=True, slots=True)
+
+@frozen
 class Proposal:
     schema: str
     proposal_id: str
@@ -42,82 +71,109 @@ class Proposal:
     urgency_evidence: str
     freshness_assumptions: tuple[str, ...]
 
-    def as_json(self) -> dict[str, object]:
-        result: dict[str, object] = asdict(self)
-        result["evidence"] = list(self.evidence)
-        result["freshness_assumptions"] = list(self.freshness_assumptions)
-        return result
+    def __attrs_post_init__(self) -> None:
+        if self.schema != SCHEMA_V1:
+            raise ProposalError("PROPOSAL_SCHEMA_INVALID", f"Proposal must use '{SCHEMA_V1}'.")
+        if not IDENTITY_PATTERN.fullmatch(self.proposal_id):
+            raise ProposalError("PROPOSAL_ID_INVALID", f"Invalid proposal identity '{self.proposal_id}'.")
+        fields = (
+            ("proposal_id", self.proposal_id),
+            ("created_at", self.created_at),
+            ("source_task_id", self.source_task_id),
+            ("user_label", self.user_label),
+            ("trigger", self.trigger),
+            ("why_it_matters", self.why_it_matters),
+            ("effect", self.effect),
+            ("unlock", self.unlock),
+            ("urgency_evidence", self.urgency_evidence),
+        )
+        for name, value in fields:
+            if not value.strip():
+                raise ProposalError("PROPOSAL_FIELD_REQUIRED", f"'{name}' must be a non-empty string.")
+            if "\n" in value or "|" in value:
+                raise ProposalError("PROPOSAL_FIELD_INVALID", f"'{name}' cannot contain a newline or pipe.")
+        if not all(self.evidence) or not all(self.freshness_assumptions):
+            raise ProposalError("PROPOSAL_FIELD_INVALID", "List fields must contain non-empty strings.")
 
     def render(self) -> bytes:
-        return render_json_object(self.as_json())
+        return encode_json(self)
 
 
-def _text(value: dict[str, object], field: str) -> str:
-    content = value.get(field)
-    if not isinstance(content, str) or not content.strip():
-        raise ProposalError("PROPOSAL_FIELD_REQUIRED", f"'{field}' must be a non-empty string.")
-    if "\n" in content or "|" in content:
-        raise ProposalError("PROPOSAL_FIELD_INVALID", f"'{field}' cannot contain a newline or pipe.")
-    return content
+@frozen
+class ProposalHistory(Proposal):
+    disposition: ProposalDispositionKind
+    target: str | None
+    coordinator_reason: str | None = None
+
+    @classmethod
+    def record(
+        cls,
+        proposal: Proposal,
+        disposition: ProposalDispositionKind,
+        target: str | None,
+        coordinator_reason: str | None = None,
+    ) -> ProposalHistory:
+        return cls(
+            schema=proposal.schema,
+            proposal_id=proposal.proposal_id,
+            created_at=proposal.created_at,
+            source_task_id=proposal.source_task_id,
+            user_label=proposal.user_label,
+            trigger=proposal.trigger,
+            evidence=proposal.evidence,
+            why_it_matters=proposal.why_it_matters,
+            relation=proposal.relation,
+            effect=proposal.effect,
+            unlock=proposal.unlock,
+            urgency_evidence=proposal.urgency_evidence,
+            freshness_assumptions=proposal.freshness_assumptions,
+            disposition=disposition,
+            target=target,
+            coordinator_reason=coordinator_reason,
+        )
+
+    @override
+    def render(self) -> bytes:
+        return encode_json(self)
 
 
-def _strings(value: dict[str, object], field: str) -> tuple[str, ...]:
-    entries = value.get(field)
-    if not isinstance(entries, list) or not all(isinstance(entry, str) and entry for entry in entries):
-        raise ProposalError("PROPOSAL_FIELD_INVALID", f"'{field}' must be a list of non-empty strings.")
-    return tuple(entries)
+def _proposal_validation_error(error: BaseValidationError) -> ProposalError:
+    domain_error = nested_exception(error, ProposalError)
+    if domain_error is not None:
+        return domain_error
+    paths = validation_paths(error)
+    if any(path and path[0] == "relation" for path in paths):
+        return ProposalError("PROPOSAL_RELATION_INVALID", validation_message(error))
+    if any(path and path[0] == "proposal_id" for path in paths):
+        return ProposalError("PROPOSAL_ID_INVALID", validation_message(error))
+    return ProposalError("PROPOSAL_FIELD_INVALID", validation_message(error))
 
 
-def _relation(value: object) -> ProposalRelation:
-    if not isinstance(value, dict):
-        raise ProposalError("PROPOSAL_RELATION_INVALID", "relation must be an object.")
-    kind = value.get("kind")
-    if not isinstance(kind, str) or kind not in RELATIONS:
-        raise ProposalError("PROPOSAL_RELATION_INVALID", "relation.kind is not supported.")
-    item = value.get("item")
-    if item is not None and (not isinstance(item, str) or not IDENTITY_PATTERN.fullmatch(item)):
-        raise ProposalError("PROPOSAL_RELATION_INVALID", "relation.item must be null or a work item identity.")
-    return ProposalRelation(kind=kind, item=item)
-
-
-def parse_proposal(value: dict[str, object]) -> Proposal:
-    schema = _text(value, "schema")
-    if schema != SCHEMA_V1:
-        raise ProposalError("PROPOSAL_SCHEMA_INVALID", f"Proposal must use '{SCHEMA_V1}'.")
-    proposal_id = _text(value, "proposal_id")
-    if not IDENTITY_PATTERN.fullmatch(proposal_id):
-        raise ProposalError("PROPOSAL_ID_INVALID", f"Invalid proposal identity '{proposal_id}'.")
-    return Proposal(
-        schema=schema,
-        proposal_id=proposal_id,
-        created_at=_text(value, "created_at"),
-        source_task_id=_text(value, "source_task_id"),
-        user_label=_text(value, "user_label"),
-        trigger=_text(value, "trigger"),
-        evidence=_strings(value, "evidence"),
-        why_it_matters=_text(value, "why_it_matters"),
-        relation=_relation(value.get("relation")),
-        effect=_text(value, "effect"),
-        unlock=_text(value, "unlock"),
-        urgency_evidence=_text(value, "urgency_evidence"),
-        freshness_assumptions=_strings(value, "freshness_assumptions"),
-    )
+def parse_proposal(data: bytes | str) -> Proposal:
+    try:
+        return decode_json(data, Proposal)
+    except JsonCodecError as error:
+        raise ProposalError("PROPOSAL_INVALID", error.message) from error
+    except BaseValidationError as error:
+        raise _proposal_validation_error(error) from error
 
 
 def read_proposal(path: Path) -> Proposal:
     try:
-        return parse_proposal(read_json_object(path, code="PROPOSAL_INVALID", subject="proposal"))
-    except JsonObjectError as error:
-        raise ProposalError(error.code, str(error).partition(": ")[2]) from error
+        return read_json(path, Proposal)
+    except JsonCodecError as error:
+        raise ProposalError("PROPOSAL_INVALID", error.message) from error
+    except BaseValidationError as error:
+        raise _proposal_validation_error(error) from error
 
 
-def create_proposal(work_root: Path, project_root: Path, value: dict[str, object]) -> Path:
+def create_proposal(work_root: Path, project_root: Path, data: bytes | str) -> Path:
     if not (work_root / "coordinator.json").is_file():
         raise ProposalError("COORDINATOR_NOT_REGISTERED", "Register an exact coordinator before submitting intake.")
     report = validate_work_state(work_root, project_root)
     if not report.valid:
         raise ProposalError("WORK_STATE_INVALID", report.render())
-    proposal = parse_proposal(value)
+    proposal = parse_proposal(data)
     path = work_root / "inbox" / f"{proposal.proposal_id}.json"
     try:
         atomic_create(path, proposal.render())

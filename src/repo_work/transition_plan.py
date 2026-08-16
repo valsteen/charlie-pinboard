@@ -1,13 +1,13 @@
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
+from attrs import evolve, frozen
+
 from repo_work.actions import Action
 from repo_work.coordinator import CoordinatorRegistration
-from repo_work.json_values import render_json_object
 from repo_work.markdown import (
     CurrentPointer,
     parse_current,
@@ -17,7 +17,7 @@ from repo_work.markdown import (
     replace_header_fields,
 )
 from repo_work.model import SCHEMA_V1, Queue, QueueItem, WorkState
-from repo_work.proposals import Proposal, read_proposal
+from repo_work.proposals import Proposal, ProposalDispositionKind, ProposalHistory, read_proposal
 from repo_work.transaction_store import ChangeSet, FileChange, delete_change, write_bytes_change, write_change
 from repo_work.transition_input import (
     AcceptProposalInput,
@@ -39,7 +39,7 @@ class TransitionPlanError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class PlanContext:
     work_root: Path
     project_root: Path
@@ -99,7 +99,7 @@ def _activate(context: PlanContext, action: Action, value: TransitionInput) -> C
     attempt_path = context.work_root / "attempts" / value.attempt / "attempt.md"
     if attempt_path.exists():
         raise TransitionPlanError("ATTEMPT_ALREADY_EXISTS", f"Attempt '{value.attempt}' already exists.")
-    items[index] = replace(items[index], state=WorkState.ACTIVE, attempt=value.attempt, next_action="continue")
+    items[index] = evolve(items[index], state=WorkState.ACTIVE, attempt=value.attempt, next_action="continue")
     return ChangeSet.of(
         write_change(f"attempts/{value.attempt}/attempt.md", _attempt_text(action.subject, value)),
         _queue_change(context, items),
@@ -117,7 +117,7 @@ def _pause_or_block(context: PlanContext, action: Action, value: TransitionInput
     dependencies = items[index].depends_on
     if action.kind == "block":
         dependencies = tuple(dict.fromkeys((*dependencies, *value.depends_on)))
-    items[index] = replace(
+    items[index] = evolve(
         items[index],
         state=target,
         depends_on=dependencies,
@@ -177,14 +177,14 @@ def _resume(context: PlanContext, action: Action, _value: TransitionInput) -> Ch
     if any(dependency in live_ids for dependency in item.depends_on):
         raise TransitionPlanError("DEPENDENCY_NOT_SATISFIED", f"Item '{action.subject}' still has a live dependency.")
     if item.attempt is None:
-        items[index] = replace(item, state=WorkState.READY, next_action="activate")
+        items[index] = evolve(item, state=WorkState.READY, next_action="activate")
         return ChangeSet.of(_queue_change(context, items))
     attempt_path = f"attempts/{item.attempt}/attempt.md"
     attempt_text = replace_header_fields(
         (context.work_root / attempt_path).read_text(encoding="utf-8"),
         {"state": "active", "updated": f'"{date.today().isoformat()}"'},
     )
-    items[index] = replace(item, state=WorkState.ACTIVE, next_action="continue")
+    items[index] = evolve(item, state=WorkState.ACTIVE, next_action="continue")
     return ChangeSet.of(
         write_change(attempt_path, attempt_text),
         _queue_change(context, items),
@@ -198,7 +198,7 @@ def _reopen(context: PlanContext, action: Action, value: TransitionInput) -> Cha
     index = _item_index(items, action.subject)
     if items[index].state != WorkState.DEFERRED:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", f"Item '{action.subject}' is not deferred.")
-    items[index] = replace(
+    items[index] = evolve(
         items[index],
         state=WorkState.INTAKE,
         timing=None,
@@ -214,7 +214,7 @@ def _mark_ready(context: PlanContext, action: Action, value: TransitionInput) ->
     index = _item_index(items, action.subject)
     if items[index].state != WorkState.INTAKE:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", f"Item '{action.subject}' is not in intake.")
-    items[index] = replace(items[index], state=WorkState.READY, next_action="activate", notes=f"Ready: {value.reason}")
+    items[index] = evolve(items[index], state=WorkState.READY, next_action="activate", notes=f"Ready: {value.reason}")
     return ChangeSet.of(_queue_change(context, items))
 
 
@@ -224,7 +224,7 @@ def _block_item(context: PlanContext, action: Action, value: TransitionInput) ->
     index = _item_index(items, action.subject)
     if items[index].state not in {WorkState.INTAKE, WorkState.READY}:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", f"Item '{action.subject}' cannot be blocked now.")
-    items[index] = replace(
+    items[index] = evolve(
         items[index], state=WorkState.BLOCKED, depends_on=value.depends_on, next_action=None, notes=value.reason
     )
     return ChangeSet.of(_queue_change(context, items))
@@ -239,19 +239,19 @@ def _defer(context: PlanContext, action: Action, value: TransitionInput) -> Chan
     item = items[index]
     if item.state not in {WorkState.INTAKE, WorkState.READY, WorkState.BLOCKED} or item.attempt is not None:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", f"Item '{action.subject}' cannot be deferred now.")
-    items[index] = replace(
+    items[index] = evolve(
         item, state=WorkState.DEFERRED, timing=value.timing, next_action=None, notes=value.reopen_condition
     )
     return ChangeSet.of(_queue_change(context, items))
 
 
-def _proposal_history(proposal: Proposal, disposition: str, target: str | None, reason: str | None = None) -> bytes:
-    result = proposal.as_json()
-    result["disposition"] = disposition
-    result["target"] = target
-    if reason is not None:
-        result["coordinator_reason"] = reason
-    return render_json_object(result)
+def _proposal_history(
+    proposal: Proposal,
+    disposition: ProposalDispositionKind,
+    target: str | None,
+    reason: str | None = None,
+) -> bytes:
+    return ProposalHistory.record(proposal, disposition, target, reason).render()
 
 
 def _proposal_paths(context: PlanContext, action: Action) -> tuple[str, str, Proposal]:
@@ -295,7 +295,7 @@ def _accept_proposal(context: PlanContext, action: Action, value: TransitionInpu
     return ChangeSet.of(
         write_change(f"items/{value.item}.md", item_text),
         _queue_change(context, [*items, item]),
-        write_bytes_change(history, _proposal_history(proposal, "accepted", value.item)),
+        write_bytes_change(history, _proposal_history(proposal, ProposalDispositionKind.ACCEPTED, value.item)),
         delete_change(inbox),
     )
 
@@ -313,7 +313,7 @@ def _merge_proposal(context: PlanContext, action: Action, value: TransitionInput
     item_text += f"\n## Intake evidence: {action.subject}\n\n{proposal.trigger}\n"
     return ChangeSet.of(
         write_change(item_path, item_text),
-        write_bytes_change(history, _proposal_history(proposal, "merged", value.target)),
+        write_bytes_change(history, _proposal_history(proposal, ProposalDispositionKind.MERGED, value.target)),
         delete_change(inbox),
     )
 
@@ -321,7 +321,9 @@ def _merge_proposal(context: PlanContext, action: Action, value: TransitionInput
 def _dispose_proposal(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
     value = cast(ReasonInput, value)
     inbox, history, proposal = _proposal_paths(context, action)
-    disposition = "returned" if action.kind == "return-proposal" else "rejected"
+    disposition = (
+        ProposalDispositionKind.RETURNED if action.kind == "return-proposal" else ProposalDispositionKind.REJECTED
+    )
     return ChangeSet.of(
         write_bytes_change(history, _proposal_history(proposal, disposition, None, value.reason)),
         delete_change(inbox),

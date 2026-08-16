@@ -4,14 +4,13 @@ import unittest
 from repo_work.actions import actions_for
 from repo_work.markdown import parse_queue
 from repo_work.model import WorkState
-from repo_work.proposals import ProposalError, create_proposal
-from repo_work.transition import apply_action
+from repo_work.proposals import ProposalError
 from repo_work.validate import validate_work_state
 
-from .support import create_state
+from .support import JsonObject, apply_action, create_proposal, create_state
 
 
-def proposal(proposal_id: str = "finding-1") -> dict[str, object]:
+def proposal(proposal_id: str = "finding-1") -> JsonObject:
     return {
         "schema": "repo-work/v1",
         "proposal_id": proposal_id,

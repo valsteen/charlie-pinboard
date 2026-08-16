@@ -1,15 +1,15 @@
 import argparse
-import json
 import sys
 from collections import Counter
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
+
+from attrs import frozen
 
 from repo_work import __version__
 from repo_work.actions import Action, ActionError, actions_for, state_revision
 from repo_work.coordinator import read_coordinator
-from repo_work.json_values import JsonObjectError, read_json_object
+from repo_work.json_codec import encode_json
 from repo_work.markdown import parse_current, parse_queue
 from repo_work.proposals import ProposalError, create_proposal
 from repo_work.registration import RegistrationError, initialize_work_state
@@ -18,7 +18,7 @@ from repo_work.transition import TransitionError, apply_action
 from repo_work.validate import ValidationReport, validate_work_state
 
 
-@dataclass(frozen=True, slots=True)
+@frozen
 class CommandContext:
     arguments: argparse.Namespace
     project: Path
@@ -26,6 +26,81 @@ class CommandContext:
 
 
 type CommandHandler = Callable[[CommandContext], int]
+
+
+@frozen
+class RootView:
+    project_root: str
+    work_root: str
+
+
+@frozen
+class DiagnosticView:
+    code: str
+    severity: str
+    path: str
+    message: str
+    hint: str | None
+
+
+@frozen
+class ValidationView:
+    valid: bool
+    diagnostics: tuple[DiagnosticView, ...]
+
+
+@frozen
+class CoordinatorView:
+    task_id: str
+    host_id: str
+    generation: int
+
+
+@frozen
+class StatusView:
+    valid: bool
+    project_root: str
+    work_root: str
+    revision: str
+    focus_item: str | None
+    focus_attempt: str | None
+    active_attempts: tuple[str, ...]
+    next_action: str
+    counts: dict[str, int]
+    inbox_count: int
+    coordinator: CoordinatorView
+
+
+@frozen
+class ActionView:
+    action_id: str
+    kind: str
+    subject: str
+    label: str
+    expected_revision: str
+    coordinator_generation: int
+    subject_revision: str
+
+    @classmethod
+    def from_action(cls, action: Action) -> ActionView:
+        return cls(
+            action_id=action.action_id,
+            kind=action.kind,
+            subject=action.subject,
+            label=action.label,
+            expected_revision=action.expected_revision,
+            coordinator_generation=action.coordinator_generation,
+            subject_revision=action.subject_revision or "",
+        )
+
+
+@frozen
+class ActionsView:
+    actions: tuple[ActionView, ...]
+
+
+def _write_json[T](value: T) -> None:
+    sys.stdout.write(encode_json(value).decode())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,46 +139,44 @@ def _roots(arguments: argparse.Namespace) -> tuple[Path, Path]:
     return project, work
 
 
-def _diagnostic_json(report: ValidationReport) -> dict[str, object]:
-    return {
-        "valid": report.valid,
-        "diagnostics": [
-            {
-                "code": diagnostic.code,
-                "severity": diagnostic.severity.value,
-                "path": str(diagnostic.path),
-                "message": diagnostic.message,
-                "hint": diagnostic.hint,
-            }
+def _diagnostic_view(report: ValidationReport) -> ValidationView:
+    return ValidationView(
+        valid=report.valid,
+        diagnostics=tuple(
+            DiagnosticView(
+                code=diagnostic.code,
+                severity=diagnostic.severity.value,
+                path=str(diagnostic.path),
+                message=diagnostic.message,
+                hint=diagnostic.hint,
+            )
             for diagnostic in report.diagnostics
-        ],
-    }
+        ),
+    )
 
 
-def _status_value(work: Path, project: Path) -> dict[str, object]:
+def _status_value(work: Path, project: Path) -> StatusView:
     report = validate_work_state(work, project)
     if not report.valid:
         raise ActionError("WORK_STATE_INVALID", report.render())
     queue = parse_queue(work / "queue.md")
     current = parse_current(work / "current.md")
     coordinator = read_coordinator(work / "coordinator.json")
-    return {
-        "valid": True,
-        "project_root": str(project),
-        "work_root": str(work),
-        "revision": state_revision(work),
-        "focus_item": current.focus_item,
-        "focus_attempt": current.focus_attempt,
-        "active_attempts": [item.attempt for item in queue.items if item.state.value == "active"],
-        "next_action": current.next_action,
-        "counts": dict(Counter(item.state.value for item in queue.items)),
-        "inbox_count": len(list((work / "inbox").glob("*.json"))),
-        "coordinator": {
-            "task_id": coordinator.task_id,
-            "host_id": coordinator.host_id,
-            "generation": coordinator.generation,
-        },
-    }
+    return StatusView(
+        valid=True,
+        project_root=str(project),
+        work_root=str(work),
+        revision=state_revision(work),
+        focus_item=current.focus_item,
+        focus_attempt=current.focus_attempt,
+        active_attempts=tuple(
+            item.attempt for item in queue.items if item.state.value == "active" and item.attempt is not None
+        ),
+        next_action=current.next_action,
+        counts=dict(Counter(item.state.value for item in queue.items)),
+        inbox_count=len(list((work / "inbox").glob("*.json"))),
+        coordinator=CoordinatorView(coordinator.task_id, coordinator.host_id, coordinator.generation),
+    )
 
 
 def _action_from_arguments(arguments: argparse.Namespace) -> Action:
@@ -122,14 +195,14 @@ def _action_from_arguments(arguments: argparse.Namespace) -> Action:
 
 
 def _root(context: CommandContext) -> int:
-    print(json.dumps({"project_root": str(context.project), "work_root": str(context.work)}, sort_keys=True))
+    _write_json(RootView(str(context.project), str(context.work)))
     return 0
 
 
 def _validate(context: CommandContext) -> int:
     report = validate_work_state(context.work, context.project)
     if bool(getattr(context.arguments, "json", False)):
-        print(json.dumps(_diagnostic_json(report), indent=2, sort_keys=True))
+        _write_json(_diagnostic_view(report))
     else:
         print(report.render())
     return 0 if report.valid else 10
@@ -138,11 +211,11 @@ def _validate(context: CommandContext) -> int:
 def _status(context: CommandContext) -> int:
     value = _status_value(context.work, context.project)
     if bool(getattr(context.arguments, "json", False)):
-        print(json.dumps(value, indent=2, sort_keys=True))
+        _write_json(value)
     else:
-        print(f"OK WORK_STATE_VALID revision={value['revision']}")
-        print(f"focus_item={value['focus_item'] or 'none'} focus_attempt={value['focus_attempt'] or 'none'}")
-        print(f"next_action={value['next_action']} inbox={value['inbox_count']}")
+        print(f"OK WORK_STATE_VALID revision={value.revision}")
+        print(f"focus_item={value.focus_item or 'none'} focus_attempt={value.focus_attempt or 'none'}")
+        print(f"next_action={value.next_action} inbox={value.inbox_count}")
     return 0
 
 
@@ -152,7 +225,7 @@ def _actions(context: CommandContext) -> int:
         raise ActionError("ROLE_INVALID", "A role is required.")
     available = actions_for(context.work, context.project, role)
     if bool(getattr(context.arguments, "json", False)):
-        print(json.dumps({"actions": [action.as_dict() for action in available]}, indent=2, sort_keys=True))
+        _write_json(ActionsView(tuple(ActionView.from_action(action) for action in available)))
     elif not available:
         print("OK NO_ACTIONS_AVAILABLE")
     else:
@@ -175,8 +248,11 @@ def _proposal(context: CommandContext) -> int:
     path = getattr(context.arguments, "file", None)
     if not isinstance(path, Path):
         raise ProposalError("PROPOSAL_INVALID", "A proposal file is required.")
-    value = read_json_object(path, code="PROPOSAL_INVALID", subject="proposal")
-    created = create_proposal(context.work, context.project, value)
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise ProposalError("PROPOSAL_INVALID", f"Cannot read proposal at '{path}': {error}") from error
+    created = create_proposal(context.work, context.project, data)
     print(f"OK PROPOSAL_CREATED {created}")
     return 0
 
@@ -186,7 +262,10 @@ def _transition(context: CommandContext) -> int:
     if not isinstance(payload_path, Path):
         raise TransitionError("TRANSITION_INPUT_INVALID", "A transition payload file is required.")
     action = _action_from_arguments(context.arguments)
-    payload = read_json_object(payload_path, code="TRANSITION_INPUT_INVALID", subject="transition payload")
+    try:
+        payload = payload_path.read_bytes()
+    except OSError as error:
+        raise TransitionError("TRANSITION_INPUT_INVALID", f"Cannot read transition payload: {error}") from error
     apply_action(context.work, context.project, action, payload)
     print(f"OK TRANSITION_APPLIED {action.action_id}")
     return 0
@@ -215,7 +294,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
         return _dispatch(arguments)
-    except (RootError, OSError, JsonObjectError) as error:
+    except (RootError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 2
     except (ActionError, TransitionError) as error:
@@ -226,4 +305,4 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 12
     except ProposalError as error:
         print(str(error), file=sys.stderr)
-        return 13
+        return 2 if error.code == "PROPOSAL_INVALID" else 13

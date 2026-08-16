@@ -2,6 +2,14 @@ import json
 import tempfile
 from pathlib import Path
 
+from repo_work.actions import Action
+from repo_work.json_codec import JsonValue
+from repo_work.proposals import create_proposal as create_serialized_proposal
+from repo_work.transaction_store import CommitFailpoint
+from repo_work.transition import apply_action as apply_serialized_action
+
+type JsonObject = dict[str, JsonValue]
+
 QUEUE_TEMPLATE = """\
 ---
 kind: work-queue
@@ -112,3 +120,18 @@ def create_state(
             encoding="utf-8",
         )
     return project, work
+
+
+def apply_action(
+    work: Path,
+    project: Path,
+    action: Action,
+    payload: JsonObject,
+    *,
+    failpoint: CommitFailpoint | None = None,
+) -> None:
+    apply_serialized_action(work, project, action, json.dumps(payload), failpoint=failpoint)
+
+
+def create_proposal(work: Path, project: Path, value: JsonObject) -> Path:
+    return create_serialized_proposal(work, project, json.dumps(value))
