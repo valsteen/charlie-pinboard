@@ -10,6 +10,7 @@ import msgspec
 from repo_work import __version__
 from repo_work.actions import Action, ActionError, actions_for, state_revision
 from repo_work.coordinator import read_coordinator
+from repo_work.dispatch import DispatchError, prepare_dispatch, read_dispatch_environment
 from repo_work.markdown import parse_current, parse_queue
 from repo_work.proposals import ProposalError, create_proposal
 from repo_work.registration import RegistrationError, initialize_work_state
@@ -122,6 +123,24 @@ def build_parser() -> argparse.ArgumentParser:
     transition.add_argument("--generation", required=True, type=int)
     transition.add_argument("--subject-revision")
     transition.add_argument("--payload", required=True, type=Path)
+    dispatch = commands.add_parser("dispatch", help="Prepare or verify a canonical worker launch.")
+    dispatch.add_argument("--action-id", required=True, help="Exact dispatch action returned by coordinator actions.")
+    dispatch.add_argument("--expected-revision", required=True, help="Ledger revision from the dispatch action.")
+    dispatch.add_argument("--generation", required=True, type=int, help="Coordinator generation from the action.")
+    dispatch.add_argument(
+        "--checkpoint", required=True, help="Exact checkpoint heading in the canonical attempt brief."
+    )
+    dispatch.add_argument(
+        "--environment",
+        required=True,
+        type=Path,
+        help="repo-work-dispatch/v1 JSON describing the checkout, branch, revision, and permissions.",
+    )
+    dispatch.add_argument(
+        "--prompt",
+        type=Path,
+        help="Verify this transported prompt instead of rendering the canonical prompt.",
+    )
     return parser
 
 
@@ -265,6 +284,36 @@ def _transition(context: CommandContext) -> int:
     return 0
 
 
+def _prepare_dispatch(context: CommandContext) -> int:
+    environment_path = getattr(context.arguments, "environment", None)
+    checkpoint = getattr(context.arguments, "checkpoint", None)
+    prompt_path = getattr(context.arguments, "prompt", None)
+    if not isinstance(environment_path, Path) or not isinstance(checkpoint, str):
+        raise DispatchError("DISPATCH_INPUT_INVALID", "Dispatch environment and checkpoint are required.")
+    environment = read_dispatch_environment(environment_path)
+    supplied_prompt: bytes | None = None
+    if prompt_path is not None:
+        if not isinstance(prompt_path, Path):
+            raise DispatchError("DISPATCH_INPUT_INVALID", "Prompt path must be a filesystem path.")
+        try:
+            supplied_prompt = prompt_path.read_bytes()
+        except OSError as error:
+            raise DispatchError("DISPATCH_PROMPT_UNREADABLE", f"Cannot read '{prompt_path}': {error}") from error
+    prompt = prepare_dispatch(
+        context.work,
+        context.project,
+        _action_from_arguments(context.arguments),
+        checkpoint,
+        environment,
+        supplied_prompt,
+    )
+    if supplied_prompt is None:
+        sys.stdout.write(prompt)
+    else:
+        print("OK DISPATCH_READY")
+    return 0
+
+
 COMMANDS: dict[str, CommandHandler] = {
     "root": _root,
     "validate": _validate,
@@ -273,6 +322,7 @@ COMMANDS: dict[str, CommandHandler] = {
     "init": _initialize,
     "proposal": _proposal,
     "transition": _transition,
+    "dispatch": _prepare_dispatch,
 }
 
 
@@ -300,3 +350,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ProposalError as error:
         print(str(error), file=sys.stderr)
         return 2 if error.code == "PROPOSAL_INVALID" else 13
+    except DispatchError as error:
+        print(str(error), file=sys.stderr)
+        return 14

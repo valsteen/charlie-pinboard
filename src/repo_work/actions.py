@@ -90,6 +90,7 @@ def _active_coordinator_actions(items: tuple[QueueItem, ...], factory: ActionFac
         result.extend(
             (
                 factory.make("continue", item.attempt, f"Continue {item.item}"),
+                factory.make("dispatch", item.attempt, f"Prepare a worker launch for {item.item}"),
                 factory.make("pause", item.attempt, f"Pause and preserve {item.item}"),
                 factory.make("block", item.attempt, f"Block {item.item} on a named condition"),
                 factory.make("complete", item.attempt, f"Accept and complete {item.item}"),

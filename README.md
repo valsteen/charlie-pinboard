@@ -5,9 +5,9 @@
 [![uv](https://img.shields.io/badge/managed%20with-uv-DE5FE9?logo=uv)](https://docs.astral.sh/uv/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Keep one trustworthy quest log while several Codex tasks explore and build in the same repository.
+Keep one trustworthy quest log—and one trustworthy execution brief—while several Codex tasks explore and build in the same repository.
 
-Codex Repository Work helps when a feature stops being a straight line. Side tasks can bring back useful discoveries without turning every chat transcript, topic folder, or feature branch into another backlog. One coordinator task keeps the shared work list coherent and shows everyone else where the project actually stands.
+Codex Repository Work helps when a feature stops being a straight line. Side tasks can bring back useful discoveries without turning every chat transcript, topic folder, or feature branch into another backlog. When a piece of work is ready, the same workflow keeps its scope and checks intact from planning through implementation and review.
 
 ## An indie RPG feature becomes a campaign
 
@@ -21,15 +21,21 @@ All of that is worth keeping, but not all of it should derail the boss feature. 
 
 ![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** Another task fixes the ability IDs, then the dragon task continues from its notes. If an older task tries to update a work list that has since changed, `repo-work` asks it to catch up first.
 
-Everything stays ordinary repository work: code, branches, worktrees, Markdown, and conversation. The plugin simply keeps the work list and the tasks using it from contradicting each other.
+Everything stays ordinary repository work: code, branches, worktrees, Markdown, and conversation. The plugin keeps the work list coherent and gives each implementation one canonical brief, so the task a worker receives is still the task the coordinator meant to send.
+
+## Where it saves rework
+
+The expensive failures are often small translation mistakes rather than dramatic crashes. A carefully scoped brief says “change both ends of this protocol together,” but the launch message casually says one end can wait. A precise test list becomes “run the relevant checks.” A link to one section turns into a request to reread half the repository. The worker can follow those instructions perfectly and still hand back something that review has to reject.
+
+The plugin avoids a second, handwritten version of the task. The accepted `attempt.md` stays in charge, while a generated launch message carries only the checkpoint and practical execution details such as the checkout, branch, and permissions. When a checkpoint crosses component boundaries, a short contract table makes the owner, required consumer, failure behavior, and exact verification visible before editing starts. Independent review still happens; it just has fewer surprises left to discover.
 
 ## What it gives you
 
 - one shared work list for features, bugs, cleanup, and foundation work;
 - an inbox where any Codex task can leave something it discovered;
-- one coordinator task that decides how the shared list changes;
-- enough recorded context to pause work and pick it up later;
-- an early warning when a task is working from an outdated view of the project;
+- a canonical attempt brief that survives the trip from planning to implementation;
+- enough recorded context and evidence to pause work, resume it, and review it without reconstruction;
+- early warnings for stale state, contradictory launch instructions, and incomplete cross-component checkpoints;
 - readable local files instead of another hosted service or database.
 
 It is most useful when repository work lasts for days, several Codex tasks are involved, or one piece of work keeps uncovering prerequisites. A short isolated change probably does not need it.
@@ -79,14 +85,14 @@ The project stores its private working state in ignored local files:
 .codex/topics/
 ```
 
-The Markdown stays readable and easy to inspect. `repo-work` checks that these files agree with each other before changing them, and it refuses updates made from an older version of the work list. It does not decide what matters, how important something is, or what the product should become.
+The Markdown stays readable and easy to inspect. `repo-work` checks that these files agree before changing them, refuses updates made from an older view, and prepares worker launches without copying the task semantics into another prompt. It does not decide what matters, how important something is, or what the product should become.
 
 The plugin contains:
 
 - `repo-work`, a small Python command that checks and updates the shared files;
 - `$repo-work`, which helps the coordinator explain the current picture and choose what happens next;
 - `$repo-work-intake`, which lets any task leave a finding for later review;
-- `$bounded-implementer`, which keeps one accepted piece of work focused while it is being implemented.
+- `$bounded-implementer`, which follows one accepted brief and returns evidence for independent review.
 
 ## Runtime and development
 
