@@ -1,0 +1,20 @@
+{
+  "name": "codex-repo-work",
+  "interface": {
+    "displayName": "Codex Repository Work"
+  },
+  "plugins": [
+    {
+      "name": "codex-repo-work",
+      "source": {
+        "source": "local",
+        "path": "."
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

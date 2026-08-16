@@ -5,6 +5,7 @@ from typing import Final
 
 ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
+PLUGIN_NAME: Final = "codex-repo-work"
 
 
 def validate_plugin() -> None:
@@ -16,8 +17,29 @@ def validate_plugin() -> None:
     missing = required - value.keys()
     if missing:
         raise ValueError(f"plugin manifest is missing: {', '.join(sorted(missing))}")
-    if value.get("name") != "codex-repo-work" or value.get("skills") != "./skills/":
+    if value.get("name") != PLUGIN_NAME or value.get("skills") != "./skills/":
         raise ValueError("plugin manifest identity or skill root is invalid")
+    if value.get("license") != "MIT":
+        raise ValueError("plugin manifest license must match the repository license")
+
+
+def validate_marketplace() -> None:
+    path = ROOT / ".agents" / "plugins" / "marketplace.json"
+    value: object = json.loads(path.read_text(encoding="utf-8"))
+    expected = {
+        "name": PLUGIN_NAME,
+        "interface": {"displayName": "Codex Repository Work"},
+        "plugins": [
+            {
+                "name": PLUGIN_NAME,
+                "source": {"source": "local", "path": "."},
+                "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+                "category": "Productivity",
+            }
+        ],
+    }
+    if value != expected:
+        raise ValueError("marketplace metadata must install the repository-root plugin")
 
 
 def validate_skill(path: Path) -> None:
@@ -42,12 +64,13 @@ def validate_skill(path: Path) -> None:
 
 def main() -> None:
     validate_plugin()
+    validate_marketplace()
     skill_paths = tuple(sorted((ROOT / "skills").glob("*/SKILL.md")))
     if not skill_paths:
         raise ValueError("plugin has no skills")
     for path in skill_paths:
         validate_skill(path)
-    print(f"validated plugin and {len(skill_paths)} skills")
+    print(f"validated plugin marketplace and {len(skill_paths)} skills")
 
 
 if __name__ == "__main__":

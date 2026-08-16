@@ -3,22 +3,69 @@
 [![CI](https://github.com/valsteen/codex-repo-work/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/codex-repo-work/actions/workflows/ci.yml)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![uv](https://img.shields.io/badge/managed%20with-uv-DE5FE9?logo=uv)](https://docs.astral.sh/uv/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Codex Repository Work coordinates one project-owned local work ledger without turning topic folders, branches, or chat transcripts into competing backlogs.
+Keep one trustworthy quest log while several Codex tasks explore and build in the same repository.
 
-The repository contains:
+Codex Repository Work helps when a feature stops being a straight line. Side tasks can bring back useful discoveries without turning every chat transcript, topic folder, or feature branch into another backlog. One coordinator task keeps the shared work list coherent and shows everyone else where the project actually stands.
 
-- `repo-work`, a standard-library Python command that validates work state, lists legal contextual actions, and applies narrow stale-safe transitions;
-- `$repo-work`, the coordinator and orientation skill;
-- `$repo-work-intake`, an intake skill that persists proposals separately from admission;
-- `$bounded-implementer`, an execution skill for one accepted attempt;
-- a Codex plugin manifest that distributes the command and skills as one unit.
+## An indie RPG feature becomes a campaign
+
+Imagine you are building *Ashfall Keep*, a small action RPG. One Codex task is working on the dragon boss's second phase. While tracing the combat code, you open two other tasks: one finds that save games capture temporary animation state, while the other discovers that controller mappings identify abilities by their inventory position.
+
+All of that is worth keeping, but not all of it should derail the boss feature. Without one shared place for the work, the original task becomes an accidental backlog, useful conclusions disappear into old conversations, and a feature branch slowly turns into a migration branch.
+
+![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** A side task comes back with a warning: “Before we can save the second phase safely, combat abilities need IDs that won’t change underneath us.” The coordinator will see it, but the work list does not change behind your back.
+
+![Pixel-art campfire checkpoint](assets/safe-camp.png) **The party makes camp.** The coordinator agrees that stable ability IDs come first. The dragon task notes exactly where it stopped and what needs to happen before it can pick the feature back up.
+
+![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** Another task fixes the ability IDs, then the dragon task continues from its notes. If an older task tries to update a work list that has since changed, `repo-work` asks it to catch up first.
+
+Everything stays ordinary repository work: code, branches, worktrees, Markdown, and conversation. The plugin simply keeps the work list and the tasks using it from contradicting each other.
+
+## What it gives you
+
+- one shared work list for features, bugs, cleanup, and foundation work;
+- an inbox where any Codex task can leave something it discovered;
+- one coordinator task that decides how the shared list changes;
+- enough recorded context to pause work and pick it up later;
+- an early warning when a task is working from an outdated view of the project;
+- readable local files instead of another hosted service or database.
+
+It is most useful when repository work lasts for days, several Codex tasks are involved, or one piece of work keeps uncovering prerequisites. A short isolated change probably does not need it.
+
+## Install from GitHub
+
+The plugin currently supports macOS and Linux. It uses [uv](https://docs.astral.sh/uv/) to provide its Python 3.14 runtime and installed command.
+
+Add this repository as a Codex marketplace, then install the plugin:
+
+```sh
+codex plugin marketplace add valsteen/codex-repo-work
+codex plugin add codex-repo-work@codex-repo-work
+```
+
+Start a new Codex task in the repository you want to coordinate and ask:
+
+> Set up repository work coordination here. Use this task as the coordinator.
+
+When another task uncovers something worth keeping, ask it:
+
+> Add this to the repository work inbox: saving a boss fight currently captures temporary animation state. Include what you found and why it could block phase-two save support.
+
+Back in the coordinator task, you can ask what came in, how it relates to work already underway, and what is ready to start. For example:
+
+> Show me where the project stands, what is waiting on something else, and what you recommend doing next.
 
 ## Core model
 
-Work is globally queued. Knowledge is thematically organized. Branches and worktrees belong to execution attempts.
+Three ideas keep responsibilities clear:
 
-The initial schema uses ignored project-local state:
+- the shared work list answers what the project may work on next;
+- topic folders hold research, designs, plans, and reports;
+- branches and worktrees belong to the concrete attempt to implement something.
+
+The project stores its private working state in ignored local files:
 
 ```text
 .codex/work/
@@ -32,11 +79,18 @@ The initial schema uses ignored project-local state:
 .codex/topics/
 ```
 
-Markdown remains readable and reviewable. The command enforces structural validity, coordinator generations, stale revisions, and legal transitions. Human and agent judgment still owns product meaning, evidence, priority, and scope.
+The Markdown stays readable and easy to inspect. `repo-work` checks that these files agree with each other before changing them, and it refuses updates made from an older version of the work list. It does not decide what matters, how important something is, or what the product should become.
+
+The plugin contains:
+
+- `repo-work`, a small Python command that checks and updates the shared files;
+- `$repo-work`, which helps the coordinator explain the current picture and choose what happens next;
+- `$repo-work-intake`, which lets any task leave a finding for later review;
+- `$bounded-implementer`, which keeps one accepted piece of work focused while it is being implemented.
 
 ## Runtime and development
 
-The package targets Python 3.14 only and has no runtime dependencies outside the standard library. `.python-version` pins the current stable 3.14 patch release. uv owns Python acquisition, the project environment, dependency resolution, the checked-in lockfile, and installed-package execution. The command and launcher support macOS and Linux.
+The package targets Python 3.14 only and has no runtime dependencies outside the standard library. `.python-version` pins the current stable 3.14 patch release. uv manages Python installation, the project environment, development dependencies, the checked-in lockfile, and command execution.
 
 ```sh
 uv sync --locked
@@ -50,6 +104,6 @@ uv build --no-sources
 scripts/repo-work --help
 ```
 
-Local checks, CI, and the plugin launcher all resolve the uv-installed package directly. The checked-in uv lockfile is the single development dependency record.
+Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record.
 
-Repository-owned metadata checks and the current Codex plugin and skill validators provide release evidence for the plugin bundle.
+CI also validates the plugin and its skills before the repository is published.
