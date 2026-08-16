@@ -3,6 +3,7 @@
 - Use Python 3.14.x syntax only. Keep `.python-version`, `requires-python`, Ruff `target-version`, Pyrefly, CI, and the uv lock aligned with the current stable 3.14 patch release.
 - Use uv as the only dependency, environment, build, and installed-package entry point. Keep `uv.lock` checked in.
 - Do not inject `PYTHONPATH` or another import path, invoke an ambient Python interpreter, add requirements files, or run source files as a substitute for the installed package.
+- Match checks to the changed surface. Run plugin and skill validators when plugin or skill files change, not merely because this repository contains them. Do not provision undeclared one-off dependencies solely for an unrelated optional check.
 - Keep Ruff `UP` as the only pyupgrade authority. Do not add standalone pyupgrade, MyPy, Pyright, or redundant type-checking layers.
 - Keep Pyrefly strict. Convert JSON and Markdown boundary values into exact validated types before domain use.
 - Keep Python types concrete. Do not use `object` or `Any` as annotation escape hatches. Use plain `Enum`; do not use `StrEnum`.
