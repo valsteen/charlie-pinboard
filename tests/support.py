@@ -3,11 +3,11 @@ import tempfile
 from pathlib import Path
 
 from repo_work.actions import Action
-from repo_work.json_codec import JsonValue
 from repo_work.proposals import create_proposal as create_serialized_proposal
 from repo_work.transaction_store import CommitFailpoint
 from repo_work.transition import apply_action as apply_serialized_action
 
+type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
 type JsonObject = dict[str, JsonValue]
 
 QUEUE_TEMPLATE = """\

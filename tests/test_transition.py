@@ -1,7 +1,6 @@
 import unittest
+from copy import replace
 from pathlib import Path
-
-from attrs import evolve
 
 from repo_work.actions import actions_for
 from repo_work.markdown import parse_current, parse_queue
@@ -136,7 +135,7 @@ class TransitionTest(unittest.TestCase):
     def test_wrong_coordinator_generation_changes_no_state(self) -> None:
         project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
         action = actions_for(work, project, role="coordinator")[0]
-        action = evolve(action, coordinator_generation=2)
+        action = replace(action, coordinator_generation=2)
         before = self.snapshot(work)
 
         with self.assertRaisesRegex(TransitionError, "COORDINATOR_OWNERSHIP_CONFLICT"):

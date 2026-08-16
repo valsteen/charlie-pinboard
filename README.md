@@ -90,7 +90,7 @@ The plugin contains:
 
 ## Runtime and development
 
-The package targets Python 3.14 only. Its runtime stack stays small: attrs defines the records and cattrs converts their JSON representation. `.python-version` pins the current stable 3.14 patch release. uv manages Python installation, the project environment, dependencies, the checked-in lockfile, and command execution.
+The package targets Python 3.14 only. msgspec provides the immutable records and strict JSON decoding used at repository boundaries. `.python-version` pins the current stable 3.14 patch release. uv manages Python installation, the project environment, dependencies, the checked-in lockfile, and command execution.
 
 ```sh
 uv sync --locked

@@ -1,20 +1,14 @@
 import base64
-import json
 import shutil
 import tempfile
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
-from attrs import frozen
-from cattrs.errors import BaseValidationError
+import msgspec
 
 from repo_work import validate as work_validation
 from repo_work.atomic import atomic_write
-from repo_work.json_codec import (
-    CONVERTER,
-    nested_exception,
-    register_json_array,
-)
+from repo_work.records import JsonRecord, Record
 from repo_work.storage_layout import journal_path_for
 
 
@@ -26,17 +20,15 @@ class AtomicCommitError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-@frozen
-class FileChange:
+class FileChange(Record):
     path: PurePosixPath
     data: bytes | None
 
 
-@frozen
-class ChangeSet:
+class ChangeSet(Record):
     changes: tuple[FileChange, ...]
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         paths: set[PurePosixPath] = set()
         for change in self.changes:
             if change.path.is_absolute() or ".." in change.path.parts or not change.path.parts:
@@ -50,31 +42,25 @@ class ChangeSet:
         return cls(tuple(changes))
 
 
-@frozen
-class OriginalFile:
+class OriginalFile(Record):
     path: PurePosixPath
     existed: bool
     data: bytes
 
 
-@frozen
-class JournalOriginal:
+class JournalOriginal(JsonRecord):
     path: str
     existed: bool
     data: str
 
 
-@frozen
-class JournalManifest:
+class JournalManifest(JsonRecord):
     schema: str
     originals: tuple[JournalOriginal, ...]
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         if self.schema != "repo-work-journal/v1":
             raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Unsupported transaction journal schema.")
-
-
-register_json_array(tuple[JournalOriginal, ...], JournalOriginal)
 
 
 type CommitFailpoint = Callable[[int, FileChange], None]
@@ -142,8 +128,8 @@ def _write_journal(work_root: Path, originals: tuple[OriginalFile, ...]) -> Path
         raise AtomicCommitError("COMMIT_RECOVERY_REQUIRED", f"Pending transaction journal exists at '{journal}'.")
     temporary = Path(tempfile.mkdtemp(prefix=f".{journal.name}.", dir=journal.parent))
     try:
-        manifest = CONVERTER.dumps(_journal_manifest(originals), indent=2, sort_keys=True) + "\n"
-        atomic_write(temporary / "manifest.json", manifest.encode())
+        encoded = msgspec.json.encode(_journal_manifest(originals), order="sorted")
+        atomic_write(temporary / "manifest.json", msgspec.json.format(encoded, indent=2) + b"\n")
         temporary.replace(journal)
     finally:
         if temporary.exists():
@@ -167,18 +153,11 @@ def _parse_original(value: JournalOriginal) -> OriginalFile:
 def _read_journal(journal: Path) -> tuple[OriginalFile, ...]:
     try:
         data = (journal / "manifest.json").read_bytes()
-        manifest = CONVERTER.loads(data, JournalManifest)
+        manifest = msgspec.json.decode(data, type=JournalManifest, strict=True)
     except OSError as error:
         raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Cannot read transaction journal: {error}") from error
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+    except msgspec.DecodeError as error:
         raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Cannot parse transaction journal: {error}") from error
-    except AttributeError as error:
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Transaction journal root must be an object.") from error
-    except BaseValidationError as error:
-        domain_error = nested_exception(error, AtomicCommitError)
-        if domain_error is not None:
-            raise domain_error from error
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", str(error)) from error
     return tuple(_parse_original(entry) for entry in manifest.originals)
 
 

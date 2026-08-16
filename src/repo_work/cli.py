@@ -4,22 +4,21 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from attrs import frozen
+import msgspec
 
 from repo_work import __version__
 from repo_work.actions import Action, ActionError, actions_for, state_revision
 from repo_work.coordinator import read_coordinator
-from repo_work.json_codec import CONVERTER
 from repo_work.markdown import parse_current, parse_queue
 from repo_work.proposals import ProposalError, create_proposal
+from repo_work.records import JsonRecord, Record
 from repo_work.registration import RegistrationError, initialize_work_state
 from repo_work.root import RootError, resolve_project_root
 from repo_work.transition import TransitionError, apply_action
 from repo_work.validate import ValidationReport, validate_work_state
 
 
-@frozen
-class CommandContext:
+class CommandContext(Record):
     arguments: argparse.Namespace
     project: Path
     work: Path
@@ -28,14 +27,12 @@ class CommandContext:
 type CommandHandler = Callable[[CommandContext], int]
 
 
-@frozen
-class RootView:
+class RootView(JsonRecord):
     project_root: str
     work_root: str
 
 
-@frozen
-class DiagnosticView:
+class DiagnosticView(JsonRecord):
     code: str
     severity: str
     path: str
@@ -43,21 +40,18 @@ class DiagnosticView:
     hint: str | None
 
 
-@frozen
-class ValidationView:
+class ValidationView(JsonRecord):
     valid: bool
     diagnostics: tuple[DiagnosticView, ...]
 
 
-@frozen
-class CoordinatorView:
+class CoordinatorView(JsonRecord):
     task_id: str
     host_id: str
     generation: int
 
 
-@frozen
-class StatusView:
+class StatusView(JsonRecord):
     valid: bool
     project_root: str
     work_root: str
@@ -71,8 +65,7 @@ class StatusView:
     coordinator: CoordinatorView
 
 
-@frozen
-class ActionView:
+class ActionView(JsonRecord):
     action_id: str
     kind: str
     subject: str
@@ -94,13 +87,13 @@ class ActionView:
         )
 
 
-@frozen
-class ActionsView:
+class ActionsView(JsonRecord):
     actions: tuple[ActionView, ...]
 
 
 def _write_json[T](value: T) -> None:
-    sys.stdout.write(CONVERTER.dumps(value, indent=2, sort_keys=True) + "\n")
+    encoded = msgspec.json.encode(value, order="sorted")
+    sys.stdout.write(msgspec.json.format(encoded, indent=2).decode() + "\n")
 
 
 def build_parser() -> argparse.ArgumentParser:

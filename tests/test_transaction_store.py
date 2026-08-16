@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 from repo_work.actions import actions_for
 from repo_work.diagnostics import Diagnostic, Severity
-from repo_work.json_codec import JsonValue
 from repo_work.transaction_store import (
     AtomicCommitError,
     ChangeSet,
@@ -18,7 +17,7 @@ from repo_work.transaction_store import (
 )
 from repo_work.validate import ValidationReport
 
-from .support import create_state
+from .support import JsonValue, create_state
 
 
 def snapshot(work: Path) -> dict[str, bytes]:

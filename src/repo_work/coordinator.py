@@ -1,18 +1,12 @@
-import json
 from pathlib import Path
 
-from attrs import frozen
-from cattrs.errors import BaseValidationError
+import msgspec
 
-from repo_work.json_codec import (
-    CONVERTER,
-    nested_exception,
-    validation_paths,
-)
 from repo_work.model import SCHEMA_V1
+from repo_work.records import JsonRecord
 
 
-class CoordinatorError(ValueError):
+class CoordinatorError(RuntimeError):
     code: str
 
     def __init__(self, code: str, message: str) -> None:
@@ -20,8 +14,7 @@ class CoordinatorError(ValueError):
         super().__init__(f"{code}: {message}")
 
 
-@frozen
-class CoordinatorRegistration:
+class CoordinatorRegistration(JsonRecord):
     schema: str
     project_root: str
     task_id: str
@@ -29,7 +22,7 @@ class CoordinatorRegistration:
     generation: int
     registered_at: str
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         if self.schema != SCHEMA_V1:
             raise CoordinatorError("COORDINATOR_SCHEMA_INVALID", f"Coordinator must use '{SCHEMA_V1}'.")
         if self.generation < 1:
@@ -45,27 +38,26 @@ class CoordinatorRegistration:
                 raise CoordinatorError("COORDINATOR_FIELD_INVALID", f"'{name}' must be a non-empty string.")
 
     def render(self) -> bytes:
-        return (CONVERTER.dumps(self, indent=2, sort_keys=True) + "\n").encode()
+        encoded = msgspec.json.encode(self, order="sorted")
+        return msgspec.json.format(encoded, indent=2) + b"\n"
 
 
-def _coordinator_validation_error(error: BaseValidationError) -> CoordinatorError:
-    domain_error = nested_exception(error, CoordinatorError)
-    if domain_error is not None:
-        return domain_error
-    if any(path and path[0] == "generation" for path in validation_paths(error)):
+def _coordinator_validation_error(error: msgspec.ValidationError) -> CoordinatorError:
+    message = str(error)
+    if message.startswith("Expected `object`"):
+        return CoordinatorError("COORDINATOR_INVALID", "JSON root must be an object.")
+    if "`generation`" in message or "$.generation" in message:
         return CoordinatorError("COORDINATOR_GENERATION_INVALID", "generation must be a positive integer.")
-    return CoordinatorError("COORDINATOR_FIELD_INVALID", str(error))
+    return CoordinatorError("COORDINATOR_FIELD_INVALID", message)
 
 
 def parse_coordinator(data: bytes | str) -> CoordinatorRegistration:
     try:
-        return CONVERTER.loads(data, CoordinatorRegistration)
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise CoordinatorError("COORDINATOR_INVALID", f"Cannot parse JSON: {error}") from error
-    except AttributeError as error:
-        raise CoordinatorError("COORDINATOR_INVALID", "JSON root must be an object.") from error
-    except BaseValidationError as error:
+        return msgspec.json.decode(data, type=CoordinatorRegistration, strict=True)
+    except msgspec.ValidationError as error:
         raise _coordinator_validation_error(error) from error
+    except msgspec.DecodeError as error:
+        raise CoordinatorError("COORDINATOR_INVALID", f"Cannot parse JSON: {error}") from error
 
 
 def read_coordinator(path: Path) -> CoordinatorRegistration:

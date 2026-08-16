@@ -1,19 +1,13 @@
-import json
 import re
 from enum import Enum
 from pathlib import Path
 from typing import Final, override
 
-from attrs import frozen
-from cattrs.errors import BaseValidationError
+import msgspec
 
 from repo_work.atomic import atomic_create
-from repo_work.json_codec import (
-    CONVERTER,
-    nested_exception,
-    validation_paths,
-)
 from repo_work.model import SCHEMA_V1
+from repo_work.records import JsonRecord
 from repo_work.validate import validate_work_state
 
 IDENTITY_PATTERN: Final = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -56,18 +50,16 @@ class ProposalDispositionKind(Enum):
     REJECTED = "rejected"
 
 
-@frozen
-class ProposalRelation:
+class ProposalRelation(JsonRecord):
     kind: RelationKind
     item: str | None
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         if self.item is not None and not IDENTITY_PATTERN.fullmatch(self.item):
             raise ProposalError("PROPOSAL_RELATION_INVALID", "relation.item must be null or a work item identity.")
 
 
-@frozen
-class Proposal:
+class Proposal(JsonRecord):
     schema: str
     proposal_id: str
     created_at: str
@@ -82,7 +74,7 @@ class Proposal:
     urgency_evidence: str
     freshness_assumptions: tuple[str, ...]
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         if self.schema != SCHEMA_V1:
             raise ProposalError("PROPOSAL_SCHEMA_INVALID", f"Proposal must use '{SCHEMA_V1}'.")
         if not IDENTITY_PATTERN.fullmatch(self.proposal_id):
@@ -107,10 +99,10 @@ class Proposal:
             raise ProposalError("PROPOSAL_FIELD_INVALID", "List fields must contain non-empty strings.")
 
     def render(self) -> bytes:
-        return (CONVERTER.dumps(self, indent=2, sort_keys=True) + "\n").encode()
+        encoded = msgspec.json.encode(self, order="sorted")
+        return msgspec.json.format(encoded, indent=2) + b"\n"
 
 
-@frozen
 class ProposalHistory(Proposal):
     disposition: ProposalDispositionKind
     target: str | None
@@ -145,30 +137,32 @@ class ProposalHistory(Proposal):
 
     @override
     def render(self) -> bytes:
-        return (CONVERTER.dumps(self, indent=2, sort_keys=True) + "\n").encode()
+        encoded = msgspec.json.encode(self, order="sorted")
+        return msgspec.json.format(encoded, indent=2) + b"\n"
 
 
-def _proposal_validation_error(error: BaseValidationError) -> ProposalError:
-    domain_error = nested_exception(error, ProposalError)
-    if domain_error is not None:
-        return domain_error
-    paths = validation_paths(error)
-    if any(path and path[0] == "relation" for path in paths):
-        return ProposalError("PROPOSAL_RELATION_INVALID", str(error))
-    if any(path and path[0] in REQUIRED_TEXT_FIELDS for path in paths):
-        return ProposalError("PROPOSAL_FIELD_REQUIRED", str(error))
-    return ProposalError("PROPOSAL_FIELD_INVALID", str(error))
+def _mentions_field(message: str, field: str) -> bool:
+    return f"`{field}`" in message or f"$.{field}" in message
+
+
+def _proposal_validation_error(error: msgspec.ValidationError) -> ProposalError:
+    message = str(error)
+    if _mentions_field(message, "relation"):
+        return ProposalError("PROPOSAL_RELATION_INVALID", message)
+    if message.startswith("Expected `object`"):
+        return ProposalError("PROPOSAL_INVALID", "JSON root must be an object.")
+    if any(_mentions_field(message, field) for field in REQUIRED_TEXT_FIELDS):
+        return ProposalError("PROPOSAL_FIELD_REQUIRED", message)
+    return ProposalError("PROPOSAL_FIELD_INVALID", message)
 
 
 def parse_proposal(data: bytes | str) -> Proposal:
     try:
-        return CONVERTER.loads(data, Proposal)
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise ProposalError("PROPOSAL_INVALID", f"Cannot parse JSON: {error}") from error
-    except AttributeError as error:
-        raise ProposalError("PROPOSAL_INVALID", "JSON root must be an object.") from error
-    except BaseValidationError as error:
+        return msgspec.json.decode(data, type=Proposal, strict=True)
+    except msgspec.ValidationError as error:
         raise _proposal_validation_error(error) from error
+    except msgspec.DecodeError as error:
+        raise ProposalError("PROPOSAL_INVALID", f"Cannot parse JSON: {error}") from error
 
 
 def read_proposal(path: Path) -> Proposal:

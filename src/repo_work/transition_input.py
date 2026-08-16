@@ -1,13 +1,10 @@
-import json
+import msgspec
 
-from attrs import frozen
-from cattrs.errors import BaseValidationError
-
-from repo_work.json_codec import CONVERTER, nested_exception
 from repo_work.model import WorkState
+from repo_work.records import JsonRecord
 
 
-class TransitionInputError(ValueError):
+class TransitionInputError(RuntimeError):
     code: str
 
     def __init__(self, code: str, message: str) -> None:
@@ -22,19 +19,17 @@ def _required_text(field: str, value: str) -> None:
         raise TransitionInputError("TRANSITION_INPUT_INVALID", f"'{field}' cannot contain a newline.")
 
 
-@frozen
-class EmptyInput:
+class EmptyInput(JsonRecord):
     pass
 
 
-@frozen
-class ActivateInput:
+class ActivateInput(JsonRecord):
     attempt: str
     branch: str
     base_revision: str
     owner: str
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         for field, value in (
             ("attempt", self.attempt),
             ("branch", self.branch),
@@ -44,44 +39,40 @@ class ActivateInput:
             _required_text(field, value)
 
 
-@frozen
-class ReasonInput:
+class ReasonInput(JsonRecord):
     reason: str
     depends_on: tuple[str, ...] = ()
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         _required_text("reason", self.reason)
         for dependency in self.depends_on:
             _required_text("depends_on", dependency)
 
 
-@frozen
-class EvidenceInput:
+class EvidenceInput(JsonRecord):
     evidence: str
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         _required_text("evidence", self.evidence)
 
 
-@frozen
-class DeferInput:
+class DeferInput(JsonRecord):
     timing: str
     reopen_condition: str
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         _required_text("timing", self.timing)
         _required_text("reopen_condition", self.reopen_condition)
 
 
-@frozen(kw_only=True)
-class AcceptProposalInput:
+class AcceptProposalInput(JsonRecord, kw_only=True):
     item: str
     state: WorkState
     next_action: str
     timing: str | None = None
     depends_on: tuple[str, ...] = ()
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         _required_text("item", self.item)
         _required_text("next_action", self.next_action)
         for dependency in self.depends_on:
@@ -93,20 +84,18 @@ class AcceptProposalInput:
             )
 
 
-@frozen
-class MergeProposalInput:
+class MergeProposalInput(JsonRecord):
     target: str
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         _required_text("target", self.target)
 
 
-@frozen
-class TransferCoordinatorInput:
+class TransferCoordinatorInput(JsonRecord):
     task_id: str
     host_id: str
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         _required_text("task_id", self.task_id)
         _required_text("host_id", self.host_id)
 
@@ -158,18 +147,16 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:
     if model is None:
         raise TransitionInputError("ACTION_NOT_MUTATING", f"Action '{kind}' is not a canonical transition.")
     try:
-        value = CONVERTER.loads(data, model)
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        value = msgspec.json.decode(data, type=model, strict=True)
+    except msgspec.ValidationError as error:
+        message = str(error)
+        if message.startswith("Object missing required field"):
+            raise TransitionInputError("TRANSITION_INPUT_REQUIRED", message) from error
+        if message.startswith("Expected `object`"):
+            raise TransitionInputError("TRANSITION_INPUT_INVALID", "JSON root must be an object.") from error
+        raise TransitionInputError("TRANSITION_INPUT_INVALID", message) from error
+    except msgspec.DecodeError as error:
         raise TransitionInputError("TRANSITION_INPUT_INVALID", f"Cannot parse JSON: {error}") from error
-    except AttributeError as error:
-        raise TransitionInputError("TRANSITION_INPUT_INVALID", "JSON root must be an object.") from error
-    except BaseValidationError as error:
-        domain_error = nested_exception(error, TransitionInputError)
-        if domain_error is not None:
-            raise domain_error from error
-        if nested_exception(error, KeyError) is not None:
-            raise TransitionInputError("TRANSITION_INPUT_REQUIRED", str(error)) from error
-        raise TransitionInputError("TRANSITION_INPUT_INVALID", str(error)) from error
     if kind in {"pause", "return-proposal", "reject-proposal", "mark-ready"} and isinstance(value, ReasonInput):
         return ReasonInput(value.reason)
     return value

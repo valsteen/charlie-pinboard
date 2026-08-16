@@ -1,10 +1,9 @@
 import json
 from collections.abc import Callable
+from copy import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
-
-from attrs import evolve, frozen
 
 from repo_work.actions import Action
 from repo_work.coordinator import CoordinatorRegistration
@@ -18,6 +17,7 @@ from repo_work.markdown import (
 )
 from repo_work.model import SCHEMA_V1, Queue, QueueItem, WorkState
 from repo_work.proposals import Proposal, ProposalDispositionKind, ProposalHistory, read_proposal
+from repo_work.records import Record
 from repo_work.transaction_store import ChangeSet, FileChange, delete_change, write_bytes_change, write_change
 from repo_work.transition_input import (
     AcceptProposalInput,
@@ -39,8 +39,7 @@ class TransitionPlanError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-@frozen
-class PlanContext:
+class PlanContext(Record):
     work_root: Path
     project_root: Path
     queue: Queue
@@ -99,7 +98,7 @@ def _activate(context: PlanContext, action: Action, value: TransitionInput) -> C
     attempt_path = context.work_root / "attempts" / value.attempt / "attempt.md"
     if attempt_path.exists():
         raise TransitionPlanError("ATTEMPT_ALREADY_EXISTS", f"Attempt '{value.attempt}' already exists.")
-    items[index] = evolve(items[index], state=WorkState.ACTIVE, attempt=value.attempt, next_action="continue")
+    items[index] = replace(items[index], state=WorkState.ACTIVE, attempt=value.attempt, next_action="continue")
     return ChangeSet.of(
         write_change(f"attempts/{value.attempt}/attempt.md", _attempt_text(action.subject, value)),
         _queue_change(context, items),
@@ -117,7 +116,7 @@ def _pause_or_block(context: PlanContext, action: Action, value: TransitionInput
     dependencies = items[index].depends_on
     if action.kind == "block":
         dependencies = tuple(dict.fromkeys((*dependencies, *value.depends_on)))
-    items[index] = evolve(
+    items[index] = replace(
         items[index],
         state=target,
         depends_on=dependencies,
@@ -177,14 +176,14 @@ def _resume(context: PlanContext, action: Action, _value: TransitionInput) -> Ch
     if any(dependency in live_ids for dependency in item.depends_on):
         raise TransitionPlanError("DEPENDENCY_NOT_SATISFIED", f"Item '{action.subject}' still has a live dependency.")
     if item.attempt is None:
-        items[index] = evolve(item, state=WorkState.READY, next_action="activate")
+        items[index] = replace(item, state=WorkState.READY, next_action="activate")
         return ChangeSet.of(_queue_change(context, items))
     attempt_path = f"attempts/{item.attempt}/attempt.md"
     attempt_text = replace_header_fields(
         (context.work_root / attempt_path).read_text(encoding="utf-8"),
         {"state": "active", "updated": f'"{date.today().isoformat()}"'},
     )
-    items[index] = evolve(item, state=WorkState.ACTIVE, next_action="continue")
+    items[index] = replace(item, state=WorkState.ACTIVE, next_action="continue")
     return ChangeSet.of(
         write_change(attempt_path, attempt_text),
         _queue_change(context, items),
@@ -198,7 +197,7 @@ def _reopen(context: PlanContext, action: Action, value: TransitionInput) -> Cha
     index = _item_index(items, action.subject)
     if items[index].state != WorkState.DEFERRED:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", f"Item '{action.subject}' is not deferred.")
-    items[index] = evolve(
+    items[index] = replace(
         items[index],
         state=WorkState.INTAKE,
         timing=None,
@@ -214,7 +213,7 @@ def _mark_ready(context: PlanContext, action: Action, value: TransitionInput) ->
     index = _item_index(items, action.subject)
     if items[index].state != WorkState.INTAKE:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", f"Item '{action.subject}' is not in intake.")
-    items[index] = evolve(items[index], state=WorkState.READY, next_action="activate", notes=f"Ready: {value.reason}")
+    items[index] = replace(items[index], state=WorkState.READY, next_action="activate", notes=f"Ready: {value.reason}")
     return ChangeSet.of(_queue_change(context, items))
 
 
@@ -224,7 +223,7 @@ def _block_item(context: PlanContext, action: Action, value: TransitionInput) ->
     index = _item_index(items, action.subject)
     if items[index].state not in {WorkState.INTAKE, WorkState.READY}:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", f"Item '{action.subject}' cannot be blocked now.")
-    items[index] = evolve(
+    items[index] = replace(
         items[index], state=WorkState.BLOCKED, depends_on=value.depends_on, next_action=None, notes=value.reason
     )
     return ChangeSet.of(_queue_change(context, items))
@@ -239,7 +238,7 @@ def _defer(context: PlanContext, action: Action, value: TransitionInput) -> Chan
     item = items[index]
     if item.state not in {WorkState.INTAKE, WorkState.READY, WorkState.BLOCKED} or item.attempt is not None:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", f"Item '{action.subject}' cannot be deferred now.")
-    items[index] = evolve(
+    items[index] = replace(
         item, state=WorkState.DEFERRED, timing=value.timing, next_action=None, notes=value.reopen_condition
     )
     return ChangeSet.of(_queue_change(context, items))

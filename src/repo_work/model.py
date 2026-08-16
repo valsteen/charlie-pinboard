@@ -2,7 +2,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Final
 
-from attrs import frozen
+from repo_work.records import Record
 
 SCHEMA_V1: Final = "repo-work/v1"
 
@@ -23,8 +23,7 @@ type HeaderValue = str | bool | None
 type Header = dict[str, HeaderValue]
 
 
-@frozen
-class QueueItem:
+class QueueItem(Record):
     item: str
     state: WorkState
     timing: str | None
@@ -35,8 +34,7 @@ class QueueItem:
     notes: str
 
 
-@frozen
-class Queue:
+class Queue(Record):
     path: Path
     header: Header
     items: tuple[QueueItem, ...]
@@ -46,23 +44,20 @@ class Queue:
         return {item.item: item for item in self.items}
 
 
-@frozen
-class WorkItemRecord:
+class WorkItemRecord(Record):
     path: Path
     item: str
     user_label: str
 
 
-@frozen
-class CurrentPointer:
+class CurrentPointer(Record):
     path: Path
     focus_item: str | None
     focus_attempt: str | None
     next_action: str
 
 
-@frozen
-class Attempt:
+class Attempt(Record):
     path: Path
     attempt: str
     item: str
