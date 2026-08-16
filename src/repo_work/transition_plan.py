@@ -1,11 +1,10 @@
 import json
 from collections.abc import Callable
 from copy import replace
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
-
-from attrs import frozen
 
 from repo_work.actions import Action
 from repo_work.coordinator import CoordinatorRegistration
@@ -41,7 +40,7 @@ class TransitionPlanError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-@frozen
+@dataclass(frozen=True, slots=True)
 class PlanContext:
     work_root: Path
     project_root: Path

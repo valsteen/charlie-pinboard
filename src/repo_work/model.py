@@ -1,8 +1,7 @@
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Final, Literal
-
-from attrs import frozen
 
 SCHEMA_V1: Final = "repo-work/v1"
 type SchemaV1 = Literal["repo-work/v1"]
@@ -24,7 +23,7 @@ type HeaderValue = str | bool | None
 type Header = dict[str, HeaderValue]
 
 
-@frozen
+@dataclass(frozen=True, slots=True)
 class QueueItem:
     item: str
     state: WorkState
@@ -36,7 +35,7 @@ class QueueItem:
     notes: str
 
 
-@frozen
+@dataclass(frozen=True, slots=True)
 class Queue:
     path: Path
     header: Header
@@ -47,14 +46,14 @@ class Queue:
         return {item.item: item for item in self.items}
 
 
-@frozen
+@dataclass(frozen=True, slots=True)
 class WorkItemRecord:
     path: Path
     item: str
     user_label: str
 
 
-@frozen
+@dataclass(frozen=True, slots=True)
 class CurrentPointer:
     path: Path
     focus_item: str | None
@@ -62,7 +61,7 @@ class CurrentPointer:
     next_action: str
 
 
-@frozen
+@dataclass(frozen=True, slots=True)
 class Attempt:
     path: Path
     attempt: str

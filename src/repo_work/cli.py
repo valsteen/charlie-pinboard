@@ -2,10 +2,10 @@ import argparse
 import sys
 from collections import Counter
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import msgspec
-from attrs import frozen
 
 from repo_work import __version__
 from repo_work.actions import Action, ActionError, actions_for, state_revision
@@ -18,7 +18,7 @@ from repo_work.transition import TransitionError, apply_action
 from repo_work.validate import ValidationReport, validate_work_state
 
 
-@frozen
+@dataclass(frozen=True, slots=True)
 class CommandContext:
     arguments: argparse.Namespace
     project: Path

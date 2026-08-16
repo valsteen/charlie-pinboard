@@ -1,11 +1,11 @@
 import shutil
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
 import msgspec
-from attrs import frozen
 
 from repo_work import validate as work_validation
 from repo_work.atomic import atomic_write
@@ -20,17 +20,17 @@ class AtomicCommitError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-@frozen
+@dataclass(frozen=True, slots=True)
 class FileChange:
     path: PurePosixPath
     data: bytes | None
 
 
-@frozen
+@dataclass(frozen=True, slots=True)
 class ChangeSet:
     changes: tuple[FileChange, ...]
 
-    def __attrs_post_init__(self) -> None:
+    def __post_init__(self) -> None:
         paths: set[PurePosixPath] = set()
         for change in self.changes:
             if change.path.is_absolute() or ".." in change.path.parts or not change.path.parts:
@@ -44,7 +44,7 @@ class ChangeSet:
         return cls(tuple(changes))
 
 
-@frozen
+@dataclass(frozen=True, slots=True)
 class OriginalFile:
     path: PurePosixPath
     existed: bool
