@@ -1,9 +1,6 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-
 
 SCHEMA_V1 = "repo-work/v1"
 

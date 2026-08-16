@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import re
 from pathlib import Path
@@ -7,7 +5,6 @@ from pathlib import Path
 from repo_work.atomic import atomic_create
 from repo_work.model import SCHEMA_V1
 from repo_work.validate import validate_work_state
-
 
 IDENTITY_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 RELATIONS = frozenset({"independent", "prerequisite", "follow-up", "duplicate", "contradiction"})
@@ -25,7 +22,7 @@ REQUIRED_TEXT = (
 
 
 class ProposalError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
 
@@ -50,9 +47,7 @@ def validate_proposal(value: dict[str, object]) -> None:
     if not isinstance(relation, dict) or relation.get("kind") not in RELATIONS:
         raise ProposalError("PROPOSAL_RELATION_INVALID", "relation.kind is not supported.")
     related_item = relation.get("item")
-    if related_item is not None and (
-        not isinstance(related_item, str) or not IDENTITY_PATTERN.fullmatch(related_item)
-    ):
+    if related_item is not None and (not isinstance(related_item, str) or not IDENTITY_PATTERN.fullmatch(related_item)):
         raise ProposalError("PROPOSAL_RELATION_INVALID", "relation.item must be null or a work item identity.")
 
 

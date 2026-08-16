@@ -1,23 +1,21 @@
-from __future__ import annotations
-
 import os
 import tempfile
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 
 @contextmanager
-def transition_lock(work_root: Path) -> Iterator[None]:
+def transition_lock(work_root: Path) -> Generator[None]:
     lock_path = work_root / ".transition.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as handle:
         if os.name == "nt":
             import msvcrt
 
-            locking = getattr(msvcrt, "locking")
-            lock_mode = getattr(msvcrt, "LK_LOCK")
-            unlock_mode = getattr(msvcrt, "LK_UNLCK")
+            locking = msvcrt.locking
+            lock_mode = msvcrt.LK_LOCK
+            unlock_mode = msvcrt.LK_UNLCK
             handle.seek(0)
             if handle.tell() == 0:
                 handle.write(b"0")
@@ -47,7 +45,7 @@ def atomic_write(path: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        temporary.replace(path)
     finally:
         if temporary.exists():
             temporary.unlink()

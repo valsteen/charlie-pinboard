@@ -1,7 +1,5 @@
-from __future__ import annotations
-
-import json
 import hashlib
+import json
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -15,14 +13,13 @@ from repo_work.markdown import (
     render_queue,
     replace_header_fields,
 )
-from repo_work.model import WorkState
-from repo_work.model import QueueItem
+from repo_work.model import QueueItem, WorkState
 from repo_work.proposals import read_proposal
 from repo_work.validate import validate_work_state
 
 
 class TransitionError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
 
@@ -66,7 +63,9 @@ def _attempt_text(item: str, payload: dict[str, object]) -> str:
 
 
 def _ensure_current_action(work_root: Path, project_root: Path, action: Action) -> None:
-    current_actions = {candidate.action_id: candidate for candidate in actions_for(work_root, project_root, "coordinator")}
+    current_actions = {
+        candidate.action_id: candidate for candidate in actions_for(work_root, project_root, "coordinator")
+    }
     current = current_actions.get(action.action_id)
     if current is None or current.kind != action.kind or current.subject != action.subject:
         raise TransitionError("ACTION_NOT_AVAILABLE", f"Action '{action.action_id}' is no longer legal.")
@@ -191,7 +190,9 @@ def apply_action(
                 raise TransitionError("ACTION_NOT_AVAILABLE", f"Item '{action.subject}' is not paused or blocked.")
             live_ids = {item.item for item in items}
             if any(dependency in live_ids for dependency in items[index].depends_on):
-                raise TransitionError("DEPENDENCY_NOT_SATISFIED", f"Item '{action.subject}' still has a live dependency.")
+                raise TransitionError(
+                    "DEPENDENCY_NOT_SATISFIED", f"Item '{action.subject}' still has a live dependency."
+                )
             resume_attempt = items[index].attempt
             if resume_attempt is None:
                 items[index] = replace(items[index], state=WorkState.READY, next_action="activate")
@@ -309,7 +310,7 @@ def apply_action(
                 f"After and trajectory: {proposal['effect']} {proposal['unlock']}\n"
             )
             atomic_write_text(work_root / "items" / f"{item_id}.md", item_text)
-            atomic_write_text(work_root / "queue.md", render_queue(queue, tuple(items) + (item,)))
+            atomic_write_text(work_root / "queue.md", render_queue(queue, (*items, item)))
             _proposal_disposition(work_root, proposal_path, proposal, "accepted", item_id)
         elif action.kind == "merge-proposal":
             proposal_path = work_root / "inbox" / f"{action.subject}.json"

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import tempfile
 import unittest
@@ -55,7 +53,9 @@ class RegistrationTest(unittest.TestCase):
         coordinator = json.loads((work / "coordinator.json").read_text(encoding="utf-8"))
         self.assertEqual("replacement-task", coordinator["task_id"])
         self.assertEqual(2, coordinator["generation"])
-        self.assertNotEqual(old_action.expected_revision, actions_for(work, project, "coordinator")[0].expected_revision)
+        self.assertNotEqual(
+            old_action.expected_revision, actions_for(work, project, "coordinator")[0].expected_revision
+        )
 
     def test_transfer_rejects_wrong_generation_without_change(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

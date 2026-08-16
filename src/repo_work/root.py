@@ -1,11 +1,9 @@
-from __future__ import annotations
-
 import subprocess
 from pathlib import Path
 
 
 class RootError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
 
@@ -15,8 +13,7 @@ def resolve_project_root(cwd: Path) -> Path:
         ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
         cwd=cwd,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if result.returncode != 0:

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import contextlib
 import io
 import json
@@ -9,7 +7,8 @@ from pathlib import Path
 
 from repo_work.actions import actions_for
 from repo_work.cli import main
-from tests.support import create_state
+
+from .support import create_state
 
 
 class CliTest(unittest.TestCase):
@@ -21,16 +20,10 @@ class CliTest(unittest.TestCase):
         return result, stdout.getvalue(), stderr.getvalue()
 
     def snapshot(self, work: Path) -> dict[str, bytes]:
-        return {
-            str(path.relative_to(work)): path.read_bytes()
-            for path in work.rglob("*")
-            if path.is_file()
-        }
+        return {str(path.relative_to(work)): path.read_bytes() for path in work.rglob("*") if path.is_file()}
 
     def test_validate_json_is_read_only(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | ready | — | — | — | design | activate | Ready. |"]
-        )
+        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
         before = self.snapshot(work)
 
         result, stdout, stderr = self.run_cli(
@@ -47,9 +40,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(before, self.snapshot(work))
 
     def test_invalid_state_has_stable_nonzero_result(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | ready | — | — | — | design | activate | Ready. |"]
-        )
+        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
         (work / "items" / "reveal-core.md").unlink()
 
         result, stdout, _ = self.run_cli(
@@ -64,9 +55,7 @@ class CliTest(unittest.TestCase):
         self.assertIn("ITEM_RECORD_MISSING", stdout)
 
     def test_actions_json_exposes_transition_tokens(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | ready | — | — | — | design | activate | Ready. |"]
-        )
+        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
 
         result, stdout, stderr = self.run_cli(
             "--project-root",
@@ -86,13 +75,9 @@ class CliTest(unittest.TestCase):
         self.assertEqual(1, activation["coordinator_generation"])
 
     def test_transition_applies_action_from_machine_fields(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | ready | — | — | — | design | activate | Ready. |"]
-        )
+        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
         action = next(
-            action
-            for action in actions_for(work, project, "coordinator")
-            if action.action_id == "activate:reveal-core"
+            action for action in actions_for(work, project, "coordinator") if action.action_id == "activate:reveal-core"
         )
         payload_path = Path(tempfile.mkdtemp()) / "payload.json"
         payload_path.write_text(

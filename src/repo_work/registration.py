@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +9,7 @@ from repo_work.validate import validate_work_state
 
 
 class RegistrationError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
 

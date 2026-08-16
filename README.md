@@ -30,14 +30,21 @@ The initial schema uses ignored project-local state:
 
 Markdown remains readable and reviewable. The command enforces structural validity, coordinator generations, stale revisions, and legal transitions. Human and agent judgment still owns product meaning, evidence, priority, and scope.
 
-## Development
+## Runtime and development
 
-The package supports Python 3.11 and newer and has no runtime dependencies outside the standard library.
+The package targets Python 3.14 only and has no runtime dependencies outside the standard library. `.python-version` pins the current stable 3.14 patch release. uv owns Python acquisition, the project environment, dependency resolution, and the checked-in lockfile.
 
 ```sh
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-MYPYPATH=src mypy --strict src/repo_work
-python3 scripts/repo-work --help
+uv sync --locked
+uv run --locked ruff format --check .
+uv run --locked ruff check .
+uv run --locked pyrefly check
+uv run --locked python -m unittest discover -v
+uv run --locked python -m compileall -q src tests
+uv build
+scripts/repo-work --help
 ```
+
+Do not inject `PYTHONPATH`, run an ambient interpreter, or maintain parallel requirements files. The uv-installed package must resolve normally in local checks, CI, and the plugin launcher.
 
 Plugin and skill metadata must also pass the current Codex plugin and skill validators before release.

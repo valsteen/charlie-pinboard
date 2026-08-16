@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import subprocess
 import tempfile
 import unittest
@@ -15,8 +13,7 @@ class RootResolutionTest(unittest.TestCase):
             cwd=cwd,
             check=True,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
 
     def test_primary_checkout_and_linked_worktree_share_root(self) -> None:

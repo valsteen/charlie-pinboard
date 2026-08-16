@@ -1,12 +1,9 @@
-from __future__ import annotations
-
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from repo_work.validate import validate_work_state
-
 
 QUEUE_TEMPLATE = """\
 ---
@@ -82,9 +79,7 @@ class WorkStateValidationTest(unittest.TestCase):
         (work / "attempts").mkdir()
         (work / "inbox").mkdir()
         (work / "history" / "items").mkdir(parents=True)
-        (work / "queue.md").write_text(
-            QUEUE_TEMPLATE.format(rows="\n".join(rows)), encoding="utf-8"
-        )
+        (work / "queue.md").write_text(QUEUE_TEMPLATE.format(rows="\n".join(rows)), encoding="utf-8")
         (work / "current.md").write_text(
             CURRENT_TEMPLATE.format(
                 focus_item=focus_item,
@@ -136,9 +131,7 @@ class WorkStateValidationTest(unittest.TestCase):
         self.assertIn("ITEM_RECORD_MISSING", self.codes(work, project))
 
     def test_rejects_unknown_dependency(self) -> None:
-        project, work = self.make_state(
-            ["| reveal-core | blocked | — | missing-core | — | finding | none | Wait. |"]
-        )
+        project, work = self.make_state(["| reveal-core | blocked | — | missing-core | — | finding | none | Wait. |"])
 
         self.assertIn("DEPENDENCY_UNKNOWN", self.codes(work, project))
 
@@ -183,7 +176,9 @@ class WorkStateValidationTest(unittest.TestCase):
                 focus_item="null",
                 focus_attempt="null",
                 next_action="select",
-            ).replace("focus_item", "active_item").replace("focus_attempt", "active_attempt"),
+            )
+            .replace("focus_item", "active_item")
+            .replace("focus_attempt", "active_attempt"),
             encoding="utf-8",
         )
 

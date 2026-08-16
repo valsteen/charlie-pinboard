@@ -1,9 +1,8 @@
-from __future__ import annotations
-
 import unittest
 
 from repo_work.actions import actions_for
-from tests.support import create_state
+
+from .support import create_state
 
 
 class AvailableActionsTest(unittest.TestCase):
@@ -77,9 +76,7 @@ class AvailableActionsTest(unittest.TestCase):
         self.assertNotIn("resume:reveal-core", action_ids)
 
     def test_paused_attempt_is_resumable(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | paused | — | — | reveal-core-1 | design | resume | Paused. |"]
-        )
+        project, work = create_state(["| reveal-core | paused | — | — | reveal-core-1 | design | resume | Paused. |"])
         attempt_dir = work / "attempts" / "reveal-core-1"
         attempt_dir.mkdir()
         (attempt_dir / "attempt.md").write_text(

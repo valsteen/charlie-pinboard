@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 import unittest
 
@@ -9,7 +7,8 @@ from repo_work.model import WorkState
 from repo_work.proposals import ProposalError, create_proposal
 from repo_work.transition import apply_action
 from repo_work.validate import validate_work_state
-from tests.support import create_state
+
+from .support import create_state
 
 
 def proposal(proposal_id: str = "finding-1") -> dict[str, object]:
@@ -91,9 +90,7 @@ class ProposalTest(unittest.TestCase):
         self.assertEqual("universal-reveal-core", queue.items[0].item)
         self.assertEqual(WorkState.INTAKE, queue.items[0].state)
         self.assertFalse((work / "inbox" / "finding-1.json").exists())
-        disposition = json.loads(
-            (work / "history" / "proposals" / "finding-1.json").read_text(encoding="utf-8")
-        )
+        disposition = json.loads((work / "history" / "proposals" / "finding-1.json").read_text(encoding="utf-8"))
         self.assertEqual("accepted", disposition["disposition"])
         self.assertTrue(validate_work_state(work, project).valid)
 

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import hashlib
 import re
 from datetime import date
@@ -7,15 +5,14 @@ from pathlib import Path
 
 from repo_work.model import (
     SCHEMA_V1,
+    TERMINAL_STATES,
     Attempt,
     CurrentPointer,
     Queue,
     QueueItem,
-    TERMINAL_STATES,
     WorkItemRecord,
     WorkState,
 )
-
 
 ITEM_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 QUEUE_COLUMNS = (
@@ -32,7 +29,7 @@ EMPTY_CELLS = frozenset({"", "—", "-", "none", "null"})
 
 
 class ParseError(ValueError):
-    def __init__(self, code: str, path: Path, message: str, line: int | None = None):
+    def __init__(self, code: str, path: Path, message: str, line: int | None = None) -> None:
         self.code = code
         self.path = path
         self.line = line
@@ -140,9 +137,7 @@ def parse_queue(path: Path) -> Queue:
         except ValueError as error:
             raise ParseError("QUEUE_STATE_INVALID", path, f"Unknown state '{state_value}'.", index + 1) from error
         depends_on = tuple(
-            dependency.strip()
-            for dependency in dependencies.split(",")
-            if _optional(dependency.strip()) is not None
+            dependency.strip() for dependency in dependencies.split(",") if _optional(dependency.strip()) is not None
         )
         items.append(
             QueueItem(
@@ -210,9 +205,7 @@ def parse_current(path: Path) -> CurrentPointer:
     focus_attempt = header.get("focus_attempt")
     if focus_item is not None and (not isinstance(focus_item, str) or not ITEM_PATTERN.fullmatch(focus_item)):
         raise ParseError("CURRENT_ITEM_INVALID", path, "focus_item must be null or a work item identity.")
-    if focus_attempt is not None and (
-        not isinstance(focus_attempt, str) or not ITEM_PATTERN.fullmatch(focus_attempt)
-    ):
+    if focus_attempt is not None and (not isinstance(focus_attempt, str) or not ITEM_PATTERN.fullmatch(focus_attempt)):
         raise ParseError("CURRENT_ATTEMPT_INVALID", path, "focus_attempt must be null or an attempt identity.")
     return CurrentPointer(
         path=path,

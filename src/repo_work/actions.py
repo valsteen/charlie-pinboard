@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import hashlib
 import json
 from dataclasses import dataclass
@@ -11,7 +9,7 @@ from repo_work.validate import validate_work_state
 
 
 class ActionError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
 
@@ -39,12 +37,16 @@ class Action:
 
 
 def state_revision(work_root: Path) -> str:
-    paths = [work_root / "queue.md", work_root / "current.md", work_root / "coordinator.json"]
+    paths: list[Path] = [work_root / "queue.md", work_root / "current.md", work_root / "coordinator.json"]
     for directory in (work_root / "items", work_root / "attempts"):
         if directory.is_dir():
             paths.extend(path for path in directory.rglob("*") if path.is_file())
     digest = hashlib.sha256()
-    for path in sorted(paths, key=lambda candidate: str(candidate.relative_to(work_root))):
+
+    def relative_name(candidate: Path) -> str:
+        return str(candidate.relative_to(work_root))
+
+    for path in sorted(paths, key=relative_name):
         relative = str(path.relative_to(work_root)).encode("utf-8")
         digest.update(len(relative).to_bytes(8, "big"))
         digest.update(relative)
@@ -71,6 +73,7 @@ def actions_for(work_root: Path, project_root: Path, role: str) -> tuple[Action,
     revision = state_revision(work_root)
     generation = coordinator_generation(work_root)
     queue = parse_queue(work_root / "queue.md")
+
     def action(kind: str, subject: str, label: str, subject_revision: str | None = None) -> Action:
         return Action(
             action_id=f"{kind}:{subject}",

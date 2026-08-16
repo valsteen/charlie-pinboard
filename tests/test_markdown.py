@@ -1,12 +1,9 @@
-from __future__ import annotations
-
 import tempfile
 import unittest
 from pathlib import Path
 
 from repo_work.markdown import ParseError, parse_header, parse_queue
 from repo_work.model import WorkState
-
 
 VALID_QUEUE = """\
 ---

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,7 +7,6 @@ from repo_work.markdown import (
     ParseError,
     parse_attempt,
     parse_current,
-    parse_header,
     parse_item,
     parse_queue,
     require_document_header,
@@ -75,14 +72,12 @@ def _validate_dependencies(queue: Queue, work_root: Path) -> list[Diagnostic]:
         if item_id in visited:
             return
         if item_id in visiting:
-            cycle = path[path.index(item_id) :] + (item_id,)
-            diagnostics.append(
-                _error("DEPENDENCY_CYCLE", queue.path, f"Dependency cycle: {' -> '.join(cycle)}.")
-            )
+            cycle = (*path[path.index(item_id) :], item_id)
+            diagnostics.append(_error("DEPENDENCY_CYCLE", queue.path, f"Dependency cycle: {' -> '.join(cycle)}."))
             return
         visiting.add(item_id)
         for dependency in graph.get(item_id, ()):
-            visit(dependency, path + (dependency,))
+            visit(dependency, (*path, dependency))
         visiting.remove(item_id)
         visited.add(item_id)
 
@@ -164,7 +159,9 @@ def validate_work_state(work_root: Path, project_root: Path) -> ValidationReport
     for item in queue.items:
         if item.state in {WorkState.ACTIVE, WorkState.PAUSED} and item.attempt is None:
             diagnostics.append(
-                _error("QUEUE_ATTEMPT_MISSING", queue.path, f"Item '{item.item}' in state '{item.state}' needs an attempt.")
+                _error(
+                    "QUEUE_ATTEMPT_MISSING", queue.path, f"Item '{item.item}' in state '{item.state}' needs an attempt."
+                )
             )
             continue
         if item.attempt is None:

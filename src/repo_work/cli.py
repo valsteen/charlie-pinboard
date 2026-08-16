@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import json
 import sys
@@ -166,7 +164,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise TransitionError("TRANSITION_INPUT_INVALID", "Payload root must be an object.")
             if action.kind == "transfer-coordinator":
                 if action.expected_revision != state_revision(work):
-                    raise TransitionError("STATE_REVISION_STALE", "Repository work state changed after this action was issued.")
+                    raise TransitionError(
+                        "STATE_REVISION_STALE", "Repository work state changed after this action was issued."
+                    )
                 task_id = payload.get("task_id")
                 host_id = payload.get("host_id")
                 if not isinstance(task_id, str) or not isinstance(host_id, str):

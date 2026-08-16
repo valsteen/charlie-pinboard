@@ -1,17 +1,17 @@
-from __future__ import annotations
-
 import unittest
+from pathlib import Path
 
 from repo_work.actions import actions_for
 from repo_work.markdown import parse_current, parse_queue
 from repo_work.model import WorkState
 from repo_work.transition import TransitionError, apply_action
 from repo_work.validate import validate_work_state
-from tests.support import create_state
+
+from .support import create_state
 
 
 class TransitionTest(unittest.TestCase):
-    def snapshot(self, work) -> dict[str, bytes]:
+    def snapshot(self, work: Path) -> dict[str, bytes]:
         return {
             str(path.relative_to(work)): path.read_bytes()
             for path in work.rglob("*")
@@ -19,9 +19,7 @@ class TransitionTest(unittest.TestCase):
         }
 
     def test_activate_updates_ledger_pointer_and_attempt(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | ready | — | — | — | design | activate | Ready. |"]
-        )
+        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
         action = next(
             action
             for action in actions_for(work, project, role="coordinator")
@@ -52,7 +50,7 @@ class TransitionTest(unittest.TestCase):
                 "| mapping-create | ready | — | — | — | design | activate | Ready. |",
             ]
         )
-        payloads = {
+        payloads: dict[str, dict[str, object]] = {
             "reveal-core": {
                 "attempt": "reveal-core-1",
                 "branch": "codex/reveal-core",
@@ -90,9 +88,7 @@ class TransitionTest(unittest.TestCase):
         self.assertTrue(validate_work_state(work, project).valid)
 
     def test_stale_action_changes_no_state(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | ready | — | — | — | design | activate | Ready. |"]
-        )
+        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
         action = actions_for(work, project, role="coordinator")[0]
         before = self.snapshot(work)
         (work / "current.md").write_text(
@@ -118,9 +114,7 @@ class TransitionTest(unittest.TestCase):
         self.assertEqual(changed, self.snapshot(work))
 
     def test_wrong_coordinator_generation_changes_no_state(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | ready | — | — | — | design | activate | Ready. |"]
-        )
+        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
         action = actions_for(work, project, role="coordinator")[0]
         object.__setattr__(action, "coordinator_generation", 2)
         before = self.snapshot(work)
@@ -174,9 +168,7 @@ class TransitionTest(unittest.TestCase):
         self.assertTrue(validate_work_state(work, project).valid)
 
     def test_resume_reactivates_preserved_attempt(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | paused | — | — | reveal-core-1 | design | resume | Paused. |"]
-        )
+        project, work = create_state(["| reveal-core | paused | — | — | reveal-core-1 | design | resume | Paused. |"])
         attempt_dir = work / "attempts" / "reveal-core-1"
         attempt_dir.mkdir()
         attempt_path = attempt_dir / "attempt.md"
@@ -210,9 +202,7 @@ updated: "2026-08-16"
 
     def test_reopen_returns_deferred_item_to_intake(self) -> None:
         project, work = create_state(
-            [
-                "| optional-check | deferred | safe-to-defer | — | — | finding | none | Reopen on evidence. |"
-            ]
+            ["| optional-check | deferred | safe-to-defer | — | — | finding | none | Reopen on evidence. |"]
         )
         action = next(
             action

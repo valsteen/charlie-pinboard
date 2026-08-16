@@ -1,12 +1,5 @@
-#!/usr/bin/env python3
-from __future__ import annotations
+#!/bin/sh
+set -eu
 
-import sys
-from importlib import import_module
-from pathlib import Path
-
-
-PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PLUGIN_ROOT / "src"))
-
-raise SystemExit(import_module("repo_work.cli").main())
+plugin_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec uv run --locked --no-dev --project "$plugin_root" repo-work "$@"

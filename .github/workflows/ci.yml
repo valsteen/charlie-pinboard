@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          python-version: "3.14.6"
+          enable-cache: true
+      - name: Sync locked development environment
+        run: uv sync --locked
+      - name: Check formatting
+        run: uv run --locked ruff format --check .
+      - name: Lint
+        run: uv run --locked ruff check .
+      - name: Type-check
+        run: uv run --locked pyrefly check
+      - name: Test
+        run: uv run --locked python -m unittest discover -v
+      - name: Compile
+        run: uv run --locked python -m compileall -q src tests
+      - name: Build
+        run: uv build
