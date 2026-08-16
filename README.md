@@ -25,9 +25,9 @@ Everything stays ordinary repository work: code, branches, worktrees, Markdown, 
 
 ## Where it saves rework
 
-The expensive failures are often small translation mistakes rather than dramatic crashes. A carefully scoped brief says “change both ends of this protocol together,” but the launch message casually says one end can wait. A precise test list becomes “run the relevant checks.” A link to one section turns into a request to reread half the repository. The worker can follow those instructions perfectly and still hand back something that review has to reject.
+You plan a change carefully, hand it to another AI, and get back something that is almost right. One half of a protocol was postponed even though both halves had to move together. The exact test commands became “run the relevant checks.” A request to read one section became a tour of half the repository. After seeing the same mistakes recur, they stop looking random: they happen when the task is retold on its way to the worker.
 
-The plugin avoids a second, handwritten version of the task. The accepted `attempt.md` stays in charge, while a generated launch message carries only the checkpoint and practical execution details such as the checkout, branch, and permissions. When a checkpoint crosses component boundaries, a short contract table makes the owner, required consumer, failure behavior, and exact verification visible before editing starts. Independent review still happens; it just has fewer surprises left to discover.
+`repo-work` keeps that retelling out of the workflow. The worker goes back to the accepted attempt brief, while the launch message says only where to work and which checkpoint to pick up. For work that crosses components, a small contract table records who owns what, which parts must move together, and how to prove the result works. Review still gets the final say, but it should not have to reconstruct the task first.
 
 ## What it gives you
 
