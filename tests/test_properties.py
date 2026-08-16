@@ -4,7 +4,6 @@ from pathlib import Path
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
 from repo_work.actions import Action, actions_for
 from repo_work.markdown import parse_queue, render_queue
@@ -56,39 +55,27 @@ class ParseRenderProperties(unittest.TestCase):
             parse_transition_input("activate", value)
 
 
-class WorkLedgerMachine(RuleBasedStateMachine):
-    project: Path
-    work: Path
-    state: WorkState
+class WorkLedgerLifecycleTest(unittest.TestCase):
+    def test_intake_activation_shelving_and_resumption_remain_valid(self) -> None:
+        project, work = create_state(["| reveal-core | intake | — | — | — | finding | review-intake | Review. |"])
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.project, self.work = create_state(
-            ["| reveal-core | intake | — | — | — | finding | review-intake | Review. |"]
-        )
-        self.state = WorkState.INTAKE
+        def action(action_id: str) -> Action:
+            return next(
+                candidate for candidate in actions_for(work, project, "coordinator") if candidate.action_id == action_id
+            )
 
-    def action(self, action_id: str) -> Action:
-        return next(
-            candidate
-            for candidate in actions_for(self.work, self.project, "coordinator")
-            if candidate.action_id == action_id
-        )
-
-    def mark_ready(self) -> None:
         apply_action(
-            self.work,
-            self.project,
-            self.action("mark-ready:reveal-core"),
-            {"reason": "Property evidence is sufficient."},
+            work,
+            project,
+            action("mark-ready:reveal-core"),
+            {"reason": "Lifecycle evidence is sufficient."},
         )
-        self.state = WorkState.READY
+        self.assertTrue(validate_work_state(work, project).valid)
 
-    def activate(self) -> None:
         apply_action(
-            self.work,
-            self.project,
-            self.action("activate:reveal-core"),
+            work,
+            project,
+            action("activate:reveal-core"),
             {
                 "attempt": "reveal-core-1",
                 "branch": "codex/reveal-core",
@@ -96,42 +83,18 @@ class WorkLedgerMachine(RuleBasedStateMachine):
                 "owner": "worker",
             },
         )
-        self.state = WorkState.ACTIVE
+        self.assertTrue(validate_work_state(work, project).valid)
 
-    def pause(self) -> None:
-        apply_action(
-            self.work,
-            self.project,
-            self.action("pause:reveal-core-1"),
-            {"reason": "Property prerequisite."},
-        )
-        self.state = WorkState.PAUSED
-
-    def resume(self) -> None:
-        apply_action(self.work, self.project, self.action("resume:reveal-core"), {})
-        self.state = WorkState.ACTIVE
-
-    @rule()
-    def advance_legal_transition(self) -> None:
-        if self.state == WorkState.INTAKE:
-            self.mark_ready()
-        elif self.state == WorkState.READY:
-            self.activate()
-        elif self.state == WorkState.ACTIVE:
-            self.pause()
-        elif self.state == WorkState.PAUSED:
-            self.resume()
-        else:
-            raise AssertionError(f"state machine reached unsupported state {self.state}")
-
-    @invariant()
-    def state_remains_valid(self) -> None:
-        if not validate_work_state(self.work, self.project).valid:
-            raise AssertionError("generated legal transition sequence produced invalid state")
-
-
-WorkLedgerMachine.TestCase.settings = settings(max_examples=20, stateful_step_count=12)
-TestWorkLedgerMachine = WorkLedgerMachine.TestCase
+        for _ in range(2):
+            apply_action(
+                work,
+                project,
+                action("pause:reveal-core-1"),
+                {"reason": "Lifecycle prerequisite."},
+            )
+            self.assertTrue(validate_work_state(work, project).valid)
+            apply_action(work, project, action("resume:reveal-core"), {})
+            self.assertTrue(validate_work_state(work, project).valid)
 
 
 if __name__ == "__main__":

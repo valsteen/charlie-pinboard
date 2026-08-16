@@ -3,9 +3,6 @@ import os
 import unittest
 from pathlib import Path
 
-from hypothesis import example, given, settings
-from hypothesis import strategies as st
-
 from repo_work.actions import Action, actions_for
 from repo_work.atomic import transition_lock
 from repo_work.transaction_store import CommitFailpoint, FileChange, journal_path_for, recover_pending_commit
@@ -71,34 +68,29 @@ class TransactionAtomicityTest(unittest.TestCase):
                 self.assertEqual(before, _snapshot(work))
                 self.assertFalse(journal_path_for(work).exists())
 
-    @example(selected_boundary=1)
-    @example(selected_boundary=2)
-    @example(selected_boundary=3)
-    @example(selected_boundary=4)
-    @example(selected_boundary=5)
-    @settings(max_examples=10)
-    @given(selected_boundary=st.integers(min_value=1, max_value=5))
-    def test_complete_failpoint_restores_every_write_and_delete_boundary(self, selected_boundary: int) -> None:
-        project, work = create_state(
-            ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],
-            focus_item="reveal-core",
-            focus_attempt="reveal-core-1",
-            create_active_attempt=True,
-        )
-        action = _action(work, project, "complete:reveal-core-1")
-        before = _snapshot(work)
+    def test_complete_failpoint_restores_every_write_and_delete_boundary(self) -> None:
+        for selected_boundary in range(1, 6):
+            with self.subTest(boundary=selected_boundary):
+                project, work = create_state(
+                    ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],
+                    focus_item="reveal-core",
+                    focus_attempt="reveal-core-1",
+                    create_active_attempt=True,
+                )
+                action = _action(work, project, "complete:reveal-core-1")
+                before = _snapshot(work)
 
-        with self.assertRaisesRegex(RuntimeError, "injected commit failure"):
-            apply_action(
-                work,
-                project,
-                action,
-                {"evidence": "accepted review"},
-                failpoint=_fail_at(selected_boundary),
-            )
+                with self.assertRaisesRegex(RuntimeError, "injected commit failure"):
+                    apply_action(
+                        work,
+                        project,
+                        action,
+                        {"evidence": "accepted review"},
+                        failpoint=_fail_at(selected_boundary),
+                    )
 
-        self.assertEqual(before, _snapshot(work))
-        self.assertFalse(journal_path_for(work).exists())
+                self.assertEqual(before, _snapshot(work))
+                self.assertFalse(journal_path_for(work).exists())
 
     def test_interrupted_process_is_recovered_from_durable_journal(self) -> None:
         project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])

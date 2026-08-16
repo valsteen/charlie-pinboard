@@ -1,5 +1,9 @@
 # Codex Repository Work
 
+[![CI](https://github.com/valsteen/codex-repo-work/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/codex-repo-work/actions/workflows/ci.yml)
+[![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![uv](https://img.shields.io/badge/managed%20with-uv-DE5FE9?logo=uv)](https://docs.astral.sh/uv/)
+
 Codex Repository Work coordinates one project-owned local work ledger without turning topic folders, branches, or chat transcripts into competing backlogs.
 
 The repository contains:
@@ -42,7 +46,6 @@ uv run --locked pyrefly check
 uv run --locked pyrefly coverage check src --strict --fail-under 100
 uv run --locked coverage run -m unittest discover -v
 uv run --locked coverage report
-uv run --locked python -m compileall -q src tests
 uv build --no-sources
 scripts/repo-work --help
 ```

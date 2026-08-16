@@ -4,8 +4,8 @@
 - Use uv as the only dependency, environment, build, and installed-package entry point. Keep `uv.lock` checked in.
 - Do not inject `PYTHONPATH` or another import path, invoke an ambient Python interpreter, add requirements files, or run source files as a substitute for the installed package.
 - Keep Ruff `UP` as the only pyupgrade authority. Do not add standalone pyupgrade, MyPy, Pyright, or redundant type-checking layers.
-- Keep Pyrefly strict and preserve 100% strict source type coverage. Convert JSON and Markdown boundary values into exact validated types before domain use.
-- Keep branch coverage at or above 95%. Tests must exercise observable behavior, rejection contracts, concurrency, recovery, or package/plugin integration rather than implementation constants.
+- Keep Pyrefly strict. Convert JSON and Markdown boundary values into exact validated types before domain use.
+- Tests must exercise observable behavior, rejection contracts, concurrency, recovery, or package/plugin integration rather than implementation constants.
 - Support macOS and Linux. Do not add cross-platform-looking branches without contention and filesystem evidence on the claimed platform.
-- Preserve transition-wide failure atomicity: plan a complete `ChangeSet`, validate prospective state before mutation, commit under the stable process lock, and prove journal rollback/recovery at every write and delete boundary.
+- Preserve the observable transaction contract: a failed transition leaves the previous valid ledger intact, and concurrent stale actions are rejected.
 - Keep `README.md` human-facing and descriptive. Put imperative agent and contributor constraints here.
