@@ -15,14 +15,14 @@ class PluginAuthor(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class PluginInterface(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    displayName: str
-    shortDescription: str
-    longDescription: str
-    developerName: str
+    display_name: str = msgspec.field(name="displayName")
+    short_description: str = msgspec.field(name="shortDescription")
+    long_description: str = msgspec.field(name="longDescription")
+    developer_name: str = msgspec.field(name="developerName")
     category: str
-    websiteURL: str
+    website_url: str = msgspec.field(name="websiteURL")
     capabilities: tuple[str, ...]
-    defaultPrompt: tuple[str, ...]
+    default_prompt: tuple[str, ...] = msgspec.field(name="defaultPrompt")
 
 
 class PluginManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -39,7 +39,7 @@ class PluginManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class MarketplaceInterface(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    displayName: str
+    display_name: str = msgspec.field(name="displayName")
 
 
 class PluginSource(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -79,7 +79,7 @@ def validate_marketplace() -> None:
     value = msgspec.json.decode(path.read_bytes(), type=MarketplaceManifest)
     expected = MarketplaceManifest(
         name=PLUGIN_NAME,
-        interface=MarketplaceInterface(displayName="Codex Repository Work"),
+        interface=MarketplaceInterface(display_name="Codex Repository Work"),
         plugins=(
             MarketplacePlugin(
                 name=PLUGIN_NAME,

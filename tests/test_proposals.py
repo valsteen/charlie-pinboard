@@ -89,9 +89,10 @@ class ProposalTest(unittest.TestCase):
         self.assertEqual("universal-reveal-core", queue.items[0].item)
         self.assertEqual(WorkState.INTAKE, queue.items[0].state)
         self.assertFalse((work / "inbox" / "finding-1.json").exists())
-        disposition = json.loads((work / "history" / "proposals" / "finding-1.json").read_text(encoding="utf-8"))
-        self.assertEqual("accepted", disposition["disposition"])
-        self.assertNotIn("coordinator_reason", disposition)
+        history = json.loads((work / "history" / "proposals" / "finding-1.json").read_text(encoding="utf-8"))
+        self.assertEqual("accepted", history["disposition"])
+        self.assertEqual("finding-1", history["proposal"]["proposal_id"])
+        self.assertNotIn("coordinator_reason", history)
         self.assertTrue(validate_work_state(work, project).valid)
 
 

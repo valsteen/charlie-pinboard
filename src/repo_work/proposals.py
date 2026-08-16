@@ -41,7 +41,7 @@ class ProposalRelation(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     item: ProposalIdentity | None
 
 
-class Proposal(msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_defaults=True):
+class Proposal(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     schema: SchemaV1
     proposal_id: ProposalIdentity
     created_at: ProposalText
@@ -61,37 +61,15 @@ class Proposal(msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_def
         return msgspec.json.format(encoded, indent=2) + b"\n"
 
 
-class ProposalHistory(Proposal, frozen=True, forbid_unknown_fields=True, omit_defaults=True):
+class ProposalHistory(msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_defaults=True):
+    proposal: Proposal
     disposition: ProposalDispositionKind
     target: str | None
     coordinator_reason: str | None = None
 
-    @classmethod
-    def record(
-        cls,
-        proposal: Proposal,
-        disposition: ProposalDispositionKind,
-        target: str | None,
-        coordinator_reason: str | None = None,
-    ) -> ProposalHistory:
-        return cls(
-            schema=proposal.schema,
-            proposal_id=proposal.proposal_id,
-            created_at=proposal.created_at,
-            source_task_id=proposal.source_task_id,
-            user_label=proposal.user_label,
-            trigger=proposal.trigger,
-            evidence=proposal.evidence,
-            why_it_matters=proposal.why_it_matters,
-            relation=proposal.relation,
-            effect=proposal.effect,
-            unlock=proposal.unlock,
-            urgency_evidence=proposal.urgency_evidence,
-            freshness_assumptions=proposal.freshness_assumptions,
-            disposition=disposition,
-            target=target,
-            coordinator_reason=coordinator_reason,
-        )
+    def render(self) -> bytes:
+        encoded = msgspec.json.encode(self, order="sorted")
+        return msgspec.json.format(encoded, indent=2) + b"\n"
 
 
 def parse_proposal(data: bytes | str) -> Proposal:

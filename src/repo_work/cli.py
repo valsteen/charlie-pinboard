@@ -33,7 +33,7 @@ class RootView(msgspec.Struct, frozen=True):
     work_root: str
 
 
-class DiagnosticView(msgspec.Struct, frozen=True, omit_defaults=True):
+class DiagnosticView(msgspec.Struct, frozen=True):
     code: str
     severity: str
     path: str

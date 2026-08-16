@@ -250,7 +250,12 @@ def _proposal_history(
     target: str | None,
     reason: str | None = None,
 ) -> bytes:
-    return ProposalHistory.record(proposal, disposition, target, reason).render()
+    return ProposalHistory(
+        proposal=proposal,
+        disposition=disposition,
+        target=target,
+        coordinator_reason=reason,
+    ).render()
 
 
 def _proposal_paths(context: PlanContext, action: Action) -> tuple[str, str, Proposal]:
