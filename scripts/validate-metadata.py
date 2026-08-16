@@ -4,7 +4,7 @@ from typing import Final
 
 from attrs import frozen
 
-from repo_work.json_codec import read_json
+from repo_work.json_codec import CONVERTER, register_json_array
 
 ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
@@ -75,9 +75,12 @@ class MarketplaceManifest:
     plugins: tuple[MarketplacePlugin, ...]
 
 
+register_json_array(tuple[MarketplacePlugin, ...], MarketplacePlugin)
+
+
 def validate_plugin() -> None:
     path = ROOT / ".codex-plugin" / "plugin.json"
-    value = read_json(path, PluginManifest)
+    value = CONVERTER.loads(path.read_bytes(), PluginManifest)
     if value.name != PLUGIN_NAME or value.skills != "./skills/":
         raise ValueError("plugin manifest identity or skill root is invalid")
     if value.license != "MIT":
@@ -86,7 +89,7 @@ def validate_plugin() -> None:
 
 def validate_marketplace() -> None:
     path = ROOT / ".agents" / "plugins" / "marketplace.json"
-    value = read_json(path, MarketplaceManifest)
+    value = CONVERTER.loads(path.read_bytes(), MarketplaceManifest)
     expected = MarketplaceManifest(
         name=PLUGIN_NAME,
         interface=MarketplaceInterface(displayName="Codex Repository Work"),

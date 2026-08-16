@@ -97,9 +97,17 @@ class JsonBoundaryTest(unittest.TestCase):
 
     def test_proposal_parser_rejects_invalid_boundary_shapes(self) -> None:
         valid = proposal()
+        missing_trigger = valid.copy()
+        del missing_trigger["trigger"]
+        missing_proposal_id = valid.copy()
+        del missing_proposal_id["proposal_id"]
         cases = (
             ({**valid, "schema": "repo-work/v2"}, "PROPOSAL_SCHEMA_INVALID"),
             ({**valid, "proposal_id": "Not Valid"}, "PROPOSAL_ID_INVALID"),
+            (missing_proposal_id, "PROPOSAL_FIELD_REQUIRED"),
+            ({**valid, "proposal_id": 1}, "PROPOSAL_FIELD_REQUIRED"),
+            (missing_trigger, "PROPOSAL_FIELD_REQUIRED"),
+            ({**valid, "trigger": 1}, "PROPOSAL_FIELD_REQUIRED"),
             ({**valid, "trigger": ""}, "PROPOSAL_FIELD_REQUIRED"),
             ({**valid, "trigger": "line\nbreak"}, "PROPOSAL_FIELD_INVALID"),
             ({**valid, "evidence": "source"}, "PROPOSAL_FIELD_INVALID"),

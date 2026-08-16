@@ -1,4 +1,5 @@
 import base64
+import json
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -9,7 +10,11 @@ from cattrs.errors import BaseValidationError
 
 from repo_work import validate as work_validation
 from repo_work.atomic import atomic_write
-from repo_work.json_codec import JsonCodecError, encode_json, nested_exception, read_json, validation_message
+from repo_work.json_codec import (
+    CONVERTER,
+    nested_exception,
+    register_json_array,
+)
 from repo_work.storage_layout import journal_path_for
 
 
@@ -67,6 +72,9 @@ class JournalManifest:
     def __attrs_post_init__(self) -> None:
         if self.schema != "repo-work-journal/v1":
             raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Unsupported transaction journal schema.")
+
+
+register_json_array(tuple[JournalOriginal, ...], JournalOriginal)
 
 
 type CommitFailpoint = Callable[[int, FileChange], None]
@@ -134,7 +142,8 @@ def _write_journal(work_root: Path, originals: tuple[OriginalFile, ...]) -> Path
         raise AtomicCommitError("COMMIT_RECOVERY_REQUIRED", f"Pending transaction journal exists at '{journal}'.")
     temporary = Path(tempfile.mkdtemp(prefix=f".{journal.name}.", dir=journal.parent))
     try:
-        atomic_write(temporary / "manifest.json", encode_json(_journal_manifest(originals)))
+        manifest = CONVERTER.dumps(_journal_manifest(originals), indent=2, sort_keys=True) + "\n"
+        atomic_write(temporary / "manifest.json", manifest.encode())
         temporary.replace(journal)
     finally:
         if temporary.exists():
@@ -157,14 +166,19 @@ def _parse_original(value: JournalOriginal) -> OriginalFile:
 
 def _read_journal(journal: Path) -> tuple[OriginalFile, ...]:
     try:
-        manifest = read_json(journal / "manifest.json", JournalManifest)
-    except JsonCodecError as error:
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", error.message) from error
+        data = (journal / "manifest.json").read_bytes()
+        manifest = CONVERTER.loads(data, JournalManifest)
+    except OSError as error:
+        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Cannot read transaction journal: {error}") from error
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Cannot parse transaction journal: {error}") from error
+    except AttributeError as error:
+        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Transaction journal root must be an object.") from error
     except BaseValidationError as error:
         domain_error = nested_exception(error, AtomicCommitError)
         if domain_error is not None:
             raise domain_error from error
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", validation_message(error)) from error
+        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", str(error)) from error
     return tuple(_parse_original(entry) for entry in manifest.originals)
 
 

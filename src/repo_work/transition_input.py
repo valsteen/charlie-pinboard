@@ -1,7 +1,9 @@
+import json
+
 from attrs import frozen
 from cattrs.errors import BaseValidationError
 
-from repo_work.json_codec import JsonCodecError, decode_json, nested_exception, validation_message
+from repo_work.json_codec import CONVERTER, nested_exception
 from repo_work.model import WorkState
 
 
@@ -156,16 +158,18 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:
     if model is None:
         raise TransitionInputError("ACTION_NOT_MUTATING", f"Action '{kind}' is not a canonical transition.")
     try:
-        value = decode_json(data, model)
-    except JsonCodecError as error:
-        raise TransitionInputError("TRANSITION_INPUT_INVALID", error.message) from error
+        value = CONVERTER.loads(data, model)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise TransitionInputError("TRANSITION_INPUT_INVALID", f"Cannot parse JSON: {error}") from error
+    except AttributeError as error:
+        raise TransitionInputError("TRANSITION_INPUT_INVALID", "JSON root must be an object.") from error
     except BaseValidationError as error:
         domain_error = nested_exception(error, TransitionInputError)
         if domain_error is not None:
             raise domain_error from error
         if nested_exception(error, KeyError) is not None:
-            raise TransitionInputError("TRANSITION_INPUT_REQUIRED", validation_message(error)) from error
-        raise TransitionInputError("TRANSITION_INPUT_INVALID", validation_message(error)) from error
+            raise TransitionInputError("TRANSITION_INPUT_REQUIRED", str(error)) from error
+        raise TransitionInputError("TRANSITION_INPUT_INVALID", str(error)) from error
     if kind in {"pause", "return-proposal", "reject-proposal", "mark-ready"} and isinstance(value, ReasonInput):
         return ReasonInput(value.reason)
     return value

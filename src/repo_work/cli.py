@@ -9,7 +9,7 @@ from attrs import frozen
 from repo_work import __version__
 from repo_work.actions import Action, ActionError, actions_for, state_revision
 from repo_work.coordinator import read_coordinator
-from repo_work.json_codec import encode_json
+from repo_work.json_codec import CONVERTER
 from repo_work.markdown import parse_current, parse_queue
 from repo_work.proposals import ProposalError, create_proposal
 from repo_work.registration import RegistrationError, initialize_work_state
@@ -100,7 +100,7 @@ class ActionsView:
 
 
 def _write_json[T](value: T) -> None:
-    sys.stdout.write(encode_json(value).decode())
+    sys.stdout.write(CONVERTER.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def build_parser() -> argparse.ArgumentParser:

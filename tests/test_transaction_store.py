@@ -88,6 +88,23 @@ class TransactionStoreTest(unittest.TestCase):
                 (journal / "manifest.json").unlink()
                 journal.rmdir()
 
+    def test_journal_originals_must_be_a_json_array(self) -> None:
+        _, work = create_state([])
+        invalid_originals: tuple[JsonValue, ...] = ({"unexpected": True}, "")
+        for originals in invalid_originals:
+            with self.subTest(originals=originals):
+                journal = journal_path_for(work)
+                journal.mkdir()
+                manifest = json.dumps({"schema": "repo-work-journal/v1", "originals": originals})
+                (journal / "manifest.json").write_text(manifest, encoding="utf-8")
+
+                with self.assertRaisesRegex(AtomicCommitError, "COMMIT_JOURNAL_INVALID"):
+                    recover_pending_commit(work)
+
+                self.assertEqual(manifest, (journal / "manifest.json").read_text(encoding="utf-8"))
+                (journal / "manifest.json").unlink()
+                journal.rmdir()
+
     def test_no_pending_journal_is_a_noop(self) -> None:
         project, work = create_state([])
 

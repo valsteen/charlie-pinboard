@@ -91,6 +91,7 @@ class ProposalTest(unittest.TestCase):
         self.assertFalse((work / "inbox" / "finding-1.json").exists())
         disposition = json.loads((work / "history" / "proposals" / "finding-1.json").read_text(encoding="utf-8"))
         self.assertEqual("accepted", disposition["disposition"])
+        self.assertNotIn("coordinator_reason", disposition)
         self.assertTrue(validate_work_state(work, project).valid)
 
 

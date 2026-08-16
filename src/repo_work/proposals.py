@@ -1,3 +1,4 @@
+import json
 import re
 from enum import Enum
 from pathlib import Path
@@ -8,18 +9,28 @@ from cattrs.errors import BaseValidationError
 
 from repo_work.atomic import atomic_create
 from repo_work.json_codec import (
-    JsonCodecError,
-    decode_json,
-    encode_json,
+    CONVERTER,
     nested_exception,
-    read_json,
-    validation_message,
     validation_paths,
 )
 from repo_work.model import SCHEMA_V1
 from repo_work.validate import validate_work_state
 
 IDENTITY_PATTERN: Final = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+REQUIRED_TEXT_FIELDS: Final = frozenset(
+    {
+        "schema",
+        "proposal_id",
+        "created_at",
+        "source_task_id",
+        "user_label",
+        "trigger",
+        "why_it_matters",
+        "effect",
+        "unlock",
+        "urgency_evidence",
+    }
+)
 
 
 class ProposalError(RuntimeError):
@@ -96,7 +107,7 @@ class Proposal:
             raise ProposalError("PROPOSAL_FIELD_INVALID", "List fields must contain non-empty strings.")
 
     def render(self) -> bytes:
-        return encode_json(self)
+        return (CONVERTER.dumps(self, indent=2, sort_keys=True) + "\n").encode()
 
 
 @frozen
@@ -134,7 +145,7 @@ class ProposalHistory(Proposal):
 
     @override
     def render(self) -> bytes:
-        return encode_json(self)
+        return (CONVERTER.dumps(self, indent=2, sort_keys=True) + "\n").encode()
 
 
 def _proposal_validation_error(error: BaseValidationError) -> ProposalError:
@@ -143,28 +154,29 @@ def _proposal_validation_error(error: BaseValidationError) -> ProposalError:
         return domain_error
     paths = validation_paths(error)
     if any(path and path[0] == "relation" for path in paths):
-        return ProposalError("PROPOSAL_RELATION_INVALID", validation_message(error))
-    if any(path and path[0] == "proposal_id" for path in paths):
-        return ProposalError("PROPOSAL_ID_INVALID", validation_message(error))
-    return ProposalError("PROPOSAL_FIELD_INVALID", validation_message(error))
+        return ProposalError("PROPOSAL_RELATION_INVALID", str(error))
+    if any(path and path[0] in REQUIRED_TEXT_FIELDS for path in paths):
+        return ProposalError("PROPOSAL_FIELD_REQUIRED", str(error))
+    return ProposalError("PROPOSAL_FIELD_INVALID", str(error))
 
 
 def parse_proposal(data: bytes | str) -> Proposal:
     try:
-        return decode_json(data, Proposal)
-    except JsonCodecError as error:
-        raise ProposalError("PROPOSAL_INVALID", error.message) from error
+        return CONVERTER.loads(data, Proposal)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ProposalError("PROPOSAL_INVALID", f"Cannot parse JSON: {error}") from error
+    except AttributeError as error:
+        raise ProposalError("PROPOSAL_INVALID", "JSON root must be an object.") from error
     except BaseValidationError as error:
         raise _proposal_validation_error(error) from error
 
 
 def read_proposal(path: Path) -> Proposal:
     try:
-        return read_json(path, Proposal)
-    except JsonCodecError as error:
-        raise ProposalError("PROPOSAL_INVALID", error.message) from error
-    except BaseValidationError as error:
-        raise _proposal_validation_error(error) from error
+        data = path.read_bytes()
+    except OSError as error:
+        raise ProposalError("PROPOSAL_INVALID", f"Cannot read JSON at '{path}': {error}") from error
+    return parse_proposal(data)
 
 
 def create_proposal(work_root: Path, project_root: Path, data: bytes | str) -> Path:

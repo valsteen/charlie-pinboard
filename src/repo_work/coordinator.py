@@ -1,15 +1,12 @@
+import json
 from pathlib import Path
 
 from attrs import frozen
 from cattrs.errors import BaseValidationError
 
 from repo_work.json_codec import (
-    JsonCodecError,
-    decode_json,
-    encode_json,
+    CONVERTER,
     nested_exception,
-    read_json,
-    validation_message,
     validation_paths,
 )
 from repo_work.model import SCHEMA_V1
@@ -48,7 +45,7 @@ class CoordinatorRegistration:
                 raise CoordinatorError("COORDINATOR_FIELD_INVALID", f"'{name}' must be a non-empty string.")
 
     def render(self) -> bytes:
-        return encode_json(self)
+        return (CONVERTER.dumps(self, indent=2, sort_keys=True) + "\n").encode()
 
 
 def _coordinator_validation_error(error: BaseValidationError) -> CoordinatorError:
@@ -57,22 +54,23 @@ def _coordinator_validation_error(error: BaseValidationError) -> CoordinatorErro
         return domain_error
     if any(path and path[0] == "generation" for path in validation_paths(error)):
         return CoordinatorError("COORDINATOR_GENERATION_INVALID", "generation must be a positive integer.")
-    return CoordinatorError("COORDINATOR_FIELD_INVALID", validation_message(error))
+    return CoordinatorError("COORDINATOR_FIELD_INVALID", str(error))
 
 
 def parse_coordinator(data: bytes | str) -> CoordinatorRegistration:
     try:
-        return decode_json(data, CoordinatorRegistration)
-    except JsonCodecError as error:
-        raise CoordinatorError("COORDINATOR_INVALID", error.message) from error
+        return CONVERTER.loads(data, CoordinatorRegistration)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise CoordinatorError("COORDINATOR_INVALID", f"Cannot parse JSON: {error}") from error
+    except AttributeError as error:
+        raise CoordinatorError("COORDINATOR_INVALID", "JSON root must be an object.") from error
     except BaseValidationError as error:
         raise _coordinator_validation_error(error) from error
 
 
 def read_coordinator(path: Path) -> CoordinatorRegistration:
     try:
-        return read_json(path, CoordinatorRegistration)
-    except JsonCodecError as error:
-        raise CoordinatorError("COORDINATOR_INVALID", error.message) from error
-    except BaseValidationError as error:
-        raise _coordinator_validation_error(error) from error
+        data = path.read_bytes()
+    except OSError as error:
+        raise CoordinatorError("COORDINATOR_INVALID", f"Cannot read JSON at '{path}': {error}") from error
+    return parse_coordinator(data)

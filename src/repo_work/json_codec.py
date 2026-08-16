@@ -1,19 +1,9 @@
-import json
-from pathlib import Path
 from typing import Final
 
 from cattrs.errors import BaseValidationError, ClassValidationError, IterableValidationError
 from cattrs.preconf.json import JsonConverter, make_converter
 
 type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
-
-
-class JsonCodecError(ValueError):
-    message: str
-
-    def __init__(self, message: str) -> None:
-        self.message = message
-        super().__init__(message)
 
 
 def _exact_string(value: JsonValue, _type: type[str]) -> str:
@@ -34,44 +24,25 @@ def _exact_boolean(value: JsonValue, _type: type[bool]) -> bool:
     return value
 
 
-def _string_tuple(value: JsonValue, _type: type[tuple[str, ...]]) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        raise TypeError(f"Expected array, got {type(value).__name__}")
-    return tuple(_exact_string(item, str) for item in value)
+def register_json_array[T](array_type: type[tuple[T, ...]], item_type: type[T]) -> None:
+    def structure_array(value: JsonValue, _requested_type: type[tuple[T, ...]]) -> tuple[T, ...]:
+        if not isinstance(value, list):
+            raise TypeError(f"Expected array, got {type(value).__name__}")
+        return tuple(CONVERTER.structure(item, item_type) for item in value)
+
+    CONVERTER.register_structure_hook_func(lambda value_type: value_type == array_type, structure_array)
 
 
 def _converter() -> JsonConverter:
-    converter = make_converter(forbid_extra_keys=True, detailed_validation=True)
+    converter = make_converter(forbid_extra_keys=True, detailed_validation=True, omit_if_default=True)
     converter.register_structure_hook(str, _exact_string)
     converter.register_structure_hook(int, _exact_integer)
     converter.register_structure_hook(bool, _exact_boolean)
-    converter.register_structure_hook_func(lambda value_type: value_type == tuple[str, ...], _string_tuple)
     return converter
 
 
 CONVERTER: Final = _converter()
-
-
-def decode_json[T](data: bytes | str, model: type[T]) -> T:
-    try:
-        value: JsonValue = json.loads(data)
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise JsonCodecError(f"Cannot parse JSON: {error}") from error
-    if not isinstance(value, dict):
-        raise JsonCodecError("JSON root must be an object.")
-    return CONVERTER.structure(value, model)
-
-
-def read_json[T](path: Path, model: type[T]) -> T:
-    try:
-        data = path.read_bytes()
-    except OSError as error:
-        raise JsonCodecError(f"Cannot read JSON at '{path}': {error}") from error
-    return decode_json(data, model)
-
-
-def encode_json[T](value: T) -> bytes:
-    return (CONVERTER.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+register_json_array(tuple[str, ...], str)
 
 
 def nested_exception[E: Exception](error: BaseException, expected: type[E]) -> E | None:
@@ -83,10 +54,6 @@ def nested_exception[E: Exception](error: BaseException, expected: type[E]) -> E
             if nested is not None:
                 return nested
     return None
-
-
-def validation_message(error: BaseValidationError) -> str:
-    return str(error)
 
 
 def validation_paths(error: BaseValidationError, prefix: tuple[str, ...] = ()) -> tuple[tuple[str, ...], ...]:
