@@ -4,19 +4,17 @@ from typing import Final
 
 import msgspec
 
-from repo_work.records import JsonRecord
-
 ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
 PLUGIN_NAME: Final = "codex-repo-work"
 
 
-class PluginAuthor(JsonRecord):
+class PluginAuthor(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     name: str
     url: str
 
 
-class PluginInterface(JsonRecord):
+class PluginInterface(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     displayName: str
     shortDescription: str
     longDescription: str
@@ -27,7 +25,7 @@ class PluginInterface(JsonRecord):
     defaultPrompt: tuple[str, ...]
 
 
-class PluginManifest(JsonRecord):
+class PluginManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     name: str
     version: str
     description: str
@@ -40,28 +38,28 @@ class PluginManifest(JsonRecord):
     interface: PluginInterface
 
 
-class MarketplaceInterface(JsonRecord):
+class MarketplaceInterface(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     displayName: str
 
 
-class PluginSource(JsonRecord):
+class PluginSource(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     source: str
     path: str
 
 
-class PluginPolicy(JsonRecord):
+class PluginPolicy(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     installation: str
     authentication: str
 
 
-class MarketplacePlugin(JsonRecord):
+class MarketplacePlugin(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     name: str
     source: PluginSource
     policy: PluginPolicy
     category: str
 
 
-class MarketplaceManifest(JsonRecord):
+class MarketplaceManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     name: str
     interface: MarketplaceInterface
     plugins: tuple[MarketplacePlugin, ...]
@@ -69,7 +67,7 @@ class MarketplaceManifest(JsonRecord):
 
 def validate_plugin() -> None:
     path = ROOT / ".codex-plugin" / "plugin.json"
-    value = msgspec.json.decode(path.read_bytes(), type=PluginManifest, strict=True)
+    value = msgspec.json.decode(path.read_bytes(), type=PluginManifest)
     if value.name != PLUGIN_NAME or value.skills != "./skills/":
         raise ValueError("plugin manifest identity or skill root is invalid")
     if value.license != "MIT":
@@ -78,7 +76,7 @@ def validate_plugin() -> None:
 
 def validate_marketplace() -> None:
     path = ROOT / ".agents" / "plugins" / "marketplace.json"
-    value = msgspec.json.decode(path.read_bytes(), type=MarketplaceManifest, strict=True)
+    value = msgspec.json.decode(path.read_bytes(), type=MarketplaceManifest)
     expected = MarketplaceManifest(
         name=PLUGIN_NAME,
         interface=MarketplaceInterface(displayName="Codex Repository Work"),
