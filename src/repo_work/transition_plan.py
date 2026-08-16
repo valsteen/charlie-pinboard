@@ -5,6 +5,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
+from attrs import frozen
+
 from repo_work.actions import Action
 from repo_work.coordinator import CoordinatorRegistration
 from repo_work.markdown import (
@@ -17,11 +19,11 @@ from repo_work.markdown import (
 )
 from repo_work.model import SCHEMA_V1, Queue, QueueItem, WorkState
 from repo_work.proposals import Proposal, ProposalDispositionKind, ProposalHistory, read_proposal
-from repo_work.records import Record
 from repo_work.transaction_store import ChangeSet, FileChange, delete_change, write_bytes_change, write_change
 from repo_work.transition_input import (
     AcceptProposalInput,
     ActivateInput,
+    BlockInput,
     DeferInput,
     EvidenceInput,
     MergeProposalInput,
@@ -39,7 +41,8 @@ class TransitionPlanError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-class PlanContext(Record):
+@frozen
+class PlanContext:
     work_root: Path
     project_root: Path
     queue: Queue
@@ -107,14 +110,14 @@ def _activate(context: PlanContext, action: Action, value: TransitionInput) -> C
 
 
 def _pause_or_block(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(ReasonInput, value)
+    value = cast(ReasonInput | BlockInput, value)
     items = context.items
     index = _attempt_index(items, action.subject)
     if items[index].state != WorkState.ACTIVE:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", "The named attempt is not active.")
     target = WorkState.PAUSED if action.kind == "pause" else WorkState.BLOCKED
     dependencies = items[index].depends_on
-    if action.kind == "block":
+    if isinstance(value, BlockInput):
         dependencies = tuple(dict.fromkeys((*dependencies, *value.depends_on)))
     items[index] = replace(
         items[index],
@@ -218,7 +221,7 @@ def _mark_ready(context: PlanContext, action: Action, value: TransitionInput) ->
 
 
 def _block_item(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(ReasonInput, value)
+    value = cast(BlockInput, value)
     items = context.items
     index = _item_index(items, action.subject)
     if items[index].state not in {WorkState.INTAKE, WorkState.READY}:
@@ -231,8 +234,6 @@ def _block_item(context: PlanContext, action: Action, value: TransitionInput) ->
 
 def _defer(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
     value = cast(DeferInput, value)
-    if value.timing not in {"must-now", "cheaper-now", "safe-to-defer"}:
-        raise TransitionPlanError("TRANSITION_INPUT_INVALID", f"Unsupported timing '{value.timing}'.")
     items = context.items
     index = _item_index(items, action.subject)
     item = items[index]
@@ -269,7 +270,7 @@ def _accept_proposal(context: PlanContext, action: Action, value: TransitionInpu
     inbox, history, proposal = _proposal_paths(context, action)
     item = QueueItem(
         item=value.item,
-        state=value.state,
+        state=WorkState(value.state.value),
         timing=value.timing,
         depends_on=value.depends_on,
         attempt=None,

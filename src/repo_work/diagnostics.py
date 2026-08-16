@@ -1,7 +1,7 @@
 from enum import Enum
 from pathlib import Path
 
-from repo_work.records import Record
+from attrs import frozen
 
 
 class Severity(Enum):
@@ -9,7 +9,8 @@ class Severity(Enum):
     WARNING = "warning"
 
 
-class Diagnostic(Record):
+@frozen
+class Diagnostic:
     code: str
     severity: Severity
     path: Path

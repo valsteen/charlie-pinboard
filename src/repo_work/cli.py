@@ -5,20 +5,21 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import msgspec
+from attrs import frozen
 
 from repo_work import __version__
 from repo_work.actions import Action, ActionError, actions_for, state_revision
 from repo_work.coordinator import read_coordinator
 from repo_work.markdown import parse_current, parse_queue
 from repo_work.proposals import ProposalError, create_proposal
-from repo_work.records import JsonRecord, Record
 from repo_work.registration import RegistrationError, initialize_work_state
 from repo_work.root import RootError, resolve_project_root
 from repo_work.transition import TransitionError, apply_action
 from repo_work.validate import ValidationReport, validate_work_state
 
 
-class CommandContext(Record):
+@frozen
+class CommandContext:
     arguments: argparse.Namespace
     project: Path
     work: Path
@@ -27,12 +28,12 @@ class CommandContext(Record):
 type CommandHandler = Callable[[CommandContext], int]
 
 
-class RootView(JsonRecord):
+class RootView(msgspec.Struct, frozen=True):
     project_root: str
     work_root: str
 
 
-class DiagnosticView(JsonRecord):
+class DiagnosticView(msgspec.Struct, frozen=True, omit_defaults=True):
     code: str
     severity: str
     path: str
@@ -40,18 +41,18 @@ class DiagnosticView(JsonRecord):
     hint: str | None
 
 
-class ValidationView(JsonRecord):
+class ValidationView(msgspec.Struct, frozen=True):
     valid: bool
     diagnostics: tuple[DiagnosticView, ...]
 
 
-class CoordinatorView(JsonRecord):
+class CoordinatorView(msgspec.Struct, frozen=True):
     task_id: str
     host_id: str
     generation: int
 
 
-class StatusView(JsonRecord):
+class StatusView(msgspec.Struct, frozen=True):
     valid: bool
     project_root: str
     work_root: str
@@ -65,7 +66,7 @@ class StatusView(JsonRecord):
     coordinator: CoordinatorView
 
 
-class ActionView(JsonRecord):
+class ActionView(msgspec.Struct, frozen=True):
     action_id: str
     kind: str
     subject: str
@@ -87,7 +88,7 @@ class ActionView(JsonRecord):
         )
 
 
-class ActionsView(JsonRecord):
+class ActionsView(msgspec.Struct, frozen=True):
     actions: tuple[ActionView, ...]
 
 

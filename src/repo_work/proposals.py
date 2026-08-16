@@ -1,33 +1,19 @@
-import re
 from enum import Enum
 from pathlib import Path
-from typing import Final, override
+from typing import Annotated
 
 import msgspec
 
 from repo_work.atomic import atomic_create
-from repo_work.model import SCHEMA_V1
-from repo_work.records import JsonRecord
+from repo_work.model import SchemaV1
 from repo_work.validate import validate_work_state
 
-IDENTITY_PATTERN: Final = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-REQUIRED_TEXT_FIELDS: Final = frozenset(
-    {
-        "schema",
-        "proposal_id",
-        "created_at",
-        "source_task_id",
-        "user_label",
-        "trigger",
-        "why_it_matters",
-        "effect",
-        "unlock",
-        "urgency_evidence",
-    }
-)
+type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
+type ProposalIdentity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
+type ProposalText = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^|\n]*[^\s|][^|\n]*$")]
 
 
-class ProposalError(RuntimeError):
+class ProposalError(ValueError):
     code: str
 
     def __init__(self, code: str, message: str) -> None:
@@ -50,60 +36,32 @@ class ProposalDispositionKind(Enum):
     REJECTED = "rejected"
 
 
-class ProposalRelation(JsonRecord):
+class ProposalRelation(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     kind: RelationKind
-    item: str | None
-
-    def __post_init__(self) -> None:
-        if self.item is not None and not IDENTITY_PATTERN.fullmatch(self.item):
-            raise ProposalError("PROPOSAL_RELATION_INVALID", "relation.item must be null or a work item identity.")
+    item: ProposalIdentity | None
 
 
-class Proposal(JsonRecord):
-    schema: str
-    proposal_id: str
-    created_at: str
-    source_task_id: str
-    user_label: str
-    trigger: str
-    evidence: tuple[str, ...]
-    why_it_matters: str
+class Proposal(msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_defaults=True):
+    schema: SchemaV1
+    proposal_id: ProposalIdentity
+    created_at: ProposalText
+    source_task_id: ProposalText
+    user_label: ProposalText
+    trigger: ProposalText
+    evidence: tuple[NonEmptyString, ...]
+    why_it_matters: ProposalText
     relation: ProposalRelation
-    effect: str
-    unlock: str
-    urgency_evidence: str
-    freshness_assumptions: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        if self.schema != SCHEMA_V1:
-            raise ProposalError("PROPOSAL_SCHEMA_INVALID", f"Proposal must use '{SCHEMA_V1}'.")
-        if not IDENTITY_PATTERN.fullmatch(self.proposal_id):
-            raise ProposalError("PROPOSAL_ID_INVALID", f"Invalid proposal identity '{self.proposal_id}'.")
-        fields = (
-            ("proposal_id", self.proposal_id),
-            ("created_at", self.created_at),
-            ("source_task_id", self.source_task_id),
-            ("user_label", self.user_label),
-            ("trigger", self.trigger),
-            ("why_it_matters", self.why_it_matters),
-            ("effect", self.effect),
-            ("unlock", self.unlock),
-            ("urgency_evidence", self.urgency_evidence),
-        )
-        for name, value in fields:
-            if not value.strip():
-                raise ProposalError("PROPOSAL_FIELD_REQUIRED", f"'{name}' must be a non-empty string.")
-            if "\n" in value or "|" in value:
-                raise ProposalError("PROPOSAL_FIELD_INVALID", f"'{name}' cannot contain a newline or pipe.")
-        if not all(self.evidence) or not all(self.freshness_assumptions):
-            raise ProposalError("PROPOSAL_FIELD_INVALID", "List fields must contain non-empty strings.")
+    effect: ProposalText
+    unlock: ProposalText
+    urgency_evidence: ProposalText
+    freshness_assumptions: tuple[NonEmptyString, ...]
 
     def render(self) -> bytes:
         encoded = msgspec.json.encode(self, order="sorted")
         return msgspec.json.format(encoded, indent=2) + b"\n"
 
 
-class ProposalHistory(Proposal):
+class ProposalHistory(Proposal, frozen=True, forbid_unknown_fields=True, omit_defaults=True):
     disposition: ProposalDispositionKind
     target: str | None
     coordinator_reason: str | None = None
@@ -135,34 +93,12 @@ class ProposalHistory(Proposal):
             coordinator_reason=coordinator_reason,
         )
 
-    @override
-    def render(self) -> bytes:
-        encoded = msgspec.json.encode(self, order="sorted")
-        return msgspec.json.format(encoded, indent=2) + b"\n"
-
-
-def _mentions_field(message: str, field: str) -> bool:
-    return f"`{field}`" in message or f"$.{field}" in message
-
-
-def _proposal_validation_error(error: msgspec.ValidationError) -> ProposalError:
-    message = str(error)
-    if _mentions_field(message, "relation"):
-        return ProposalError("PROPOSAL_RELATION_INVALID", message)
-    if message.startswith("Expected `object`"):
-        return ProposalError("PROPOSAL_INVALID", "JSON root must be an object.")
-    if any(_mentions_field(message, field) for field in REQUIRED_TEXT_FIELDS):
-        return ProposalError("PROPOSAL_FIELD_REQUIRED", message)
-    return ProposalError("PROPOSAL_FIELD_INVALID", message)
-
 
 def parse_proposal(data: bytes | str) -> Proposal:
     try:
-        return msgspec.json.decode(data, type=Proposal, strict=True)
-    except msgspec.ValidationError as error:
-        raise _proposal_validation_error(error) from error
+        return msgspec.json.decode(data, type=Proposal)
     except msgspec.DecodeError as error:
-        raise ProposalError("PROPOSAL_INVALID", f"Cannot parse JSON: {error}") from error
+        raise ProposalError("PROPOSAL_INVALID", f"Cannot decode proposal JSON: {error}") from error
 
 
 def read_proposal(path: Path) -> Proposal:

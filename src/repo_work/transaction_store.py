@@ -1,14 +1,14 @@
-import base64
 import shutil
 import tempfile
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
+from typing import Annotated, Literal
 
 import msgspec
+from attrs import frozen
 
 from repo_work import validate as work_validation
 from repo_work.atomic import atomic_write
-from repo_work.records import JsonRecord, Record
 from repo_work.storage_layout import journal_path_for
 
 
@@ -20,15 +20,17 @@ class AtomicCommitError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-class FileChange(Record):
+@frozen
+class FileChange:
     path: PurePosixPath
     data: bytes | None
 
 
-class ChangeSet(Record):
+@frozen
+class ChangeSet:
     changes: tuple[FileChange, ...]
 
-    def __post_init__(self) -> None:
+    def __attrs_post_init__(self) -> None:
         paths: set[PurePosixPath] = set()
         for change in self.changes:
             if change.path.is_absolute() or ".." in change.path.parts or not change.path.parts:
@@ -42,25 +44,22 @@ class ChangeSet(Record):
         return cls(tuple(changes))
 
 
-class OriginalFile(Record):
+@frozen
+class OriginalFile:
     path: PurePosixPath
     existed: bool
     data: bytes
 
 
-class JournalOriginal(JsonRecord):
-    path: str
+class JournalOriginal(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    path: Annotated[str, msgspec.Meta(min_length=1)]
     existed: bool
-    data: str
+    data: bytes
 
 
-class JournalManifest(JsonRecord):
-    schema: str
+class JournalManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: Literal["repo-work-journal/v1"]
     originals: tuple[JournalOriginal, ...]
-
-    def __post_init__(self) -> None:
-        if self.schema != "repo-work-journal/v1":
-            raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Unsupported transaction journal schema.")
 
 
 type CommitFailpoint = Callable[[int, FileChange], None]
@@ -115,7 +114,7 @@ def _journal_manifest(originals: tuple[OriginalFile, ...]) -> JournalManifest:
             JournalOriginal(
                 path=str(original.path),
                 existed=original.existed,
-                data=base64.b64encode(original.data).decode("ascii"),
+                data=original.data,
             )
             for original in originals
         ),
@@ -138,22 +137,16 @@ def _write_journal(work_root: Path, originals: tuple[OriginalFile, ...]) -> Path
 
 
 def _parse_original(value: JournalOriginal) -> OriginalFile:
-    if not value.path:
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", "Journal original entry has invalid fields.")
     relative = PurePosixPath(value.path)
     if relative.is_absolute() or ".." in relative.parts:
         raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Journal path '{value.path}' escapes the work root.")
-    try:
-        decoded = base64.b64decode(value.data, validate=True)
-    except ValueError as error:
-        raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Journal data for '{value.path}' is not base64.") from error
-    return OriginalFile(relative, value.existed, decoded)
+    return OriginalFile(relative, value.existed, value.data)
 
 
 def _read_journal(journal: Path) -> tuple[OriginalFile, ...]:
     try:
         data = (journal / "manifest.json").read_bytes()
-        manifest = msgspec.json.decode(data, type=JournalManifest, strict=True)
+        manifest = msgspec.json.decode(data, type=JournalManifest)
     except OSError as error:
         raise AtomicCommitError("COMMIT_JOURNAL_INVALID", f"Cannot read transaction journal: {error}") from error
     except msgspec.DecodeError as error:

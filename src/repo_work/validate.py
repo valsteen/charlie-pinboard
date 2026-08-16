@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from attrs import frozen
+
 from repo_work.coordinator import CoordinatorError, read_coordinator
 from repo_work.diagnostics import Diagnostic, Severity
 from repo_work.markdown import (
@@ -11,11 +13,11 @@ from repo_work.markdown import (
     require_document_header,
 )
 from repo_work.model import SCHEMA_V1, Queue, QueueItem, WorkState
-from repo_work.records import Record
 from repo_work.storage_layout import journal_path_for
 
 
-class ValidationReport(Record):
+@frozen
+class ValidationReport:
     diagnostics: tuple[Diagnostic, ...]
 
     @property

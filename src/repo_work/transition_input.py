@@ -1,10 +1,14 @@
+from enum import Enum
+from typing import Annotated, Literal
+
 import msgspec
 
-from repo_work.model import WorkState
-from repo_work.records import JsonRecord
+type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
+type Identity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
+type Timing = Literal["must-now", "cheaper-now", "safe-to-defer"]
 
 
-class TransitionInputError(RuntimeError):
+class TransitionInputError(ValueError):
     code: str
 
     def __init__(self, code: str, message: str) -> None:
@@ -12,98 +16,64 @@ class TransitionInputError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-def _required_text(field: str, value: str) -> None:
-    if not value:
-        raise TransitionInputError("TRANSITION_INPUT_REQUIRED", f"'{field}' must be a non-empty string.")
-    if "\n" in value:
-        raise TransitionInputError("TRANSITION_INPUT_INVALID", f"'{field}' cannot contain a newline.")
+class AcceptedProposalState(Enum):
+    INTAKE = "intake"
+    READY = "ready"
+    BLOCKED = "blocked"
+    DEFERRED = "deferred"
 
 
-class EmptyInput(JsonRecord):
+class EmptyInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     pass
 
 
-class ActivateInput(JsonRecord):
-    attempt: str
-    branch: str
-    base_revision: str
-    owner: str
-
-    def __post_init__(self) -> None:
-        for field, value in (
-            ("attempt", self.attempt),
-            ("branch", self.branch),
-            ("base_revision", self.base_revision),
-            ("owner", self.owner),
-        ):
-            _required_text(field, value)
+class ActivateInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    attempt: Identity
+    branch: NonEmptyLine
+    base_revision: NonEmptyLine
+    owner: NonEmptyLine
 
 
-class ReasonInput(JsonRecord):
-    reason: str
-    depends_on: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        _required_text("reason", self.reason)
-        for dependency in self.depends_on:
-            _required_text("depends_on", dependency)
+class ReasonInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    reason: NonEmptyLine
 
 
-class EvidenceInput(JsonRecord):
-    evidence: str
-
-    def __post_init__(self) -> None:
-        _required_text("evidence", self.evidence)
+class BlockInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    reason: NonEmptyLine
+    depends_on: tuple[Identity, ...] = ()
 
 
-class DeferInput(JsonRecord):
-    timing: str
-    reopen_condition: str
-
-    def __post_init__(self) -> None:
-        _required_text("timing", self.timing)
-        _required_text("reopen_condition", self.reopen_condition)
+class EvidenceInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    evidence: NonEmptyLine
 
 
-class AcceptProposalInput(JsonRecord, kw_only=True):
-    item: str
-    state: WorkState
-    next_action: str
-    timing: str | None = None
-    depends_on: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        _required_text("item", self.item)
-        _required_text("next_action", self.next_action)
-        for dependency in self.depends_on:
-            _required_text("depends_on", dependency)
-        if self.state in {WorkState.ACTIVE, WorkState.PAUSED}:
-            raise TransitionInputError(
-                "TRANSITION_INPUT_INVALID",
-                "A proposal cannot enter an attempt-owned state.",
-            )
+class DeferInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    timing: Timing
+    reopen_condition: NonEmptyLine
 
 
-class MergeProposalInput(JsonRecord):
-    target: str
+class AcceptProposalInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
+    item: Identity
+    state: AcceptedProposalState
+    next_action: NonEmptyLine
+    timing: Timing | None = None
+    depends_on: tuple[Identity, ...] = ()
 
-    def __post_init__(self) -> None:
-        _required_text("target", self.target)
+
+class MergeProposalInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    target: Identity
 
 
-class TransferCoordinatorInput(JsonRecord):
-    task_id: str
-    host_id: str
-
-    def __post_init__(self) -> None:
-        _required_text("task_id", self.task_id)
-        _required_text("host_id", self.host_id)
+class TransferCoordinatorInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    task_id: NonEmptyLine
+    host_id: NonEmptyLine
 
 
 type TransitionInput = (
     EmptyInput
     | ActivateInput
     | ReasonInput
+    | BlockInput
     | EvidenceInput
     | DeferInput
     | AcceptProposalInput
@@ -112,16 +82,7 @@ type TransitionInput = (
 )
 
 
-type InputModel = (
-    type[EmptyInput]
-    | type[ActivateInput]
-    | type[ReasonInput]
-    | type[EvidenceInput]
-    | type[DeferInput]
-    | type[AcceptProposalInput]
-    | type[MergeProposalInput]
-    | type[TransferCoordinatorInput]
-)
+type InputModel = type[TransitionInput]
 
 
 INPUT_MODELS: dict[str, InputModel] = {
@@ -130,8 +91,8 @@ INPUT_MODELS: dict[str, InputModel] = {
     "return-proposal": ReasonInput,
     "reject-proposal": ReasonInput,
     "mark-ready": ReasonInput,
-    "block": ReasonInput,
-    "block-item": ReasonInput,
+    "block": BlockInput,
+    "block-item": BlockInput,
     "complete": EvidenceInput,
     "reopen": EvidenceInput,
     "defer": DeferInput,
@@ -147,16 +108,6 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:
     if model is None:
         raise TransitionInputError("ACTION_NOT_MUTATING", f"Action '{kind}' is not a canonical transition.")
     try:
-        value = msgspec.json.decode(data, type=model, strict=True)
-    except msgspec.ValidationError as error:
-        message = str(error)
-        if message.startswith("Object missing required field"):
-            raise TransitionInputError("TRANSITION_INPUT_REQUIRED", message) from error
-        if message.startswith("Expected `object`"):
-            raise TransitionInputError("TRANSITION_INPUT_INVALID", "JSON root must be an object.") from error
-        raise TransitionInputError("TRANSITION_INPUT_INVALID", message) from error
+        return msgspec.json.decode(data, type=model)
     except msgspec.DecodeError as error:
-        raise TransitionInputError("TRANSITION_INPUT_INVALID", f"Cannot parse JSON: {error}") from error
-    if kind in {"pause", "return-proposal", "reject-proposal", "mark-ready"} and isinstance(value, ReasonInput):
-        return ReasonInput(value.reason)
-    return value
+        raise TransitionInputError("TRANSITION_INPUT_INVALID", f"Cannot decode transition JSON: {error}") from error

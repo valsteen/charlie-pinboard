@@ -1,10 +1,11 @@
 import hashlib
 from pathlib import Path
 
+from attrs import frozen
+
 from repo_work.coordinator import read_coordinator
 from repo_work.markdown import parse_queue
 from repo_work.model import Queue, QueueItem, WorkState
-from repo_work.records import Record
 from repo_work.validate import validate_work_state
 
 
@@ -16,7 +17,8 @@ class ActionError(RuntimeError):
         super().__init__(f"{code}: {message}")
 
 
-class Action(Record):
+@frozen
+class Action:
     action_id: str
     kind: str
     subject: str
@@ -50,7 +52,8 @@ def coordinator_generation(work_root: Path) -> int:
     return read_coordinator(work_root / "coordinator.json").generation
 
 
-class ActionFactory(Record):
+@frozen
+class ActionFactory:
     revision: str
     generation: int
 

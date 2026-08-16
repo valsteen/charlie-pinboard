@@ -1,10 +1,11 @@
 from enum import Enum
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
-from repo_work.records import Record
+from attrs import frozen
 
 SCHEMA_V1: Final = "repo-work/v1"
+type SchemaV1 = Literal["repo-work/v1"]
 
 
 class WorkState(Enum):
@@ -23,7 +24,8 @@ type HeaderValue = str | bool | None
 type Header = dict[str, HeaderValue]
 
 
-class QueueItem(Record):
+@frozen
+class QueueItem:
     item: str
     state: WorkState
     timing: str | None
@@ -34,7 +36,8 @@ class QueueItem(Record):
     notes: str
 
 
-class Queue(Record):
+@frozen
+class Queue:
     path: Path
     header: Header
     items: tuple[QueueItem, ...]
@@ -44,20 +47,23 @@ class Queue(Record):
         return {item.item: item for item in self.items}
 
 
-class WorkItemRecord(Record):
+@frozen
+class WorkItemRecord:
     path: Path
     item: str
     user_label: str
 
 
-class CurrentPointer(Record):
+@frozen
+class CurrentPointer:
     path: Path
     focus_item: str | None
     focus_attempt: str | None
     next_action: str
 
 
-class Attempt(Record):
+@frozen
+class Attempt:
     path: Path
     attempt: str
     item: str
