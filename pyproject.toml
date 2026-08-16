@@ -28,7 +28,6 @@ src = ["src", "tests"]
 select = ["ANN", "ARG", "B", "BLE", "C4", "C90", "E4", "E7", "E9", "F", "I", "PERF", "PGH", "PIE", "PLC0415", "PLR0912", "PLR0915", "PTH", "RET", "RUF", "SIM", "T10", "TID", "UP", "W"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"builtins.object".msg = "Use the concrete boundary or domain type."
 "enum.StrEnum".msg = "Use Enum so string behavior remains explicit."
 "typing.Any".msg = "Use a concrete type or a closed union."
 
