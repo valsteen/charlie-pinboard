@@ -12,10 +12,10 @@ Implement one accepted attempt, verify it, and leave a result the registered coo
 1. Resolve the repository-work executable relative to the installed plugin as `../../scripts/repo-work`.
 2. Run `repo-work status --json` and `repo-work actions --role worker --json`.
 3. Require the user-supplied attempt to be present and active. Other disjoint attempts may also be active. Stop if state is invalid, the supplied attempt is absent, or its queue and attempt records disagree.
-4. Read that attempt's `attempt.md` fully, then read only the project guidance, item context, accepted knowledge, and source authorities it names.
+4. Read that attempt's `attempt.md` fully, then read only the project guidance, item context, accepted knowledge, and source authorities it names. Preserve exact file and section selectors instead of broadening them into exploratory reads.
 5. Inspect the checkout, branch/worktree, base revision, and unrelated user changes before editing.
 
-Restate the objective, non-goals, affected boundaries, testing mode, acceptance criteria, and completion checks briefly. Ask only when missing information would change product behavior, architecture, scope, compatibility, or verification expectations.
+Confirm the attempt identity, checkpoint, and execution environment without rewriting its semantics. The canonical attempt remains the sole source for scope, ordering, deferrals, and verification. Ask only when missing information would change product behavior, architecture, scope, compatibility, or verification expectations.
 
 ## Stay inside the attempt
 
@@ -47,11 +47,13 @@ Use the repository's selected testing mode. Prefer the smallest evidence that ca
 Before review:
 
 1. finish the coherent implementation batch;
-2. run the required focused checks and formatter/linter gates;
+2. run every command required by the attempt, without replacing it with a narrower package, test, formatter, or linter command;
 3. inspect the final diff;
 4. identify the stable candidate by commit or working-tree fingerprint;
 5. map every acceptance criterion to code, test, or evidence;
-6. write `result.md` in the attempt directory.
+6. if an existing test file shrank materially, inventory the removed behavior or test names and identify the replacement evidence;
+7. when acceptance claims lifecycle wiring, prove it through the production entry point rather than only through an internal primitive;
+8. write `result.md` in the attempt directory.
 
 The result must record:
 
@@ -59,6 +61,8 @@ The result must record:
 - concise implementation result;
 - acceptance-criterion evidence;
 - verification commands and outcomes;
+- any material test removal and its replacement evidence;
+- production-entry-point evidence for lifecycle claims;
 - preserved unrelated changes;
 - new findings or exact unknowns;
 - whether the attempt is ready for review or blocked.

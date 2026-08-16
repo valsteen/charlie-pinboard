@@ -33,11 +33,17 @@ One registered coordinator generation owns canonical transitions. Multiple tasks
 
 When the coordinator launches a worker for an active attempt:
 
-1. Retain coordinator ownership and the worker identifier.
-2. Wait until the worker finishes or needs attention. A wait timeout, progress update, or successful launch is not a terminal result.
-3. Do not end the coordinator turn merely because implementation started. End with a running worker only when the user explicitly requested background execution; report that coordinator review remains pending and resume it before any acceptance transition.
-4. Do not edit the worker's checkout or review candidate while it is still changing.
-5. After completion, read `result.md` or `blocker.md`, inspect the stable candidate, and perform the review described below.
+1. Make `attempt.md` the only semantic execution brief. Put the accepted scope, checkpoint, named source selectors, acceptance criteria, and exact checks there.
+2. Give every dispatched checkpoint one explicit `Checkpoint boundary: local` or `Checkpoint boundary: cross-boundary` line. Use `cross-boundary` when that checkpoint changes one contract across multiple production owners or required consumers. Before launching a cross-boundary checkpoint, also record `Checkpoint outcome: independently-buildable` and a compact `Contract table` with these columns: `Invariant`; `Authority / owner`; `Required consumer or production observation`; `Failure classification`; `Exact verification`; `Preflight / final revalidation`.
+3. Select the exact `dispatch:<attempt>` action. Record only `schema`, `checkout`, `branch`, `starting_revision`, and `permissions` in a `repo-work-dispatch/v1` environment JSON file. Permission values are `repository-read`, `repository-write`, `network`, `external-write`, and `live-application`.
+4. Run `repo-work dispatch` with the action tokens, exact checkpoint heading, and environment file. Launch the worker with the rendered prompt unchanged. Use `--prompt` to verify a prompt received through another transport before launch.
+5. Retain coordinator ownership and the worker identifier. Do not edit the worker's checkout or review candidate while it is still changing.
+6. Wait until the worker finishes or needs attention. A wait timeout, progress update, or successful launch is not a terminal result.
+7. After completion, read `result.md` or `blocker.md`, inspect the stable candidate, and perform the review described below.
+
+The dispatch prompt identifies the canonical brief, checkpoint, and execution environment. It must not repeat acceptance semantics, checks, deferrals, or source-reading instructions. Change the attempt first when its contract is wrong.
+
+Do not end the coordinator turn merely because implementation started. End with a running worker only when the user explicitly requested background execution; report that coordinator review remains pending and resume it before any acceptance transition.
 
 The registered coordinator owns independent review. If an additional reviewer is useful, the coordinator launches it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
 

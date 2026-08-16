@@ -37,6 +37,7 @@ class AvailableActionsTest(unittest.TestCase):
         self.assertTrue(
             {
                 "continue:reveal-core-1",
+                "dispatch:reveal-core-1",
                 "pause:reveal-core-1",
                 "block:reveal-core-1",
                 "complete:reveal-core-1",

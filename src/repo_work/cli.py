@@ -4,12 +4,14 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import msgspec
 
 from repo_work import __version__
 from repo_work.actions import Action, ActionError, actions_for, state_revision
 from repo_work.coordinator import read_coordinator
+from repo_work.dispatch import DispatchError, prepare_dispatch, read_dispatch_environment
 from repo_work.markdown import parse_current, parse_queue
 from repo_work.proposals import ProposalError, create_proposal
 from repo_work.registration import RegistrationError, initialize_work_state
@@ -17,10 +19,32 @@ from repo_work.root import RootError, resolve_project_root
 from repo_work.transition import TransitionError, apply_action
 from repo_work.validate import ValidationReport, validate_work_state
 
+type CommandName = Literal["root", "validate", "status", "actions", "init", "proposal", "transition", "dispatch"]
+type RoleName = Literal["coordinator", "worker", "observer"]
+
+
+class CliArguments(argparse.Namespace):
+    command: CommandName
+    project_root: Path | None
+    work_root: Path | None
+    json: bool
+    role: RoleName
+    coordinator_task_id: str
+    host_id: str
+    file: Path
+    action_id: str
+    expected_revision: str
+    generation: int
+    subject_revision: str | None
+    payload: Path
+    checkpoint: str
+    environment: Path
+    prompt: Path | None
+
 
 @dataclass(frozen=True, slots=True)
 class CommandContext:
-    arguments: argparse.Namespace
+    arguments: CliArguments
     project: Path
     work: Path
 
@@ -122,14 +146,32 @@ def build_parser() -> argparse.ArgumentParser:
     transition.add_argument("--generation", required=True, type=int)
     transition.add_argument("--subject-revision")
     transition.add_argument("--payload", required=True, type=Path)
+    dispatch = commands.add_parser("dispatch", help="Prepare or verify a canonical worker launch.")
+    dispatch.add_argument("--action-id", required=True, help="Exact dispatch action returned by coordinator actions.")
+    dispatch.add_argument("--expected-revision", required=True, help="Ledger revision from the dispatch action.")
+    dispatch.add_argument("--generation", required=True, type=int, help="Coordinator generation from the action.")
+    dispatch.add_argument(
+        "--checkpoint", required=True, help="Exact checkpoint heading in the canonical attempt brief."
+    )
+    dispatch.add_argument(
+        "--environment",
+        required=True,
+        type=Path,
+        help="repo-work-dispatch/v1 JSON describing the checkout, branch, revision, and permissions.",
+    )
+    dispatch.add_argument(
+        "--prompt",
+        type=Path,
+        help="Verify this transported prompt instead of rendering the canonical prompt.",
+    )
     return parser
 
 
-def _roots(arguments: argparse.Namespace) -> tuple[Path, Path]:
-    project_argument = getattr(arguments, "project_root", None)
-    project = project_argument.resolve() if isinstance(project_argument, Path) else resolve_project_root(Path.cwd())
-    work_argument = getattr(arguments, "work_root", None)
-    work = work_argument.resolve() if isinstance(work_argument, Path) else project / ".codex" / "work"
+def _roots(arguments: CliArguments) -> tuple[Path, Path]:
+    project_argument = arguments.project_root
+    project = project_argument.resolve() if project_argument is not None else resolve_project_root(Path.cwd())
+    work_argument = arguments.work_root
+    work = work_argument.resolve() if work_argument is not None else project / ".codex" / "work"
     return project, work
 
 
@@ -173,19 +215,24 @@ def _status_value(work: Path, project: Path) -> StatusView:
     )
 
 
-def _action_from_arguments(arguments: argparse.Namespace) -> Action:
-    action_id = getattr(arguments, "action_id", None)
-    if not isinstance(action_id, str) or ":" not in action_id:
+def _action_from_values(
+    action_id: str,
+    expected_revision: str,
+    generation: int,
+    subject_revision: str | None,
+) -> Action:
+    if ":" not in action_id:
         raise TransitionError("ACTION_ID_INVALID", "Action identity must be 'kind:subject'.")
     kind, subject = action_id.split(":", 1)
-    expected_revision = getattr(arguments, "expected_revision", None)
-    generation = getattr(arguments, "generation", None)
-    subject_revision = getattr(arguments, "subject_revision", None)
-    if not isinstance(expected_revision, str) or not isinstance(generation, int):
-        raise TransitionError("TRANSITION_INPUT_INVALID", "Transition action tokens are invalid.")
-    if subject_revision is not None and not isinstance(subject_revision, str):
-        raise TransitionError("TRANSITION_INPUT_INVALID", "Subject revision must be a string.")
-    return Action(action_id, kind, subject, action_id, expected_revision, generation, subject_revision)
+    return Action(
+        action_id,
+        kind,
+        subject,
+        action_id,
+        expected_revision,
+        generation,
+        subject_revision,
+    )
 
 
 def _root(context: CommandContext) -> int:
@@ -195,7 +242,7 @@ def _root(context: CommandContext) -> int:
 
 def _validate(context: CommandContext) -> int:
     report = validate_work_state(context.work, context.project)
-    if bool(getattr(context.arguments, "json", False)):
+    if context.arguments.json:
         _write_json(_diagnostic_view(report))
     else:
         print(report.render())
@@ -204,7 +251,7 @@ def _validate(context: CommandContext) -> int:
 
 def _status(context: CommandContext) -> int:
     value = _status_value(context.work, context.project)
-    if bool(getattr(context.arguments, "json", False)):
+    if context.arguments.json:
         _write_json(value)
     else:
         print(f"OK WORK_STATE_VALID revision={value.revision}")
@@ -214,11 +261,8 @@ def _status(context: CommandContext) -> int:
 
 
 def _actions(context: CommandContext) -> int:
-    role = getattr(context.arguments, "role", None)
-    if not isinstance(role, str):
-        raise ActionError("ROLE_INVALID", "A role is required.")
-    available = actions_for(context.work, context.project, role)
-    if bool(getattr(context.arguments, "json", False)):
+    available = actions_for(context.work, context.project, context.arguments.role)
+    if context.arguments.json:
         _write_json(ActionsView(tuple(ActionView.from_action(action) for action in available)))
     elif not available:
         print("OK NO_ACTIONS_AVAILABLE")
@@ -229,19 +273,18 @@ def _actions(context: CommandContext) -> int:
 
 
 def _initialize(context: CommandContext) -> int:
-    task_id = getattr(context.arguments, "coordinator_task_id", None)
-    host_id = getattr(context.arguments, "host_id", None)
-    if not isinstance(task_id, str) or not isinstance(host_id, str):
-        raise RegistrationError("COORDINATOR_IDENTITY_INVALID", "Coordinator task and host identities are required.")
-    initialized = initialize_work_state(context.project, task_id, host_id, context.work)
+    initialized = initialize_work_state(
+        context.project,
+        context.arguments.coordinator_task_id,
+        context.arguments.host_id,
+        context.work,
+    )
     print(f"OK WORK_STATE_INITIALIZED {initialized}")
     return 0
 
 
 def _proposal(context: CommandContext) -> int:
-    path = getattr(context.arguments, "file", None)
-    if not isinstance(path, Path):
-        raise ProposalError("PROPOSAL_INVALID", "A proposal file is required.")
+    path = context.arguments.file
     try:
         data = path.read_bytes()
     except OSError as error:
@@ -252,10 +295,13 @@ def _proposal(context: CommandContext) -> int:
 
 
 def _transition(context: CommandContext) -> int:
-    payload_path = getattr(context.arguments, "payload", None)
-    if not isinstance(payload_path, Path):
-        raise TransitionError("TRANSITION_INPUT_INVALID", "A transition payload file is required.")
-    action = _action_from_arguments(context.arguments)
+    payload_path = context.arguments.payload
+    action = _action_from_values(
+        context.arguments.action_id,
+        context.arguments.expected_revision,
+        context.arguments.generation,
+        context.arguments.subject_revision,
+    )
     try:
         payload = payload_path.read_bytes()
     except OSError as error:
@@ -265,7 +311,38 @@ def _transition(context: CommandContext) -> int:
     return 0
 
 
-COMMANDS: dict[str, CommandHandler] = {
+def _prepare_dispatch(context: CommandContext) -> int:
+    environment = read_dispatch_environment(context.arguments.environment)
+    supplied_prompt: bytes | None = None
+    if context.arguments.prompt is not None:
+        try:
+            supplied_prompt = context.arguments.prompt.read_bytes()
+        except OSError as error:
+            raise DispatchError(
+                "DISPATCH_PROMPT_UNREADABLE",
+                f"Cannot read '{context.arguments.prompt}': {error}",
+            ) from error
+    prompt = prepare_dispatch(
+        context.work,
+        context.project,
+        _action_from_values(
+            context.arguments.action_id,
+            context.arguments.expected_revision,
+            context.arguments.generation,
+            None,
+        ),
+        context.arguments.checkpoint,
+        environment,
+        supplied_prompt,
+    )
+    if supplied_prompt is None:
+        sys.stdout.write(prompt)
+    else:
+        print("OK DISPATCH_READY")
+    return 0
+
+
+COMMANDS: dict[CommandName, CommandHandler] = {
     "root": _root,
     "validate": _validate,
     "status": _status,
@@ -273,19 +350,17 @@ COMMANDS: dict[str, CommandHandler] = {
     "init": _initialize,
     "proposal": _proposal,
     "transition": _transition,
+    "dispatch": _prepare_dispatch,
 }
 
 
-def _dispatch(arguments: argparse.Namespace) -> int:
-    command = getattr(arguments, "command", None)
-    if not isinstance(command, str) or command not in COMMANDS:
-        raise AssertionError(f"unhandled command {command}")
+def _dispatch(arguments: CliArguments) -> int:
     project, work = _roots(arguments)
-    return COMMANDS[command](CommandContext(arguments, project, work))
+    return COMMANDS[arguments.command](CommandContext(arguments, project, work))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = build_parser().parse_args(argv)
+    arguments = build_parser().parse_args(argv, namespace=CliArguments())
     try:
         return _dispatch(arguments)
     except (RootError, OSError) as error:
@@ -300,3 +375,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ProposalError as error:
         print(str(error), file=sys.stderr)
         return 2 if error.code == "PROPOSAL_INVALID" else 13
+    except DispatchError as error:
+        print(str(error), file=sys.stderr)
+        return 14
