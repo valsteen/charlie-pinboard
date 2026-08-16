@@ -1,3 +1,4 @@
+import json
 import unittest
 from copy import replace
 from pathlib import Path
@@ -341,7 +342,11 @@ updated: "2026-08-16"
             apply_action(work, project, action, {"reason": "The evidence does not support admission."})
 
             self.assertFalse((work / "inbox" / f"{proposal_id}.json").exists())
-            self.assertTrue((work / "history" / "proposals" / f"{proposal_id}.json").is_file())
+            history_path = work / "history" / "proposals" / f"{proposal_id}.json"
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+            self.assertEqual("returned" if kind == "return-proposal" else "rejected", history["disposition"])
+            self.assertEqual("The evidence does not support admission.", history["coordinator_reason"])
+            self.assertEqual(proposal_id, history["proposal"]["proposal_id"])
 
     def test_transfer_coordinator_is_a_revision_checked_action(self) -> None:
         project, work = create_state([])

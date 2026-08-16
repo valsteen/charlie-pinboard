@@ -65,7 +65,8 @@ class ProposalTest(unittest.TestCase):
 
     def test_accept_moves_proposal_into_canonical_intake(self) -> None:
         project, work = create_state([])
-        create_proposal(work, project, proposal())
+        submitted = proposal()
+        create_proposal(work, project, submitted)
         action = next(
             action
             for action in actions_for(work, project, role="coordinator")
@@ -91,7 +92,8 @@ class ProposalTest(unittest.TestCase):
         self.assertFalse((work / "inbox" / "finding-1.json").exists())
         history = json.loads((work / "history" / "proposals" / "finding-1.json").read_text(encoding="utf-8"))
         self.assertEqual("accepted", history["disposition"])
-        self.assertEqual("finding-1", history["proposal"]["proposal_id"])
+        self.assertEqual("universal-reveal-core", history["target"])
+        self.assertEqual(submitted, history["proposal"])
         self.assertNotIn("coordinator_reason", history)
         self.assertTrue(validate_work_state(work, project).valid)
 
