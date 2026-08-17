@@ -97,13 +97,11 @@ Use one of these outcomes:
 
 When the finding belongs to an existing admitted item but its semantic context is incomplete, add the exact observation to that item's context arc and run `repo-work validate`. When no admitted item owns it, use `$repo-work-intake` if the user has explicitly authorized preservation. Otherwise report `not recorded` and ask whether to preserve it; do not imply guaranteed follow-up.
 
-Give a formal **Durable finding receipt** whenever the finding is material enough to affect later product work or likely to make the user wonder whether it will be lost. Include:
+Keep current work as the main topic. State the exact finding and consequence in the normal update, then give a compact **Durable finding** receipt on one line by default:
 
-- `Finding`: the exact observation and consequence;
-- `Durable status`: `already recorded`, `recorded now`, or `not recorded`;
-- `Persistence timing`: the earlier durable selector or timestamp, `this turn before this receipt`, or `not persisted`;
-- `Owner`: the exact item or proposal ID, durable selector, and current lifecycle state, or `none`;
-- `Current work`: `blocked` or `not blocked`, with the reason.
+`Durable finding — <already recorded | recorded now | not recorded> in <exact owner and state>; current work <blocked | not blocked>.`
+
+Let `recorded now` mean this turn before the update. For `already recorded`, include the earlier durable selector or timestamp. For `not recorded`, name `no owner` and the missing authorization or failed persistence. Expand the receipt into separate labeled fields only when persistence failed, ownership is ambiguous, the finding blocks current work, or the user asks for detail. Compactness must not hide status, timing, owner/state, or blocking impact.
 
 Never use a later edit to imply earlier coverage. If a broad item existed before the report but the exact observation was added only after a question or challenge, say both facts explicitly.
 

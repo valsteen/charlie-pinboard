@@ -1,6 +1,6 @@
 {
   "name": "codex-repo-work",
-  "version": "0.1.0+codex.20260817201116",
+  "version": "0.1.0+codex.20260817201815",
   "description": "Coordinate repository work with canonical execution briefs and validated state transitions.",
   "author": {
     "name": "Vincent Alsteen",

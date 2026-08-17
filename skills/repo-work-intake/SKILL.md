@@ -51,16 +51,11 @@ If transport is unavailable or fails, retain the validated proposal in the inbox
 
 ## Result language
 
-For a material finding, lead with a formal **Durable finding receipt**:
+Keep the active work as the main topic. State the exact finding and consequence in the normal update, then give a compact **Durable finding** receipt on one line by default:
 
-- `Finding`: the exact observation and consequence;
-- `Durable status`: `already recorded`, `recorded now`, or `not recorded`;
-- `Persistence timing`: the earlier durable selector or timestamp, `this turn before this receipt`, or `not persisted`;
-- `Owner`: the exact item or proposal ID, durable selector, and current lifecycle state, or `none`;
-- `Notification`: `delivered`, `unavailable`, or `not applicable`;
-- `Current work`: `blocked` or `not blocked`, with the reason.
+`Durable finding — <already recorded | recorded now | not recorded> in <exact owner and state>; notification <delivered | unavailable | not applicable>; current work <blocked | not blocked>.`
 
-Use `recorded now` only after `OK PROPOSAL_CREATED`; use `not recorded` when proposal creation fails. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact finding was present earlier.
+Use `recorded now` only after `OK PROPOSAL_CREATED`; it means this turn before the update. For `already recorded`, include the earlier durable selector or timestamp. Use `not recorded` when proposal creation fails and name `no owner`. Omit `notification not applicable` when an existing admitted item was updated directly. Expand the receipt into separate labeled fields only when persistence failed, ownership is ambiguous, the finding blocks current work, or the user asks for detail. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact finding was present earlier.
 
 Then use one of these precise lifecycle outcomes:
 
