@@ -36,6 +36,8 @@ Create a bounded JSON proposal containing:
 
 Do not create work merely because a question was asked. Require an explicit request to preserve or submit the finding.
 
+Before creating a proposal, distinguish exact prior coverage from a merely related theme. If the exact observation and consequence already exist in a known canonical item or proposal, do not create a duplicate merely to produce a receipt. Report `already recorded` with the exact durable selector and current state. If only a broader item exists, treat the exact finding as unrecorded.
+
 ## Persist, then deliver
 
 1. Write the proposal to a temporary file outside canonical work state.
@@ -49,7 +51,13 @@ If transport is unavailable or fails, retain the validated proposal in the inbox
 
 ## Result language
 
-Use one of these precise outcomes:
+Keep the active work as the main topic. State the exact finding and consequence in the normal update, then give a compact **Durable finding** receipt on one line by default:
+
+`Durable finding — <already recorded | recorded now | not recorded> in <exact owner and state>; notification <delivered | unavailable | not applicable>; current work <blocked | not blocked>.`
+
+Use `recorded now` only after `OK PROPOSAL_CREATED`; it means this turn before the update. For `already recorded`, include the earlier durable selector or timestamp. Use `not recorded` when proposal creation fails and name `no owner`. Omit `notification not applicable` when an existing admitted item was updated directly. Expand the receipt into separate labeled fields only when persistence failed, ownership is ambiguous, the finding blocks current work, or the user asks for detail. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact finding was present earlier.
+
+Then use one of these precise lifecycle outcomes:
 
 - proposal prepared but not persisted;
 - proposal persisted, delivery unavailable;

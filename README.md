@@ -17,6 +17,12 @@ All of that is worth keeping, but not all of it should derail the boss feature. 
 
 ![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** A side task comes back with a warning: “Before we can save the second phase safely, combat abilities need IDs that won’t change underneath us.” The coordinator will see it, but the work list does not change behind your back.
 
+**The map fills in as the party travels.** Deep work rarely reveals the whole campaign upfront. While the dragon fight remains the main quest, an experiment may uncover a controller-mapping weakness worth returning to later. Repository Work lets the plan grow from that evidence without turning every discovery into an interruption: preserve the exact finding, keep the current objective moving when it is not blocked, and leave one compact receipt.
+
+> **Durable finding — recorded now in `controller-mapping-identity` (`intake`); current work not blocked.**
+
+That line is small on purpose. It removes the anxiety that a valuable observation vanished into conversation while keeping the discussion centered on the work in front of you. Over a long investigation, those receipts let the project adapt its plan as reality becomes clearer without reconstructing the journey from old chats.
+
 ![Pixel-art campfire checkpoint](assets/safe-camp.png) **The party makes camp.** The coordinator agrees that stable ability IDs come first. The dragon task notes exactly where it stopped and what needs to happen before it can pick the feature back up.
 
 ![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** Another task fixes the ability IDs, then the dragon task continues from its notes. If an older task tries to update a work list that has since changed, `repo-work` asks it to catch up first.
