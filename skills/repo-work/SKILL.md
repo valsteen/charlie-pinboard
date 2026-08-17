@@ -85,6 +85,28 @@ The executable rejects stale revisions, replaced coordinators, illegal states, i
 
 Process newly delivered intake only after the current review, transition, commit, or other atomic repository action ends. Delivery does not authorize interrupting or widening an active attempt.
 
+### Reconcile material findings before reporting them
+
+Before presenting a discovered out-of-scope finding as planned, preserved, covered, queued, deferred, or future work, determine the disposition of that exact finding. A broader item with a compatible theme is not exact coverage.
+
+Use one of these outcomes:
+
+- `already recorded`: the exact observation and its consequence were durable before the current report;
+- `recorded now`: the exact observation was absent and this turn added it to its authoritative item context or created an intake proposal;
+- `not recorded`: no exact durable owner exists, persistence was not authorized, or persistence failed.
+
+When the finding belongs to an existing admitted item but its semantic context is incomplete, add the exact observation to that item's context arc and run `repo-work validate`. When no admitted item owns it, use `$repo-work-intake` if the user has explicitly authorized preservation. Otherwise report `not recorded` and ask whether to preserve it; do not imply guaranteed follow-up.
+
+Give a formal **Durable finding receipt** whenever the finding is material enough to affect later product work or likely to make the user wonder whether it will be lost. Include:
+
+- `Finding`: the exact observation and consequence;
+- `Durable status`: `already recorded`, `recorded now`, or `not recorded`;
+- `Persistence timing`: the earlier durable selector or timestamp, `this turn before this receipt`, or `not persisted`;
+- `Owner`: the exact item or proposal ID, durable selector, and current lifecycle state, or `none`;
+- `Current work`: `blocked` or `not blocked`, with the reason.
+
+Never use a later edit to imply earlier coverage. If a broad item existed before the report but the exact observation was added only after a question or challenge, say both facts explicitly.
+
 When an active attempt discovers a prerequisite:
 
 1. preserve its current result and verification;

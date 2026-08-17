@@ -36,6 +36,8 @@ Create a bounded JSON proposal containing:
 
 Do not create work merely because a question was asked. Require an explicit request to preserve or submit the finding.
 
+Before creating a proposal, distinguish exact prior coverage from a merely related theme. If the exact observation and consequence already exist in a known canonical item or proposal, do not create a duplicate merely to produce a receipt. Report `already recorded` with the exact durable selector and current state. If only a broader item exists, treat the exact finding as unrecorded.
+
 ## Persist, then deliver
 
 1. Write the proposal to a temporary file outside canonical work state.
@@ -49,7 +51,18 @@ If transport is unavailable or fails, retain the validated proposal in the inbox
 
 ## Result language
 
-Use one of these precise outcomes:
+For a material finding, lead with a formal **Durable finding receipt**:
+
+- `Finding`: the exact observation and consequence;
+- `Durable status`: `already recorded`, `recorded now`, or `not recorded`;
+- `Persistence timing`: the earlier durable selector or timestamp, `this turn before this receipt`, or `not persisted`;
+- `Owner`: the exact item or proposal ID, durable selector, and current lifecycle state, or `none`;
+- `Notification`: `delivered`, `unavailable`, or `not applicable`;
+- `Current work`: `blocked` or `not blocked`, with the reason.
+
+Use `recorded now` only after `OK PROPOSAL_CREATED`; use `not recorded` when proposal creation fails. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact finding was present earlier.
+
+Then use one of these precise lifecycle outcomes:
 
 - proposal prepared but not persisted;
 - proposal persisted, delivery unavailable;
