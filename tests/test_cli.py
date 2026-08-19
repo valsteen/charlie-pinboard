@@ -18,6 +18,7 @@ from repo_work.markdown import parse_attempt, parse_current, parse_queue
 from repo_work.migration import migrate_to_v2
 from repo_work.model import AttemptState, WorkState
 from repo_work.root import RootError
+from repo_work.transaction_store import journal_path_for
 from repo_work.transition import apply_action as apply_transition
 from repo_work.validate import validate_work_state
 
@@ -181,9 +182,12 @@ class CliTest(unittest.TestCase):
 
         contract = self.run_json_cli(*common, "input-contract", "accept-proposal")
         self.assertEqual("accept-proposal", contract["action_kind"])
-        accepted = self.json_schema_root(self.json_object(contract["payload_schema"]))
+        contract_schema = self.json_object(contract["payload_schema"])
+        accepted = self.json_schema_root(contract_schema)
         self.assertEqual(["item", "state", "next_action"], accepted["required"])
         self.assertEqual([], self.json_object_at(accepted, "properties", "depends_on")["default"])
+        accepted_state = self.json_object_at(contract_schema, "$defs", "AcceptedProposalState")
+        self.assertEqual(["blocked", "deferred", "intake", "ready"], accepted_state["enum"])
         empty = self.json_schema_root(
             self.json_object(self.run_json_cli(*common, "input-contract", "submit-review")["payload_schema"])
         )
@@ -1215,6 +1219,8 @@ class CliTest(unittest.TestCase):
         proposal_result, _, proposal_stderr = self.run_cli(*common, "proposal", "--file", str(invalid))
         with patch("repo_work.cli.resolve_project_root", side_effect=RootError("PROJECT_ROOT_NOT_FOUND", "missing")):
             root_result, _, root_stderr = self.run_cli("root")
+        journal_path_for(work).mkdir()
+        recovery_result, _, recovery_stderr = self.run_cli(*common, "recover")
 
         self.assertEqual(12, registration_result)
         self.assertIn("WORK_STATE_ALREADY_EXISTS", registration_stderr)
@@ -1222,6 +1228,8 @@ class CliTest(unittest.TestCase):
         self.assertIn("Expected `object`, got `array`", proposal_stderr)
         self.assertEqual(2, root_result)
         self.assertIn("PROJECT_ROOT_NOT_FOUND", root_stderr)
+        self.assertEqual(11, recovery_result)
+        self.assertIn("COMMIT_JOURNAL_INVALID", recovery_stderr)
 
     def test_module_entrypoint_delegates_to_cli(self) -> None:
         with patch.object(sys, "argv", ["repo-work", "--version"]), self.assertRaises(SystemExit) as raised:

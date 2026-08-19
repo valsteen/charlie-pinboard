@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
+from uuid import uuid4
 
 import msgspec
 
@@ -169,13 +170,23 @@ def _rollback(work_root: Path, originals: tuple[OriginalFile, ...]) -> None:
             _prune_empty_parents(path, work_root)
 
 
+def _delete_retired_journal(retired: Path) -> None:
+    shutil.rmtree(retired, ignore_errors=True)
+
+
+def _retire_journal(journal: Path) -> None:
+    retired = journal.with_name(f"{journal.name}.retired.{uuid4().hex}")
+    journal.replace(retired)
+    _delete_retired_journal(retired)
+
+
 def recover_pending_commit(work_root: Path) -> bool:
     journal = journal_path_for(work_root)
     if not journal.exists():
         return False
     originals = _read_journal(journal)
     _rollback(work_root, originals)
-    shutil.rmtree(journal)
+    _retire_journal(journal)
     return True
 
 
@@ -215,6 +226,6 @@ def commit_change_set(
             raise AtomicCommitError("TRANSITION_POSTCONDITION_FAILED", report.render())
     except Exception, KeyboardInterrupt, SystemExit:
         _rollback(work_root, originals)
-        shutil.rmtree(journal)
+        _retire_journal(journal)
         raise
-    shutil.rmtree(journal)
+    _retire_journal(journal)

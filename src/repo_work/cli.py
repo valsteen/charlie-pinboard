@@ -59,7 +59,7 @@ from repo_work.resources import (
     revoke_resource,
 )
 from repo_work.root import RootError, resolve_project_root
-from repo_work.transaction_store import recover_pending_commit
+from repo_work.transaction_store import AtomicCommitError, recover_pending_commit
 from repo_work.transition import TransitionError, apply_action
 from repo_work.transition_input import (
     TRANSITION_ACTION_KINDS,
@@ -1264,6 +1264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         MigrationError,
         ParallelError,
         OverviewError,
+        AtomicCommitError,
     ) as error:
         print(str(error), file=sys.stderr)
         return 11
