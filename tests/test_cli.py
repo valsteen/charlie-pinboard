@@ -8,15 +8,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from repo_work.actions import actions_for
+from repo_work.actions import actions_for, state_revision
+from repo_work.atomic import atomic_write_text as real_atomic_write_text
 from repo_work.cli import main
+from repo_work.leases import LeaseRecord
+from repo_work.leases import acquire_coordination as real_acquire_coordination
+from repo_work.leases import release_coordination as real_release_coordination
 from repo_work.markdown import parse_attempt, parse_current, parse_queue
 from repo_work.migration import migrate_to_v2
 from repo_work.model import AttemptState, WorkState
 from repo_work.root import RootError
+from repo_work.transaction_store import journal_path_for
+from repo_work.transition import apply_action as apply_transition
 from repo_work.validate import validate_work_state
 
-from .support import JsonObject, create_state
+from .support import JsonObject, JsonValue, create_state
 
 
 class CliTest(unittest.TestCase):
@@ -29,6 +35,39 @@ class CliTest(unittest.TestCase):
 
     def snapshot(self, work: Path) -> dict[str, bytes]:
         return {str(path.relative_to(work)): path.read_bytes() for path in work.rglob("*") if path.is_file()}
+
+    def run_json_cli(self, *arguments: str) -> JsonObject:
+        result, stdout, stderr = self.run_cli(*arguments, "--json")
+        self.assertEqual(0, result, stderr)
+        value = json.loads(stdout)
+        if not isinstance(value, dict):
+            self.fail("CLI JSON result must be an object")
+        return value
+
+    def json_object(self, value: JsonValue) -> JsonObject:
+        if not isinstance(value, dict):
+            self.fail("JSON value must be an object")
+        return value
+
+    def json_list(self, value: JsonValue) -> list[JsonValue]:
+        if not isinstance(value, list):
+            self.fail("JSON value must be a list")
+        return value
+
+    def json_string(self, value: JsonValue) -> str:
+        if not isinstance(value, str):
+            self.fail("JSON value must be a string")
+        return value
+
+    def json_object_at(self, value: JsonObject, *keys: str) -> JsonObject:
+        current = value
+        for key in keys[:-1]:
+            current = self.json_object(current[key])
+        return self.json_object(current[keys[-1]])
+
+    def json_schema_root(self, schema: JsonObject) -> JsonObject:
+        reference = self.json_string(schema["$ref"])
+        return self.json_object(self.json_object(schema["$defs"])[reference.rsplit("/", 1)[-1]])
 
     def run_json_transition(
         self,
@@ -123,6 +162,262 @@ class CliTest(unittest.TestCase):
         activation = next(action for action in actions if action["action_id"] == "activate:reveal-core")
         self.assertEqual(64, len(activation["expected_revision"]))
         self.assertEqual(1, activation["coordinator_generation"])
+
+    def test_exact_action_query_and_input_contract_avoid_broad_action_discovery(self) -> None:
+        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
+        common = ("--project-root", str(project), "--work-root", str(work))
+        before = self.snapshot(work)
+
+        actions = self.json_list(
+            self.run_json_cli(*common, "actions", "--role", "coordinator", "--action-id", "activate:reveal-core")[
+                "actions"
+            ]
+        )
+        action = self.json_object(actions[0])
+        self.assertEqual("activate:reveal-core", action["action_id"])
+        schema = self.json_object_at(action, "input_contract", "payload_schema")
+        activate = self.json_schema_root(schema)
+        self.assertEqual(["attempt", "branch", "base_revision", "owner"], activate["required"])
+        self.assertFalse(activate["additionalProperties"])
+
+        contract = self.run_json_cli(*common, "input-contract", "accept-proposal")
+        self.assertEqual("accept-proposal", contract["action_kind"])
+        contract_schema = self.json_object(contract["payload_schema"])
+        accepted = self.json_schema_root(contract_schema)
+        self.assertEqual(["item", "state", "next_action"], accepted["required"])
+        self.assertEqual([], self.json_object_at(accepted, "properties", "depends_on")["default"])
+        accepted_state = self.json_object_at(contract_schema, "$defs", "AcceptedProposalState")
+        self.assertEqual(["blocked", "deferred", "intake", "ready"], accepted_state["enum"])
+        empty = self.json_schema_root(
+            self.json_object(self.run_json_cli(*common, "input-contract", "submit-review")["payload_schema"])
+        )
+        self.assertEqual([], empty["required"])
+        self.assertEqual({}, empty["properties"])
+
+        missing_result, _, missing_stderr = self.run_cli(
+            *common,
+            "actions",
+            "--role",
+            "coordinator",
+            "--action-id",
+            "activate:missing",
+            "--json",
+        )
+        self.assertEqual(11, missing_result)
+        self.assertIn("ACTION_NOT_AVAILABLE", missing_stderr)
+        self.assertEqual(before, self.snapshot(work))
+
+    def test_one_shot_coordination_is_recoverable_before_during_and_after_apply(self) -> None:
+        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
+        migrate_to_v2(work, project)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        payload = Path(tempfile.mkdtemp()) / "activate.json"
+        payload.write_text(
+            json.dumps(
+                {
+                    "attempt": "reveal-core-1",
+                    "branch": "codex/reveal-core",
+                    "base_revision": "abc123",
+                    "owner": "worker-task",
+                }
+            ),
+            encoding="utf-8",
+        )
+        invalid_payload = payload.with_name("invalid.json")
+        invalid_payload.write_text("{}", encoding="utf-8")
+        before = self.snapshot(work)
+        apply_arguments = (
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "host",
+            "--action-id",
+            "activate:reveal-core",
+        )
+
+        invalid_result, _, invalid_stderr = self.run_cli(*apply_arguments, "--payload", str(invalid_payload))
+        self.assertEqual(11, invalid_result)
+        self.assertIn("TRANSITION_INPUT_INVALID", invalid_stderr)
+        self.assertEqual(before, self.snapshot(work))
+
+        with (
+            patch("repo_work.cli.apply_action", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.run_cli(*apply_arguments, "--payload", str(payload))
+        self.assertEqual("released", self.run_json_cli(*common, "coordination", "status")["status"])
+        self.assertEqual(WorkState.READY, parse_queue(work / "v2" / "queue.md").items[0].state)
+        self.assertTrue(validate_work_state(work, project).valid)
+
+        lease = self.run_json_cli(
+            *common,
+            "coordination",
+            "acquire",
+            "--task-id",
+            "interrupted-task",
+            "--host-id",
+            "host",
+            "--ttl-seconds",
+            "60",
+        )
+        retained_actions = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "coordinator",
+                "--lease-id",
+                str(lease["lease_id"]),
+                "--generation",
+                str(lease["generation"]),
+                "--action-id",
+                "activate:reveal-core",
+            )["actions"]
+        )
+        retained = self.json_object(retained_actions[0])
+        self.run_json_cli(
+            *common,
+            "coordination",
+            "release",
+            "--lease-id",
+            str(lease["lease_id"]),
+            "--generation",
+            str(lease["generation"]),
+        )
+        released = self.snapshot(work)
+
+        stale_result, _, stale_stderr = self.run_json_transition(common, retained, payload)
+        self.assertEqual(11, stale_result)
+        self.assertRegex(stale_stderr, "LEASE_FENCED|ACTION_NOT_AVAILABLE")
+        self.assertEqual(released, self.snapshot(work))
+
+        receipt = self.run_json_cli(*apply_arguments, "--payload", str(payload))
+        self.assertEqual("activate:reveal-core", receipt["action_id"])
+        self.assertEqual(64, len(self.json_string(receipt["revision"])))
+        self.assertEqual(WorkState.ACTIVE, parse_queue(work / "v2" / "queue.md").items[0].state)
+        self.assertTrue(validate_work_state(work, project).valid)
+        self.assertEqual("released", self.run_json_cli(*common, "coordination", "status")["status"])
+
+    def test_one_shot_coordination_cleans_catchable_acquire_and_release_interrupts(self) -> None:
+        for phase, interrupted_write, expected_state in (
+            ("acquire", 1, WorkState.READY),
+            ("release", 2, WorkState.ACTIVE),
+        ):
+            with self.subTest(phase=phase):
+                project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
+                migrate_to_v2(work, project)
+                common = ("--project-root", str(project), "--work-root", str(work))
+                payload = Path(tempfile.mkdtemp()) / "activate.json"
+                payload.write_text(
+                    json.dumps(
+                        {
+                            "attempt": "reveal-core-1",
+                            "branch": "codex/reveal-core",
+                            "base_revision": "abc123",
+                            "owner": "worker-task",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                writes = 0
+
+                def interrupt_after_write(path: Path, text: str, threshold: int = interrupted_write) -> None:
+                    nonlocal writes
+                    real_atomic_write_text(path, text)
+                    writes += 1
+                    if writes == threshold:
+                        raise KeyboardInterrupt
+
+                with (
+                    patch("repo_work.leases.atomic_write_text", side_effect=interrupt_after_write),
+                    self.assertRaises(KeyboardInterrupt),
+                ):
+                    self.run_cli(
+                        *common,
+                        "coordination",
+                        "apply",
+                        "--task-id",
+                        "coordinator-task",
+                        "--host-id",
+                        "host",
+                        "--action-id",
+                        "activate:reveal-core",
+                        "--payload",
+                        str(payload),
+                    )
+
+                self.assertEqual("released", self.run_json_cli(*common, "coordination", "status")["status"])
+                self.assertEqual(expected_state, parse_queue(work / "v2" / "queue.md").items[0].state)
+                self.assertTrue(validate_work_state(work, project).valid)
+
+    def test_one_shot_receipt_keeps_the_transition_revision_across_a_release_race(self) -> None:
+        project, work = create_state(
+            [
+                "| reveal-core | ready | — | — | — | design | activate | Ready. |",
+                "| later-work | ready | — | — | — | design | activate | Ready. |",
+            ]
+        )
+        migrate_to_v2(work, project)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        payload = Path(tempfile.mkdtemp()) / "activate.json"
+        payload.write_text(
+            json.dumps(
+                {
+                    "attempt": "reveal-core-1",
+                    "branch": "codex/reveal-core",
+                    "base_revision": "abc123",
+                    "owner": "worker-task",
+                }
+            ),
+            encoding="utf-8",
+        )
+        observed: dict[str, str] = {}
+
+        def release_then_change(work_root: Path, lease_id: str, generation: int) -> LeaseRecord:
+            observed["transition_revision"] = state_revision(work_root)
+            released = real_release_coordination(work_root, lease_id, generation)
+            replacement = real_acquire_coordination(work_root, "other-task", "host", 60)
+            action = next(
+                candidate
+                for candidate in actions_for(
+                    work_root,
+                    project,
+                    "coordinator",
+                    lease_id=replacement.lease_id,
+                    generation=replacement.generation,
+                )
+                if candidate.action_id == "close:later-work"
+            )
+            apply_transition(
+                work_root,
+                project,
+                action,
+                json.dumps({"outcome": "done", "reason": "Concurrent decision completed."}),
+            )
+            real_release_coordination(work_root, replacement.lease_id, replacement.generation)
+            return released
+
+        with patch("repo_work.cli.release_coordination", side_effect=release_then_change):
+            receipt = self.run_json_cli(
+                *common,
+                "coordination",
+                "apply",
+                "--task-id",
+                "coordinator-task",
+                "--host-id",
+                "host",
+                "--action-id",
+                "activate:reveal-core",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual(observed["transition_revision"], receipt["revision"])
+        self.assertNotEqual(state_revision(work), receipt["revision"])
+        self.assertTrue(validate_work_state(work, project).valid)
 
     def test_transition_applies_action_from_machine_fields(self) -> None:
         project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
@@ -757,23 +1052,21 @@ class CliTest(unittest.TestCase):
             item_path.read_text(encoding="utf-8").replace("resources: —", "resources: bitwig-live"),
             encoding="utf-8",
         )
-        actions_result, actions_stdout, actions_stderr = self.run_cli(
-            *common,
-            "actions",
-            "--role",
-            "worker",
-            "--lease-id",
-            str(attempt["lease_id"]),
-            "--generation",
-            str(attempt["generation"]),
-            "--json",
+        exact_actions = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "worker",
+                "--lease-id",
+                str(attempt["lease_id"]),
+                "--generation",
+                str(attempt["generation"]),
+                "--action-id",
+                "submit-review:reveal-core-1",
+            )["actions"]
         )
-        self.assertEqual(0, actions_result, actions_stderr)
-        submit = next(
-            action
-            for action in json.loads(actions_stdout)["actions"]
-            if action["action_id"] == "submit-review:reveal-core-1"
-        )
+        submit = self.json_object(exact_actions[0])
         self.assertEqual(
             [
                 {
@@ -785,6 +1078,9 @@ class CliTest(unittest.TestCase):
             ],
             submit["resource_claims"],
         )
+        submit_input = self.json_schema_root(self.json_object_at(submit, "input_contract", "payload_schema"))
+        self.assertEqual([], submit_input["required"])
+        self.assertEqual({}, submit_input["properties"])
         payload = Path(tempfile.mkdtemp()) / "submit.json"
         payload.write_text("{}\n", encoding="utf-8")
         transition_result, _, transition_stderr = self.run_json_transition(common, submit, payload)
@@ -923,6 +1219,8 @@ class CliTest(unittest.TestCase):
         proposal_result, _, proposal_stderr = self.run_cli(*common, "proposal", "--file", str(invalid))
         with patch("repo_work.cli.resolve_project_root", side_effect=RootError("PROJECT_ROOT_NOT_FOUND", "missing")):
             root_result, _, root_stderr = self.run_cli("root")
+        journal_path_for(work).mkdir()
+        recovery_result, _, recovery_stderr = self.run_cli(*common, "recover")
 
         self.assertEqual(12, registration_result)
         self.assertIn("WORK_STATE_ALREADY_EXISTS", registration_stderr)
@@ -930,6 +1228,8 @@ class CliTest(unittest.TestCase):
         self.assertIn("Expected `object`, got `array`", proposal_stderr)
         self.assertEqual(2, root_result)
         self.assertIn("PROJECT_ROOT_NOT_FOUND", root_stderr)
+        self.assertEqual(11, recovery_result)
+        self.assertIn("COMMIT_JOURNAL_INVALID", recovery_stderr)
 
     def test_module_entrypoint_delegates_to_cli(self) -> None:
         with patch.object(sys, "argv", ["repo-work", "--version"]), self.assertRaises(SystemExit) as raised:

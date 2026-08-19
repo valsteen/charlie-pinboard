@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 import msgspec
 
@@ -115,6 +115,8 @@ INPUT_MODELS: dict[str, InputModel] = {
     "submit-review": EmptyInput,
 }
 
+TRANSITION_ACTION_KINDS: Final = tuple(INPUT_MODELS)
+
 
 def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:
     model = INPUT_MODELS.get(kind)
@@ -124,3 +126,10 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:
         return msgspec.json.decode(data, type=model)
     except msgspec.DecodeError as error:
         raise TransitionInputError("TRANSITION_INPUT_INVALID", f"Cannot decode transition JSON: {error}") from error
+
+
+def encoded_transition_input_schema(kind: str) -> bytes:
+    model = INPUT_MODELS.get(kind)
+    if model is None:
+        raise TransitionInputError("ACTION_NOT_MUTATING", f"Action '{kind}' has no canonical transition input.")
+    return msgspec.json.encode(msgspec.json.schema(model), order="sorted")
