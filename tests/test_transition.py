@@ -311,6 +311,74 @@ class TransitionTest(unittest.TestCase):
         with self.assertRaisesRegex(TransitionError, "LEASE_FENCED"):
             apply_action(work, project, action, {})
 
+    def test_v2_disjoint_tasks_keep_independent_review_and_completion_actions(self) -> None:
+        project, work = create_state(
+            [
+                "| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |",
+                "| mapping-create | active | — | — | mapping-create-1 | design | continue | Active. |",
+            ],
+            focus_item="reveal-core",
+            focus_attempt="reveal-core-1",
+            create_active_attempt=True,
+        )
+        second_attempt = work / "attempts" / "mapping-create-1"
+        second_attempt.mkdir()
+        first_attempt = (work / "attempts" / "reveal-core-1" / "attempt.md").read_text(encoding="utf-8")
+        second_attempt.joinpath("attempt.md").write_text(
+            first_attempt.replace("reveal-core-1", "mapping-create-1").replace("reveal-core", "mapping-create"),
+            encoding="utf-8",
+        )
+        migrate_to_v2(work, project)
+        root = work / "v2"
+        visible_task = acquire_attempt(work, "reveal-core-1", "visible-task", "host", 300)
+        subagent_task = acquire_attempt(work, "mapping-create-1", "subagent-task", "host", 300)
+        reveal_submit = next(
+            candidate
+            for candidate in actions_for(
+                work,
+                project,
+                "worker",
+                lease_id=visible_task.lease_id,
+                generation=visible_task.generation,
+            )
+            if candidate.action_id == "submit-review:reveal-core-1"
+        )
+        mapping_submit = next(
+            candidate
+            for candidate in actions_for(
+                work,
+                project,
+                "worker",
+                lease_id=subagent_task.lease_id,
+                generation=subagent_task.generation,
+            )
+            if candidate.action_id == "submit-review:mapping-create-1"
+        )
+
+        apply_action(work, project, reveal_submit, {})
+        self.assertEqual(WorkState.REVIEW, parse_queue(root / "queue.md").by_id()["reveal-core"].state)
+        self.assertEqual(WorkState.ACTIVE, parse_queue(root / "queue.md").by_id()["mapping-create"].state)
+        apply_action(work, project, mapping_submit, {})
+
+        self.assertEqual(
+            {WorkState.REVIEW},
+            {item.state for item in parse_queue(root / "queue.md").items},
+        )
+        coordination = acquire_coordination(work, "coordinator-task", "host", 300)
+        coordinator_actions = {
+            candidate.action_id
+            for candidate in actions_for(
+                work,
+                project,
+                "coordinator",
+                lease_id=coordination.lease_id,
+                generation=coordination.generation,
+            )
+        }
+        self.assertTrue({"complete:reveal-core-1", "complete:mapping-create-1"}.issubset(coordinator_actions))
+        self.assertIsNone(parse_current(root / "current.md").focus_item)
+        self.assertTrue(validate_work_state(work, project).valid)
+
     def test_resource_sensitive_action_carries_and_revalidates_exact_claim_tokens(self) -> None:
         project, work = create_state(
             ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],

@@ -10,11 +10,13 @@ from unittest.mock import patch
 
 from repo_work.actions import actions_for
 from repo_work.cli import main
+from repo_work.markdown import parse_attempt, parse_current, parse_queue
 from repo_work.migration import migrate_to_v2
+from repo_work.model import AttemptState, WorkState
 from repo_work.root import RootError
 from repo_work.validate import validate_work_state
 
-from .support import create_state
+from .support import JsonObject, create_state
 
 
 class CliTest(unittest.TestCase):
@@ -27,6 +29,48 @@ class CliTest(unittest.TestCase):
 
     def snapshot(self, work: Path) -> dict[str, bytes]:
         return {str(path.relative_to(work)): path.read_bytes() for path in work.rglob("*") if path.is_file()}
+
+    def run_json_transition(
+        self,
+        common: tuple[str, ...],
+        action: JsonObject,
+        payload: Path,
+    ) -> tuple[int, str, str]:
+        arguments = [
+            *common,
+            "transition",
+            "--action-id",
+            str(action["action_id"]),
+            "--expected-revision",
+            str(action["expected_revision"]),
+            "--generation",
+            str(action["coordinator_generation"]),
+            "--authorization",
+            str(action["authorization"]),
+        ]
+        subject_revision = action.get("subject_revision")
+        if subject_revision:
+            arguments.extend(("--subject-revision", str(subject_revision)))
+        lease_id = action.get("lease_id")
+        if lease_id:
+            arguments.extend(("--lease-id", str(lease_id)))
+        resource_claims = action.get("resource_claims", [])
+        if not isinstance(resource_claims, list):
+            self.fail("resource_claims must be a JSON list")
+        for claim in resource_claims:
+            if not isinstance(claim, dict):
+                self.fail("each resource claim must be a JSON object")
+            arguments.extend(
+                (
+                    "--resource-claim",
+                    str(claim["resource_id"]),
+                    str(claim["host_id"]),
+                    str(claim["lease_id"]),
+                    str(claim["generation"]),
+                )
+            )
+        arguments.extend(("--payload", str(payload)))
+        return self.run_cli(*arguments)
 
     def test_validate_json_is_read_only(self) -> None:
         project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
@@ -116,6 +160,78 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(0, result, stderr)
         self.assertIn("TRANSITION_APPLIED", stdout)
+
+    def test_v1_worker_action_round_trips_through_review_and_completion(self) -> None:
+        project, work = create_state(
+            ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],
+            focus_item="reveal-core",
+            focus_attempt="reveal-core-1",
+            create_active_attempt=True,
+        )
+        common = ("--project-root", str(project), "--work-root", str(work))
+        result_path = work / "attempts" / "reveal-core-1" / "result.md"
+        result_path.write_text("Ready for review.\n", encoding="utf-8")
+        payload = Path(tempfile.mkdtemp()) / "transition.json"
+        payload.write_text("{}\n", encoding="utf-8")
+
+        actions_result, actions_stdout, actions_stderr = self.run_cli(
+            *common,
+            "actions",
+            "--role",
+            "worker",
+            "--json",
+        )
+        self.assertEqual(0, actions_result, actions_stderr)
+        submit = next(
+            action
+            for action in json.loads(actions_stdout)["actions"]
+            if action["action_id"] == "submit-review:reveal-core-1"
+        )
+
+        before_rejection = self.snapshot(work)
+        wrong_role = {**submit, "authorization": "coordinator"}
+        rejected_result, _, rejected_stderr = self.run_json_transition(common, wrong_role, payload)
+
+        self.assertEqual(11, rejected_result)
+        self.assertIn("ACTION_NOT_AVAILABLE", rejected_stderr)
+        self.assertEqual(before_rejection, self.snapshot(work))
+        self.assertTrue(validate_work_state(work, project).valid)
+
+        transition_result, _, transition_stderr = self.run_json_transition(common, submit, payload)
+
+        self.assertEqual(0, transition_result, transition_stderr)
+        self.assertEqual("attempt", submit["authorization"])
+        self.assertEqual(WorkState.REVIEW, parse_queue(work / "queue.md").items[0].state)
+        self.assertEqual(
+            AttemptState.REVIEW,
+            parse_attempt(work / "attempts" / "reveal-core-1" / "attempt.md").state,
+        )
+        self.assertIsNone(parse_current(work / "current.md").focus_item)
+        self.assertEqual("Ready for review.\n", result_path.read_text(encoding="utf-8"))
+
+        completion_payload = Path(tempfile.mkdtemp()) / "complete.json"
+        completion_payload.write_text('{"evidence":"accepted review"}\n', encoding="utf-8")
+        coordinator_result, coordinator_stdout, coordinator_stderr = self.run_cli(
+            *common,
+            "actions",
+            "--role",
+            "coordinator",
+            "--json",
+        )
+        self.assertEqual(0, coordinator_result, coordinator_stderr)
+        complete = next(
+            action
+            for action in json.loads(coordinator_stdout)["actions"]
+            if action["action_id"] == "complete:reveal-core-1"
+        )
+
+        completion_result, _, completion_stderr = self.run_json_transition(common, complete, completion_payload)
+
+        self.assertEqual(0, completion_result, completion_stderr)
+        self.assertEqual((), parse_queue(work / "queue.md").items)
+        self.assertTrue((work / "history" / "items" / "reveal-core.md").is_file())
+        self.assertIsNone(parse_current(work / "current.md").focus_item)
+        self.assertTrue(validate_work_state(work, project).valid)
 
     def test_root_status_and_actions_have_human_and_json_views(self) -> None:
         project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
@@ -671,29 +787,7 @@ class CliTest(unittest.TestCase):
         )
         payload = Path(tempfile.mkdtemp()) / "submit.json"
         payload.write_text("{}\n", encoding="utf-8")
-        transition_result, _, transition_stderr = self.run_cli(
-            *common,
-            "transition",
-            "--action-id",
-            submit["action_id"],
-            "--expected-revision",
-            submit["expected_revision"],
-            "--generation",
-            str(submit["coordinator_generation"]),
-            "--subject-revision",
-            submit["subject_revision"],
-            "--lease-id",
-            submit["lease_id"],
-            "--authorization",
-            submit["authorization"],
-            "--resource-claim",
-            "bitwig-live",
-            "mac--one",
-            str(claim["lease_id"]),
-            str(claim["generation"]),
-            "--payload",
-            str(payload),
-        )
+        transition_result, _, transition_stderr = self.run_json_transition(common, submit, payload)
         self.assertEqual(0, transition_result, transition_stderr)
         json_command("resource", "status", "--resource-id", "bitwig-live")
         json_command("resource", "status", "--resource-id", "bitwig-live", "--host-id", "mac--one")

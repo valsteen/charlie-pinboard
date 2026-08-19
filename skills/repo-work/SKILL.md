@@ -111,10 +111,12 @@ Never describe a partial external launch as complete. Report one result per requ
 ## Apply a transition
 
 1. Select one exact action returned by `repo-work actions --json`.
-2. Prepare only the semantic payload required by that action.
-3. Run `repo-work transition` with the action ID, relevant revision, authorization kind, lease identity, fencing generation, optional proposal revision, and payload file.
-4. Report the returned transition result.
-5. Run `repo-work validate` immediately after any non-tool edit to supporting topic or attempt artifacts.
+2. Treat the returned action record as one opaque capability receipt. Forward its `action_id`, `expected_revision`, `coordinator_generation`, `authorization`, and every non-empty `subject_revision`, `lease_id`, and `resource_claims` value verbatim. Do not infer authorization from the current role, reuse fields from another action, or reconstruct a partial token from prose.
+3. Prepare only the semantic payload required by that action.
+4. Run `repo-work transition` with those exact token fields and the payload file. Repeat `--resource-claim` once for every returned claim, preserving its resource, host, lease, and generation.
+5. If transition returns `ACTION_NOT_AVAILABLE`, do not retry the same command, switch roles, or skip to another lifecycle state. Validate once and refresh actions for the same role and lease. If the action disappeared, explain the intervening state change. If the same action and tokens are still returned, report an executable contradiction, preserve the current attempt evidence, and stop transition work until the command is corrected.
+6. Report the returned transition result. Do not re-read overview after a successful revision-stamped transition merely to confirm its postcondition.
+7. Run `repo-work validate` immediately after any non-tool edit to supporting topic or attempt artifacts.
 
 The executable rejects stale subject scopes, expired or replaced lease holders, illegal states, invalid dependencies, missing resource claims, and inconsistent references. It does not decide whether evidence is true, whether work is valuable, or what product behavior should mean.
 

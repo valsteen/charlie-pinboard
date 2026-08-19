@@ -322,6 +322,19 @@ def _v2_factory(
             assert_never(unreachable)
 
 
+def _v1_factory(base_work_root: Path, role: Role) -> ActionFactory:
+    match role:
+        case Role.OBSERVER:
+            authorization = AuthorizationKind.OBSERVER
+        case Role.WORKER:
+            authorization = AuthorizationKind.ATTEMPT
+        case Role.COORDINATOR:
+            authorization = AuthorizationKind.COORDINATOR
+        case _ as unreachable:
+            assert_never(unreachable)
+    return ActionFactory(state_revision(base_work_root), coordinator_generation(base_work_root), authorization)
+
+
 def _owned_worker_items(
     work_root: Path,
     items: tuple[QueueItem, ...],
@@ -364,7 +377,7 @@ def actions_for(
     root = authority.work_root
     match authority.version:
         case AuthorityVersion.V1:
-            factory = ActionFactory(state_revision(work_root), coordinator_generation(work_root))
+            factory = _v1_factory(work_root, selected_role)
         case AuthorityVersion.V2:
             factory = _v2_factory(work_root, root, selected_role, lease_id, generation)
         case _ as unreachable:
