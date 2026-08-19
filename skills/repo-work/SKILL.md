@@ -130,19 +130,28 @@ Process newly delivered intake only after the current review, transition, commit
 
 Before presenting a discovered out-of-scope finding as planned, preserved, covered, queued, deferred, or future work, determine the disposition of that exact finding. A broader item with a compatible theme is not exact coverage.
 
-Use one of these outcomes:
+Use one of these durable dispositions:
 
 - `already recorded`: the exact observation and its consequence were durable before the current report;
 - `recorded now`: the exact observation was absent and this turn added it to its authoritative item context or created an intake proposal;
 - `not recorded`: no exact durable owner exists, persistence was not authorized, or persistence failed.
 
-When the finding belongs to an existing admitted item but its semantic context is incomplete, add the exact observation to that item's context arc and run `repo-work validate`. When no admitted item owns it, use `$repo-work-intake` if the user has explicitly authorized preservation. Otherwise report `not recorded` and ask whether to preserve it; do not imply guaranteed follow-up.
+When the finding belongs to an existing admitted item but its semantic context is incomplete, add the exact observation to that item's context arc and run `repo-work validate`. When no admitted item owns it, use `$repo-work-intake` if the user has explicitly authorized preservation.
 
-Keep current work as the main topic. State the exact finding and consequence in the normal update, then give a compact **Durable finding** receipt on one line by default:
+Keep current work as the main topic and lead the receipt with its practical outcome, not the internal disposition name:
 
-`Durable finding — <already recorded | recorded now | not recorded> in <exact owner and state>; current work <blocked | not blocked>.`
+- For `already recorded` or `recorded now`, say `Saved for later — <finding> <was already recorded at selector | was recorded now> in <exact owner and state>; current work <continues | is blocked by it>.`
+- For an explicit dismissal, say `Finding dismissed — <finding> was not saved at your request; no follow-up remains.`
+- For completed work, say `Completed — <result>; no follow-up needed.` Do not introduce completed or dismissed work as a durable finding or saved follow-up.
 
-Let `recorded now` mean this turn before the update. For `already recorded`, include the earlier durable selector or timestamp. For `not recorded`, name `no owner` and the missing authorization or failed persistence. Expand the receipt into separate labeled fields only when persistence failed, ownership is ambiguous, the finding blocks current work, or the user asks for detail. Compactness must not hide status, timing, owner/state, or blocking impact.
+A material `not recorded` disposition is unresolved and must not end as a bare receipt. State the finding, exact cause, durable state, current-work impact, and next action owner. Then produce exactly one resolution:
+
+- If preservation lacks authorization, ask one concrete preserve-or-dismiss question: `Finding needs a decision — <finding> is not saved because <cause>. Current work <impact>. Should I preserve it for later or dismiss it?`
+- If a safe retry needs no new authority, announce it as expected concurrency and retry before the terminal response: `Persistence delayed — <finding> is not yet saved because <cause>. Current work <impact>. I am retrying now; no action needed.`
+- If retry needs new authority, changes scope, or overrides another owner, ask one concrete approval question that names the action and consequence.
+- If persistence still fails after the permitted retry, report the same four facts and ask the one decision that can actually resolve it. Never leave `not recorded` as a terminal aside.
+
+Let `recorded now` mean this turn before the update. For `already recorded`, include the earlier durable selector or timestamp. Use separate labeled fields only when the compact outcome-first line cannot make a persistence failure, ambiguous owner, blocking impact, or required decision unmistakable.
 
 Never use a later edit to imply earlier coverage. If a broad item existed before the report but the exact observation was added only after a question or challenge, say both facts explicitly.
 

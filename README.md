@@ -19,9 +19,15 @@ All of that is worth keeping, but not all of it should derail the boss feature. 
 
 ![Pixel-art folded adventure map](assets/map-fills-in.png) **The map fills in as the party travels.** Deep work rarely reveals the whole campaign upfront. While the dragon fight remains the main quest, an experiment may reveal that save games are capturing temporary animation state, a flaw worth returning to later. Repository Work lets the plan grow from that evidence without turning every discovery into an interruption: preserve the exact finding, keep the current objective moving when it is not blocked, and leave one compact receipt.
 
-> **Durable finding — recorded now in `save-game-animation-state` (`intake`); current work not blocked.**
+> **Saved for later — the animation-state finding is now in `save-game-animation-state` (`intake`); dragon work continues.**
 
 That line is small on purpose. It removes the anxiety that a valuable observation vanished into conversation while keeping the discussion centered on the work in front of you. Over a long investigation, those receipts let the project adapt its plan as reality becomes clearer without reconstructing the journey from old chats.
+
+Another scout may return with a concern that nobody authorized as a new quest. The chat does not wave it away with “not recorded” and leave you wondering whether to react:
+
+> **Finding needs a decision — controller profiles may also depend on inventory position, but that concern is not saved because this task was not authorized to add it. The dragon work can continue. Should I preserve it for later or dismiss it?**
+
+If the ledger changes while the finding is being saved, the task retries that expected coordination conflict itself. If the proposal reaches the inbox but the coordinating chat cannot be notified, the receipt still says it was saved and that no action is needed. Completed work gets a different ending—`Completed; no follow-up needed`—so a solved quest never masquerades as a newly discovered one.
 
 ![Pixel-art open quest ledger](assets/quick-quest-log.png) **A glance at the quest log stays a glance.** You ask, “Where do we stand?” and the chat reads the live map once: the dragon phase is active, controller mapping is ready, and the save-game finding is still in intake. It answers with that compact picture, then asks naturally whether you want to know why one quest should come next, which decisions are already finished, whether a branch shipped, or how the full campaign unfolded. You can answer with a normal sentence, a short phrase, or the number beside an offered continuation. These are conversational doors with optional shortcuts, not magic global commands. Until you choose one, the chat does not rummage through old chronicles or ride to GitHub just in case.
 
@@ -87,7 +93,7 @@ There is no master chat to keep alive. The single-chat workflow remains the simp
 
 For concurrent work, open one chat per distinct outcome. Each chat claims only its own attempt, so unrelated item changes do not invalidate its local actions. A chat that needs to admit work, change dependencies, activate an attempt, or accept a result briefly acquires the exclusive coordination lease and releases it after that atomic change. If another chat already holds coordination, the command identifies that chat and the lease expiry so the current chat can wait or ask you about revocation.
 
-Projects may declare host-local exclusive resources such as `bitwig-live`. A chat that owns an attempt must also claim each resource named by that item before live use. A conflict identifies the holding attempt, chat, host, and expiry. Offline work with no declared scarce resource remains available concurrently.
+Projects may declare host-local exclusive resources such as `capture-rig`. A chat that owns an attempt must also claim each resource named by that item before live use. A conflict identifies the holding attempt, chat, host, and expiry. Offline work with no declared scarce resource remains available concurrently.
 
 ## Core model
 
@@ -116,7 +122,7 @@ The project stores its private working state in ignored local files:
 .codex/topics/
 ```
 
-The Markdown stays readable and easy to inspect in Finder. Each item file is authoritative; `queue.md` is regenerated as a convenient overview. `repo-work` checks that these files agree before changing them, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt. SQLite is not required and is not an authority.
+The Markdown stays readable and easy to inspect in Finder. Each item file is authoritative; `queue.md` is regenerated as a convenient overview. `repo-work` checks that these files agree before changing them, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt.
 
 The plugin contains:
 

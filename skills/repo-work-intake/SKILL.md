@@ -47,15 +47,26 @@ Before creating a proposal, distinguish exact prior coverage from a merely relat
 5. Optionally notify that holder with the proposal ID and shared work root. Repository persistence, not messaging, is the correctness boundary.
 6. Report persistence and delivery separately.
 
-If transport is unavailable, no coordination lease exists, or delivery fails, retain the validated proposal in the inbox. Report notification as unavailable without treating that as a persistence failure. Any later chat can discover it through status.
+If transport is unavailable, no coordination lease exists, or delivery fails, retain the validated proposal in the inbox. Report notification as unavailable without treating that as a persistence failure. Any later chat can discover it through status, so never ask the human to relay the proposal or authorize lease revocation merely to deliver an optional notification.
 
 ## Result language
 
-Keep the active work as the main topic. State the exact finding and consequence in the normal update, then give a compact **Durable finding** receipt on one line by default:
+Keep the active work as the main topic and lead with the practical outcome:
 
-`Durable finding — <already recorded | recorded now | not recorded> in <exact owner and state>; notification <delivered | unavailable | not applicable>; current work <blocked | not blocked>.`
+- After `OK PROPOSAL_CREATED`, say `Saved for later — <finding> was recorded now as <proposal in inbox>; notification <delivered | unavailable>; current work <continues | is blocked by it>.` When notification is unavailable, add `No action needed; the inbox is authoritative.`
+- For exact prior coverage, say `Saved for later — <finding> was already recorded at <selector and state>; current work <continues | is blocked by it>.`
+- When the user explicitly dismisses the finding, say `Finding dismissed — <finding> was not saved at your request; no follow-up remains.`
 
-Use `recorded now` only after `OK PROPOSAL_CREATED`; it means this turn before the update. For `already recorded`, include the earlier durable selector or timestamp. Use `not recorded` when proposal creation fails and name `no owner`. Omit `notification not applicable` when an existing admitted item was updated directly. Expand the receipt into separate labeled fields only when persistence failed, ownership is ambiguous, the finding blocks current work, or the user asks for detail. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact finding was present earlier.
+Use `recorded now` only after `OK PROPOSAL_CREATED`; it means this turn before the update. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact finding was present earlier.
+
+When proposal creation fails, `not recorded` is an unresolved state, not a terminal receipt. Give one compact formal announcement containing:
+
+- `Cause`: the exact failure classification;
+- `Durable state`: not saved and no owner;
+- `Current work`: blocked or continuing;
+- `Next owner`: this task for a safe retry, or the human for one named decision.
+
+Treat a stale proposal view or a coordination-holder change during optional delivery as expected concurrency. Retry once when doing so needs no new authority. If delivery remains unavailable after persistence, stop with no human action because the inbox is authoritative. If retry needs new authority, changes scope, or overrides another owner, ask exactly one concrete approval question. If persistence was never authorized, ask whether to preserve or dismiss the finding. Never tell the human to contact or notify the coordinating chat.
 
 Then use one of these precise lifecycle outcomes:
 
