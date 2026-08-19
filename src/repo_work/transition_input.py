@@ -100,6 +100,7 @@ INPUT_MODELS: dict[str, InputModel] = {
     "merge-proposal": MergeProposalInput,
     "transfer-coordinator": TransferCoordinatorInput,
     "resume": EmptyInput,
+    "submit-review": EmptyInput,
 }
 
 

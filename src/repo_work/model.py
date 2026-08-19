@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Final, Literal
 
 SCHEMA_V1: Final = "repo-work/v1"
+SCHEMA_V2: Final = "repo-work/v2"
 type SchemaV1 = Literal["repo-work/v1"]
 
 
@@ -14,6 +15,15 @@ class WorkState(Enum):
     PAUSED = "paused"
     BLOCKED = "blocked"
     DEFERRED = "deferred"
+    REVIEW = "review"
+
+
+class AttemptState(Enum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    BLOCKED = "blocked"
+    REVIEW = "review"
+    DONE = "done"
 
 
 TERMINAL_STATES: Final = frozenset({"done", "superseded", "dropped"})
@@ -51,6 +61,8 @@ class WorkItemRecord:
     path: Path
     item: str
     user_label: str
+    queue_item: QueueItem | None = None
+    resources: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +78,7 @@ class Attempt:
     path: Path
     attempt: str
     item: str
-    state: str
+    state: AttemptState
     branch: str
     base_revision: str
-    owner: str
+    provenance: str

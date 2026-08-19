@@ -1,5 +1,7 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from repo_work.actions import actions_for
 from repo_work.markdown import parse_queue
@@ -47,6 +49,17 @@ class ProposalTest(unittest.TestCase):
         with self.assertRaisesRegex(ProposalError, "PROPOSAL_ALREADY_EXISTS"):
             create_proposal(work, project, proposal())
         self.assertEqual(original, path.read_bytes())
+
+    def test_proposal_writer_rejects_an_outside_inbox_symlink(self) -> None:
+        project, work = create_state([])
+        outside = Path(tempfile.mkdtemp()) / "outside-inbox"
+        (work / "inbox").replace(outside)
+        (work / "inbox").symlink_to(outside, target_is_directory=True)
+
+        with self.assertRaisesRegex(ProposalError, "PROPOSAL_IDENTITY_INVALID"):
+            create_proposal(work, project, proposal())
+
+        self.assertEqual([], list(outside.iterdir()))
 
     def test_idle_coordinator_sees_closed_proposal_choices(self) -> None:
         project, work = create_state([])

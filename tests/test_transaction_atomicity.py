@@ -5,6 +5,8 @@ from pathlib import Path
 
 from repo_work.actions import Action, actions_for
 from repo_work.atomic import transition_lock
+from repo_work.leases import acquire_coordination
+from repo_work.migration import migrate_to_v2
 from repo_work.transaction_store import CommitFailpoint, FileChange, journal_path_for, recover_pending_commit
 from repo_work.transition import TransitionError
 from repo_work.validate import validate_work_state
@@ -91,6 +93,45 @@ class TransactionAtomicityTest(unittest.TestCase):
 
                 self.assertEqual(before, _snapshot(work))
                 self.assertFalse(journal_path_for(work).exists())
+
+    def test_v2_complete_failpoint_restores_active_history_and_dependency_boundaries(self) -> None:
+        for selected_boundary in range(1, 6):
+            with self.subTest(boundary=selected_boundary):
+                project, work = create_state(
+                    [
+                        "| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |",
+                        "| dependent | blocked | — | reveal-core | — | design | none | Waiting. |",
+                    ],
+                    focus_item="reveal-core",
+                    focus_attempt="reveal-core-1",
+                    create_active_attempt=True,
+                )
+                migrate_to_v2(work, project)
+                coordination = acquire_coordination(work, "reviewer", "host", 60)
+                action = next(
+                    candidate
+                    for candidate in actions_for(
+                        work,
+                        project,
+                        "coordinator",
+                        lease_id=coordination.lease_id,
+                        generation=coordination.generation,
+                    )
+                    if candidate.action_id == "complete:reveal-core-1"
+                )
+                before = _snapshot(work)
+
+                with self.assertRaisesRegex(RuntimeError, "injected commit failure"):
+                    apply_action(
+                        work,
+                        project,
+                        action,
+                        {"evidence": "accepted review"},
+                        failpoint=_fail_at(selected_boundary),
+                    )
+
+                self.assertEqual(before, _snapshot(work))
+                self.assertFalse(journal_path_for(work / "v2").exists())
 
     def test_interrupted_process_is_recovered_from_durable_journal(self) -> None:
         project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])

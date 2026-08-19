@@ -1,13 +1,16 @@
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, assert_never
 
 import msgspec
 
-from repo_work.actions import Action, actions_for, coordinator_generation
-from repo_work.atomic import PlatformNotSupportedError, transition_lock
+from repo_work.actions import Action, ActionKind, actions_for, coordinator_generation
+from repo_work.atomic import PlatformNotSupportedError
+from repo_work.authority import AuthorityVersion, authority_transaction, resolve_authority
+from repo_work.leases import LeaseError, require_coordination
 from repo_work.markdown import parse_attempt
+from repo_work.model import AttemptState
 
 type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
 type DispatchSchema = Literal["repo-work-dispatch/v1"]
@@ -157,14 +160,30 @@ def _require_current_dispatch_action(
     project_root: Path,
     supplied: Action,
 ) -> None:
-    if supplied.kind != "dispatch":
+    if supplied.kind != ActionKind.DISPATCH:
         raise DispatchError("DISPATCH_ACTION_INVALID", "The supplied action is not a dispatch action.")
-    if coordinator_generation(work_root) != supplied.coordinator_generation:
-        raise DispatchError("COORDINATOR_REPLACED", "A different coordinator generation now owns dispatch.")
+    authority = resolve_authority(work_root)
+    match authority.version:
+        case AuthorityVersion.V1:
+            if coordinator_generation(work_root) != supplied.coordinator_generation:
+                raise DispatchError("COORDINATOR_REPLACED", "A different coordinator generation now owns dispatch.")
+        case AuthorityVersion.V2:
+            try:
+                require_coordination(authority.work_root, supplied.lease_id or "", supplied.coordinator_generation)
+            except LeaseError as error:
+                raise DispatchError(error.code, str(error).partition(": ")[2]) from error
+        case _ as unreachable:
+            assert_never(unreachable)
     current = next(
         (
             action
-            for action in actions_for(work_root, project_root, "coordinator")
+            for action in actions_for(
+                work_root,
+                project_root,
+                "coordinator",
+                lease_id=supplied.lease_id,
+                generation=supplied.coordinator_generation,
+            )
             if action.action_id == supplied.action_id
         ),
         None,
@@ -201,8 +220,9 @@ def prepare_dispatch(
     supplied_prompt: bytes | None = None,
 ) -> str:
     try:
-        with transition_lock(work_root):
+        with authority_transaction(work_root) as authority:
             return _prepare_dispatch_locked(
+                authority.work_root,
                 work_root,
                 project_root,
                 action,
@@ -217,16 +237,17 @@ def prepare_dispatch(
 
 def _prepare_dispatch_locked(
     work_root: Path,
+    base_work_root: Path,
     project_root: Path,
     action: Action,
     checkpoint: str,
     environment: DispatchEnvironment,
     supplied_prompt: bytes | None,
 ) -> str:
-    _require_current_dispatch_action(work_root, project_root, action)
+    _require_current_dispatch_action(base_work_root, project_root, action)
     attempt_path = work_root / "attempts" / action.subject / "attempt.md"
     attempt = parse_attempt(attempt_path)
-    if attempt.state != "active":
+    if attempt.state != AttemptState.ACTIVE:
         raise DispatchError("DISPATCH_ATTEMPT_NOT_ACTIVE", f"Attempt '{attempt.attempt}' is not active.")
     if environment.branch != attempt.branch:
         raise DispatchError(

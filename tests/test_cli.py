@@ -176,6 +176,383 @@ class CliTest(unittest.TestCase):
         self.assertEqual(0, proposal_result, proposal_stderr)
         self.assertIn("PROPOSAL_CREATED", proposal_stdout)
 
+    def test_v2_init_needs_no_master_task_and_coordination_is_borrowed(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        work = project / ".codex" / "work"
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        init_result, _, init_stderr = self.run_cli(*common, "init")
+        status_result, status_stdout, status_stderr = self.run_cli(*common, "status", "--json")
+        acquire_result, acquire_stdout, acquire_stderr = self.run_cli(
+            *common,
+            "coordination",
+            "acquire",
+            "--task-id",
+            "chat-a",
+            "--host-id",
+            "mac--one",
+            "--ttl-seconds",
+            "60",
+            "--json",
+        )
+
+        self.assertEqual(0, init_result, init_stderr)
+        self.assertEqual(0, status_result, status_stderr)
+        self.assertEqual("v2", json.loads(status_stdout)["authority"])
+        self.assertIsNone(json.loads(status_stdout)["coordinator"])
+        self.assertEqual(0, acquire_result, acquire_stderr)
+        self.assertEqual("chat-a", json.loads(acquire_stdout)["task_id"])
+
+    def test_v1_lease_and_resource_commands_require_explicit_migration(self) -> None:
+        project, work = create_state([])
+        common = ("--project-root", str(project), "--work-root", str(work))
+        commands = (
+            ("coordination", "status"),
+            ("attempt", "status", "--attempt-id", "attempt-1"),
+            ("resource", "status", "--resource-id", "bitwig-live"),
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result, _, stderr = self.run_cli(*common, *command)
+                self.assertEqual(11, result)
+                self.assertIn("MIGRATION_REQUIRED", stderr)
+                self.assertIn("repo-work migrate --to v2", stderr)
+
+    def test_cli_path_identities_cannot_escape_v2_authoritative_directories(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        work = project / ".codex" / "work"
+        common = ("--project-root", str(project), "--work-root", str(work))
+        self.assertEqual(0, self.run_cli(*common, "init")[0])
+        commands = (
+            (
+                "coordination",
+                "acquire",
+                "--task-id",
+                "task",
+                "--host-id",
+                "../../escape",
+                "--ttl-seconds",
+                "60",
+            ),
+            ("attempt", "status", "--attempt-id", "../../escape"),
+            ("resource", "status", "--resource-id", "bitwig-live", "--host-id", "../../escape"),
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                result, _, stderr = self.run_cli(*common, *command)
+                self.assertEqual(11, result)
+                self.assertRegex(stderr, "IDENTITY_INVALID|ID_INVALID")
+        self.assertFalse((work / "escape").exists())
+        self.assertFalse((project / "escape").exists())
+
+    def test_migrate_and_v2_actions_expose_lease_authority(self) -> None:
+        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
+        common = ("--project-root", str(project), "--work-root", str(work))
+        migrate_result, migrate_stdout, migrate_stderr = self.run_cli(*common, "migrate", "--to", "v2", "--json")
+        acquire_result, acquire_stdout, acquire_stderr = self.run_cli(
+            *common,
+            "coordination",
+            "acquire",
+            "--task-id",
+            "chat-a",
+            "--host-id",
+            "mac--one",
+            "--ttl-seconds",
+            "60",
+            "--json",
+        )
+        lease = json.loads(acquire_stdout)
+        actions_result, actions_stdout, actions_stderr = self.run_cli(
+            *common,
+            "actions",
+            "--role",
+            "coordinator",
+            "--lease-id",
+            lease["lease_id"],
+            "--generation",
+            str(lease["generation"]),
+            "--json",
+        )
+
+        self.assertEqual(0, migrate_result, migrate_stderr)
+        self.assertTrue(json.loads(migrate_stdout)["cutover"])
+        self.assertEqual(0, acquire_result, acquire_stderr)
+        self.assertEqual(0, actions_result, actions_stderr)
+        activation = next(value for value in json.loads(actions_stdout)["actions"] if value["kind"] == "activate")
+        self.assertEqual("coordination", activation["authorization"])
+        self.assertEqual(lease["lease_id"], activation["lease_id"])
+
+    def test_v2_lease_and_resource_commands_cover_the_concurrent_chat_lifecycle(self) -> None:
+        project, work = create_state(
+            ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],
+            focus_item="reveal-core",
+            focus_attempt="reveal-core-1",
+            create_active_attempt=True,
+        )
+        common = ("--project-root", str(project), "--work-root", str(work))
+        self.assertEqual(0, self.run_cli(*common, "migrate", "--to", "v2")[0])
+
+        def json_command(*arguments: str) -> dict[str, str | int]:
+            result, stdout, stderr = self.run_cli(*common, *arguments, "--json")
+            self.assertEqual(0, result, stderr)
+            value = json.loads(stdout)
+            self.assertIsInstance(value, dict)
+            return value
+
+        coordination = json_command(
+            "coordination",
+            "acquire",
+            "--task-id",
+            "chat-a",
+            "--host-id",
+            "mac--one",
+            "--ttl-seconds",
+            "60",
+        )
+        json_command("coordination", "status")
+        coordination = json_command(
+            "coordination",
+            "renew",
+            "--lease-id",
+            str(coordination["lease_id"]),
+            "--generation",
+            str(coordination["generation"]),
+            "--ttl-seconds",
+            "120",
+        )
+        json_command(
+            "resource",
+            "declare",
+            "--resource-id",
+            "bitwig-live",
+            "--label",
+            "Bitwig live application",
+            "--scope",
+            "host-local",
+            "--coordination-lease-id",
+            str(coordination["lease_id"]),
+            "--coordination-generation",
+            str(coordination["generation"]),
+        )
+        attempt = json_command(
+            "attempt",
+            "acquire",
+            "--attempt-id",
+            "reveal-core-1",
+            "--task-id",
+            "chat-a",
+            "--host-id",
+            "mac--one",
+            "--ttl-seconds",
+            "120",
+        )
+        json_command("attempt", "status", "--attempt-id", "reveal-core-1")
+        attempt = json_command(
+            "attempt",
+            "renew",
+            "--attempt-id",
+            "reveal-core-1",
+            "--lease-id",
+            str(attempt["lease_id"]),
+            "--generation",
+            str(attempt["generation"]),
+            "--ttl-seconds",
+            "180",
+        )
+        claim = json_command(
+            "resource",
+            "claim",
+            "--resource-id",
+            "bitwig-live",
+            "--attempt-id",
+            "reveal-core-1",
+            "--task-id",
+            "chat-a",
+            "--host-id",
+            "mac--one",
+            "--ttl-seconds",
+            "60",
+            "--attempt-lease-id",
+            str(attempt["lease_id"]),
+            "--attempt-generation",
+            str(attempt["generation"]),
+        )
+        item_path = work / "v2" / "items" / "reveal-core.md"
+        item_path.write_text(
+            item_path.read_text(encoding="utf-8").replace("resources: —", "resources: bitwig-live"),
+            encoding="utf-8",
+        )
+        actions_result, actions_stdout, actions_stderr = self.run_cli(
+            *common,
+            "actions",
+            "--role",
+            "worker",
+            "--lease-id",
+            str(attempt["lease_id"]),
+            "--generation",
+            str(attempt["generation"]),
+            "--json",
+        )
+        self.assertEqual(0, actions_result, actions_stderr)
+        submit = next(
+            action
+            for action in json.loads(actions_stdout)["actions"]
+            if action["action_id"] == "submit-review:reveal-core-1"
+        )
+        self.assertEqual(
+            [
+                {
+                    "generation": claim["generation"],
+                    "host_id": "mac--one",
+                    "lease_id": claim["lease_id"],
+                    "resource_id": "bitwig-live",
+                }
+            ],
+            submit["resource_claims"],
+        )
+        payload = Path(tempfile.mkdtemp()) / "submit.json"
+        payload.write_text("{}\n", encoding="utf-8")
+        transition_result, _, transition_stderr = self.run_cli(
+            *common,
+            "transition",
+            "--action-id",
+            submit["action_id"],
+            "--expected-revision",
+            submit["expected_revision"],
+            "--generation",
+            str(submit["coordinator_generation"]),
+            "--subject-revision",
+            submit["subject_revision"],
+            "--lease-id",
+            submit["lease_id"],
+            "--authorization",
+            submit["authorization"],
+            "--resource-claim",
+            "bitwig-live",
+            "mac--one",
+            str(claim["lease_id"]),
+            str(claim["generation"]),
+            "--payload",
+            str(payload),
+        )
+        self.assertEqual(0, transition_result, transition_stderr)
+        json_command("resource", "status", "--resource-id", "bitwig-live")
+        json_command("resource", "status", "--resource-id", "bitwig-live", "--host-id", "mac--one")
+        validate_result, _, validate_stderr = self.run_cli(*common, "validate")
+        self.assertEqual(0, validate_result, validate_stderr)
+        claim = json_command(
+            "resource",
+            "renew",
+            "--resource-id",
+            "bitwig-live",
+            "--host-id",
+            "mac--one",
+            "--lease-id",
+            str(claim["lease_id"]),
+            "--generation",
+            str(claim["generation"]),
+            "--ttl-seconds",
+            "120",
+        )
+        json_command(
+            "resource",
+            "release",
+            "--resource-id",
+            "bitwig-live",
+            "--host-id",
+            "mac--one",
+            "--lease-id",
+            str(claim["lease_id"]),
+            "--generation",
+            str(claim["generation"]),
+        )
+        claim = json_command(
+            "resource",
+            "claim",
+            "--resource-id",
+            "bitwig-live",
+            "--attempt-id",
+            "reveal-core-1",
+            "--task-id",
+            "chat-a",
+            "--host-id",
+            "mac--one",
+            "--ttl-seconds",
+            "60",
+            "--attempt-lease-id",
+            str(attempt["lease_id"]),
+            "--attempt-generation",
+            str(attempt["generation"]),
+        )
+        revoked_claim = json_command(
+            "resource",
+            "revoke",
+            "--resource-id",
+            "bitwig-live",
+            "--host-id",
+            "mac--one",
+            "--coordination-lease-id",
+            str(coordination["lease_id"]),
+            "--coordination-generation",
+            str(coordination["generation"]),
+        )
+        self.assertGreater(int(revoked_claim["generation"]), int(claim["generation"]))
+
+        json_command(
+            "attempt",
+            "release",
+            "--attempt-id",
+            "reveal-core-1",
+            "--lease-id",
+            str(attempt["lease_id"]),
+            "--generation",
+            str(attempt["generation"]),
+        )
+        attempt = json_command(
+            "attempt",
+            "acquire",
+            "--attempt-id",
+            "reveal-core-1",
+            "--task-id",
+            "chat-b",
+            "--host-id",
+            "mac--one",
+            "--ttl-seconds",
+            "60",
+        )
+        revoked_attempt = json_command(
+            "attempt",
+            "revoke",
+            "--attempt-id",
+            "reveal-core-1",
+            "--coordination-lease-id",
+            str(coordination["lease_id"]),
+            "--coordination-generation",
+            str(coordination["generation"]),
+        )
+        self.assertGreater(int(revoked_attempt["generation"]), int(attempt["generation"]))
+
+        json_command(
+            "coordination",
+            "release",
+            "--lease-id",
+            str(coordination["lease_id"]),
+            "--generation",
+            str(coordination["generation"]),
+        )
+        replacement = json_command(
+            "coordination",
+            "acquire",
+            "--task-id",
+            "chat-b",
+            "--host-id",
+            "mac--one",
+            "--ttl-seconds",
+            "60",
+        )
+        revoked_coordination = json_command("coordination", "revoke")
+        self.assertGreater(int(revoked_coordination["generation"]), int(replacement["generation"]))
+
     def test_cli_maps_root_registration_and_json_failures_to_stable_results(self) -> None:
         project, work = create_state([])
         common = ("--project-root", str(project), "--work-root", str(work))

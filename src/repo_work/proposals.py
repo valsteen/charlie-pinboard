@@ -5,7 +5,9 @@ from typing import Annotated
 import msgspec
 
 from repo_work.atomic import atomic_create
+from repo_work.authority import AuthorityVersion, authority_transaction
 from repo_work.model import SchemaV1
+from repo_work.storage_layout import PathIdentityError, identity_child
 from repo_work.validate import validate_work_state
 
 type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
@@ -88,15 +90,25 @@ def read_proposal(path: Path) -> Proposal:
 
 
 def create_proposal(work_root: Path, project_root: Path, data: bytes | str) -> Path:
-    if not (work_root / "coordinator.json").is_file():
-        raise ProposalError("COORDINATOR_NOT_REGISTERED", "Register an exact coordinator before submitting intake.")
-    report = validate_work_state(work_root, project_root)
-    if not report.valid:
-        raise ProposalError("WORK_STATE_INVALID", report.render())
     proposal = parse_proposal(data)
-    path = work_root / "inbox" / f"{proposal.proposal_id}.json"
-    try:
-        atomic_create(path, proposal.render())
-    except FileExistsError as error:
-        raise ProposalError("PROPOSAL_ALREADY_EXISTS", f"Proposal '{proposal.proposal_id}' already exists.") from error
-    return path
+    with authority_transaction(work_root) as authority:
+        current = authority.work_root
+        if authority.version == AuthorityVersion.V1 and not (current / "coordinator.json").is_file():
+            raise ProposalError("COORDINATOR_NOT_REGISTERED", "Register an exact coordinator before submitting intake.")
+        report = validate_work_state(work_root, project_root)
+        if not report.valid:
+            raise ProposalError("WORK_STATE_INVALID", report.render())
+        try:
+            path = identity_child(current, current / "inbox", f"{proposal.proposal_id}.json")
+        except PathIdentityError as error:
+            raise ProposalError(
+                "PROPOSAL_IDENTITY_INVALID",
+                f"Proposal '{proposal.proposal_id}' must stay inside the authoritative inbox.",
+            ) from error
+        try:
+            atomic_create(path, proposal.render())
+        except FileExistsError as error:
+            raise ProposalError(
+                "PROPOSAL_ALREADY_EXISTS", f"Proposal '{proposal.proposal_id}' already exists."
+            ) from error
+        return path

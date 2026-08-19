@@ -1,4 +1,4 @@
 interface:
   display_name: "Bounded Implementer"
   short_description: "Execute one accepted repository attempt"
-  default_prompt: "Use $bounded-implementer to execute the one accepted repository attempt without widening its scope."
+  default_prompt: "Use $bounded-implementer to execute the accepted repository attempt without widening its scope, leave the durable result, and report review delivery accurately."

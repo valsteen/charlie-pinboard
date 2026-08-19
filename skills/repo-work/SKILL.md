@@ -5,47 +5,52 @@ description: Coordinate one repository-owned work ledger for backlog orientation
 
 # Repository Work
 
-Coordinate shared work through one project-local ledger while keeping knowledge organized independently by topic and execution isolated by attempt.
+Coordinate shared work through one project-local ledger while keeping knowledge organized independently by topic and execution isolated by attempt. Support one chat and concurrent chats through the same lease protocol; never require a permanent master chat.
 
 ## Start from executable state
 
 1. Resolve this plugin's executable relative to this file as `../../scripts/repo-work`.
 2. Run `repo-work status --json` from the repository checkout.
-3. If `.codex/work` is absent, report `WORKFLOW_UNAVAILABLE`. Initialize it only when the user explicitly requests coordinated-work setup and supplies the exact coordinator task and host identities.
+3. If `.codex/work` is absent, report `WORKFLOW_UNAVAILABLE`. Initialize it with `repo-work init` only when the user explicitly requests coordinated-work setup. Do not ask for a permanent coordinator identity.
 4. If validation fails, stop state-consuming work and use the recovery procedure in `references/state-and-recovery.md`.
-5. Run `repo-work actions --role coordinator --json` and present only the actions it returns.
+5. Check the returned authority version. For `v1`, do not issue lease guidance or run a lease/resource command. Run `repo-work migrate --to v2` before continuing when migration is authorized; otherwise report `MIGRATION_REQUIRED` with that exact command.
+6. Inspecting v2 state needs no lease. Before a graph-wide change, acquire a short coordination lease with the current task and host identities, then run `repo-work actions --role coordinator` with its lease identity and generation. Before an attempt-local change, use that attempt's lease instead.
+7. Release coordination after the atomic graph-wide change. Renew it only while an immediate sequence genuinely needs the same authority.
+
+Tell the user how to proceed from the chat they are using. In one-chat use, that chat borrows coordination and owns its attempt. In multi-chat use, recommend one chat per distinct outcome. If coordination or a resource is busy, name the current holder and expiry, explain what can continue offline, and ask about revocation only when waiting is unsuitable.
 
 Do not infer work from arbitrary Markdown, historical plans, topic folders, unchecked boxes, branch names, or transcript memory. Do not directly edit canonical lifecycle fields when the executable can perform the transition.
 
 ## Ownership
 
-- Let `queue.md` own every nonterminal item's state, dependencies, current attempt, source, and next action.
+- Let `items/<item>.md` own every nonterminal item's context plus state, dependencies, current attempt, source, next action, and declared resources.
+- Let `queue.md` remain a generated Finder-readable overview. Never edit it as authority.
 - Let `current.md` remain an optional validated coordinator-focus pointer, never a second queue or a limit on concurrent attempts.
-- Let `items/<item>.md` own the context arc and semantic rationale without duplicating lifecycle state.
-- Let `attempts/<attempt>/` own the execution brief, branch/worktree, result, blocker, and review evidence.
+- Let `attempts/<attempt>/` own the execution brief, branch/worktree, renewable ownership lease, result, blocker, and review evidence.
+- Let `resources/` own project-declared scarce-resource definitions and `leases/resources/` own their host-local exclusive claims.
 - Let `inbox/` hold immutable proposals that have been delivered but not admitted.
 - Let `topics/` organize findings, designs, evidence, and human navigation without owning work state.
 - Let public project documentation own stable architecture and domain truth.
 
-One registered coordinator generation owns canonical transitions. Multiple tasks may create unique intake proposals. Multiple workers may execute disjoint accepted attempts in separate worktrees.
+One current coordination lease may authorize graph-wide transitions. Disjoint attempt leases may authorize item-local work concurrently. Expiry, release, revocation, and higher fencing generations invalidate retained actions.
 
 ## Coordinate delegated attempts
 
-When the coordinator launches a worker for an active attempt:
+When a coordinating chat launches a worker for an active attempt:
 
 1. Make `attempt.md` the only semantic execution brief. Put the accepted scope, checkpoint, named source selectors, acceptance criteria, and exact checks there.
 2. Give every dispatched checkpoint one explicit `Checkpoint boundary: local` or `Checkpoint boundary: cross-boundary` line. Use `cross-boundary` when that checkpoint changes one contract across multiple production owners or required consumers. Before launching a cross-boundary checkpoint, also record `Checkpoint outcome: independently-buildable` and a compact `Contract table` with these columns: `Invariant`; `Authority / owner`; `Required consumer or production observation`; `Failure classification`; `Exact verification`; `Preflight / final revalidation`.
 3. Select the exact `dispatch:<attempt>` action. Record only `schema`, `checkout`, `branch`, `starting_revision`, and `permissions` in a `repo-work-dispatch/v1` environment JSON file. Permission values are `repository-read`, `repository-write`, `network`, `external-write`, and `live-application`.
 4. Run `repo-work dispatch` with the action tokens, exact checkpoint heading, and environment file. Launch the worker with the rendered prompt unchanged. Use `--prompt` to verify a prompt received through another transport before launch.
-5. Retain coordinator ownership and the worker identifier. Do not edit the worker's checkout or review candidate while it is still changing.
+5. Release coordination after dispatch preparation. Retain the worker identifier and its attempt lease. Do not edit the worker's checkout or review candidate while it is still changing.
 6. Wait until the worker finishes or needs attention. A wait timeout, progress update, or successful launch is not a terminal result.
 7. After completion, read `result.md` or `blocker.md`, inspect the stable candidate, and perform the review described below.
 
 The dispatch prompt identifies the canonical brief, checkpoint, and execution environment. It must not repeat acceptance semantics, checks, deferrals, or source-reading instructions. Change the attempt first when its contract is wrong.
 
-Do not end the coordinator turn merely because implementation started. End with a running worker only when the user explicitly requested background execution; report that coordinator review remains pending and resume it before any acceptance transition.
+Do not end the coordinating turn merely because implementation started. End with a running worker only when the user explicitly requested background execution; report that independent review remains pending and perform it before any acceptance transition.
 
-The registered coordinator owns independent review. If an additional reviewer is useful, the coordinator launches it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
+The chat performing acceptance borrows coordination for independent review and the completion transition. If an additional reviewer is useful, launch it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
 
 ## Interpret the available actions
 
@@ -75,11 +80,11 @@ Do not turn that ordering into a score. A recommendation remains an explanation,
 
 1. Select one exact action returned by `repo-work actions --json`.
 2. Prepare only the semantic payload required by that action.
-3. Run `repo-work transition` with the action ID, expected revision, coordinator generation, optional proposal revision, and payload file.
+3. Run `repo-work transition` with the action ID, relevant revision, authorization kind, lease identity, fencing generation, optional proposal revision, and payload file.
 4. Report the returned transition result.
 5. Run `repo-work validate` immediately after any non-tool edit to supporting topic or attempt artifacts.
 
-The executable rejects stale revisions, replaced coordinators, illegal states, invalid dependencies, and inconsistent references. It does not decide whether evidence is true, whether work is valuable, or what product behavior should mean.
+The executable rejects stale subject scopes, expired or replaced lease holders, illegal states, invalid dependencies, missing resource claims, and inconsistent references. It does not decide whether evidence is true, whether work is valuable, or what product behavior should mean.
 
 ## Safe boundaries
 
@@ -121,4 +126,4 @@ Treat worker completion as a review request, not acceptance. Compare the attempt
 
 Move terminal scheduling state out of the live queue in the same transition that preserves its history receipt. Do not manufacture follow-up work when the honest result is no follow-up.
 
-Read `references/state-and-recovery.md` only for coordinator transfer, inconsistent state, schema migration, legacy-queue migration, or interrupted transitions.
+Read `references/state-and-recovery.md` only for lease revocation, inconsistent state, schema migration, legacy-queue migration, or interrupted transitions.

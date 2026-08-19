@@ -15,7 +15,7 @@ Imagine you are building *Ashfall Keep*, a small action RPG. One Codex task is w
 
 All of that is worth keeping, but not all of it should derail the boss feature. Without one shared place for the work, the original task becomes an accidental backlog, useful conclusions disappear into old conversations, and a feature branch slowly turns into a migration branch.
 
-![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** A side task comes back with a warning: “Before we can save the second phase safely, combat abilities need IDs that won’t change underneath us.” The coordinator will see it, but the work list does not change behind your back.
+![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** A side task comes back with a warning: “Before we can save the second phase safely, combat abilities need IDs that won’t change underneath us.” The proposal stays in the shared inbox until any chat briefly borrows coordination authority and reviews it; the work list does not change behind your back.
 
 **The map fills in as the party travels.** Deep work rarely reveals the whole campaign upfront. While the dragon fight remains the main quest, an experiment may reveal that save games are capturing temporary animation state, a flaw worth returning to later. Repository Work lets the plan grow from that evidence without turning every discovery into an interruption: preserve the exact finding, keep the current objective moving when it is not blocked, and leave one compact receipt.
 
@@ -23,11 +23,11 @@ All of that is worth keeping, but not all of it should derail the boss feature. 
 
 That line is small on purpose. It removes the anxiety that a valuable observation vanished into conversation while keeping the discussion centered on the work in front of you. Over a long investigation, those receipts let the project adapt its plan as reality becomes clearer without reconstructing the journey from old chats.
 
-![Pixel-art campfire checkpoint](assets/safe-camp.png) **The party makes camp.** The coordinator agrees that stable ability IDs come first. The dragon task notes exactly where it stopped and what needs to happen before it can pick the feature back up.
+![Pixel-art campfire checkpoint](assets/safe-camp.png) **The party makes camp.** The chat making the scheduling change briefly acquires coordination, records that stable ability IDs come first, then releases it. The dragon task notes exactly where it stopped and what needs to happen before it can pick the feature back up.
 
 ![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** Another task fixes the ability IDs, then the dragon task continues from its notes. If an older task tries to update a work list that has since changed, `repo-work` asks it to catch up first.
 
-Everything stays ordinary repository work: code, branches, worktrees, Markdown, and conversation. The plugin keeps the work list coherent and gives each implementation one canonical brief, so the task a worker receives is still the task the coordinator meant to send.
+Everything stays ordinary repository work: code, branches, worktrees, Markdown, and conversation. The plugin keeps the work list coherent and gives each implementation one canonical brief, so the task a worker receives is still the task the coordinating chat meant to send.
 
 ## Where it saves rework
 
@@ -57,17 +57,27 @@ codex plugin marketplace add valsteen/codex-repo-work
 codex plugin add codex-repo-work@codex-repo-work
 ```
 
-Start a new Codex task in the repository you want to coordinate and ask:
+Start a Codex task in the repository and ask:
 
-> Set up repository work coordination here. Use this task as the coordinator.
+> Set up Repository Work here and explain how I can use it from one chat or several chats.
 
 When another task uncovers something worth keeping, ask it:
 
 > Add this to the repository work inbox: saving a boss fight currently captures temporary animation state. Include what you found and why it could block phase-two save support.
 
-Back in the coordinator task, you can ask what came in, how it relates to work already underway, and what is ready to start. For example:
+In any chat, you can ask what came in, how it relates to work already underway, and what is ready to start. That chat borrows the short coordination lease only for the shared change, then releases it. For example:
 
 > Show me where the project stands, what is waiting on something else, and what you recommend doing next.
+
+## One chat or several
+
+There is no master chat to keep alive. The single-chat workflow remains the simplest option: one chat can inspect the ledger, briefly borrow coordination for scheduling changes, claim its attempt, and finish the work.
+
+Existing schema-v1 ledgers need one explicit `repo-work migrate --to v2` cutover before lease or resource commands become available. Until then, those commands return `MIGRATION_REQUIRED` rather than pretending legacy permanent ownership has lease semantics.
+
+For concurrent work, open one chat per distinct outcome. Each chat claims only its own attempt, so unrelated item changes do not invalidate its local actions. A chat that needs to admit work, change dependencies, activate an attempt, or accept a result briefly acquires the exclusive coordination lease and releases it after that atomic change. If another chat already holds coordination, the command identifies that chat and the lease expiry so the current chat can wait or ask you about revocation.
+
+Projects may declare host-local exclusive resources such as `bitwig-live`. A chat that owns an attempt must also claim each resource named by that item before live use. A conflict identifies the holding attempt, chat, host, and expiry. Offline work with no declared scarce resource remains available concurrently.
 
 ## Core model
 
@@ -81,22 +91,27 @@ The project stores its private working state in ignored local files:
 
 ```text
 .codex/work/
-  current.md
-  queue.md
-  coordinator.json
-  inbox/
-  items/
-  attempts/
-  history/
+  authority.json
+  v2/
+    current.md
+    queue.md                  # generated overview
+    inbox/
+    items/                    # authoritative lifecycle and context Markdown
+    attempts/                 # briefs and renewable ownership leases
+    resources/                # project-declared scarce resources
+    leases/
+      coordination.md         # present after first coordination lease
+      resources/
+    history/
 .codex/topics/
 ```
 
-The Markdown stays readable and easy to inspect. `repo-work` checks that these files agree before changing them, refuses updates made from an older view, and prepares worker launches without copying the task semantics into another prompt. It does not decide what matters, how important something is, or what the product should become.
+The Markdown stays readable and easy to inspect in Finder. Each item file is authoritative; `queue.md` is regenerated as a convenient overview. `repo-work` checks that these files agree before changing them, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt. SQLite is not required and is not an authority.
 
 The plugin contains:
 
 - `repo-work`, a small Python command that checks and updates the shared files;
-- `$repo-work`, which helps the coordinator explain the current picture and choose what happens next;
+- `$repo-work`, which helps any chat explain the current picture, borrow coordination when needed, and choose what happens next;
 - `$repo-work-intake`, which lets any task leave a finding for later review;
 - `$bounded-implementer`, which follows one accepted brief and returns evidence for independent review.
 

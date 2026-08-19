@@ -14,10 +14,13 @@ from repo_work.markdown import (
     parse_current,
     parse_header,
     parse_item,
+    parse_queue_text,
+    render_current,
     render_queue,
+    render_v2_item,
     replace_header_fields,
 )
-from repo_work.model import Queue, QueueItem, WorkState
+from repo_work.model import SCHEMA_V1, SCHEMA_V2, Queue, QueueItem, WorkState
 from repo_work.proposals import ProposalError, parse_proposal, read_proposal
 from repo_work.transition_input import ActivateInput, TransitionInputError, parse_transition_input
 
@@ -226,10 +229,16 @@ class MarkdownBoundaryTest(unittest.TestCase):
         self.assertEqual("reveal-core", parse_item(self.write(valid_item)).item)
         self.assertIsNone(parse_current(self.write(valid_current)).focus_item)
         self.assertEqual("attempt-1", parse_attempt(self.write(valid_attempt)).attempt)
+        valid_v2_attempt = valid_attempt.replace("repo-work/v1", "repo-work/v2").replace(
+            "owner: worker", "provenance: worker"
+        )
+        self.assertEqual("worker", parse_attempt(self.write(valid_v2_attempt)).provenance)
+        with self.assertRaisesRegex(ParseError, "ATTEMPT_STATIC_OWNER_INVALID"):
+            parse_attempt(self.write(valid_v2_attempt.replace("provenance: worker", "owner: worker")))
 
         cases = (
             (valid_item.replace("kind: work-item", "kind: other"), parse_item, "DOCUMENT_KIND_INVALID"),
-            (valid_item.replace("repo-work/v1", "repo-work/v2"), parse_item, "DOCUMENT_SCHEMA_INVALID"),
+            (valid_item.replace("repo-work/v1", "repo-work/v3"), parse_item, "DOCUMENT_SCHEMA_INVALID"),
             (valid_item.replace("reveal-core", "Bad Item"), parse_item, "ITEM_ID_INVALID"),
             (valid_current.replace("focus_item: null", "focus_item: Bad Item"), parse_current, "CURRENT_ITEM_INVALID"),
             (
@@ -265,3 +274,79 @@ class MarkdownBoundaryTest(unittest.TestCase):
         )
         self.assertIn("state: done", replaced)
         self.assertIn("evidence: accepted", replaced)
+
+    def test_v2_item_renderer_quotes_reserved_string_tokens_and_preserves_missing_sentinels(self) -> None:
+        source = (
+            "---\nkind: work-item\nschema: repo-work/v1\nitem: token-item\n"
+            'user_label: "Token item"\n---\n\n# Token item\n'
+        )
+        item = QueueItem(
+            "token-item",
+            WorkState.ACTIVE,
+            "true",
+            ("true", "false", "null"),
+            "true",
+            "false",
+            "null",
+            "~",
+        )
+
+        rendered = render_v2_item(source, item, ("true", "false", "null"))
+        record = parse_item(self.write(rendered))
+
+        self.assertEqual(item, record.queue_item)
+        self.assertEqual(("true", "false", "null"), record.resources)
+        for expected in (
+            'timing: "true"',
+            'depends_on: "true, false, null"',
+            'attempt: "true"',
+            'source: "false"',
+            'next_action: "null"',
+            'notes: "~"',
+            'resources: "true, false, null"',
+        ):
+            self.assertIn(expected, rendered)
+
+        missing = QueueItem("token-item", WorkState.READY, None, (), None, "source", None, "Notes.")
+        missing_rendered = render_v2_item(source, missing)
+        for expected in ("timing: —", "depends_on: —", "attempt: —", "next_action: —", "resources: —"):
+            self.assertIn(expected, missing_rendered)
+        self.assertEqual(missing, parse_item(self.write(missing_rendered)).queue_item)
+
+    def test_v2_queue_preserves_reserved_data_while_v1_keeps_legacy_empty_tokens(self) -> None:
+        path = Path("queue.md")
+        item = QueueItem(
+            "token-item",
+            WorkState.READY,
+            "null",
+            ("null", "none", "~"),
+            "null",
+            "source",
+            "none",
+            "Notes.",
+        )
+        queue = Queue(path, {}, (item,), "")
+
+        rendered_v2 = render_queue(queue, queue.items, SCHEMA_V2)
+        self.assertEqual(item, parse_queue_text(rendered_v2, path).items[0])
+
+        rendered_v1 = render_queue(queue, queue.items, SCHEMA_V1)
+        legacy = parse_queue_text(rendered_v1, path).items[0]
+        self.assertIsNone(legacy.timing)
+        self.assertEqual(("~",), legacy.depends_on)
+        self.assertIsNone(legacy.attempt)
+        self.assertIsNone(legacy.next_action)
+
+    def test_v2_current_renderer_distinguishes_reserved_strings_from_absence(self) -> None:
+        rendered = render_current("true", "false", "null", SCHEMA_V2)
+
+        current = parse_current(self.write(rendered))
+
+        self.assertEqual(("true", "false", "null"), (current.focus_item, current.focus_attempt, current.next_action))
+        self.assertIn('focus_item: "true"', rendered)
+        self.assertIn('focus_attempt: "false"', rendered)
+        self.assertIn('next_action: "null"', rendered)
+
+        absent = render_current(None, None, "select", SCHEMA_V2)
+        self.assertIn("focus_item: null", absent)
+        self.assertIn("focus_attempt: null", absent)

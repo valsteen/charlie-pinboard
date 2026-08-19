@@ -1,4 +1,4 @@
 interface:
   display_name: "Repository Work Intake"
-  short_description: "Propose work to the registered coordinator"
-  default_prompt: "Use $repo-work-intake to prepare and deliver this finding to the registered repository coordinator."
+  short_description: "Preserve a finding in the shared work inbox"
+  default_prompt: "Use $repo-work-intake to preserve this finding in the repository work inbox for the next coordination pass."

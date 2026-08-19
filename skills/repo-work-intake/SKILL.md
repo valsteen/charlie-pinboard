@@ -1,6 +1,6 @@
 ---
 name: repo-work-intake
-description: Propose newly discovered repository work from any project task and deliver it to the exact registered coordinator. Use when a user says to add, queue, intake, preserve, or send a finding for later; when an investigation discovers a prerequisite, bug, cleanup, feature, or contradiction; or when a side task should notify the coordinator at its next safe boundary. Do not use merely because a conversation explores an idea without requesting shared work state.
+description: Propose newly discovered repository work from any project task into the shared immutable inbox. Use when a user says to add, queue, intake, preserve, or send a finding for later; when an investigation discovers a prerequisite, bug, cleanup, feature, or contradiction; or when a side task should preserve a finding for the next coordination pass. Do not use merely because a conversation explores an idea without requesting shared work state.
 ---
 
 # Repository Work Intake
@@ -11,8 +11,8 @@ Convert one explicit finding into an immutable proposal. Do not edit the canonic
 
 1. Resolve this plugin's executable relative to this file as `../../scripts/repo-work`.
 2. Run `repo-work status --json` from the repository checkout.
-3. Require an existing valid `.codex/work/coordinator.json` with an exact task ID, host ID, and generation.
-4. If the workflow, executable, or coordinator registration is unavailable, stop. Do not infer a coordinator from titles, recency, nearby tasks, branches, or old audit files.
+3. Require a valid current authority root. Intake does not require a coordination lease and must not wait for a master chat.
+4. If the workflow or executable is unavailable, stop. Do not infer shared state from titles, recency, nearby tasks, branches, or old audit files.
 5. Determine the current source task identity from trusted task context. If the environment does not expose it, ask the human for the exact task ID rather than inventing one.
 
 ## Prepare one proposal
@@ -43,11 +43,11 @@ Before creating a proposal, distinguish exact prior coverage from a merely relat
 1. Write the proposal to a temporary file outside canonical work state.
 2. Run `repo-work proposal --file <path>`.
 3. Treat `OK PROPOSAL_CREATED` as persistence only.
-4. Read `references/codex-transport.md` when Codex task messaging is available.
-5. Deliver a compact notification naming the proposal ID and shared work root to the exact registered coordinator.
+4. Read `references/codex-transport.md` only when Codex task messaging is available and a useful active coordination holder exists.
+5. Optionally notify that holder with the proposal ID and shared work root. Repository persistence, not messaging, is the correctness boundary.
 6. Report persistence and delivery separately.
 
-If transport is unavailable or fails, retain the validated proposal in the inbox and report `INTAKE_TRANSPORT_UNAVAILABLE`. Do not claim the coordinator saw it. The coordinator can discover it through status at its next continuation.
+If transport is unavailable, no coordination lease exists, or delivery fails, retain the validated proposal in the inbox. Report notification as unavailable without treating that as a persistence failure. Any later chat can discover it through status.
 
 ## Result language
 
@@ -67,4 +67,4 @@ Then use one of these precise lifecycle outcomes:
 - proposal returned for evidence;
 - proposal rejected.
 
-Only the registered coordinator may report the latter four after applying the matching transition.
+Only a chat holding the current coordination lease may report the latter four after applying the matching transition.

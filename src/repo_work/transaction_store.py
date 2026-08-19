@@ -9,7 +9,8 @@ import msgspec
 
 from repo_work import validate as work_validation
 from repo_work.atomic import atomic_write
-from repo_work.storage_layout import journal_path_for
+from repo_work.authority import AuthorityVersion
+from repo_work.storage_layout import PathIdentityError, confined_path, journal_path_for
 
 
 class AtomicCommitError(RuntimeError):
@@ -78,7 +79,11 @@ def delete_change(path: str) -> FileChange:
 
 
 def _target(work_root: Path, relative: PurePosixPath) -> Path:
-    return work_root.joinpath(*relative.parts)
+    path = work_root.joinpath(*relative.parts)
+    try:
+        return confined_path(work_root, path)
+    except PathIdentityError as error:
+        raise AtomicCommitError("CHANGE_PATH_INVALID", f"Change path '{relative}' escapes the work root.") from error
 
 
 def _apply_change(work_root: Path, change: FileChange) -> None:
@@ -174,13 +179,18 @@ def recover_pending_commit(work_root: Path) -> bool:
     return True
 
 
-def validate_change_set(work_root: Path, project_root: Path, changes: ChangeSet) -> None:
+def validate_change_set(
+    work_root: Path,
+    project_root: Path,
+    changes: ChangeSet,
+    version: AuthorityVersion,
+) -> None:
     with tempfile.TemporaryDirectory(prefix="repo-work-prospective-") as temporary:
         prospective = Path(temporary) / "work"
         shutil.copytree(work_root, prospective)
         for change in changes.changes:
             _apply_change(prospective, change)
-        report = work_validation.validate_work_state(prospective, project_root)
+        report = work_validation.validate_work_state_during_commit(prospective, project_root, version)
         if not report.valid:
             raise AtomicCommitError("TRANSITION_POSTCONDITION_FAILED", report.render())
 
@@ -189,6 +199,7 @@ def commit_change_set(
     work_root: Path,
     project_root: Path,
     changes: ChangeSet,
+    version: AuthorityVersion,
     *,
     failpoint: CommitFailpoint | None = None,
 ) -> None:
@@ -199,7 +210,7 @@ def commit_change_set(
             _apply_change(work_root, change)
             if failpoint is not None:
                 failpoint(boundary, change)
-        report = work_validation.validate_work_state_during_commit(work_root, project_root)
+        report = work_validation.validate_work_state_during_commit(work_root, project_root, version)
         if not report.valid:
             raise AtomicCommitError("TRANSITION_POSTCONDITION_FAILED", report.render())
     except Exception, KeyboardInterrupt, SystemExit:
