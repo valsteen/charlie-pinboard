@@ -4,6 +4,7 @@ from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
 from repo_work.actions import actions_for
+from repo_work.authority import AuthorityVersion
 from repo_work.diagnostics import Diagnostic, Severity
 from repo_work.transaction_store import (
     AtomicCommitError,
@@ -37,7 +38,7 @@ class TransactionStoreTest(unittest.TestCase):
         changes = ChangeSet.of(FileChange(PurePosixPath("items/reveal-core.md"), None))
 
         with self.assertRaisesRegex(AtomicCommitError, "TRANSITION_POSTCONDITION_FAILED"):
-            validate_change_set(work, project, changes)
+            validate_change_set(work, project, changes, AuthorityVersion.V1)
 
         self.assertEqual(before, snapshot(work))
 
@@ -51,7 +52,7 @@ class TransactionStoreTest(unittest.TestCase):
             patch("repo_work.validate.validate_work_state_during_commit", return_value=invalid),
             self.assertRaisesRegex(AtomicCommitError, "TRANSITION_POSTCONDITION_FAILED"),
         ):
-            commit_change_set(work, project, changes)
+            commit_change_set(work, project, changes, AuthorityVersion.V1)
 
         self.assertEqual(before, snapshot(work))
         self.assertFalse(journal_path_for(work).exists())
@@ -65,7 +66,12 @@ class TransactionStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(AtomicCommitError, "COMMIT_JOURNAL_INVALID"):
             recover_pending_commit(work)
         with self.assertRaisesRegex(AtomicCommitError, "COMMIT_RECOVERY_REQUIRED"):
-            commit_change_set(work, project, ChangeSet.of(write_change("current.md", "value")))
+            commit_change_set(
+                work,
+                project,
+                ChangeSet.of(write_change("current.md", "value")),
+                AuthorityVersion.V1,
+            )
 
     def test_invalid_journal_entries_are_typed_rejections(self) -> None:
         _, work = create_state([])

@@ -1,6 +1,6 @@
 ---
 name: repo-work-intake
-description: Propose newly discovered repository work from any project task and deliver it to the exact registered coordinator. Use when a user says to add, queue, intake, preserve, or send a finding for later; when an investigation discovers a prerequisite, bug, cleanup, feature, or contradiction; or when a side task should notify the coordinator at its next safe boundary. Do not use merely because a conversation explores an idea without requesting shared work state.
+description: Propose newly discovered repository work from any project task into the shared immutable inbox. Use when a user says to add, queue, intake, preserve, or send a finding for later; when an investigation discovers a prerequisite, bug, cleanup, feature, or contradiction; or when a side task should preserve a finding for the next coordination pass. Do not use merely because a conversation explores an idea without requesting shared work state.
 ---
 
 # Repository Work Intake
@@ -11,8 +11,8 @@ Convert one explicit finding into an immutable proposal. Do not edit the canonic
 
 1. Resolve this plugin's executable relative to this file as `../../scripts/repo-work`.
 2. Run `repo-work status --json` from the repository checkout.
-3. Require an existing valid `.codex/work/coordinator.json` with an exact task ID, host ID, and generation.
-4. If the workflow, executable, or coordinator registration is unavailable, stop. Do not infer a coordinator from titles, recency, nearby tasks, branches, or old audit files.
+3. Require a valid current authority root. Intake does not require a coordination lease and must not wait for a master chat.
+4. If the workflow or executable is unavailable, stop. Do not infer shared state from titles, recency, nearby tasks, branches, or old audit files.
 5. Determine the current source task identity from trusted task context. If the environment does not expose it, ask the human for the exact task ID rather than inventing one.
 
 ## Prepare one proposal
@@ -43,19 +43,30 @@ Before creating a proposal, distinguish exact prior coverage from a merely relat
 1. Write the proposal to a temporary file outside canonical work state.
 2. Run `repo-work proposal --file <path>`.
 3. Treat `OK PROPOSAL_CREATED` as persistence only.
-4. Read `references/codex-transport.md` when Codex task messaging is available.
-5. Deliver a compact notification naming the proposal ID and shared work root to the exact registered coordinator.
+4. Read `references/codex-transport.md` only when Codex task messaging is available and a useful active coordination holder exists.
+5. Optionally notify that holder with the proposal ID and shared work root. Repository persistence, not messaging, is the correctness boundary.
 6. Report persistence and delivery separately.
 
-If transport is unavailable or fails, retain the validated proposal in the inbox and report `INTAKE_TRANSPORT_UNAVAILABLE`. Do not claim the coordinator saw it. The coordinator can discover it through status at its next continuation.
+If transport is unavailable, no coordination lease exists, or delivery fails, retain the validated proposal in the inbox. Report notification as unavailable without treating that as a persistence failure. Any later chat can discover it through status, so never ask the human to relay the proposal or authorize lease revocation merely to deliver an optional notification.
 
 ## Result language
 
-Keep the active work as the main topic. State the exact finding and consequence in the normal update, then give a compact **Durable finding** receipt on one line by default:
+Keep the active work as the main topic and lead with the practical outcome:
 
-`Durable finding — <already recorded | recorded now | not recorded> in <exact owner and state>; notification <delivered | unavailable | not applicable>; current work <blocked | not blocked>.`
+- After `OK PROPOSAL_CREATED`, say `Saved for later — <finding> was recorded now as <proposal in inbox>; notification <delivered | unavailable>; current work <continues | is blocked by it>.` When notification is unavailable, add `No action needed; the inbox is authoritative.`
+- For exact prior coverage, say `Saved for later — <finding> was already recorded at <selector and state>; current work <continues | is blocked by it>.`
+- When the user explicitly dismisses the finding, say `Finding dismissed — <finding> was not saved at your request; no follow-up remains.`
 
-Use `recorded now` only after `OK PROPOSAL_CREATED`; it means this turn before the update. For `already recorded`, include the earlier durable selector or timestamp. Use `not recorded` when proposal creation fails and name `no owner`. Omit `notification not applicable` when an existing admitted item was updated directly. Expand the receipt into separate labeled fields only when persistence failed, ownership is ambiguous, the finding blocks current work, or the user asks for detail. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact finding was present earlier.
+Use `recorded now` only after `OK PROPOSAL_CREATED`; it means this turn before the update. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact finding was present earlier.
+
+When proposal creation fails, `not recorded` is an unresolved state, not a terminal receipt. Give one compact formal announcement containing:
+
+- `Cause`: the exact failure classification;
+- `Durable state`: not saved and no owner;
+- `Current work`: blocked or continuing;
+- `Next owner`: this task for a safe retry, or the human for one named decision.
+
+Treat a stale proposal view or a coordination-holder change during optional delivery as expected concurrency. Retry once when doing so needs no new authority. If delivery remains unavailable after persistence, stop with no human action because the inbox is authoritative. If retry needs new authority, changes scope, or overrides another owner, ask exactly one concrete approval question. If persistence was never authorized, ask whether to preserve or dismiss the finding. Never tell the human to contact or notify the coordinating chat.
 
 Then use one of these precise lifecycle outcomes:
 
@@ -67,4 +78,4 @@ Then use one of these precise lifecycle outcomes:
 - proposal returned for evidence;
 - proposal rejected.
 
-Only the registered coordinator may report the latter four after applying the matching transition.
+Only a chat holding the current coordination lease may report the latter four after applying the matching transition.

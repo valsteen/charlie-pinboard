@@ -1,6 +1,6 @@
 import unittest
 
-from repo_work.actions import ActionError, actions_for
+from repo_work.actions import ActionError, AuthorizationKind, actions_for
 
 from .support import create_state
 
@@ -63,6 +63,24 @@ class AvailableActionsTest(unittest.TestCase):
             },
             action_ids,
         )
+
+    def test_v1_action_authorization_matches_the_requested_role(self) -> None:
+        project, work = create_state(
+            ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],
+            focus_item="reveal-core",
+            focus_attempt="reveal-core-1",
+            create_active_attempt=True,
+        )
+
+        for role, expected in (
+            ("observer", AuthorizationKind.OBSERVER),
+            ("worker", AuthorizationKind.ATTEMPT),
+            ("coordinator", AuthorizationKind.COORDINATOR),
+        ):
+            with self.subTest(role=role):
+                actions = actions_for(work, project, role)
+                self.assertTrue(actions)
+                self.assertEqual({expected}, {action.authorization for action in actions})
 
     def test_blocked_item_is_not_resumable_while_dependency_is_live(self) -> None:
         project, work = create_state(

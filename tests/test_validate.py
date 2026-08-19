@@ -1,8 +1,10 @@
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
+from repo_work.authority import AuthorityVersion, write_authority_selector
 from repo_work.validate import validate_work_state
 
 QUEUE_TEMPLATE = """\
@@ -66,6 +68,27 @@ updated: "2026-08-16"
 
 
 class WorkStateValidationTest(unittest.TestCase):
+    def test_selected_v2_authority_rejects_a_coherent_v1_ledger(self) -> None:
+        project, work = self.make_state(
+            ["| reveal-core | ready | — | — | — | accepted design | activate | First item. |"]
+        )
+        root = work / "v2"
+        root.mkdir()
+        for name in ("items", "attempts", "inbox", "history"):
+            shutil.move(work / name, root / name)
+        for name in ("queue.md", "current.md", "coordinator.json"):
+            shutil.move(work / name, root / name)
+        (root / "migration-complete.md").write_text(
+            "---\nkind: migration-complete\nschema: repo-work/v2\n---\n",
+            encoding="utf-8",
+        )
+        write_authority_selector(work, AuthorityVersion.V2, "v2")
+
+        report = validate_work_state(work, project)
+
+        self.assertFalse(report.valid)
+        self.assertIn("DOCUMENT_SCHEMA_INVALID", {diagnostic.code for diagnostic in report.diagnostics})
+
     def make_state(
         self,
         rows: list[str],

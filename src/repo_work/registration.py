@@ -2,9 +2,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from repo_work.atomic import atomic_write, atomic_write_text, transition_lock
+from repo_work.authority import AuthorityVersion, resolve_authority, write_authority_selector
 from repo_work.coordinator import CoordinatorRegistration, read_coordinator
-from repo_work.markdown import render_current, render_queue
-from repo_work.model import SCHEMA_V1, Queue
+from repo_work.markdown import render_current, render_queue, render_v2_header
+from repo_work.model import SCHEMA_V1, SCHEMA_V2, Queue
 from repo_work.transaction_store import (
     ChangeSet,
     commit_change_set,
@@ -36,7 +37,7 @@ def _registration(project_root: Path, task_id: str, host_id: str, generation: in
     )
 
 
-def initialize_work_state(
+def _initialize_work_state(
     project_root: Path,
     task_id: str,
     host_id: str,
@@ -64,6 +65,53 @@ def initialize_work_state(
     return work_root
 
 
+def initialize_work_state(
+    project_root: Path,
+    task_id: str,
+    host_id: str,
+    work_root: Path | None = None,
+) -> Path:
+    selected = work_root.resolve() if work_root is not None else project_root.resolve() / ".codex" / "work"
+    with transition_lock(selected):
+        return _initialize_work_state(project_root, task_id, host_id, selected)
+
+
+def _initialize_work_state_v2(project_root: Path, work_root: Path | None = None) -> Path:
+    project_root = project_root.resolve()
+    base = work_root.resolve() if work_root is not None else project_root / ".codex" / "work"
+    if base.exists():
+        raise RegistrationError("WORK_STATE_ALREADY_EXISTS", f"'{base}' already exists.")
+    current = base / "v2"
+    for directory in (
+        current / "items",
+        current / "attempts",
+        current / "resources",
+        current / "leases" / "resources",
+        current / "inbox",
+        current / "history" / "items",
+        current / "history" / "proposals",
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    queue = Queue(path=current / "queue.md", header={"schema": SCHEMA_V2}, items=(), revision="")
+    atomic_write_text(current / "queue.md", render_queue(queue, (), SCHEMA_V2))
+    atomic_write_text(current / "current.md", render_current(None, None, "select", SCHEMA_V2))
+    atomic_write_text(
+        current / "migration-complete.md",
+        render_v2_header({"kind": "migration-complete", "schema": SCHEMA_V2}) + "\n# Native v2 Ledger\n",
+    )
+    write_authority_selector(base, AuthorityVersion.V2, "v2")
+    report = validate_work_state(base, project_root)
+    if not report.valid:
+        raise RegistrationError("INITIALIZATION_POSTCONDITION_FAILED", report.render())
+    return base
+
+
+def initialize_work_state_v2(project_root: Path, work_root: Path | None = None) -> Path:
+    selected = work_root.resolve() if work_root is not None else project_root.resolve() / ".codex" / "work"
+    with transition_lock(selected):
+        return _initialize_work_state_v2(project_root, selected)
+
+
 def transfer_coordinator(
     work_root: Path,
     project_root: Path,
@@ -72,11 +120,17 @@ def transfer_coordinator(
     host_id: str,
 ) -> None:
     with transition_lock(work_root):
-        recover_pending_commit(work_root)
-        report = validate_work_state(work_root, project_root)
+        authority = resolve_authority(work_root)
+        if authority.version != AuthorityVersion.V1:
+            raise RegistrationError(
+                "MIGRATION_REQUIRED", "Legacy coordinator transfer is unavailable after v2 cutover."
+            )
+        root = authority.work_root
+        recover_pending_commit(root)
+        report = validate_work_state(root, project_root)
         if not report.valid:
             raise RegistrationError("WORK_STATE_INVALID", report.render())
-        current = read_coordinator(work_root / "coordinator.json")
+        current = read_coordinator(root / "coordinator.json")
         if current.generation != expected_generation:
             raise RegistrationError(
                 "COORDINATOR_OWNERSHIP_CONFLICT",
@@ -88,5 +142,5 @@ def transfer_coordinator(
                 _registration(project_root, task_id, host_id, expected_generation + 1).render(),
             )
         )
-        validate_change_set(work_root, project_root, changes)
-        commit_change_set(work_root, project_root, changes)
+        validate_change_set(root, project_root, changes, AuthorityVersion.V1)
+        commit_change_set(root, project_root, changes, AuthorityVersion.V1)
