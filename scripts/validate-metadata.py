@@ -1,12 +1,16 @@
 import re
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import msgspec
+import yaml
 
 ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
 PLUGIN_NAME: Final = "codex-repo-work"
+
+type YamlScalar = str | int | float | bool | None
+type YamlValue = YamlScalar | list[YamlValue] | dict[str, YamlValue]
 
 
 class PluginAuthor(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -65,6 +69,52 @@ class MarketplaceManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=Tru
     plugins: tuple[MarketplacePlugin, ...]
 
 
+class SkillFrontmatter(msgspec.Struct, frozen=True):
+    name: str
+    description: str
+
+
+class SkillInterface(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    display_name: str
+    short_description: str
+    default_prompt: str
+
+
+class SkillAgent(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    interface: SkillInterface
+
+
+def load_yaml(text: str, path: Path) -> YamlValue:
+    try:
+        return cast(YamlValue, yaml.safe_load(text))
+    except yaml.YAMLError as error:
+        raise ValueError(f"{path}: invalid YAML: {error}") from error
+
+
+def decode_skill_frontmatter(text: str, path: Path) -> SkillFrontmatter:
+    value = load_yaml(text, path)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: frontmatter must be a YAML mapping")
+    if not all(isinstance(field, str) for field in value):
+        raise ValueError(f"{path}: frontmatter field names must be strings")
+    allowed = {"name", "description", "license", "allowed-tools", "metadata"}
+    unexpected = set(value) - allowed
+    if unexpected:
+        raise ValueError(f"{path}: unexpected frontmatter fields: {', '.join(sorted(unexpected))}")
+    try:
+        return msgspec.convert(value, type=SkillFrontmatter, strict=True)
+    except msgspec.ValidationError as error:
+        raise ValueError(f"{path}: invalid metadata: {error}") from error
+
+
+def decode_skill_agent(text: str, path: Path) -> SkillAgent:
+    value = load_yaml(text, path)
+    try:
+        return msgspec.convert(value, type=SkillAgent, strict=True)
+    except msgspec.ValidationError as error:
+        raise ValueError(f"{path}: invalid metadata: {error}") from error
+
+
 def validate_plugin() -> None:
     path = ROOT / ".codex-plugin" / "plugin.json"
     value = msgspec.json.decode(path.read_bytes(), type=PluginManifest)
@@ -99,18 +149,25 @@ def validate_skill(path: Path) -> None:
     if len(lines) < 5 or lines[0] != "---" or "---" not in lines[1:]:
         raise ValueError(f"{path}: skill frontmatter is missing")
     end = lines.index("---", 1)
-    name_line = next((line for line in lines[1:end] if line.startswith("name: ")), "")
-    description = next((line for line in lines[1:end] if line.startswith("description: ")), "")
-    match = SKILL_NAME.fullmatch(name_line)
-    if match is None or match.group(1) != path.parent.name:
+    frontmatter = decode_skill_frontmatter("\n".join(lines[1:end]), path)
+    match = SKILL_NAME.fullmatch(f"name: {frontmatter.name}")
+    if match is None or match.group(1) != path.parent.name or len(frontmatter.name) > 64:
         raise ValueError(f"{path}: skill name must match its directory")
-    if not description.removeprefix("description: ").strip():
+    if not frontmatter.description.strip():
         raise ValueError(f"{path}: skill description is empty")
+    if "<" in frontmatter.description or ">" in frontmatter.description or len(frontmatter.description) > 1024:
+        raise ValueError(f"{path}: skill description violates platform constraints")
     agent = path.parent / "agents" / "openai.yaml"
-    agent_text = agent.read_text(encoding="utf-8")
-    for field in ("display_name:", "short_description:", "default_prompt:"):
-        if field not in agent_text:
-            raise ValueError(f"{agent}: missing {field}")
+    agent_value = decode_skill_agent(agent.read_text(encoding="utf-8"), agent)
+    if not all(
+        value.strip()
+        for value in (
+            agent_value.interface.display_name,
+            agent_value.interface.short_description,
+            agent_value.interface.default_prompt,
+        )
+    ):
+        raise ValueError(f"{agent}: interface fields must be non-empty")
 
 
 def main() -> None:

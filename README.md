@@ -131,10 +131,11 @@ uv run --locked pyrefly check
 uv run --locked pyrefly coverage check src --strict --fail-under 100
 uv run --locked coverage run -m unittest discover -v
 uv run --locked coverage report
+uv run --locked python scripts/validate-metadata.py
 uv build --no-sources
 scripts/repo-work --help
 ```
 
-Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record.
+Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. Its development group includes the YAML parser used for platform-compatible skill validation; the installed `repo-work` package does not depend on it.
 
-CI also validates the plugin and its skills before the repository is published.
+CI validates the plugin and its skills before the repository is published.
