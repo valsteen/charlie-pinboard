@@ -126,7 +126,7 @@ The Markdown stays readable and easy to inspect in Finder. Each item file is aut
 
 The plugin contains:
 
-- `repo-work`, a small Python command that checks and updates the shared files;
+- `repo-work`, a Python command that checks and updates the shared files;
 - `$repo-work`, which helps any chat explain the current picture, borrow coordination when needed, and choose what happens next;
 - `$repo-work-intake`, which lets any task leave a finding for later review;
 - `$bounded-implementer`, which follows one accepted brief and returns evidence for independent review.
