@@ -578,6 +578,61 @@ class TransitionTest(unittest.TestCase):
         self.assertTrue((work / "history" / "items" / "reveal-core.md").is_file())
         self.assertTrue(validate_work_state(work, project).valid)
 
+    def test_v2_close_done_fences_a_paused_attempt_and_satisfies_a_dependent(self) -> None:
+        project, work = create_state(
+            [
+                "| prerequisite | active | — | — | prerequisite-1 | design | continue | Active. |",
+                "| dependent | blocked | — | prerequisite | — | design | none | Waiting. |",
+            ],
+            focus_item="prerequisite",
+            focus_attempt="prerequisite-1",
+            create_active_attempt=True,
+        )
+        migrate_to_v2(work, project)
+        root = work / "v2"
+        attempt = acquire_attempt(work, "prerequisite-1", "worker", "host", 300)
+        coordination = acquire_coordination(work, "coordinator", "host", 300)
+        pause = next(
+            candidate
+            for candidate in actions_for(
+                work,
+                project,
+                "coordinator",
+                lease_id=coordination.lease_id,
+                generation=coordination.generation,
+            )
+            if candidate.action_id == "pause:prerequisite-1"
+        )
+        apply_action(work, project, pause, {"reason": "The user is making a terminal decision."})
+        close = next(
+            candidate
+            for candidate in actions_for(
+                work,
+                project,
+                "coordinator",
+                lease_id=coordination.lease_id,
+                generation=coordination.generation,
+            )
+            if candidate.action_id == "close:prerequisite"
+        )
+
+        apply_action(work, project, close, {"outcome": "done", "reason": "Decision complete."})
+
+        self.assertEqual("done", parse_header(root / "history" / "items" / "prerequisite.md")["state"])
+        attempt_header = parse_header(root / "attempts" / "prerequisite-1" / "attempt.md")
+        self.assertEqual("done", attempt_header["state"])
+        self.assertEqual("revoked", attempt_header["lease_status"])
+        self.assertEqual(str(attempt.generation + 1), attempt_header["lease_generation"])
+        actions = actions_for(
+            work,
+            project,
+            "coordinator",
+            lease_id=coordination.lease_id,
+            generation=coordination.generation,
+        )
+        self.assertIn("resume:dependent", {candidate.action_id for candidate in actions})
+        self.assertTrue(validate_work_state(work, project).valid)
+
     def test_v2_completion_records_done_from_active_or_review_and_unblocks_dependents(self) -> None:
         for submit_review in (False, True):
             with self.subTest(submit_review=submit_review):

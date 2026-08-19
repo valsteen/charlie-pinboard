@@ -23,6 +23,11 @@ class AcceptedProposalState(Enum):
     DEFERRED = "deferred"
 
 
+class CloseOutcome(Enum):
+    DONE = "done"
+    DROPPED = "dropped"
+
+
 class EmptyInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     pass
 
@@ -45,6 +50,11 @@ class BlockInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 class EvidenceInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     evidence: NonEmptyLine
+
+
+class CloseInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    outcome: CloseOutcome
+    reason: NonEmptyLine
 
 
 class DeferInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -75,6 +85,7 @@ type TransitionInput = (
     | ReasonInput
     | BlockInput
     | EvidenceInput
+    | CloseInput
     | DeferInput
     | AcceptProposalInput
     | MergeProposalInput
@@ -94,6 +105,7 @@ INPUT_MODELS: dict[str, InputModel] = {
     "block": BlockInput,
     "block-item": BlockInput,
     "complete": EvidenceInput,
+    "close": CloseInput,
     "reopen": EvidenceInput,
     "defer": DeferInput,
     "accept-proposal": AcceptProposalInput,

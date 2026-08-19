@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import sys
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -39,6 +40,7 @@ from repo_work.leases import (
 )
 from repo_work.markdown import parse_current, parse_queue
 from repo_work.migration import MigrationError, migrate_to_v2
+from repo_work.overview import OverviewError, OverviewItem, WorkOverview, read_overview
 from repo_work.parallel import ParallelError, ParallelItem, ParallelPreview, preview_parallel
 from repo_work.proposals import ProposalError, create_proposal
 from repo_work.registration import RegistrationError, initialize_work_state, initialize_work_state_v2
@@ -57,6 +59,7 @@ from repo_work.resources import (
 )
 from repo_work.root import RootError, resolve_project_root
 from repo_work.transition import TransitionError, apply_action
+from repo_work.transition_input import CloseOutcome
 from repo_work.validate import ValidationReport, validate_work_state
 
 
@@ -64,6 +67,8 @@ class CommandName(Enum):
     ROOT = "root"
     VALIDATE = "validate"
     STATUS = "status"
+    OVERVIEW = "overview"
+    CLOSE = "close"
     ACTIONS = "actions"
     INIT = "init"
     PROPOSAL = "proposal"
@@ -138,6 +143,9 @@ class CliArguments(argparse.Namespace):
     scope: str
     to: str
     item: list[str]
+    item_id: str
+    outcome: str
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +198,63 @@ class StatusView(msgspec.Struct, frozen=True):
     inbox_count: int
     coordinator: CoordinatorView | None
     authority: str = "v1"
+
+
+class OverviewItemView(msgspec.Struct, frozen=True):
+    item_id: str
+    label: str
+    state: str
+    timing: str | None
+    depends_on: tuple[str, ...]
+    attempt_id: str | None
+    next_action: str | None
+    notes: str
+
+    @classmethod
+    def from_item(cls, item: OverviewItem) -> OverviewItemView:
+        return cls(
+            item.item_id,
+            item.label,
+            item.state.value,
+            item.timing,
+            item.depends_on,
+            item.attempt_id,
+            item.next_action,
+            item.notes,
+        )
+
+
+class OverviewView(msgspec.Struct, frozen=True):
+    schema: str
+    authority: str
+    revision: str
+    focus_item: str | None
+    focus_attempt: str | None
+    active_attempts: tuple[str, ...]
+    items: tuple[OverviewItemView, ...]
+    inbox: tuple[str, ...]
+    immediate_options: tuple[str, ...]
+
+    @classmethod
+    def from_overview(cls, overview: WorkOverview) -> OverviewView:
+        return cls(
+            overview.schema,
+            overview.authority,
+            overview.revision,
+            overview.focus_item,
+            overview.focus_attempt,
+            overview.active_attempts,
+            tuple(OverviewItemView.from_item(item) for item in overview.items),
+            overview.inbox,
+            overview.immediate_options,
+        )
+
+
+class CloseView(msgspec.Struct, frozen=True):
+    item_id: str
+    outcome: str
+    reason: str
+    revision: str
 
 
 class ActionView(msgspec.Struct, frozen=True):
@@ -375,6 +440,19 @@ def _add_parallel_parser(commands: argparse._SubParsersAction[argparse.ArgumentP
     preview.add_argument("--json", action="store_true")
 
 
+def _add_chat_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    overview = commands.add_parser("overview", help="Show one coherent live-work snapshot.")
+    overview.add_argument("--json", action="store_true")
+    close = commands.add_parser("close", help="Record a terminal decision for non-active work.")
+    close.add_argument("item_id")
+    close.add_argument("--outcome", choices=tuple(outcome.value for outcome in CloseOutcome), required=True)
+    close.add_argument("--reason", required=True)
+    close.add_argument("--task-id")
+    close.add_argument("--host-id")
+    close.add_argument("--ttl-seconds", type=int, default=60)
+    close.add_argument("--json", action="store_true")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="repo-work", description="Inspect and transition one repository work ledger.")
     parser.add_argument("--version", action="version", version=__version__)
@@ -386,6 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--json", action="store_true")
     status = commands.add_parser("status", help="Show bounded current work facts.")
     status.add_argument("--json", action="store_true")
+    _add_chat_parser(commands)
     actions = commands.add_parser("actions", help="List the legal contextual actions.")
     actions.add_argument("--role", choices=tuple(role.value for role in Role), required=True)
     actions.add_argument("--lease-id")
@@ -575,6 +654,86 @@ def _status(context: CommandContext) -> int:
         print(f"OK WORK_STATE_VALID revision={value.revision}")
         print(f"focus_item={value.focus_item or 'none'} focus_attempt={value.focus_attempt or 'none'}")
         print(f"next_action={value.next_action} inbox={value.inbox_count}")
+    return 0
+
+
+def _overview(context: CommandContext) -> int:
+    overview = read_overview(context.work, context.project)
+    if context.arguments.json:
+        _write_json(OverviewView.from_overview(overview))
+        return 0
+    print(f"OK WORK_OVERVIEW revision={overview.revision} authority={overview.authority}")
+    if not overview.items:
+        print("live_work=none")
+    for item in overview.items:
+        attempt = f" attempt={item.attempt_id}" if item.attempt_id is not None else ""
+        next_action = item.next_action or "none"
+        print(f"{item.item_id}\t{item.state.value}\tnext={next_action}{attempt}\t{item.label}")
+    print(f"inbox={len(overview.inbox)} immediate_options={len(overview.immediate_options)}")
+    return 0
+
+
+def _close_action(context: CommandContext, lease: LeaseRecord | None = None) -> Action:
+    actions = actions_for(
+        context.work,
+        context.project,
+        Role.COORDINATOR,
+        lease_id=lease.lease_id if lease is not None else None,
+        generation=lease.generation if lease is not None else None,
+    )
+    action_id = f"close:{context.arguments.item_id}"
+    action = next((candidate for candidate in actions if candidate.action_id == action_id), None)
+    if action is None:
+        raise TransitionError(
+            "ACTION_NOT_AVAILABLE",
+            f"Item '{context.arguments.item_id}' is not non-active live work that can be closed.",
+        )
+    return action
+
+
+def _apply_close(context: CommandContext, lease: LeaseRecord | None = None) -> None:
+    payload = msgspec.json.encode(
+        {"outcome": context.arguments.outcome, "reason": context.arguments.reason}, order="sorted"
+    )
+    apply_action(context.work, context.project, _close_action(context, lease), payload)
+
+
+def _close(context: CommandContext) -> int:
+    authority = resolve_authority(context.work)
+    match authority.version:
+        case AuthorityVersion.V1:
+            _apply_close(context)
+        case AuthorityVersion.V2:
+            if not context.arguments.task_id or not context.arguments.host_id:
+                raise LeaseError(
+                    "COORDINATION_IDENTITY_REQUIRED",
+                    "Schema-v2 close requires --task-id and --host-id so the command can borrow coordination.",
+                )
+            lease = acquire_coordination(
+                context.work,
+                context.arguments.task_id,
+                context.arguments.host_id,
+                context.arguments.ttl_seconds,
+            )
+            try:
+                _apply_close(context, lease)
+            except ActionError, TransitionError:
+                with contextlib.suppress(LeaseError):
+                    release_coordination(context.work, lease.lease_id, lease.generation)
+                raise
+            release_coordination(context.work, lease.lease_id, lease.generation)
+        case _ as unreachable:
+            assert_never(unreachable)
+    value = CloseView(
+        context.arguments.item_id,
+        context.arguments.outcome,
+        context.arguments.reason,
+        state_revision(context.work),
+    )
+    if context.arguments.json:
+        _write_json(value)
+    else:
+        print(f"OK WORK_ITEM_CLOSED item={value.item_id} outcome={value.outcome} revision={value.revision}")
     return 0
 
 
@@ -909,6 +1068,8 @@ COMMANDS: dict[CommandName, CommandHandler] = {
     CommandName.ROOT: _root,
     CommandName.VALIDATE: _validate,
     CommandName.STATUS: _status,
+    CommandName.OVERVIEW: _overview,
+    CommandName.CLOSE: _close,
     CommandName.ACTIONS: _actions,
     CommandName.INIT: _initialize,
     CommandName.PROPOSAL: _proposal,
@@ -934,7 +1095,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (RootError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 2
-    except (ActionError, TransitionError, LeaseError, ResourceError, MigrationError, ParallelError) as error:
+    except (
+        ActionError,
+        TransitionError,
+        LeaseError,
+        ResourceError,
+        MigrationError,
+        ParallelError,
+        OverviewError,
+    ) as error:
         print(str(error), file=sys.stderr)
         return 11
     except RegistrationError as error:

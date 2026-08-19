@@ -23,6 +23,10 @@ All of that is worth keeping, but not all of it should derail the boss feature. 
 
 That line is small on purpose. It removes the anxiety that a valuable observation vanished into conversation while keeping the discussion centered on the work in front of you. Over a long investigation, those receipts let the project adapt its plan as reality becomes clearer without reconstructing the journey from old chats.
 
+**A glance at the quest log stays a glance.** You ask, “Where do we stand?” and the chat reads the live map once: the dragon phase is active, controller mapping is ready, and the save-game finding is still in intake. It answers with that compact picture, then asks naturally whether you want to know why one quest should come next, which decisions are already finished, whether a branch shipped, or how the full campaign unfolded. You can answer with a normal sentence, a short phrase, or the number beside an offered continuation. These are conversational doors with optional shortcuts, not magic global commands. Until you choose one, the chat does not rummage through old chronicles or ride to GitHub just in case.
+
+When you decide an old research quest is conclusively unnecessary, the chat records that terminal decision in one move. It does not pretend the quest returned to intake, became ready, started an expedition, and completed an invented attempt. The revision-stamped receipt is enough to know the quest left the live map and its reason remains in history.
+
 **The party can split up without walking into the same trap.** Before launching anything, you ask which quests can move together. The preview puts save-game animation research and controller-remapping research in the safe group, explains that a dragon-arena integration still depends on the boss work, and keeps two experiments that need the same capture rig in a “choose one” group. Merely looking at that map creates no new tasks.
 
 You can select a few quests or say, “Launch all safe work.” The animation question still needs design choices, so it opens as a visible task where you can inspect the work and answer questions. The controller investigation already has a complete autonomous brief, so a subagent can scout it quietly and return evidence. Before each launch, the remaining group is checked again; if another task claims the capture rig or changes a dependency, the rest stop with a precise partial result instead of pretending the whole party departed.
@@ -71,7 +75,9 @@ When another task uncovers something worth keeping, ask it:
 
 In any chat, you can ask what came in, how it relates to work already underway, and what is ready to start. That chat borrows the short coordination lease only for the shared change, then releases it. For example:
 
-> Show me where the project stands, what is waiting on something else, and what you recommend doing next.
+> Give me the quick live-work overview. Then offer the deeper views I can ask for.
+
+The first answer deliberately stays on live work. Ask for the recommendation and item context, completed decisions, delivery and CI, or the full history only when that layer is useful. A terminal decision such as “this deferred experiment is complete and we will not return to it” is recorded directly instead of being walked through artificial intermediate states.
 
 ## One chat or several
 

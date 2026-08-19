@@ -173,6 +173,7 @@ class JsonBoundaryTest(unittest.TestCase):
                 },
                 "TRANSITION_INPUT_INVALID",
             ),
+            ("close", {"outcome": "later", "reason": "Not terminal."}, "TRANSITION_INPUT_INVALID"),
             ("unknown", {}, "ACTION_NOT_MUTATING"),
         )
         for kind, value, code in cases:

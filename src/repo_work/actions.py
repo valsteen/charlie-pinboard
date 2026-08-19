@@ -34,6 +34,7 @@ class ActionKind(Enum):
     BLOCK = "block"
     BLOCK_ITEM = "block-item"
     COMPLETE = "complete"
+    CLOSE = "close"
     CONTINUE = "continue"
     DEFER = "defer"
     DISPATCH = "dispatch"
@@ -237,21 +238,25 @@ def _intake_actions(item: QueueItem, factory: ActionFactory) -> list[Action]:
 
 
 def _item_actions(item: QueueItem, queue: Queue, factory: ActionFactory) -> list[Action]:
+    close = factory.make(ActionKind.CLOSE, item.item, f"Record a terminal decision for {item.item}")
     if item.state == WorkState.INTAKE:
-        return _intake_actions(item, factory)
+        return [*_intake_actions(item, factory), close]
     if item.state == WorkState.READY:
         return [
             factory.make(ActionKind.ACTIVATE, item.item, f"Activate {item.item}"),
             factory.make(ActionKind.DEFER, item.item, f"Defer {item.item} with a reopen condition"),
+            close,
         ]
     dependencies_live = any(dependency in queue.by_id() for dependency in item.depends_on)
     if item.state in {WorkState.PAUSED, WorkState.BLOCKED} and not dependencies_live:
         result = [factory.make(ActionKind.RESUME, item.item, f"Return {item.item} to ready")]
         if item.attempt is None:
             result.append(factory.make(ActionKind.DEFER, item.item, f"Defer {item.item} with a reopen condition"))
-        return result
+        return [*result, close]
+    if item.state in {WorkState.PAUSED, WorkState.BLOCKED}:
+        return [close]
     if item.state == WorkState.DEFERRED:
-        return [factory.make(ActionKind.REOPEN, item.item, f"Reopen {item.item} for intake")]
+        return [factory.make(ActionKind.REOPEN, item.item, f"Reopen {item.item} for intake"), close]
     return []
 
 

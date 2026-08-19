@@ -10,7 +10,9 @@ from unittest.mock import patch
 
 from repo_work.actions import actions_for
 from repo_work.cli import main
+from repo_work.migration import migrate_to_v2
 from repo_work.root import RootError
+from repo_work.validate import validate_work_state
 
 from .support import create_state
 
@@ -132,6 +134,195 @@ class CliTest(unittest.TestCase):
         self.assertEqual(1, json.loads(status_json_stdout)["counts"]["ready"])
         self.assertEqual(0, actions_result)
         self.assertIn("inspect:ledger", actions_stdout)
+
+    def test_overview_returns_one_revision_stamped_live_snapshot_without_history(self) -> None:
+        project, work = create_state(
+            [
+                "| reveal-core | ready | cheaper-now | — | — | design | activate | Ready. |",
+                "| mapping | blocked | must-now | reveal-core | — | finding | none | Waiting. |",
+            ]
+        )
+        (work / "history" / "items" / "old-work.md").write_text(
+            "---\nkind: work-history\nschema: wrong\nitem: old-work\nstate: done\n---\n",
+            encoding="utf-8",
+        )
+        common = ("--project-root", str(project), "--work-root", str(work))
+        before = self.snapshot(work)
+
+        result, stdout, stderr = self.run_cli(*common, "overview", "--json")
+
+        self.assertEqual(0, result, stderr)
+        value = json.loads(stdout)
+        self.assertEqual("repo-work-overview/v1", value["schema"])
+        self.assertEqual(64, len(value["revision"]))
+        self.assertEqual(["mapping", "reveal-core"], sorted(item["item_id"] for item in value["items"]))
+        self.assertNotIn("history", value)
+        reveal = next(item for item in value["items"] if item["item_id"] == "reveal-core")
+        self.assertEqual("Reveal Core", reveal["label"])
+        self.assertEqual("activate", reveal["next_action"])
+        self.assertEqual(["reveal-core"], value["immediate_options"])
+        self.assertFalse(validate_work_state(work, project).valid)
+        self.assertEqual(before, self.snapshot(work))
+
+        (work / "history" / "items" / "old-work.md").unlink()
+        migrate_to_v2(work, project)
+        v2_before = self.snapshot(work)
+        v2_result, v2_stdout, v2_stderr = self.run_cli(*common, "overview", "--json")
+        self.assertEqual(0, v2_result, v2_stderr)
+        self.assertEqual("v2", json.loads(v2_stdout)["authority"])
+        self.assertEqual(value["items"], json.loads(v2_stdout)["items"])
+        self.assertEqual(v2_before, self.snapshot(work))
+
+    def test_overview_reads_an_exact_historical_prerequisite_but_not_all_history(self) -> None:
+        project, work = create_state(["| dependent | blocked | — | completed-work | — | design | none | Waiting. |"])
+        history = work / "history" / "items" / "completed-work.md"
+        history.write_text(
+            "---\nkind: work-history\nschema: repo-work/v1\nitem: completed-work\nstate: done\n---\n",
+            encoding="utf-8",
+        )
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        result, _, stderr = self.run_cli(*common, "overview", "--json")
+        self.assertEqual(0, result, stderr)
+
+        history.write_text(history.read_text(encoding="utf-8").replace("repo-work/v1", "wrong"), encoding="utf-8")
+        invalid_result, _, invalid_stderr = self.run_cli(*common, "overview", "--json")
+        self.assertEqual(11, invalid_result)
+        self.assertIn("DOCUMENT_SCHEMA_INVALID", invalid_stderr)
+
+    def test_close_records_a_terminal_decision_in_one_v1_command(self) -> None:
+        project, work = create_state(
+            ["| old-work | deferred | safe-to-defer | — | — | design | none | Revisit later. |"]
+        )
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        result, stdout, stderr = self.run_cli(
+            *common,
+            "close",
+            "old-work",
+            "--outcome",
+            "done",
+            "--reason",
+            "The user made the final decision.",
+            "--json",
+        )
+
+        self.assertEqual(0, result, stderr)
+        self.assertEqual("done", json.loads(stdout)["outcome"])
+        self.assertFalse((work / "items" / "old-work.md").exists())
+        history = work / "history" / "items" / "old-work.md"
+        self.assertTrue(history.is_file())
+        self.assertIn("The user made the final decision.", history.read_text(encoding="utf-8"))
+
+    def test_close_borrows_and_releases_v2_coordination_in_one_command(self) -> None:
+        project, work = create_state(
+            ["| old-work | deferred | safe-to-defer | — | — | design | none | Revisit later. |"]
+        )
+        migrate_to_v2(work, project)
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        result, stdout, stderr = self.run_cli(
+            *common,
+            "close",
+            "old-work",
+            "--outcome",
+            "dropped",
+            "--reason",
+            "No longer useful.",
+            "--task-id",
+            "chat-a",
+            "--host-id",
+            "mac--one",
+            "--json",
+        )
+
+        self.assertEqual(0, result, stderr)
+        self.assertEqual("dropped", json.loads(stdout)["outcome"])
+        lease_result, lease_stdout, lease_stderr = self.run_cli(*common, "coordination", "status", "--json")
+        self.assertEqual(0, lease_result, lease_stderr)
+        self.assertEqual("released", json.loads(lease_stdout)["status"])
+
+    def test_close_refuses_active_work_and_dropped_prerequisites(self) -> None:
+        active_project, active_work = create_state(
+            ["| active-work | active | — | — | active-work-1 | design | continue | Active. |"],
+            focus_item="active-work",
+            focus_attempt="active-work-1",
+            create_active_attempt=True,
+        )
+        active_before = self.snapshot(active_work)
+
+        active_result, _, active_stderr = self.run_cli(
+            "--project-root",
+            str(active_project),
+            "--work-root",
+            str(active_work),
+            "close",
+            "active-work",
+            "--outcome",
+            "done",
+            "--reason",
+            "Skip review.",
+        )
+
+        self.assertEqual(11, active_result)
+        self.assertIn("ACTION_NOT_AVAILABLE", active_stderr)
+        self.assertEqual(active_before, self.snapshot(active_work))
+
+        project, work = create_state(
+            [
+                "| prerequisite | deferred | safe-to-defer | — | — | design | none | Old. |",
+                "| dependent | blocked | — | prerequisite | — | design | none | Waiting. |",
+            ]
+        )
+        before = self.snapshot(work)
+        result, _, stderr = self.run_cli(
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(work),
+            "close",
+            "prerequisite",
+            "--outcome",
+            "dropped",
+            "--reason",
+            "Not doing it.",
+        )
+
+        self.assertEqual(11, result)
+        self.assertIn("LIVE_DEPENDENTS", stderr)
+        self.assertEqual(before, self.snapshot(work))
+
+        migrate_to_v2(work, project)
+        v2_result, _, v2_stderr = self.run_cli(
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(work),
+            "close",
+            "prerequisite",
+            "--outcome",
+            "dropped",
+            "--reason",
+            "Not doing it.",
+            "--task-id",
+            "chat-a",
+            "--host-id",
+            "studio",
+        )
+        self.assertEqual(11, v2_result)
+        self.assertIn("LIVE_DEPENDENTS", v2_stderr)
+        self.assertTrue((work / "v2" / "items" / "prerequisite.md").is_file())
+        lease_result, lease_stdout, lease_stderr = self.run_cli(
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(work),
+            "coordination",
+            "status",
+            "--json",
+        )
+        self.assertEqual(0, lease_result, lease_stderr)
+        self.assertEqual("released", json.loads(lease_stdout)["status"])
 
     def test_init_and_proposal_commands_use_installed_package_paths(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

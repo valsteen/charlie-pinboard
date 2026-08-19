@@ -231,7 +231,7 @@ class ParallelPreviewTest(unittest.TestCase):
             create_active_attempt=True,
         )
         migrate_to_v2(work, project, now=NOW)
-        coordination = acquire_coordination(work, "coordinator", "studio", 120, now=NOW)
+        coordination = acquire_coordination(work, "coordinator", "studio", 120)
         action = next(
             candidate
             for candidate in actions_for(

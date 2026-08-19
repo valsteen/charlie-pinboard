@@ -10,16 +10,35 @@ Coordinate shared work through one project-local ledger while keeping knowledge 
 ## Start from executable state
 
 1. Resolve this plugin's executable relative to this file as `../../scripts/repo-work`.
-2. Run `repo-work status --json` from the repository checkout.
+2. For ordinary orientation, run `repo-work overview --json` from the repository checkout and treat its revision-stamped result as the complete default input. When the user has already supplied an exact mutation and its semantic inputs, do not add an overview preflight merely because this skill triggered; use the narrow canonical command or action query directly.
 3. If `.codex/work` is absent, report `WORKFLOW_UNAVAILABLE`. Initialize it with `repo-work init` only when the user explicitly requests coordinated-work setup. Do not ask for a permanent coordinator identity.
 4. If validation fails, stop state-consuming work and use the recovery procedure in `references/state-and-recovery.md`.
 5. Check the returned authority version. For `v1`, do not issue lease guidance or run a lease/resource command. Run `repo-work migrate --to v2` before continuing when migration is authorized; otherwise report `MIGRATION_REQUIRED` with that exact command.
-6. Inspecting v2 state needs no lease. Before a graph-wide change, acquire a short coordination lease with the current task and host identities, then run `repo-work actions --role coordinator` with its lease identity and generation. Before an attempt-local change, use that attempt's lease instead.
+6. Inspecting v2 state needs no lease. Before a graph-wide change, acquire a short coordination lease with the current task and host identities, then run `repo-work actions --role coordinator` with its lease identity and generation. Before an attempt-local change, use that attempt's lease instead. The `close` convenience command is the exception: it borrows and releases coordination inside its single invocation.
 7. Release coordination after the atomic graph-wide change. Renew it only while an immediate sequence genuinely needs the same authority.
 
 Tell the user how to proceed from the chat they are using. In one-chat use, that chat borrows coordination and owns its attempt. In multi-chat use, recommend one chat per distinct outcome. If coordination or a resource is busy, name the current holder and expiry, explain what can continue offline, and ask about revocation only when waiting is unsuitable.
 
 Do not infer work from arbitrary Markdown, historical plans, topic folders, unchecked boxes, branch names, or transcript memory. Do not directly edit canonical lifecycle fields when the executable can perform the transition.
+
+## Match detail to the question
+
+Default “where do we stand?”, “what remains?”, “quick status”, and equivalent orientation questions to the single `overview` result. Report the current focus, active attempts, live items, inbox, immediate choices, and the short revision stamp. Do not read history, topic context, GitHub, branches, CI, delivery state, or old decisions for this default answer. Do not acquire a lease merely to explain the live picture.
+
+Keep chat usable without GUI affordances. End every compact overview with one short, explicit offer to expand the useful layers: recommendation and item context; completed decisions; delivery and CI; or full history. Phrase the offer as a natural continuation of the conversation, such as “If useful, I can explain why X should come next, recap decisions we already closed, check what shipped and whether CI is green, or reconstruct the full project history.” Follow it with the optional shortcut `Quick reply: 1 why next · 2 decisions · 3 delivery/CI · 4 full history`. Accept the visible number, a short phrase such as `decisions`, or an ordinary sentence as the same intent. The numbers belong only to that visible offer; do not imply that they are global application commands.
+
+Do not present bare option names as a robotic command menu. Keep the conversational sentence primary and the shortcut line optional. Do not invent slash commands for these expansions. `$repo-work` is an explicit entry point for invoking the skill in a new or unrelated context, where terse prompts such as `$repo-work quick status` or `$repo-work full history` are valid. It is not a required subcommand inside an ongoing Repository Work conversation.
+
+Fetch only the selected expansion:
+
+- For a recommendation or deeper rationale, use the overview itself when it contains enough evidence. Otherwise read only the exact live item records that are plausible choices. Apply the ordering below only then.
+- For completed decisions, read terminal item history only. Do not add GitHub or delivery checks.
+- For delivery or CI, inspect Git and GitHub only. Do not reconstruct ledger history.
+- For full history, say that the answer will be slower, then read the complete relevant ledger and topic context. Add delivery state only if the user includes it.
+
+When an expansion needs several known files or facts, fetch them in one bounded batch when the available tool supports it. Do not turn one requested layer into a serial command-per-item walk. If the user explicitly asks for a zero-tool or last-known answer, reuse the most recent overview from the current conversation and label it with its revision and the fact that it was not refreshed. Never present it as current. A requested expansion is not permission to preload the other layers.
+
+This proportional behavior applies to mutation as well as status. After a successful command returns a revision-stamped receipt, do not run a redundant overview merely to confirm what the command already proved. Run broader verification only when the operation lacks a sufficient postcondition or the user asks for it.
 
 ## Ownership
 
@@ -98,6 +117,8 @@ Never describe a partial external launch as complete. Report one result per requ
 5. Run `repo-work validate` immediately after any non-tool edit to supporting topic or attempt artifacts.
 
 The executable rejects stale subject scopes, expired or replaced lease holders, illegal states, invalid dependencies, missing resource claims, and inconsistent references. It does not decide whether evidence is true, whether work is valuable, or what product behavior should mean.
+
+For an explicit terminal human decision about non-active live work, use one `repo-work close <item> --outcome <done|dropped> --reason <text> --task-id <current-task> --host-id <current-host>` invocation instead of manufacturing intake, ready, active, or attempt states. Pass the identities even when the authority version is not already known; schema v1 ignores them, while schema v2 uses them to borrow and release coordination inside the command. Do not precede this exact command with overview or action-list reads. Use `done` when the recorded decision or outcome is complete and may satisfy dependents. Use `dropped` only when the work is intentionally abandoned and has no live dependents. Never use `close` to bypass review for active or review work; keep the normal evidence-backed completion transition there. The returned revision is the durable receipt, so do not create a temporary payload file or re-read status after success.
 
 ## Safe boundaries
 

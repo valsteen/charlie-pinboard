@@ -154,6 +154,30 @@ def _validate_dependencies(queue: Queue, work_root: Path, schema: str) -> list[D
     return diagnostics
 
 
+def _validate_live_dependencies(queue: Queue, work_root: Path, schema: str) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
+    live_ids = frozenset(queue.by_id())
+    completed: set[str] = set()
+    referenced_history = {
+        dependency for item in queue.items for dependency in item.depends_on if dependency not in live_ids
+    }
+    for dependency in referenced_history:
+        path = work_root / "history" / "items" / f"{dependency}.md"
+        try:
+            header = require_document_header(path, "work-history", schema)
+        except OSError:
+            continue
+        except ParseError as error:
+            diagnostics.append(_parse_error(error))
+            continue
+        if header.get("item") == dependency and header.get("state") == "done":
+            completed.add(dependency)
+    graph, graph_diagnostics = _dependency_graph(queue, completed)
+    diagnostics.extend(graph_diagnostics)
+    diagnostics.extend(_dependency_cycles(graph, queue.path))
+    return diagnostics
+
+
 def _validate_coordinator(work_root: Path, project_root: Path) -> list[Diagnostic]:
     path = work_root / "coordinator.json"
     if not path.is_file():
@@ -341,6 +365,42 @@ def _validate_work_state(
 def validate_work_state(work_root: Path, project_root: Path) -> ValidationReport:
     authority = resolve_authority(work_root)
     return _validate_work_state(authority.work_root, project_root, authority.version, check_pending=True)
+
+
+def validate_live_work_state(work_root: Path, project_root: Path) -> ValidationReport:
+    authority = resolve_authority(work_root)
+    root = authority.work_root
+    schema = SCHEMA_V2 if authority.version == AuthorityVersion.V2 else SCHEMA_V1
+    queue, diagnostics = _read_queue(root, schema)
+    diagnostics.extend(_validate_no_pending_transaction(root))
+    if queue is None:
+        return ValidationReport(tuple(diagnostics))
+    diagnostics.extend(_validate_item_records(queue, root, schema))
+    diagnostics.extend(_validate_live_dependencies(queue, root, schema))
+    if authority.version == AuthorityVersion.V1:
+        diagnostics.extend(_validate_coordinator(root, project_root))
+    diagnostics.extend(_validate_attempts(queue, root, schema))
+    diagnostics.extend(_validate_current(queue, root, schema))
+    if authority.version == AuthorityVersion.V2:
+        marker = root / "migration-complete.md"
+        if not marker.is_file():
+            diagnostics.append(_error("MIGRATION_INCOMPLETE", marker, "Schema-v2 authority is incomplete."))
+        else:
+            try:
+                require_document_header(marker, "migration-complete", SCHEMA_V2)
+            except ParseError as error:
+                diagnostics.append(_parse_error(error))
+        coordinator = root / "coordinator.json"
+        if coordinator.exists():
+            diagnostics.append(
+                _error(
+                    "V1_COORDINATOR_UNEXPECTED",
+                    coordinator,
+                    "Schema-v2 authority must not retain an active v1 coordinator registration.",
+                )
+            )
+        diagnostics.extend(_validate_v2_item_records(queue, root))
+    return ValidationReport(tuple(diagnostics))
 
 
 def validate_v2_shadow(work_root: Path, project_root: Path) -> ValidationReport:

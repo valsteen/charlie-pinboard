@@ -30,6 +30,8 @@ from repo_work.transition_input import (
     AcceptProposalInput,
     ActivateInput,
     BlockInput,
+    CloseInput,
+    CloseOutcome,
     DeferInput,
     EvidenceInput,
     MergeProposalInput,
@@ -274,6 +276,84 @@ def _complete(context: PlanContext, action: Action, value: TransitionInput) -> C
     return ChangeSet(tuple(changes))
 
 
+def _close_history_text(context: PlanContext, item_path: str, outcome: CloseOutcome, reason: str) -> str:
+    source_path = context.work_root / item_path
+    item_text = source_path.read_text(encoding="utf-8")
+    item_header = parse_header(source_path)
+    updated = date.today().isoformat()
+    if context.queue.header.get("schema") == SCHEMA_V2:
+        return replace_v2_header_fields(
+            item_text,
+            {"kind": "work-history", "state": outcome.value, "updated": updated},
+            {"evidence": reason},
+        )
+    replacements = {"kind": "work-history", "updated": f'"{updated}"'}
+    additions: dict[str, str] = {}
+    for field, field_value in (("state", outcome.value), ("evidence", encode_string_scalar(reason))):
+        (replacements if field in item_header else additions)[field] = field_value
+    return replace_header_fields(item_text, replacements, additions)
+
+
+def _closed_attempt_change(context: PlanContext, attempt: str) -> FileChange:
+    attempt_path = f"attempts/{attempt}/attempt.md"
+    attempt_source = context.work_root / attempt_path
+    attempt_header = parse_header(attempt_source)
+    updated = date.today().isoformat()
+    source_text = attempt_source.read_text(encoding="utf-8")
+    if attempt_header.get("schema") != SCHEMA_V2:
+        return write_change(
+            attempt_path,
+            replace_header_fields(source_text, {"state": "done", "updated": f'"{updated}"'}),
+        )
+    generation_value = attempt_header.get("lease_generation")
+    if not isinstance(generation_value, str):
+        raise TransitionPlanError("LEASE_INVALID", "The closed attempt has no lease generation.")
+    try:
+        generation = int(generation_value)
+    except ValueError as error:
+        raise TransitionPlanError("LEASE_INVALID", "The closed attempt has an invalid lease generation.") from error
+    return write_change(
+        attempt_path,
+        replace_v2_header_fields(
+            source_text,
+            {
+                "state": "done",
+                "updated": updated,
+                "lease_generation": generation + 1,
+                "lease_status": "revoked",
+            },
+        ),
+    )
+
+
+def _close(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
+    value = cast(CloseInput, value)
+    items = context.items
+    index = _item_index(items, action.subject)
+    item = items[index]
+    if item.state in {WorkState.ACTIVE, WorkState.REVIEW}:
+        raise TransitionPlanError("ACTION_NOT_AVAILABLE", "Active or review work requires the acceptance path.")
+    if value.outcome == CloseOutcome.DROPPED and any(item.item in candidate.depends_on for candidate in items):
+        raise TransitionPlanError(
+            "LIVE_DEPENDENTS",
+            f"Item '{item.item}' still has live dependents; resolve their dependency before dropping it.",
+        )
+    item_path = f"items/{item.item}.md"
+    history_path = f"history/items/{item.item}.md"
+    if (context.work_root / history_path).exists():
+        raise TransitionPlanError("HISTORY_RECORD_EXISTS", f"History already contains '{item.item}'.")
+    changes = [
+        write_change(history_path, _close_history_text(context, item_path, value.outcome, value.reason)),
+        _queue_change(context, [candidate for candidate in items if candidate.item != item.item]),
+        delete_change(item_path),
+    ]
+    if item.attempt is not None:
+        changes.append(_closed_attempt_change(context, item.attempt))
+    if context.current.focus_item == item.item or context.current.focus_attempt == item.attempt:
+        changes.append(write_change("current.md", _current_text(context, None, None, "select")))
+    return ChangeSet(tuple(changes))
+
+
 def _resume(context: PlanContext, action: Action, _value: TransitionInput) -> ChangeSet:
     items = context.items
     index = _item_index(items, action.subject)
@@ -499,6 +579,7 @@ HANDLERS: dict[ActionKind, PlanHandler] = {
     ActionKind.PAUSE: _pause_or_block,
     ActionKind.BLOCK: _pause_or_block,
     ActionKind.COMPLETE: _complete,
+    ActionKind.CLOSE: _close,
     ActionKind.RESUME: _resume,
     ActionKind.SUBMIT_REVIEW: _submit_review,
     ActionKind.REOPEN: _reopen,
