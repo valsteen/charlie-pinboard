@@ -2,7 +2,7 @@ import argparse
 import contextlib
 import sys
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -59,7 +59,12 @@ from repo_work.resources import (
 )
 from repo_work.root import RootError, resolve_project_root
 from repo_work.transition import TransitionError, apply_action
-from repo_work.transition_input import CloseOutcome
+from repo_work.transition_input import (
+    CloseOutcome,
+    TransitionInputError,
+    encoded_transition_input_schema,
+    parse_transition_input,
+)
 from repo_work.validate import ValidationReport, validate_work_state
 
 
@@ -70,6 +75,7 @@ class CommandName(Enum):
     OVERVIEW = "overview"
     CLOSE = "close"
     ACTIONS = "actions"
+    INPUT_CONTRACT = "input-contract"
     INIT = "init"
     PROPOSAL = "proposal"
     TRANSITION = "transition"
@@ -82,6 +88,7 @@ class CommandName(Enum):
 
 
 class CoordinationOperation(Enum):
+    APPLY = "apply"
     ACQUIRE = "acquire"
     RENEW = "renew"
     RELEASE = "release"
@@ -120,6 +127,7 @@ class CliArguments(argparse.Namespace):
     host_id: str
     file: Path
     action_id: str
+    action_kind: str
     expected_revision: str
     generation: int
     subject_revision: str | None
@@ -257,7 +265,16 @@ class CloseView(msgspec.Struct, frozen=True):
     revision: str
 
 
-class ActionView(msgspec.Struct, frozen=True):
+class InputContractView(msgspec.Struct, frozen=True):
+    action_kind: str
+    payload_schema: msgspec.Raw
+
+    @classmethod
+    def from_kind(cls, kind: str) -> InputContractView:
+        return cls(kind, msgspec.Raw(encoded_transition_input_schema(kind)))
+
+
+class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
     action_id: str
     kind: str
     subject: str
@@ -268,9 +285,17 @@ class ActionView(msgspec.Struct, frozen=True):
     authorization: str
     lease_id: str
     resource_claims: tuple[ResourceToken, ...]
+    input_contract: InputContractView | None = None
 
     @classmethod
-    def from_action(cls, action: Action) -> ActionView:
+    def from_action(cls, action: Action, *, include_input_contract: bool = False) -> ActionView:
+        input_contract: InputContractView | None = None
+        if include_input_contract:
+            try:
+                input_contract = InputContractView.from_kind(action.kind.value)
+            except TransitionInputError as error:
+                if error.code != "ACTION_NOT_MUTATING":
+                    raise
         return cls(
             action_id=action.action_id,
             kind=action.kind.value,
@@ -282,11 +307,17 @@ class ActionView(msgspec.Struct, frozen=True):
             authorization=action.authorization.value,
             lease_id=action.lease_id or "",
             resource_claims=action.resource_claims,
+            input_contract=input_contract,
         )
 
 
 class ActionsView(msgspec.Struct, frozen=True):
     actions: tuple[ActionView, ...]
+
+
+class CoordinatedTransitionView(msgspec.Struct, frozen=True):
+    action_id: str
+    revision: str
 
 
 class ParallelReasonView(msgspec.Struct, frozen=True):
@@ -348,6 +379,13 @@ def _write_json[T](value: T) -> None:
 def _add_coordination_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     coordination = commands.add_parser("coordination", help="Borrow or manage temporary graph-wide authority.")
     operations = coordination.add_subparsers(dest="operation", required=True)
+    apply = operations.add_parser("apply", help="Borrow coordination for one exact transition and release it.")
+    apply.add_argument("--task-id", required=True)
+    apply.add_argument("--host-id", required=True)
+    apply.add_argument("--action-id", required=True)
+    apply.add_argument("--payload", required=True, type=Path)
+    apply.add_argument("--ttl-seconds", type=int, default=60)
+    apply.add_argument("--json", action="store_true")
     acquire = operations.add_parser("acquire")
     acquire.add_argument("--task-id", required=True)
     acquire.add_argument("--host-id", required=True)
@@ -469,7 +507,13 @@ def build_parser() -> argparse.ArgumentParser:
     actions.add_argument("--role", choices=tuple(role.value for role in Role), required=True)
     actions.add_argument("--lease-id")
     actions.add_argument("--generation", type=int)
+    actions.add_argument("--action-id", help="Return only this exact currently legal action.")
     actions.add_argument("--json", action="store_true")
+    input_contract = commands.add_parser(
+        "input-contract", help="Show the canonical JSON payload schema for one transition action kind."
+    )
+    input_contract.add_argument("action_kind", choices=tuple(kind.value for kind in ActionKind))
+    input_contract.add_argument("--json", action="store_true")
     initialize = commands.add_parser("init", help="Create an empty schema-v2 ledger.")
     initialize.add_argument("--coordinator-task-id")
     initialize.add_argument("--host-id")
@@ -691,6 +735,23 @@ def _close_action(context: CommandContext, lease: LeaseRecord | None = None) -> 
     return action
 
 
+@contextlib.contextmanager
+def _borrow_coordination(context: CommandContext) -> Generator[LeaseRecord]:
+    lease = acquire_coordination(
+        context.work,
+        context.arguments.task_id,
+        context.arguments.host_id,
+        context.arguments.ttl_seconds,
+    )
+    try:
+        yield lease
+    except BaseException:
+        with contextlib.suppress(LeaseError):
+            release_coordination(context.work, lease.lease_id, lease.generation)
+        raise
+    release_coordination(context.work, lease.lease_id, lease.generation)
+
+
 def _apply_close(context: CommandContext, lease: LeaseRecord | None = None) -> None:
     payload = msgspec.json.encode(
         {"outcome": context.arguments.outcome, "reason": context.arguments.reason}, order="sorted"
@@ -709,19 +770,8 @@ def _close(context: CommandContext) -> int:
                     "COORDINATION_IDENTITY_REQUIRED",
                     "Schema-v2 close requires --task-id and --host-id so the command can borrow coordination.",
                 )
-            lease = acquire_coordination(
-                context.work,
-                context.arguments.task_id,
-                context.arguments.host_id,
-                context.arguments.ttl_seconds,
-            )
-            try:
+            with _borrow_coordination(context) as lease:
                 _apply_close(context, lease)
-            except ActionError, TransitionError:
-                with contextlib.suppress(LeaseError):
-                    release_coordination(context.work, lease.lease_id, lease.generation)
-                raise
-            release_coordination(context.work, lease.lease_id, lease.generation)
         case _ as unreachable:
             assert_never(unreachable)
     value = CloseView(
@@ -745,13 +795,37 @@ def _actions(context: CommandContext) -> int:
         lease_id=context.arguments.lease_id,
         generation=context.arguments.generation,
     )
+    exact_action_id = context.arguments.action_id
+    if exact_action_id is not None:
+        available = tuple(action for action in available if action.action_id == exact_action_id)
+        if not available:
+            raise ActionError(
+                "ACTION_NOT_AVAILABLE", f"Action '{exact_action_id}' is not currently legal for this role and lease."
+            )
     if context.arguments.json:
-        _write_json(ActionsView(tuple(ActionView.from_action(action) for action in available)))
+        _write_json(
+            ActionsView(
+                tuple(
+                    ActionView.from_action(action, include_input_contract=exact_action_id is not None)
+                    for action in available
+                )
+            )
+        )
     elif not available:
         print("OK NO_ACTIONS_AVAILABLE")
     else:
         for action in available:
             print(f"{action.action_id}\t{action.label}")
+    return 0
+
+
+def _input_contract(context: CommandContext) -> int:
+    value = InputContractView.from_kind(context.arguments.action_kind)
+    if context.arguments.json:
+        _write_json(value)
+    else:
+        print(f"OK INPUT_CONTRACT action_kind={value.action_kind}")
+        sys.stdout.write(msgspec.json.format(bytes(value.payload_schema), indent=2).decode() + "\n")
     return 0
 
 
@@ -893,10 +967,48 @@ def _lease_command_root(work_root: Path) -> Path:
     return authority.work_root
 
 
+def _coordinated_transition(context: CommandContext) -> CoordinatedTransitionView:
+    payload_path = context.arguments.payload
+    try:
+        payload = payload_path.read_bytes()
+    except OSError as error:
+        raise TransitionError(
+            "TRANSITION_INPUT_INVALID", f"Cannot read transition payload at '{payload_path}': {error}"
+        ) from error
+    kind_value, separator, _ = context.arguments.action_id.partition(":")
+    if not separator:
+        raise TransitionError("ACTION_ID_INVALID", "Action identity must be 'kind:subject'.")
+    parse_transition_input(kind_value, payload)
+    with _borrow_coordination(context) as lease:
+        available = actions_for(
+            context.work,
+            context.project,
+            Role.COORDINATOR,
+            lease_id=lease.lease_id,
+            generation=lease.generation,
+        )
+        action = next(
+            (candidate for candidate in available if candidate.action_id == context.arguments.action_id), None
+        )
+        if action is None:
+            raise TransitionError(
+                "ACTION_NOT_AVAILABLE", f"Action '{context.arguments.action_id}' is not currently legal."
+            )
+        apply_action(context.work, context.project, action, payload)
+    return CoordinatedTransitionView(context.arguments.action_id, state_revision(context.work))
+
+
 def _coordination(context: CommandContext) -> int:
     root = _lease_command_root(context.work)
     operation = CoordinationOperation(context.arguments.operation)
     match operation:
+        case CoordinationOperation.APPLY:
+            value = _coordinated_transition(context)
+            if context.arguments.json:
+                _write_json(value)
+            else:
+                print(f"OK COORDINATED_TRANSITION action={value.action_id} revision={value.revision}")
+            return 0
         case CoordinationOperation.ACQUIRE:
             value = acquire_coordination(
                 context.work, context.arguments.task_id, context.arguments.host_id, context.arguments.ttl_seconds
@@ -1071,6 +1183,7 @@ COMMANDS: dict[CommandName, CommandHandler] = {
     CommandName.OVERVIEW: _overview,
     CommandName.CLOSE: _close,
     CommandName.ACTIONS: _actions,
+    CommandName.INPUT_CONTRACT: _input_contract,
     CommandName.INIT: _initialize,
     CommandName.PROPOSAL: _proposal,
     CommandName.TRANSITION: _transition,
@@ -1098,6 +1211,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (
         ActionError,
         TransitionError,
+        TransitionInputError,
         LeaseError,
         ResourceError,
         MigrationError,
