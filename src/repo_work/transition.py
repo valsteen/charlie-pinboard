@@ -169,7 +169,7 @@ def apply_action(
     payload: bytes | str,
     *,
     failpoint: CommitFailpoint | None = None,
-) -> None:
+) -> str:
     try:
         with authority_transaction(work_root) as authority:
             active_root = authority.work_root
@@ -180,6 +180,7 @@ def apply_action(
             changes = plan_transition(active_root, project_root, action, value)
             validate_change_set(active_root, project_root, changes, authority.version)
             commit_change_set(active_root, project_root, changes, authority.version, failpoint=failpoint)
+            return state_revision(work_root)
     except PlatformNotSupportedError as error:
         raise TransitionError("PLATFORM_NOT_SUPPORTED", _message(error)) from error
     except (

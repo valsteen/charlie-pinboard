@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import assert_never
+from uuid import uuid4
 
 import msgspec
 
@@ -21,7 +22,7 @@ from repo_work.actions import (
     actions_for,
     state_revision,
 )
-from repo_work.authority import AuthorityVersion, resolve_authority
+from repo_work.authority import AuthorityVersion, authority_transaction, resolve_authority
 from repo_work.coordinator import read_coordinator
 from repo_work.dispatch import DispatchError, prepare_dispatch, read_dispatch_environment
 from repo_work.leases import (
@@ -58,8 +59,10 @@ from repo_work.resources import (
     revoke_resource,
 )
 from repo_work.root import RootError, resolve_project_root
+from repo_work.transaction_store import recover_pending_commit
 from repo_work.transition import TransitionError, apply_action
 from repo_work.transition_input import (
+    TRANSITION_ACTION_KINDS,
     CloseOutcome,
     TransitionInputError,
     encoded_transition_input_schema,
@@ -76,6 +79,7 @@ class CommandName(Enum):
     CLOSE = "close"
     ACTIONS = "actions"
     INPUT_CONTRACT = "input-contract"
+    RECOVER = "recover"
     INIT = "init"
     PROPOSAL = "proposal"
     TRANSITION = "transition"
@@ -320,6 +324,11 @@ class CoordinatedTransitionView(msgspec.Struct, frozen=True):
     revision: str
 
 
+class RecoveryView(msgspec.Struct, frozen=True):
+    recovered: bool
+    revision: str
+
+
 class ParallelReasonView(msgspec.Struct, frozen=True):
     code: str
     message: str
@@ -491,12 +500,7 @@ def _add_chat_parser(commands: argparse._SubParsersAction[argparse.ArgumentParse
     close.add_argument("--json", action="store_true")
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="repo-work", description="Inspect and transition one repository work ledger.")
-    parser.add_argument("--version", action="version", version=__version__)
-    parser.add_argument("--project-root", type=Path)
-    parser.add_argument("--work-root", type=Path)
-    commands = parser.add_subparsers(dest="command", required=True)
+def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     commands.add_parser("root", help="Resolve the shared project and work roots.")
     validate = commands.add_parser("validate", help="Validate work state without modifying it.")
     validate.add_argument("--json", action="store_true")
@@ -512,8 +516,19 @@ def build_parser() -> argparse.ArgumentParser:
     input_contract = commands.add_parser(
         "input-contract", help="Show the canonical JSON payload schema for one transition action kind."
     )
-    input_contract.add_argument("action_kind", choices=tuple(kind.value for kind in ActionKind))
+    input_contract.add_argument("action_kind", choices=TRANSITION_ACTION_KINDS)
     input_contract.add_argument("--json", action="store_true")
+    recover = commands.add_parser("recover", help="Roll back a durable interrupted transition journal.")
+    recover.add_argument("--json", action="store_true")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="repo-work", description="Inspect and transition one repository work ledger.")
+    parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--project-root", type=Path)
+    parser.add_argument("--work-root", type=Path)
+    commands = parser.add_subparsers(dest="command", required=True)
+    _add_inspection_parsers(commands)
     initialize = commands.add_parser("init", help="Create an empty schema-v2 ledger.")
     initialize.add_argument("--coordinator-task-id")
     initialize.add_argument("--host-id")
@@ -737,33 +752,50 @@ def _close_action(context: CommandContext, lease: LeaseRecord | None = None) -> 
 
 @contextlib.contextmanager
 def _borrow_coordination(context: CommandContext) -> Generator[LeaseRecord]:
-    lease = acquire_coordination(
-        context.work,
-        context.arguments.task_id,
-        context.arguments.host_id,
-        context.arguments.ttl_seconds,
-    )
+    candidate_lease_id = uuid4().hex
+    try:
+        lease = acquire_coordination(
+            context.work,
+            context.arguments.task_id,
+            context.arguments.host_id,
+            context.arguments.ttl_seconds,
+            lease_id=candidate_lease_id,
+        )
+    except BaseException:
+        try:
+            current = read_coordination_lease(resolve_authority(context.work).work_root)
+            if current is not None and current.lease_id == candidate_lease_id:
+                with contextlib.suppress(LeaseError):
+                    release_coordination(context.work, current.lease_id, current.generation)
+        except LeaseError, OSError:
+            pass
+        raise
     try:
         yield lease
     except BaseException:
         with contextlib.suppress(LeaseError):
             release_coordination(context.work, lease.lease_id, lease.generation)
         raise
-    release_coordination(context.work, lease.lease_id, lease.generation)
+    try:
+        release_coordination(context.work, lease.lease_id, lease.generation)
+    except BaseException:
+        with contextlib.suppress(LeaseError):
+            release_coordination(context.work, lease.lease_id, lease.generation)
+        raise
 
 
-def _apply_close(context: CommandContext, lease: LeaseRecord | None = None) -> None:
+def _apply_close(context: CommandContext, lease: LeaseRecord | None = None) -> str:
     payload = msgspec.json.encode(
         {"outcome": context.arguments.outcome, "reason": context.arguments.reason}, order="sorted"
     )
-    apply_action(context.work, context.project, _close_action(context, lease), payload)
+    return apply_action(context.work, context.project, _close_action(context, lease), payload)
 
 
 def _close(context: CommandContext) -> int:
     authority = resolve_authority(context.work)
     match authority.version:
         case AuthorityVersion.V1:
-            _apply_close(context)
+            revision = _apply_close(context)
         case AuthorityVersion.V2:
             if not context.arguments.task_id or not context.arguments.host_id:
                 raise LeaseError(
@@ -771,14 +803,14 @@ def _close(context: CommandContext) -> int:
                     "Schema-v2 close requires --task-id and --host-id so the command can borrow coordination.",
                 )
             with _borrow_coordination(context) as lease:
-                _apply_close(context, lease)
+                revision = _apply_close(context, lease)
         case _ as unreachable:
             assert_never(unreachable)
     value = CloseView(
         context.arguments.item_id,
         context.arguments.outcome,
         context.arguments.reason,
-        state_revision(context.work),
+        revision,
     )
     if context.arguments.json:
         _write_json(value)
@@ -829,6 +861,20 @@ def _input_contract(context: CommandContext) -> int:
     return 0
 
 
+def _recover(context: CommandContext) -> int:
+    with authority_transaction(context.work) as authority:
+        recovered = recover_pending_commit(authority.work_root)
+        report = validate_work_state(context.work, context.project)
+        if not report.valid:
+            raise ActionError("WORK_STATE_INVALID", report.render())
+        value = RecoveryView(recovered, state_revision(context.work))
+    if context.arguments.json:
+        _write_json(value)
+    else:
+        print(f"OK WORK_STATE_RECOVERED recovered={str(value.recovered).lower()} revision={value.revision}")
+    return 0
+
+
 def _initialize(context: CommandContext) -> int:
     task_id = context.arguments.coordinator_task_id
     host_id = context.arguments.host_id
@@ -870,8 +916,8 @@ def _transition(context: CommandContext) -> int:
         payload = payload_path.read_bytes()
     except OSError as error:
         raise TransitionError("TRANSITION_INPUT_INVALID", f"Cannot read transition payload: {error}") from error
-    apply_action(context.work, context.project, action, payload)
-    print(f"OK TRANSITION_APPLIED {action.action_id}")
+    revision = apply_action(context.work, context.project, action, payload)
+    print(f"OK TRANSITION_APPLIED {action.action_id} revision={revision}")
     return 0
 
 
@@ -994,8 +1040,8 @@ def _coordinated_transition(context: CommandContext) -> CoordinatedTransitionVie
             raise TransitionError(
                 "ACTION_NOT_AVAILABLE", f"Action '{context.arguments.action_id}' is not currently legal."
             )
-        apply_action(context.work, context.project, action, payload)
-    return CoordinatedTransitionView(context.arguments.action_id, state_revision(context.work))
+        revision = apply_action(context.work, context.project, action, payload)
+    return CoordinatedTransitionView(context.arguments.action_id, revision)
 
 
 def _coordination(context: CommandContext) -> int:
@@ -1184,6 +1230,7 @@ COMMANDS: dict[CommandName, CommandHandler] = {
     CommandName.CLOSE: _close,
     CommandName.ACTIONS: _actions,
     CommandName.INPUT_CONTRACT: _input_contract,
+    CommandName.RECOVER: _recover,
     CommandName.INIT: _initialize,
     CommandName.PROPOSAL: _proposal,
     CommandName.TRANSITION: _transition,

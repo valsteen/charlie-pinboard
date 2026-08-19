@@ -1,13 +1,16 @@
+import contextlib
+import io
+import json
 import multiprocessing
 import os
 import unittest
 from pathlib import Path
 
 from repo_work.actions import Action, actions_for
-from repo_work.atomic import transition_lock
+from repo_work.cli import main
 from repo_work.leases import acquire_coordination
 from repo_work.migration import migrate_to_v2
-from repo_work.transaction_store import CommitFailpoint, FileChange, journal_path_for, recover_pending_commit
+from repo_work.transaction_store import CommitFailpoint, FileChange, journal_path_for
 from repo_work.transition import TransitionError
 from repo_work.validate import validate_work_state
 
@@ -134,21 +137,54 @@ class TransactionAtomicityTest(unittest.TestCase):
                 self.assertFalse(journal_path_for(work / "v2").exists())
 
     def test_interrupted_process_is_recovered_from_durable_journal(self) -> None:
-        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
-        action = _action(work, project, "activate:reveal-core")
-        before = _snapshot(work)
-        context = multiprocessing.get_context("fork")
-        process = context.Process(target=_crash_transition, args=(str(work), str(project), action, 2))
+        for authority in ("v1", "v2"):
+            for boundary in range(1, 4):
+                with self.subTest(authority=authority, boundary=boundary):
+                    project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
+                    if authority == "v2":
+                        migrate_to_v2(work, project)
+                        lease = acquire_coordination(work, "task", "host", 60)
+                        action = next(
+                            candidate
+                            for candidate in actions_for(
+                                work,
+                                project,
+                                "coordinator",
+                                lease_id=lease.lease_id,
+                                generation=lease.generation,
+                            )
+                            if candidate.action_id == "activate:reveal-core"
+                        )
+                        active_root = work / "v2"
+                    else:
+                        action = _action(work, project, "activate:reveal-core")
+                        active_root = work
+                    before = _snapshot(work)
+                    process = multiprocessing.get_context("fork").Process(
+                        target=_crash_transition, args=(str(work), str(project), action, boundary)
+                    )
 
-        process.start()
-        process.join(timeout=10)
+                    process.start()
+                    process.join(timeout=10)
 
-        self.assertEqual(73, process.exitcode)
-        self.assertTrue(journal_path_for(work).exists())
-        with transition_lock(work):
-            self.assertTrue(recover_pending_commit(work))
-        self.assertEqual(before, _snapshot(work))
-        self.assertFalse(journal_path_for(work).exists())
+                    self.assertEqual(73, process.exitcode)
+                    self.assertTrue(journal_path_for(active_root).exists())
+                    stdout = io.StringIO()
+                    with contextlib.redirect_stdout(stdout):
+                        result = main(
+                            (
+                                "--project-root",
+                                str(project),
+                                "--work-root",
+                                str(work),
+                                "recover",
+                                "--json",
+                            )
+                        )
+                    self.assertEqual(0, result)
+                    self.assertTrue(json.loads(stdout.getvalue())["recovered"])
+                    self.assertEqual(before, _snapshot(work))
+                    self.assertFalse(journal_path_for(active_root).exists())
 
     def test_two_processes_race_one_revision_and_one_receives_stale_outcome(self) -> None:
         project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])

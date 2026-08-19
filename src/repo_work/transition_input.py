@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 import msgspec
 
@@ -114,6 +114,8 @@ INPUT_MODELS: dict[str, InputModel] = {
     "resume": EmptyInput,
     "submit-review": EmptyInput,
 }
+
+TRANSITION_ACTION_KINDS: Final = tuple(INPUT_MODELS)
 
 
 def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:

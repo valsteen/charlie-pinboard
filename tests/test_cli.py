@@ -8,12 +8,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from repo_work.actions import actions_for
+from repo_work.actions import actions_for, state_revision
+from repo_work.atomic import atomic_write_text as real_atomic_write_text
 from repo_work.cli import main
+from repo_work.leases import LeaseRecord
+from repo_work.leases import acquire_coordination as real_acquire_coordination
+from repo_work.leases import release_coordination as real_release_coordination
 from repo_work.markdown import parse_attempt, parse_current, parse_queue
 from repo_work.migration import migrate_to_v2
 from repo_work.model import AttemptState, WorkState
 from repo_work.root import RootError
+from repo_work.transition import apply_action as apply_transition
 from repo_work.validate import validate_work_state
 
 from .support import JsonObject, JsonValue, create_state
@@ -179,6 +184,11 @@ class CliTest(unittest.TestCase):
         accepted = self.json_schema_root(self.json_object(contract["payload_schema"]))
         self.assertEqual(["item", "state", "next_action"], accepted["required"])
         self.assertEqual([], self.json_object_at(accepted, "properties", "depends_on")["default"])
+        empty = self.json_schema_root(
+            self.json_object(self.run_json_cli(*common, "input-contract", "submit-review")["payload_schema"])
+        )
+        self.assertEqual([], empty["required"])
+        self.assertEqual({}, empty["properties"])
 
         missing_result, _, missing_stderr = self.run_cli(
             *common,
@@ -286,6 +296,124 @@ class CliTest(unittest.TestCase):
         self.assertEqual(WorkState.ACTIVE, parse_queue(work / "v2" / "queue.md").items[0].state)
         self.assertTrue(validate_work_state(work, project).valid)
         self.assertEqual("released", self.run_json_cli(*common, "coordination", "status")["status"])
+
+    def test_one_shot_coordination_cleans_catchable_acquire_and_release_interrupts(self) -> None:
+        for phase, interrupted_write, expected_state in (
+            ("acquire", 1, WorkState.READY),
+            ("release", 2, WorkState.ACTIVE),
+        ):
+            with self.subTest(phase=phase):
+                project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
+                migrate_to_v2(work, project)
+                common = ("--project-root", str(project), "--work-root", str(work))
+                payload = Path(tempfile.mkdtemp()) / "activate.json"
+                payload.write_text(
+                    json.dumps(
+                        {
+                            "attempt": "reveal-core-1",
+                            "branch": "codex/reveal-core",
+                            "base_revision": "abc123",
+                            "owner": "worker-task",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                writes = 0
+
+                def interrupt_after_write(path: Path, text: str, threshold: int = interrupted_write) -> None:
+                    nonlocal writes
+                    real_atomic_write_text(path, text)
+                    writes += 1
+                    if writes == threshold:
+                        raise KeyboardInterrupt
+
+                with (
+                    patch("repo_work.leases.atomic_write_text", side_effect=interrupt_after_write),
+                    self.assertRaises(KeyboardInterrupt),
+                ):
+                    self.run_cli(
+                        *common,
+                        "coordination",
+                        "apply",
+                        "--task-id",
+                        "coordinator-task",
+                        "--host-id",
+                        "host",
+                        "--action-id",
+                        "activate:reveal-core",
+                        "--payload",
+                        str(payload),
+                    )
+
+                self.assertEqual("released", self.run_json_cli(*common, "coordination", "status")["status"])
+                self.assertEqual(expected_state, parse_queue(work / "v2" / "queue.md").items[0].state)
+                self.assertTrue(validate_work_state(work, project).valid)
+
+    def test_one_shot_receipt_keeps_the_transition_revision_across_a_release_race(self) -> None:
+        project, work = create_state(
+            [
+                "| reveal-core | ready | — | — | — | design | activate | Ready. |",
+                "| later-work | ready | — | — | — | design | activate | Ready. |",
+            ]
+        )
+        migrate_to_v2(work, project)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        payload = Path(tempfile.mkdtemp()) / "activate.json"
+        payload.write_text(
+            json.dumps(
+                {
+                    "attempt": "reveal-core-1",
+                    "branch": "codex/reveal-core",
+                    "base_revision": "abc123",
+                    "owner": "worker-task",
+                }
+            ),
+            encoding="utf-8",
+        )
+        observed: dict[str, str] = {}
+
+        def release_then_change(work_root: Path, lease_id: str, generation: int) -> LeaseRecord:
+            observed["transition_revision"] = state_revision(work_root)
+            released = real_release_coordination(work_root, lease_id, generation)
+            replacement = real_acquire_coordination(work_root, "other-task", "host", 60)
+            action = next(
+                candidate
+                for candidate in actions_for(
+                    work_root,
+                    project,
+                    "coordinator",
+                    lease_id=replacement.lease_id,
+                    generation=replacement.generation,
+                )
+                if candidate.action_id == "close:later-work"
+            )
+            apply_transition(
+                work_root,
+                project,
+                action,
+                json.dumps({"outcome": "done", "reason": "Concurrent decision completed."}),
+            )
+            real_release_coordination(work_root, replacement.lease_id, replacement.generation)
+            return released
+
+        with patch("repo_work.cli.release_coordination", side_effect=release_then_change):
+            receipt = self.run_json_cli(
+                *common,
+                "coordination",
+                "apply",
+                "--task-id",
+                "coordinator-task",
+                "--host-id",
+                "host",
+                "--action-id",
+                "activate:reveal-core",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual(observed["transition_revision"], receipt["revision"])
+        self.assertNotEqual(state_revision(work), receipt["revision"])
+        self.assertTrue(validate_work_state(work, project).valid)
 
     def test_transition_applies_action_from_machine_fields(self) -> None:
         project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
@@ -920,23 +1048,21 @@ class CliTest(unittest.TestCase):
             item_path.read_text(encoding="utf-8").replace("resources: —", "resources: bitwig-live"),
             encoding="utf-8",
         )
-        actions_result, actions_stdout, actions_stderr = self.run_cli(
-            *common,
-            "actions",
-            "--role",
-            "worker",
-            "--lease-id",
-            str(attempt["lease_id"]),
-            "--generation",
-            str(attempt["generation"]),
-            "--json",
+        exact_actions = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "worker",
+                "--lease-id",
+                str(attempt["lease_id"]),
+                "--generation",
+                str(attempt["generation"]),
+                "--action-id",
+                "submit-review:reveal-core-1",
+            )["actions"]
         )
-        self.assertEqual(0, actions_result, actions_stderr)
-        submit = next(
-            action
-            for action in json.loads(actions_stdout)["actions"]
-            if action["action_id"] == "submit-review:reveal-core-1"
-        )
+        submit = self.json_object(exact_actions[0])
         self.assertEqual(
             [
                 {
@@ -948,6 +1074,9 @@ class CliTest(unittest.TestCase):
             ],
             submit["resource_claims"],
         )
+        submit_input = self.json_schema_root(self.json_object_at(submit, "input_contract", "payload_schema"))
+        self.assertEqual([], submit_input["required"])
+        self.assertEqual({}, submit_input["properties"])
         payload = Path(tempfile.mkdtemp()) / "submit.json"
         payload.write_text("{}\n", encoding="utf-8")
         transition_result, _, transition_stderr = self.run_json_transition(common, submit, payload)
