@@ -17,17 +17,19 @@ All of that is worth keeping, but not all of it should derail the boss feature. 
 
 ![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** A side task comes back with a warning: “Before we can save the second phase safely, combat abilities need IDs that won’t change underneath us.” The proposal stays in the shared inbox until any chat briefly borrows coordination authority and reviews it; the work list does not change behind your back.
 
-**The map fills in as the party travels.** Deep work rarely reveals the whole campaign upfront. While the dragon fight remains the main quest, an experiment may reveal that save games are capturing temporary animation state, a flaw worth returning to later. Repository Work lets the plan grow from that evidence without turning every discovery into an interruption: preserve the exact finding, keep the current objective moving when it is not blocked, and leave one compact receipt.
+![Pixel-art folded adventure map](assets/map-fills-in.png) **The map fills in as the party travels.** Deep work rarely reveals the whole campaign upfront. While the dragon fight remains the main quest, an experiment may reveal that save games are capturing temporary animation state, a flaw worth returning to later. Repository Work lets the plan grow from that evidence without turning every discovery into an interruption: preserve the exact finding, keep the current objective moving when it is not blocked, and leave one compact receipt.
 
 > **Durable finding — recorded now in `save-game-animation-state` (`intake`); current work not blocked.**
 
 That line is small on purpose. It removes the anxiety that a valuable observation vanished into conversation while keeping the discussion centered on the work in front of you. Over a long investigation, those receipts let the project adapt its plan as reality becomes clearer without reconstructing the journey from old chats.
 
-**A glance at the quest log stays a glance.** You ask, “Where do we stand?” and the chat reads the live map once: the dragon phase is active, controller mapping is ready, and the save-game finding is still in intake. It answers with that compact picture, then asks naturally whether you want to know why one quest should come next, which decisions are already finished, whether a branch shipped, or how the full campaign unfolded. You can answer with a normal sentence, a short phrase, or the number beside an offered continuation. These are conversational doors with optional shortcuts, not magic global commands. Until you choose one, the chat does not rummage through old chronicles or ride to GitHub just in case.
+![Pixel-art open quest ledger](assets/quick-quest-log.png) **A glance at the quest log stays a glance.** You ask, “Where do we stand?” and the chat reads the live map once: the dragon phase is active, controller mapping is ready, and the save-game finding is still in intake. It answers with that compact picture, then asks naturally whether you want to know why one quest should come next, which decisions are already finished, whether a branch shipped, or how the full campaign unfolded. You can answer with a normal sentence, a short phrase, or the number beside an offered continuation. These are conversational doors with optional shortcuts, not magic global commands. Until you choose one, the chat does not rummage through old chronicles or ride to GitHub just in case.
 
-When you decide an old research quest is conclusively unnecessary, the chat records that terminal decision in one move. It does not pretend the quest returned to intake, became ready, started an expedition, and completed an invented attempt. The revision-stamped receipt is enough to know the quest left the live map and its reason remains in history.
+![Pixel-art sealed retired quest scroll](assets/retired-quest.png) **An old quest leaves the live map cleanly.** When you decide an old research quest is conclusively unnecessary, the chat records that terminal decision in one move. It does not pretend the quest returned to intake, became ready, started an expedition, and completed an invented attempt. The revision-stamped receipt is enough to know the quest left the live map and its reason remains in history.
 
-**The party can split up without walking into the same trap.** Before launching anything, you ask which quests can move together. The preview puts save-game animation research and controller-remapping research in the safe group, explains that a dragon-arena integration still depends on the boss work, and keeps two experiments that need the same capture rig in a “choose one” group. Merely looking at that map creates no new tasks.
+<img align="right" width="360" src="assets/party-crossroads.png" alt="Pixel-art adventurers taking routes toward a river village, the dragon keep, and a crystal cave">
+
+![Pixel-art forked trail with two adventurers](assets/split-party.png) **The party can split up without walking into the same trap.** Before launching anything, you ask which quests can move together. The preview puts save-game animation research and controller-remapping research in the safe group, explains that a dragon-arena integration still depends on the boss work, and keeps two experiments that need the same capture rig in a “choose one” group. Merely looking at that map creates no new tasks.
 
 You can select a few quests or say, “Launch all safe work.” The animation question still needs design choices, so it opens as a visible task where you can inspect the work and answer questions. The controller investigation already has a complete autonomous brief, so a subagent can scout it quietly and return evidence. Before each launch, the remaining group is checked again; if another task claims the capture rig or changes a dependency, the rest stop with a precise partial result instead of pretending the whole party departed.
 
@@ -82,8 +84,6 @@ The first answer deliberately stays on live work. Ask for the recommendation and
 ## One chat or several
 
 There is no master chat to keep alive. The single-chat workflow remains the simplest option: one chat can inspect the ledger, briefly borrow coordination for scheduling changes, claim its attempt, and finish the work.
-
-Existing schema-v1 ledgers need one explicit `repo-work migrate --to v2` cutover before lease or resource commands become available. Until then, those commands return `MIGRATION_REQUIRED` rather than pretending legacy permanent ownership has lease semantics.
 
 For concurrent work, open one chat per distinct outcome. Each chat claims only its own attempt, so unrelated item changes do not invalidate its local actions. A chat that needs to admit work, change dependencies, activate an attempt, or accept a result briefly acquires the exclusive coordination lease and releases it after that atomic change. If another chat already holds coordination, the command identifies that chat and the lease expiry so the current chat can wait or ask you about revocation.
 
@@ -145,3 +145,10 @@ scripts/repo-work --help
 Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. Its development group includes the YAML parser used for platform-compatible skill validation; the installed `repo-work` package does not depend on it.
 
 CI validates the plugin and its skills before the repository is published.
+
+<details>
+<summary>Legacy schema-v1 migration</summary>
+
+Existing schema-v1 ledgers need one explicit `repo-work migrate --to v2` cutover before lease or resource commands become available. Until then, those commands return `MIGRATION_REQUIRED` rather than pretending legacy permanent ownership has lease semantics.
+
+</details>
