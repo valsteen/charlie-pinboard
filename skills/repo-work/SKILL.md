@@ -1,6 +1,6 @@
 ---
 name: repo-work
-description: Coordinate one repository-owned work ledger for backlog orientation, next-work selection, admission, activation, shelving, resumption, review, migration, or long-running work continuity. Use when a user asks what to do next, wants repository work state changed, resumes coordinated work, manages prerequisites or concurrent attempts, or replaces an audit/theme-owned queue. Do not use for ordinary implementation that already has one accepted attempt.
+description: Coordinate one repository-owned work ledger for backlog orientation, next-work selection, safe parallel-work preview or launch, admission, activation, shelving, resumption, review, migration, or long-running work continuity. Use when a user asks what to do next, wants repository work state changed, resumes coordinated work, manages prerequisites or concurrent attempts, or replaces an audit/theme-owned queue. Do not use for ordinary implementation that already has one accepted attempt.
 ---
 
 # Repository Work
@@ -75,6 +75,19 @@ Prefer, in order:
 5. optional hardening only after its recorded reopen condition occurs.
 
 Do not turn that ordering into a score. A recommendation remains an explanation, not an automatic product decision.
+
+## Preview and launch independent work
+
+When the user asks what can run in parallel, asks to choose a batch, or explicitly asks to launch independent work, read `references/parallel-work.md` and follow it completely.
+
+Use `repo-work parallel preview` as read-only structural evidence. It does not authorize task creation, decide product priority, or select among items that share a host-local resource. Keep these outcomes distinct:
+
+- listing or previewing creates no tasks;
+- an exact selected subset or “all safe work” is launch authority for that batch only;
+- items marked `requires-selection` stay out of an all-safe launch until the user chooses among them;
+- each external creation receives a fresh structural check and an explainable visible-task or subagent recommendation.
+
+Never describe a partial external launch as complete. Report one result per requested item and retain the current repository work as the main topic.
 
 ## Apply a transition
 

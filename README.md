@@ -23,6 +23,10 @@ All of that is worth keeping, but not all of it should derail the boss feature. 
 
 That line is small on purpose. It removes the anxiety that a valuable observation vanished into conversation while keeping the discussion centered on the work in front of you. Over a long investigation, those receipts let the project adapt its plan as reality becomes clearer without reconstructing the journey from old chats.
 
+**The party can split up without walking into the same trap.** Before launching anything, you ask which quests can move together. The preview puts save-game animation research and controller-remapping research in the safe group, explains that a dragon-arena integration still depends on the boss work, and keeps two experiments that need the same capture rig in a “choose one” group. Merely looking at that map creates no new tasks.
+
+You can select a few quests or say, “Launch all safe work.” The animation question still needs design choices, so it opens as a visible task where you can inspect the work and answer questions. The controller investigation already has a complete autonomous brief, so a subagent can scout it quietly and return evidence. Before each launch, the remaining group is checked again; if another task claims the capture rig or changes a dependency, the rest stop with a precise partial result instead of pretending the whole party departed.
+
 ![Pixel-art campfire checkpoint](assets/safe-camp.png) **The party makes camp.** The chat making the scheduling change briefly acquires coordination, records that stable ability IDs come first, then releases it. The dragon task notes exactly where it stopped and what needs to happen before it can pick the feature back up.
 
 ![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** Another task fixes the ability IDs, then the dragon task continues from its notes. If an older task tries to update a work list that has since changed, `repo-work` asks it to catch up first.

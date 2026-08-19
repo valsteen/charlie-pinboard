@@ -291,6 +291,8 @@ def parse_item(path: Path) -> WorkItemRecord:
     depends_on = _generated_string_list(_required_string(header, path, "depends_on"))
     resources_value = _required_string(header, path, "resources")
     resources = _generated_string_list(resources_value)
+    if len(resources) != len(set(resources)):
+        raise ParseError("ITEM_RESOURCES_DUPLICATE", path, "resources must not contain duplicate identities.")
     queue_item = QueueItem(
         item=item,
         state=state,

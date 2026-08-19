@@ -218,6 +218,74 @@ class CliTest(unittest.TestCase):
                 self.assertIn("MIGRATION_REQUIRED", stderr)
                 self.assertIn("repo-work migrate --to v2", stderr)
 
+    def test_parallel_preview_has_machine_and_human_views_and_exact_selection(self) -> None:
+        project, work = create_state(
+            [
+                "| alpha | ready | — | — | — | design | activate | Ready. |",
+                "| foundation | intake | — | — | — | finding | classify | Intake. |",
+            ]
+        )
+        common = ("--project-root", str(project), "--work-root", str(work))
+        self.assertEqual(0, self.run_cli(*common, "migrate", "--to", "v2")[0])
+
+        json_result, json_stdout, json_stderr = self.run_cli(
+            *common,
+            "parallel",
+            "preview",
+            "--host-id",
+            "studio",
+            "--json",
+        )
+        selected_result, selected_stdout, selected_stderr = self.run_cli(
+            *common,
+            "parallel",
+            "preview",
+            "--host-id",
+            "studio",
+            "--item",
+            "alpha",
+            "--json",
+        )
+        human_result, human_stdout, human_stderr = self.run_cli(
+            *common,
+            "parallel",
+            "preview",
+            "--host-id",
+            "studio",
+        )
+
+        self.assertEqual(0, json_result, json_stderr)
+        preview = json.loads(json_stdout)
+        self.assertEqual("repo-work-parallel-preview/v1", preview["schema"])
+        self.assertEqual("all-safe", preview["selection"])
+        self.assertTrue(preview["safe"])
+        self.assertEqual(["alpha"], [item["item_id"] for item in preview["launchable"]])
+        self.assertEqual(
+            ["state-not-launchable"],
+            [reason["code"] for reason in preview["excluded"][0]["reasons"]],
+        )
+        self.assertEqual(0, selected_result, selected_stderr)
+        self.assertEqual("selected", json.loads(selected_stdout)["selection"])
+        self.assertEqual(0, human_result, human_stderr)
+        self.assertIn("Ready to launch together", human_stdout)
+        self.assertIn("Not launchable", human_stdout)
+
+    def test_parallel_preview_requires_schema_v2(self) -> None:
+        project, work = create_state(["| alpha | ready | — | — | — | design | activate | Ready. |"])
+        result, _, stderr = self.run_cli(
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(work),
+            "parallel",
+            "preview",
+            "--host-id",
+            "studio",
+        )
+
+        self.assertEqual(11, result)
+        self.assertIn("MIGRATION_REQUIRED", stderr)
+
     def test_cli_path_identities_cannot_escape_v2_authoritative_directories(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         work = project / ".codex" / "work"

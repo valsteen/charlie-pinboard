@@ -39,6 +39,7 @@ from repo_work.leases import (
 )
 from repo_work.markdown import parse_current, parse_queue
 from repo_work.migration import MigrationError, migrate_to_v2
+from repo_work.parallel import ParallelError, ParallelItem, ParallelPreview, preview_parallel
 from repo_work.proposals import ProposalError, create_proposal
 from repo_work.registration import RegistrationError, initialize_work_state, initialize_work_state_v2
 from repo_work.resources import (
@@ -72,6 +73,7 @@ class CommandName(Enum):
     COORDINATION = "coordination"
     ATTEMPT = "attempt"
     RESOURCE = "resource"
+    PARALLEL = "parallel"
 
 
 class CoordinationOperation(Enum):
@@ -97,6 +99,10 @@ class ResourceOperation(Enum):
     RELEASE = "release"
     REVOKE = "revoke"
     STATUS = "status"
+
+
+class ParallelOperation(Enum):
+    PREVIEW = "preview"
 
 
 class CliArguments(argparse.Namespace):
@@ -131,6 +137,7 @@ class CliArguments(argparse.Namespace):
     label: str
     scope: str
     to: str
+    item: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +222,57 @@ class ActionView(msgspec.Struct, frozen=True):
 
 class ActionsView(msgspec.Struct, frozen=True):
     actions: tuple[ActionView, ...]
+
+
+class ParallelReasonView(msgspec.Struct, frozen=True):
+    code: str
+    message: str
+
+
+class ParallelItemView(msgspec.Struct, frozen=True):
+    item_id: str
+    label: str
+    state: str
+    attempt_id: str | None
+    resources: tuple[str, ...]
+    outcome: str
+    reasons: tuple[ParallelReasonView, ...]
+
+    @classmethod
+    def from_item(cls, item: ParallelItem) -> ParallelItemView:
+        return cls(
+            item.item_id,
+            item.label,
+            item.state.value,
+            item.attempt_id,
+            item.resources,
+            item.outcome.value,
+            tuple(ParallelReasonView(reason.code.value, reason.message) for reason in item.reasons),
+        )
+
+
+class ParallelPreviewView(msgspec.Struct, frozen=True):
+    schema: str
+    revision: str
+    host_id: str
+    selection: str
+    safe: bool
+    launchable: tuple[ParallelItemView, ...]
+    requires_selection: tuple[ParallelItemView, ...]
+    excluded: tuple[ParallelItemView, ...]
+
+    @classmethod
+    def from_preview(cls, preview: ParallelPreview) -> ParallelPreviewView:
+        return cls(
+            preview.schema,
+            preview.revision,
+            preview.host_id,
+            preview.selection.value,
+            preview.safe,
+            tuple(ParallelItemView.from_item(item) for item in preview.launchable),
+            tuple(ParallelItemView.from_item(item) for item in preview.requires_selection),
+            tuple(ParallelItemView.from_item(item) for item in preview.excluded),
+        )
 
 
 def _write_json[T](value: T) -> None:
@@ -308,6 +366,15 @@ def _add_resource_parser(commands: argparse._SubParsersAction[argparse.ArgumentP
     status.add_argument("--json", action="store_true")
 
 
+def _add_parallel_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parallel = commands.add_parser("parallel", help="Preview structurally independent work without launching it.")
+    operations = parallel.add_subparsers(dest="operation", required=True)
+    preview = operations.add_parser("preview")
+    preview.add_argument("--host-id", required=True)
+    preview.add_argument("--item", action="append", default=[])
+    preview.add_argument("--json", action="store_true")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="repo-work", description="Inspect and transition one repository work ledger.")
     parser.add_argument("--version", action="version", version=__version__)
@@ -371,6 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_coordination_parser(commands)
     _add_attempt_parser(commands)
     _add_resource_parser(commands)
+    _add_parallel_parser(commands)
     return parser
 
 
@@ -800,6 +868,43 @@ def _resource(context: CommandContext) -> int:
     return _emit_operation(value, context.arguments.json)
 
 
+def _print_parallel_group(title: str, items: tuple[ParallelItem, ...]) -> None:
+    print(f"{title}:")
+    if not items:
+        print("- none")
+        return
+    for item in items:
+        detail = "; ".join(reason.message for reason in item.reasons)
+        attempt = f", attempt {item.attempt_id}" if item.attempt_id is not None else ""
+        suffix = f" — {detail}" if detail else ""
+        print(f"- {item.item_id} ({item.state.value}{attempt}){suffix}")
+
+
+def _parallel(context: CommandContext) -> int:
+    operation = ParallelOperation(context.arguments.operation)
+    match operation:
+        case ParallelOperation.PREVIEW:
+            preview = preview_parallel(
+                context.work,
+                context.project,
+                context.arguments.host_id,
+                selected=tuple(context.arguments.item),
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+    if context.arguments.json:
+        _write_json(ParallelPreviewView.from_preview(preview))
+    else:
+        print(
+            f"OK PARALLEL_PREVIEW revision={preview.revision} selection={preview.selection.value} "
+            f"safe={'yes' if preview.safe else 'no'}"
+        )
+        _print_parallel_group("Ready to launch together", preview.launchable)
+        _print_parallel_group("Needs explicit selection", preview.requires_selection)
+        _print_parallel_group("Not launchable", preview.excluded)
+    return 0
+
+
 COMMANDS: dict[CommandName, CommandHandler] = {
     CommandName.ROOT: _root,
     CommandName.VALIDATE: _validate,
@@ -813,6 +918,7 @@ COMMANDS: dict[CommandName, CommandHandler] = {
     CommandName.COORDINATION: _coordination,
     CommandName.ATTEMPT: _attempt,
     CommandName.RESOURCE: _resource,
+    CommandName.PARALLEL: _parallel,
 }
 
 
@@ -828,7 +934,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (RootError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 2
-    except (ActionError, TransitionError, LeaseError, ResourceError, MigrationError) as error:
+    except (ActionError, TransitionError, LeaseError, ResourceError, MigrationError, ParallelError) as error:
         print(str(error), file=sys.stderr)
         return 11
     except RegistrationError as error:
