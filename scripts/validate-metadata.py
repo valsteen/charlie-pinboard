@@ -9,8 +9,8 @@ import yaml
 ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
 PLUGIN_NAME: Final = "charlie-pinboard"
-EXPECTED_SKILLS: Final = frozenset({"coordinate", "deliver", "intake"})
-EXPECTED_ENTRY_POINTS: Final = {"charlie": "repo_work.cli:main", "repo-work": "repo_work.cli:main"}
+EXPECTED_SKILLS: Final = frozenset({"pinboard", "pinboard-deliver", "pinboard-intake"})
+EXPECTED_ENTRY_POINTS: Final = {"pinboard": "repo_work.cli:main", "repo-work": "repo_work.cli:main"}
 
 type YamlScalar = str | int | float | bool | None
 type YamlValue = YamlScalar | list[YamlValue] | dict[str, YamlValue]
@@ -142,7 +142,7 @@ def validate_project_metadata() -> None:
     if project.name != PLUGIN_NAME:
         raise ValueError("distribution and plugin identities must match")
     if project.scripts != EXPECTED_ENTRY_POINTS:
-        raise ValueError("charlie must be primary and repo-work must remain an alias to the same engine")
+        raise ValueError("pinboard must be primary and repo-work must remain an alias to the same engine")
 
 
 def validate_marketplace() -> None:
@@ -150,7 +150,7 @@ def validate_marketplace() -> None:
     value = msgspec.json.decode(path.read_bytes(), type=MarketplaceManifest)
     expected = MarketplaceManifest(
         name=PLUGIN_NAME,
-        interface=MarketplaceInterface(display_name="Charlie Pinboard"),
+        interface=MarketplaceInterface(display_name="Charlie's pinboard"),
         plugins=(
             MarketplacePlugin(
                 name=PLUGIN_NAME,
@@ -197,7 +197,7 @@ def main() -> None:
     validate_marketplace()
     skill_paths = tuple(sorted((ROOT / "skills").glob("*/SKILL.md")))
     if {path.parent.name for path in skill_paths} != EXPECTED_SKILLS:
-        raise ValueError("public skills must be exactly coordinate, deliver, and intake")
+        raise ValueError("public skills must be exactly pinboard, pinboard-deliver, and pinboard-intake")
     for path in skill_paths:
         validate_skill(path)
     print(f"validated plugin marketplace and {len(skill_paths)} skills")

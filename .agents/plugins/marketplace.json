@@ -1,7 +1,7 @@
 {
   "name": "charlie-pinboard",
   "interface": {
-    "displayName": "Charlie Pinboard"
+    "displayName": "Charlie's pinboard"
   },
   "plugins": [
     {

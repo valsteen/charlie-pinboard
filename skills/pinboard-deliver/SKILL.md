@@ -1,16 +1,16 @@
 ---
-name: deliver
-description: Deliver exactly one active Charlie attempt from its accepted brief and renewable lease. Use when the item, checkout, scope, acceptance criteria, and verification are already recorded. Do not use for intake, portfolio selection, broad audits, design exploration, or acceptance review.
+name: pinboard-deliver
+description: Deliver exactly one active pinboard attempt from its accepted brief and renewable lease. Use when the item, checkout, scope, acceptance criteria, and verification are already recorded. Do not use for intake, portfolio selection, broad audits, design exploration, or acceptance review.
 ---
 
-# Deliver with Charlie
+# Deliver from the pinboard
 
 Implement one accepted attempt, verify it, leave a durable result, and return it accurately for independent coordination review.
 
 ## Establish the attempt
 
-1. Resolve the Charlie executable relative to the installed plugin as `../../scripts/charlie`.
-2. Run `charlie status --json`. If it reports v1 authority, stop with `MIGRATION_REQUIRED` and the exact `charlie migrate --to v2` command; do not imply that v1 has attempt-lease semantics. On v2, acquire or validate the user-supplied attempt lease, then run `charlie actions --role worker` with its lease identity and fencing generation.
+1. Resolve the pinboard executable relative to the installed plugin as `../../scripts/pinboard`.
+2. Run `pinboard status --json`. If it reports v1 authority, stop with `MIGRATION_REQUIRED` and the exact `pinboard migrate --to v2` command; do not imply that v1 has attempt-lease semantics. On v2, acquire or validate the user-supplied attempt lease, then run `pinboard actions --role worker` with its lease identity and fencing generation.
 3. Require the user-supplied attempt to be present and active. Other disjoint attempts may also be active. Stop if state is invalid, the supplied attempt is absent, its item and attempt records disagree, or another unexpired owner holds it. Report that owner and expiry instead of guessing or silently revoking it.
 4. Read that attempt's `attempt.md` fully, then read only the project guidance, item context, accepted knowledge, and source authorities it names. Preserve exact file and section selectors instead of broadening them into exploratory reads.
 5. Inspect the checkout, branch/worktree, base revision, and unrelated user changes before editing.
@@ -31,14 +31,14 @@ Confirm the attempt identity, checkpoint, and execution environment without rewr
 
 Worker diff inspection, requirement mapping, and fresh verification are pre-review evidence. They do not replace independent review under a current coordination lease.
 
-If additional work is useful but not required, invoke `$intake` only when the user explicitly wants it preserved. Otherwise mention it in the result without creating shared state.
+If additional work is useful but not required, invoke `$pinboard-intake` only when the user explicitly wants it preserved. Otherwise mention it in the result without creating shared state.
 
 If a discovered problem blocks the attempt:
 
 1. stop widening the implementation;
 2. preserve the current commit/worktree and verification;
 3. write `blocker.md` in the active attempt directory with the observation, affected criterion, completed work, and safest next action;
-4. use `$intake` to propose a prerequisite when explicitly requested;
+4. use `$pinboard-intake` to propose a prerequisite when explicitly requested;
 5. report the blocker so any chat can borrow coordination and choose the available block or pause transition.
 
 ## Implement and verify

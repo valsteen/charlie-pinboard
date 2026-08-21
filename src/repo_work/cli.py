@@ -524,7 +524,7 @@ def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.Argume
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=PROGRAM_NAME, description="Inspect and transition one Charlie work ledger.")
+    parser = argparse.ArgumentParser(prog=PROGRAM_NAME, description="Inspect and transition one pinboard.")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--project-root", type=Path)
     parser.add_argument("--work-root", type=Path)
@@ -1009,7 +1009,7 @@ def _lease_command_root(work_root: Path) -> Path:
     if authority.version != AuthorityVersion.V2:
         raise MigrationError(
             "MIGRATION_REQUIRED",
-            "Lease and resource commands require schema v2; run 'charlie migrate --to v2' first.",
+            "Lease and resource commands require schema v2; run 'pinboard migrate --to v2' first.",
         )
     return authority.work_root
 
