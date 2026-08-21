@@ -1,4 +1,4 @@
-# Codex Task Transport
+# Pinboard Task Transport
 
 Use this adapter only when the current Codex environment exposes task discovery and task-to-task messaging.
 

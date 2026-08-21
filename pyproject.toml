@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-charlie = "repo_work.cli:main"
+pinboard = "repo_work.cli:main"
 repo-work = "repo_work.cli:main"
 
 [tool.uv.build-backend]

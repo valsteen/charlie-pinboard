@@ -235,7 +235,7 @@ def _preview_parallel_locked(
     if authority.version != AuthorityVersion.V2:
         raise ParallelError(
             "MIGRATION_REQUIRED",
-            "Parallel preview requires schema v2; run 'charlie migrate --to v2' first.",
+            "Parallel preview requires schema v2; run 'pinboard migrate --to v2' first.",
         )
     root = authority.work_root
     _validate_host(root, host_id)

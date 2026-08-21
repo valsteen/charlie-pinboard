@@ -1,4 +1,4 @@
-"""Charlie coordination primitives."""
+"""Pinboard coordination primitives."""
 
 from importlib.metadata import version
 from typing import Final
