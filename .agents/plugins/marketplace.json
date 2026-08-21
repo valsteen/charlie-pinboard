@@ -1,11 +1,11 @@
 {
-  "name": "charlie-board",
+  "name": "charlie-pinboard",
   "interface": {
-    "displayName": "Charlie"
+    "displayName": "Charlie Pinboard"
   },
   "plugins": [
     {
-      "name": "charlie-board",
+      "name": "charlie-pinboard",
       "source": {
         "source": "local",
         "path": "."

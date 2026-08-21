@@ -8,7 +8,7 @@ import yaml
 
 ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
-PLUGIN_NAME: Final = "charlie-board"
+PLUGIN_NAME: Final = "charlie-pinboard"
 EXPECTED_SKILLS: Final = frozenset({"coordinate", "deliver", "intake"})
 EXPECTED_ENTRY_POINTS: Final = {"charlie": "repo_work.cli:main", "repo-work": "repo_work.cli:main"}
 
@@ -150,7 +150,7 @@ def validate_marketplace() -> None:
     value = msgspec.json.decode(path.read_bytes(), type=MarketplaceManifest)
     expected = MarketplaceManifest(
         name=PLUGIN_NAME,
-        interface=MarketplaceInterface(display_name="Charlie"),
+        interface=MarketplaceInterface(display_name="Charlie Pinboard"),
         plugins=(
             MarketplacePlugin(
                 name=PLUGIN_NAME,

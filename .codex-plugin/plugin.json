@@ -1,13 +1,13 @@
 {
-  "name": "charlie-board",
-  "version": "0.1.0+codex.20260821212219",
+  "name": "charlie-pinboard",
+  "version": "0.1.0+codex.20260821215033",
   "description": "Coordinate repository work with canonical execution briefs and validated state transitions.",
   "author": {
     "name": "Vincent Alsteen",
     "url": "https://github.com/valsteen"
   },
-  "homepage": "https://github.com/valsteen/charlie-board#readme",
-  "repository": "https://github.com/valsteen/charlie-board",
+  "homepage": "https://github.com/valsteen/charlie-pinboard#readme",
+  "repository": "https://github.com/valsteen/charlie-pinboard",
   "license": "MIT",
   "keywords": [
     "codex",
@@ -16,12 +16,12 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Charlie",
+    "displayName": "Charlie Pinboard",
     "shortDescription": "Coordinate one validated repository work ledger.",
     "longDescription": "Keep one repository queue, turn accepted work into canonical execution briefs, and prevent worker launches from drifting before independent review.",
     "developerName": "Vincent Alsteen",
     "category": "Productivity",
-    "websiteURL": "https://github.com/valsteen/charlie-board",
+    "websiteURL": "https://github.com/valsteen/charlie-pinboard",
     "capabilities": [
       "Interactive",
       "Write"
