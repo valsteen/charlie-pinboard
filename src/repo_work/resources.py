@@ -49,7 +49,7 @@ def _v2_root(authority: Authority) -> Path:
     if authority.version != AuthorityVersion.V2:
         raise ResourceError(
             "MIGRATION_REQUIRED",
-            "Resource operations require schema v2; run 'repo-work migrate --to v2' first.",
+            "Resource operations require schema v2; run 'charlie migrate --to v2' first.",
         )
     return authority.work_root
 

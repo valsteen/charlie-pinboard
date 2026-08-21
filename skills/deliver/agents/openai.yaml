@@ -1,0 +1,4 @@
+interface:
+  display_name: "Charlie: Deliver"
+  short_description: "Deliver one accepted project attempt"
+  default_prompt: "Use $deliver to execute the accepted repository attempt without widening its scope, leave the durable result, and report review delivery accurately."

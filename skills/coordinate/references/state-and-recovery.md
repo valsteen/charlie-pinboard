@@ -67,9 +67,9 @@ Assume any task may stop between commands or before its final message appears. A
 
 For a task interrupted around a graph-wide transition:
 
-1. Run `repo-work validate`. Do not replay a retained action token.
-2. If validation reports `COMMIT_RECOVERY_REQUIRED`, run `repo-work recover`, then validate again. Recovery rolls the durable journal back to the exact pre-transition bytes before normal status or coordination resumes.
-3. Run one `repo-work status --json` or `repo-work overview --json` read. If the intended item still has its prior state, no transition committed. If it has the intended next state, the atomic transition committed completely even if the task stopped before reporting it.
+1. Run `charlie validate`. Do not replay a retained action token.
+2. If validation reports `COMMIT_RECOVERY_REQUIRED`, run `charlie recover`, then validate again. Recovery rolls the durable journal back to the exact pre-transition bytes before normal status or coordination resumes.
+3. Run one `charlie status --json` or `charlie overview --json` read. If the intended item still has its prior state, no transition committed. If it has the intended next state, the atomic transition committed completely even if the task stopped before reporting it.
 4. If coordination is still active for the interrupted task, the ledger is valid but temporarily reserved. Wait for its recorded expiry when practical. One-shot coordinated transitions default to 60 seconds and perform best-effort cleanup for catchable interruption around acquisition and release. Use forced revocation only with explicit user authority when waiting is unsuitable.
 5. Acquire fresh coordination only after release or expiry. Its higher generation fences every action retained by the interrupted task.
 6. Resume from the authoritative item and attempt state. Never reconstruct ownership from the stopped task's prose, title, or temporary payload files.
@@ -78,7 +78,7 @@ The same rule applies to manual transitions: the ledger remains at the previous 
 
 ## Legacy migration
 
-Lease and resource commands exist only in schema v2. If status reports v1, run `repo-work migrate --to v2` before giving lease instructions. When the current request does not authorize migration, return `MIGRATION_REQUIRED` and that exact command instead of treating permanent v1 ownership as a lease.
+Lease and resource commands exist only in schema v2. If status reports v1, run `charlie migrate --to v2` before giving lease instructions. When the current request does not authorize migration, return `MIGRATION_REQUIRED` and that exact command instead of treating permanent v1 ownership as a lease.
 
 Use a shadow root before changing authority:
 

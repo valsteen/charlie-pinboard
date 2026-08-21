@@ -1,6 +1,8 @@
-"""Repository work coordination primitives."""
+"""Charlie coordination primitives."""
 
 from importlib.metadata import version
 from typing import Final
 
-__version__: Final = version("codex-repo-work")
+from repo_work.identity import DISTRIBUTION_NAME
+
+__version__: Final = version(DISTRIBUTION_NAME)

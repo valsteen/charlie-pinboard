@@ -154,6 +154,7 @@ class DispatchTest(unittest.TestCase):
         accepted_result, accepted_stdout, accepted_stderr = self.run_cli(*arguments, "--prompt", str(canonical_path))
 
         self.assertEqual(0, render_result, render_stderr)
+        self.assertIn("Use $deliver", canonical_prompt)
         self.assertIn("sole semantic execution contract", canonical_prompt)
         self.assertNotIn("pnpm rust:test", canonical_prompt)
         self.assertEqual(14, rejected_result)

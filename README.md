@@ -1,13 +1,17 @@
-# Codex Repository Work
+# Charlie
 
-[![CI](https://github.com/valsteen/codex-repo-work/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/codex-repo-work/actions/workflows/ci.yml)
+[![CI](https://github.com/valsteen/charlie-board/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/charlie-board/actions/workflows/ci.yml)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![uv](https://img.shields.io/badge/managed%20with-uv-DE5FE9?logo=uv)](https://docs.astral.sh/uv/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+<img align="right" width="430" src="assets/charlie-investigation-board.png" alt="Pixel-art bard explaining a fantasy investigation board covered with maps, clues, and red thread">
+
 Keep one trustworthy quest log—and one trustworthy execution brief—while several Codex tasks explore and build in the same repository.
 
-Codex Repository Work helps when a feature stops being a straight line. Side tasks can bring back useful discoveries without turning every chat transcript, topic folder, or feature branch into another backlog. When a piece of work is ready, the same workflow keeps its scope and checks intact from planning through implementation and review.
+Charlie helps when a feature stops being a straight line. Side tasks can bring back useful discoveries without turning every chat transcript, topic folder, or feature branch into another backlog. When a piece of work is ready, Charlie keeps its scope and checks intact from planning through implementation and review.
+
+The name is friendly; the work model is serious. Charlie maintains the board, preserves what the party learns, and makes the available paths visible without deciding the product for you.
 
 ## An indie RPG feature becomes a campaign
 
@@ -17,7 +21,7 @@ All of that is worth keeping, but not all of it should derail the boss feature. 
 
 ![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** A side task comes back with a warning: “Before we can save the second phase safely, combat abilities need IDs that won’t change underneath us.” The proposal stays in the shared inbox until any chat briefly borrows coordination authority and reviews it; the work list does not change behind your back.
 
-![Pixel-art folded adventure map](assets/map-fills-in.png) **The map fills in as the party travels.** Deep work rarely reveals the whole campaign upfront. While the dragon fight remains the main quest, an experiment may reveal that save games are capturing temporary animation state, a flaw worth returning to later. Repository Work lets the plan grow from that evidence without turning every discovery into an interruption: preserve the exact finding, keep the current objective moving when it is not blocked, and leave one compact receipt.
+![Pixel-art folded adventure map](assets/map-fills-in.png) **The map fills in as the party travels.** Deep work rarely reveals the whole campaign upfront. While the dragon fight remains the main quest, an experiment may reveal that save games are capturing temporary animation state, a flaw worth returning to later. Charlie lets the plan grow from that evidence without turning every discovery into an interruption: preserve the exact finding, keep the current objective moving when it is not blocked, and leave one compact receipt.
 
 > **Saved for later — the animation-state finding is now in `save-game-animation-state` (`intake`); dragon work continues.**
 
@@ -41,7 +45,7 @@ You can select a few quests or say, “Launch all safe work.” The animation qu
 
 ![Pixel-art campfire checkpoint](assets/safe-camp.png) **The party makes camp.** The chat making the scheduling change briefly acquires coordination, records that stable ability IDs come first, then releases it. The dragon task notes exactly where it stopped and what needs to happen before it can pick the feature back up.
 
-![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** Another task fixes the ability IDs, then the dragon task continues from its notes. If an older task tries to update a work list that has since changed, `repo-work` asks it to catch up first.
+![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** Another task fixes the ability IDs, then the dragon task continues from its notes. If an older task tries to update a work list that has since changed, `charlie` asks it to catch up first.
 
 Everything stays ordinary repository work: code, branches, worktrees, Markdown, and conversation. The plugin keeps the work list coherent and gives each implementation one canonical brief, so the task a worker receives is still the task the coordinating chat meant to send.
 
@@ -49,7 +53,7 @@ Everything stays ordinary repository work: code, branches, worktrees, Markdown, 
 
 You plan a change carefully, hand it to another AI, and get back something that is almost right. One half of a protocol was postponed even though both halves had to move together. The exact test commands became “run the relevant checks.” A request to read one section became a tour of half the repository. After seeing the same mistakes recur, they stop looking random: they happen when the task is retold on its way to the worker.
 
-`repo-work` keeps that retelling out of the workflow. The worker goes back to the accepted attempt brief, while the launch message says only where to work and which checkpoint to pick up. For work that crosses components, a small contract table records who owns what, which parts must move together, and how to prove the result works. Review still gets the final say, but it should not have to reconstruct the task first.
+Charlie keeps that retelling out of the workflow. The worker goes back to the accepted attempt brief, while the launch message says only where to work and which checkpoint to pick up. For work that crosses components, a small contract table records who owns what, which parts must move together, and how to prove the result works. Review still gets the final say, but it should not have to reconstruct the task first.
 
 ## What it gives you
 
@@ -58,7 +62,7 @@ You plan a change carefully, hand it to another AI, and get back something that 
 - a canonical attempt brief that survives the trip from planning to implementation;
 - enough recorded context and evidence to pause work, resume it, and review it without reconstruction;
 - early warnings for stale state, contradictory launch instructions, and incomplete cross-component checkpoints;
-- readable local files instead of another hosted service or database.
+- reviewable local project state instead of another hosted service.
 
 It is most useful when repository work lasts for days, several Codex tasks are involved, or one piece of work keeps uncovering prerequisites. A short isolated change probably does not need it.
 
@@ -69,13 +73,13 @@ The plugin currently supports macOS and Linux. It uses [uv](https://docs.astral.
 Add this repository as a Codex marketplace, then install the plugin:
 
 ```sh
-codex plugin marketplace add valsteen/codex-repo-work
-codex plugin add codex-repo-work@codex-repo-work
+codex plugin marketplace add valsteen/charlie-board
+codex plugin add charlie-board@charlie-board
 ```
 
 Start a Codex task in the repository and ask:
 
-> Set up Repository Work here and explain how I can use it from one chat or several chats.
+> Set up Charlie here and explain how I can use it from one chat or several chats.
 
 When another task uncovers something worth keeping, ask it:
 
@@ -122,14 +126,14 @@ The project stores its private working state in ignored local files:
 .codex/topics/
 ```
 
-The Markdown stays readable and easy to inspect in Finder. Each item file is authoritative; `queue.md` is regenerated as a convenient overview. `repo-work` checks that these files agree before changing them, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt.
+The Markdown stays readable and easy to inspect in Finder. Each item file is authoritative; `queue.md` is regenerated as a convenient overview. `charlie` checks that these files agree before changing them, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt.
 
 The plugin contains:
 
-- `repo-work`, a Python command that checks and updates the shared files;
-- `$repo-work`, which helps any chat explain the current picture, borrow coordination when needed, and choose what happens next;
-- `$repo-work-intake`, which lets any task leave a finding for later review;
-- `$bounded-implementer`, which follows one accepted brief and returns evidence for independent review.
+- `charlie`, the primary command that checks and updates the shared state;
+- `$coordinate`, which helps any chat explain the current picture, borrow coordination when needed, and choose what happens next;
+- `$intake`, which lets any task leave a finding for later review;
+- `$deliver`, which follows one accepted brief and returns evidence for independent review.
 
 ## Runtime and development
 
@@ -145,16 +149,23 @@ uv run --locked coverage run -m unittest discover -v
 uv run --locked coverage report
 uv run --locked python scripts/validate-metadata.py
 uv build --no-sources
-scripts/repo-work --help
+scripts/charlie --help
 ```
 
-Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. Its development group includes the YAML parser used for platform-compatible skill validation; the installed `repo-work` package does not depend on it.
+Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. Its development group includes the YAML parser used for platform-compatible skill validation; the installed `charlie-board` package does not depend on it.
 
 CI validates the plugin and its skills before the repository is published.
 
 <details>
 <summary>Legacy schema-v1 migration</summary>
 
-Existing schema-v1 ledgers need one explicit `repo-work migrate --to v2` cutover before lease or resource commands become available. Until then, those commands return `MIGRATION_REQUIRED` rather than pretending legacy permanent ownership has lease semantics.
+Existing schema-v1 ledgers need one explicit `charlie migrate --to v2` cutover before lease or resource commands become available. Until then, those commands return `MIGRATION_REQUIRED` rather than pretending legacy permanent ownership has lease semantics.
+
+</details>
+
+<details>
+<summary>Temporary command compatibility</summary>
+
+`repo-work` currently invokes the same installed engine as `charlie` so existing local tasks can move over without a flag day. It is a temporary tested alias, not a second product or protocol. The Python module remains `repo_work`, and existing `.codex/work` paths plus `repo-work/*` serialized identifiers remain stable.
 
 </details>
