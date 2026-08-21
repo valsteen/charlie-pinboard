@@ -1,16 +1,16 @@
 ---
-name: repo-work-intake
-description: Propose newly discovered repository work from any project task into the shared immutable inbox. Use when a user says to add, queue, intake, preserve, or send a finding for later; when an investigation discovers a prerequisite, bug, cleanup, feature, or contradiction; or when a side task should preserve a finding for the next coordination pass. Do not use merely because a conversation explores an idea without requesting shared work state.
+name: intake
+description: Preserve one newly discovered project finding in Charlie's immutable inbox. Use when the user explicitly asks to add, queue, intake, preserve, or send a prerequisite, bug, cleanup, feature, or contradiction for later coordination. Do not use merely because a conversation explores an idea.
 ---
 
-# Repository Work Intake
+# Intake with Charlie
 
 Convert one explicit finding into an immutable proposal. Do not edit the canonical queue or claim admission.
 
 ## Preconditions
 
-1. Resolve this plugin's executable relative to this file as `../../scripts/repo-work`.
-2. Run `repo-work status --json` from the repository checkout.
+1. Resolve this plugin's executable relative to this file as `../../scripts/charlie`.
+2. Run `charlie status --json` from the repository checkout.
 3. Require a valid current authority root. Intake does not require a coordination lease and must not wait for a master chat.
 4. If the workflow or executable is unavailable, stop. Do not infer shared state from titles, recency, nearby tasks, branches, or old audit files.
 5. Determine the current source task identity from trusted task context. If the environment does not expose it, ask the human for the exact task ID rather than inventing one.
@@ -41,7 +41,7 @@ Before creating a proposal, distinguish exact prior coverage from a merely relat
 ## Persist, then deliver
 
 1. Write the proposal to a temporary file outside canonical work state.
-2. Run `repo-work proposal --file <path>`.
+2. Run `charlie proposal --file <path>`.
 3. Treat `OK PROPOSAL_CREATED` as persistence only.
 4. Read `references/codex-transport.md` only when Codex task messaging is available and a useful active coordination holder exists.
 5. Optionally notify that holder with the proposal ID and shared work root. Repository persistence, not messaging, is the correctness boundary.

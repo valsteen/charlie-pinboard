@@ -818,7 +818,7 @@ class CliTest(unittest.TestCase):
                 result, _, stderr = self.run_cli(*common, *command)
                 self.assertEqual(11, result)
                 self.assertIn("MIGRATION_REQUIRED", stderr)
-                self.assertIn("repo-work migrate --to v2", stderr)
+                self.assertIn("charlie migrate --to v2", stderr)
 
     def test_parallel_preview_has_machine_and_human_views_and_exact_selection(self) -> None:
         project, work = create_state(
@@ -1232,7 +1232,7 @@ class CliTest(unittest.TestCase):
         self.assertIn("COMMIT_JOURNAL_INVALID", recovery_stderr)
 
     def test_module_entrypoint_delegates_to_cli(self) -> None:
-        with patch.object(sys, "argv", ["repo-work", "--version"]), self.assertRaises(SystemExit) as raised:
+        with patch.object(sys, "argv", ["charlie", "--version"]), self.assertRaises(SystemExit) as raised:
             runpy.run_module("repo_work.__main__", run_name="__main__")
 
         self.assertEqual(0, raised.exception.code)

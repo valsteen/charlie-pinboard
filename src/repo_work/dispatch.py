@@ -197,7 +197,7 @@ def _require_current_dispatch_action(
 def _canonical_prompt(attempt_path: Path, attempt_id: str, checkpoint: str, environment: DispatchEnvironment) -> str:
     permissions = ", ".join(sorted(permission.value for permission in environment.permissions)) or "none"
     return (
-        "Use $bounded-implementer for this repository attempt.\n\n"
+        "Use $deliver for this repository attempt.\n\n"
         f"Attempt: {attempt_id}\n"
         f"Checkpoint: {checkpoint}\n"
         f"Canonical brief: {attempt_path}\n\n"

@@ -11,7 +11,7 @@ Do not use it merely because more than one item exists. Ordinary next-work selec
 ## Build the preview
 
 1. Require schema v2 and identify the host on which host-local resources would be used.
-2. Run `repo-work parallel preview --host-id <host> --json` without a coordination lease.
+2. Run `charlie parallel preview --host-id <host> --json` without a coordination lease.
 3. Present the result in three compact groups:
    - **Ready together:** the unambiguous all-safe set.
    - **Choose one:** candidates that structurally qualify alone but conflict over a host-local resource.
@@ -35,7 +35,7 @@ Treat either of these as explicit launch authority:
 Before creating anything, rerun one selected preview containing every authorized item:
 
 ```text
-repo-work parallel preview --host-id <host> --item <first> --item <second> --json
+charlie parallel preview --host-id <host> --item <first> --item <second> --json
 ```
 
 Proceed only when `safe` is true. Preserve its revision as the batch observation. If it is false, show the changed reason and ask only for the decision that the new state requires.
@@ -47,7 +47,7 @@ Work through the authorized items in the presented order. Before each external c
 For a **Visible task**:
 
 1. Use the environment's native user-visible task creation capability. This is authorized by the user's exact batch request.
-2. Give it the repository root, item identity, fresh preview revision, and an instruction to use Repository Work to inspect the item and borrow coordination only for its own legal transition.
+2. Give it the repository root, item identity, fresh preview revision, and an instruction to use Charlie to inspect the item and borrow coordination only for its own legal transition.
 3. Keep design and authorization questions in that visible task. Do not replace it with a subagent when visible-task creation is unavailable.
 
 For a **Subagent**:

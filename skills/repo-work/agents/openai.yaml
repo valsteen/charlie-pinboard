@@ -1,4 +1,0 @@
-interface:
-  display_name: "Repository Work"
-  short_description: "Coordinate one repository work ledger"
-  default_prompt: "Use $repo-work to give a compact live-work overview first, offer natural-language expansions with optional numbered quick replies, and preview safe parallel work when requested."

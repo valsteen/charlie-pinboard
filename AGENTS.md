@@ -10,4 +10,5 @@
 - Tests must exercise observable behavior, rejection contracts, concurrency, recovery, or package/plugin integration rather than implementation constants.
 - Support macOS and Linux. Do not add cross-platform-looking branches without contention and filesystem evidence on the claimed platform.
 - Preserve the observable transaction contract: a failed transition leaves the previous valid ledger intact, and concurrent stale actions are rejected.
+- Treat compatibility code as release-scoped, not permanent architecture. While no external users depend on an older format, use temporary isolated tooling to migrate the known local ledgers, preserve equivalence evidence, then delete the migrator, legacy readers, compatibility branches, and superseded tests before acceptance. Retain current schema detection and clean module boundaries; add a version-specific migration only when a real supported predecessor exists.
 - Keep `README.md` human-facing and descriptive. Put imperative agent and contributor constraints here.

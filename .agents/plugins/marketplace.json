@@ -1,11 +1,11 @@
 {
-  "name": "codex-repo-work",
+  "name": "charlie-board",
   "interface": {
-    "displayName": "Codex Repository Work"
+    "displayName": "Charlie"
   },
   "plugins": [
     {
-      "name": "codex-repo-work",
+      "name": "charlie-board",
       "source": {
         "source": "local",
         "path": "."
