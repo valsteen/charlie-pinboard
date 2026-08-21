@@ -11,7 +11,7 @@ Keep one trustworthy quest log—and one trustworthy execution brief—while sev
 
 Charlie helps when a feature stops being a straight line. Side tasks can bring back useful discoveries without turning every chat transcript, topic folder, or feature branch into another backlog. When a piece of work is ready, Charlie keeps its scope and checks intact from planning through implementation and review.
 
-The name is friendly; the work model is serious. Charlie maintains the board, preserves what the party learns, and makes the available paths visible without deciding the product for you.
+Charlie preserves what the party learns, keeps the available paths visible, and carries each chosen piece of work into one trustworthy execution brief without deciding the product for you.
 
 ## An indie RPG feature becomes a campaign
 
