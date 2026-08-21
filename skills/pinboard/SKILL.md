@@ -69,7 +69,7 @@ The dispatch prompt identifies the canonical brief, checkpoint, and execution en
 
 Do not end the coordinating turn merely because implementation started. End with a running worker only when the user explicitly requested background execution; report that independent review remains pending and perform it before any acceptance transition.
 
-The chat performing acceptance reviews the frozen candidate without coordination. Only after reaching a complete verdict does it use one-shot coordination for the completion transition. If an additional reviewer is useful, launch it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
+The chat performing acceptance reviews the frozen candidate without coordination. Only after reaching a complete verdict does it use one-shot coordination for the review outcome. Complete a fully accepted candidate. When review finds an actionable defect, use `return-for-correction:<attempt>` with one concise reason that identifies the durable review evidence. The transition preserves the same attempt and evidence, fences its previous worker and resource authority, and leaves it ready for an explicitly selected worker to reacquire. If an additional reviewer is useful, launch it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
 
 ## Interpret the available actions
 
@@ -168,6 +168,8 @@ Never absorb the prerequisite silently into the current attempt.
 ## Review and completion
 
 Treat worker completion as a review request, not acceptance. Compare the attempt brief, diff or commit, result receipt, and fresh proportionate verification. Complete the item only when every acceptance criterion is satisfied and current knowledge owners are reconciled.
+
+When review rejects the candidate, record the exact correction reason through `return-for-correction:<attempt>` instead of completing the item, manufacturing a new attempt, or editing lifecycle files. Report the outcome compactly: `Returned for correction — <reason>; the same attempt and review evidence are preserved and ready for a named worker to reacquire. No acceptance occurred.` If the executable does not offer that action for an item in review, preserve the review evidence and report the workflow blocker; do not bypass the missing transition.
 
 Move terminal scheduling state out of the live queue in the same transition that preserves its history receipt. Do not manufacture follow-up work when the honest result is no follow-up.
 

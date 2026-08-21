@@ -70,6 +70,7 @@ class ActionKind(Enum):
     REOPEN = "reopen"
     REPORT_BLOCKER = "report-blocker"
     RESUME = "resume"
+    RETURN_FOR_CORRECTION = "return-for-correction"
     RETURN_PROPOSAL = "return-proposal"
     SUBMIT_REVIEW = "submit-review"
     TRANSFER_COORDINATOR = "transfer-coordinator"
@@ -427,6 +428,14 @@ def _active_coordinator_actions(snapshot: LedgerSnapshot, factory: ActionFactory
             and not _scope_stale(snapshot, item)
         ):
             result.append(factory.make(ActionKind.COMPLETE, item.attempt, f"Accept and complete {item.item}"))
+        if item.state == WorkState.REVIEW and factory.actor.authorization == AuthorizationKind.COORDINATION:
+            result.append(
+                factory.make(
+                    ActionKind.RETURN_FOR_CORRECTION,
+                    item.attempt,
+                    f"Return {item.item} for correction",
+                )
+            )
     return result
 
 
@@ -1301,6 +1310,27 @@ def _submit_review(snapshot: LedgerSnapshot, action: Action, value: TransitionIn
     )
 
 
+def _return_for_correction(
+    snapshot: LedgerSnapshot,
+    action: Action,
+    value: TransitionInput,
+    now: datetime,
+) -> Decision:
+    item = _attempt_item(snapshot, action.subject)
+    if item.state != WorkState.REVIEW:
+        raise DecisionError("ACTION_NOT_AVAILABLE", "Only an attempt in review can be returned for correction.")
+    if not isinstance(value, ReasonInput) or not value.reason.strip():
+        raise DecisionError("TRANSITION_INPUT_INVALID", "Returning a review requires a correction reason.")
+    return _result(
+        action,
+        now,
+        item=item.item,
+        item_change=ItemChange(item.item, WorkState.REVIEW, WorkState.ACTIVE, item.attempt),
+        attempt_change=AttemptChange(action.subject, AttemptState.REVIEW, AttemptState.ACTIVE),
+        evidence=value.reason,
+    )
+
+
 def _simple_item_transition(
     snapshot: LedgerSnapshot,
     action: Action,
@@ -1377,6 +1407,7 @@ DECISION_HANDLERS: dict[ActionKind, DecisionHandler] = {
     ActionKind.CLOSE: _close,
     ActionKind.RESUME: _resume,
     ActionKind.SUBMIT_REVIEW: _submit_review,
+    ActionKind.RETURN_FOR_CORRECTION: _return_for_correction,
     ActionKind.REOPEN: _simple_item_transition,
     ActionKind.MARK_READY: _simple_item_transition,
     ActionKind.BLOCK_ITEM: _simple_item_transition,

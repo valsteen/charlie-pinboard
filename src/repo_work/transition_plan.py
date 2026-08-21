@@ -419,6 +419,82 @@ def _submit_review(context: PlanContext, action: Action, _value: TransitionInput
     return ChangeSet(tuple(changes))
 
 
+def _integer_header(path: Path, field: str) -> int:
+    value = parse_header(path).get(field)
+    if not isinstance(value, str):
+        raise TransitionPlanError("LEASE_INVALID", f"'{path}' has no {field}.")
+    try:
+        result = int(value)
+    except ValueError as error:
+        raise TransitionPlanError("LEASE_INVALID", f"'{path}' has an invalid {field}.") from error
+    if result < 0:
+        raise TransitionPlanError("LEASE_INVALID", f"'{path}' has a negative {field}.")
+    return result
+
+
+def _return_resource_changes(context: PlanContext, attempt: str, timestamp: str) -> list[FileChange]:
+    directory = context.work_root / "leases" / "resources"
+    if not directory.is_dir():
+        return []
+    changes: list[FileChange] = []
+    for path in sorted(directory.glob("*.md")):
+        header = parse_header(path)
+        if header.get("kind") != "resource-claim" or header.get("attempt") != attempt:
+            continue
+        generation = _integer_header(path, "lease_generation")
+        text = replace_v2_header_fields(
+            path.read_text(encoding="utf-8"),
+            {
+                "lease_generation": generation + 1,
+                "lease_expires_at": timestamp,
+                "lease_status": "revoked",
+            },
+        )
+        changes.append(write_change(str(path.relative_to(context.work_root)), text))
+    return changes
+
+
+def _return_for_correction(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
+    value = cast(ReasonInput, value)
+    items = context.items
+    index = _attempt_index(items, action.subject)
+    item = items[index]
+    if item.state != WorkState.REVIEW:
+        raise TransitionPlanError("ACTION_NOT_AVAILABLE", "Only an attempt in review can be returned for correction.")
+    attempt_path = context.work_root / "attempts" / action.subject / "attempt.md"
+    generation = _integer_header(attempt_path, "lease_generation")
+    timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    attempt_text = replace_v2_header_fields(
+        attempt_path.read_text(encoding="utf-8"),
+        {
+            "state": "active",
+            "owner_task_id": "unclaimed",
+            "owner_host_id": "unclaimed",
+            "lease_id": "unclaimed",
+            "lease_generation": generation + 1,
+            "lease_acquired_at": timestamp,
+            "lease_expires_at": timestamp,
+            "lease_status": "revoked",
+            "updated": date.today().isoformat(),
+        },
+    )
+    items[index] = replace(
+        item,
+        state=WorkState.ACTIVE,
+        next_action="reacquire-and-continue",
+        notes=f"Correction requested: {value.reason}",
+    )
+    return ChangeSet.of(
+        write_change(str(attempt_path.relative_to(context.work_root)), attempt_text),
+        *_return_resource_changes(context, action.subject, timestamp),
+        _queue_change(context, items),
+        write_change(
+            "current.md",
+            _current_text(context, item.item, action.subject, "reacquire-and-continue"),
+        ),
+    )
+
+
 def _reopen(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
     value = cast(EvidenceInput, value)
     items = context.items
@@ -594,6 +670,7 @@ HANDLERS: dict[ActionKind, PlanHandler] = {
     ActionKind.CLOSE: _close,
     ActionKind.RESUME: _resume,
     ActionKind.SUBMIT_REVIEW: _submit_review,
+    ActionKind.RETURN_FOR_CORRECTION: _return_for_correction,
     ActionKind.REOPEN: _reopen,
     ActionKind.MARK_READY: _mark_ready,
     ActionKind.BLOCK_ITEM: _block_item,

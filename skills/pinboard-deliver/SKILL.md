@@ -17,6 +17,8 @@ Implement one accepted attempt, verify it, leave a durable result, and return it
 
 Confirm the attempt identity, checkpoint, and execution environment without rewriting its semantics. The canonical attempt remains the sole source for scope, ordering, deferrals, and verification. Ask only when missing information would change product behavior, architecture, scope, compatibility, or verification expectations.
 
+When reacquiring an attempt returned from review, read the durable correction reason and `review.md` before editing. Keep the same accepted brief, branch, evidence, and attempt identity. Treat the earlier `result.md` as preserved history, not a current readiness claim; refresh it only after the corrected candidate is stable and all required checks pass.
+
 ## Stay inside the attempt
 
 - Edit only what the attempt requires.
@@ -77,3 +79,5 @@ The result must record:
 3. Say `submitted for coordination review` only after confirmed delivery to the exact return task. A written receipt without confirmed delivery is `ready for coordination review`, not submitted.
 
 Do not claim canonical completion until a current coordination lease authorizes the completion transition.
+
+If the attempt was returned for correction, report the new candidate normally. Do not present the return itself as a new finding or imply that the earlier review was accepted. The compact human outcome is: `Correction ready — <candidate>; the same attempt has been resubmitted for independent review.`

@@ -113,6 +113,7 @@ INPUT_MODELS: dict[str, InputModel] = {
     "transfer-coordinator": TransferCoordinatorInput,
     "resume": EmptyInput,
     "submit-review": EmptyInput,
+    "return-for-correction": ReasonInput,
 }
 
 TRANSITION_ACTION_KINDS: Final = tuple(INPUT_MODELS)
