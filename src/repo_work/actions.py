@@ -1,11 +1,19 @@
 import hashlib
-from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import assert_never
 
 from repo_work.authority import AuthorityVersion, resolve_authority
 from repo_work.coordinator import read_coordinator
+from repo_work.decisions import (
+    Action,
+    ActionKind,
+    ActorAuthority,
+    AuthorizationKind,
+    DecisionError,
+    ResourceToken,
+    Role,
+    available_actions,
+)
 from repo_work.leases import (
     LeaseError,
     read_attempt_lease,
@@ -14,10 +22,22 @@ from repo_work.leases import (
     require_coordination,
 )
 from repo_work.markdown import parse_item, parse_queue
-from repo_work.model import Queue, QueueItem, WorkState
+from repo_work.model import (
+    AttemptAuthority,
+    AttemptRecord,
+    AttemptState,
+    LedgerSnapshot,
+    ProposalRecord,
+    QueueItem,
+    ResourceAuthority,
+    SubjectRevision,
+    WorkState,
+)
 from repo_work.resources import ResourceError, read_resource_claim, require_resource
 from repo_work.revisions import subject_revision
 from repo_work.validate import validate_work_state
+
+__all__ = ["Action", "ActionError", "ActionKind", "AuthorizationKind", "ResourceToken", "Role", "actions_for"]
 
 
 class ActionError(RuntimeError):
@@ -26,64 +46,6 @@ class ActionError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
-
-
-class ActionKind(Enum):
-    ACCEPT_PROPOSAL = "accept-proposal"
-    ACTIVATE = "activate"
-    BLOCK = "block"
-    BLOCK_ITEM = "block-item"
-    COMPLETE = "complete"
-    CLOSE = "close"
-    CONTINUE = "continue"
-    DEFER = "defer"
-    DISPATCH = "dispatch"
-    INSPECT = "inspect"
-    MARK_READY = "mark-ready"
-    MERGE_PROPOSAL = "merge-proposal"
-    PAUSE = "pause"
-    REJECT_PROPOSAL = "reject-proposal"
-    REOPEN = "reopen"
-    REPORT_BLOCKER = "report-blocker"
-    RESUME = "resume"
-    RETURN_PROPOSAL = "return-proposal"
-    SUBMIT_REVIEW = "submit-review"
-    TRANSFER_COORDINATOR = "transfer-coordinator"
-
-
-class AuthorizationKind(Enum):
-    COORDINATOR = "coordinator"
-    COORDINATION = "coordination"
-    ATTEMPT = "attempt"
-    OBSERVER = "observer"
-
-
-class Role(Enum):
-    COORDINATOR = "coordinator"
-    WORKER = "worker"
-    OBSERVER = "observer"
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceToken:
-    resource_id: str
-    host_id: str
-    lease_id: str
-    generation: int
-
-
-@dataclass(frozen=True, slots=True)
-class Action:
-    action_id: str
-    kind: ActionKind
-    subject: str
-    label: str
-    expected_revision: str
-    coordinator_generation: int
-    subject_revision: str | None = None
-    authorization: AuthorizationKind = AuthorizationKind.COORDINATOR
-    lease_id: str | None = None
-    resource_claims: tuple[ResourceToken, ...] = ()
 
 
 def state_revision(work_root: Path) -> str:
@@ -129,43 +91,19 @@ def coordinator_generation(work_root: Path) -> int:
             assert_never(unreachable)
 
 
-@dataclass(frozen=True, slots=True)
-class ActionFactory:
-    revision: str
-    generation: int
-    authorization: AuthorizationKind = AuthorizationKind.COORDINATOR
-    lease_id: str | None = None
-
-    def make(
-        self,
-        kind: ActionKind,
-        subject: str,
-        label: str,
-        subject_revision: str | None = None,
-        resource_claims: tuple[ResourceToken, ...] = (),
-    ) -> Action:
-        return Action(
-            action_id=f"{kind.value}:{subject}",
-            kind=kind,
-            subject=subject,
-            label=label,
-            expected_revision=self.revision,
-            coordinator_generation=self.generation,
-            subject_revision=subject_revision,
-            authorization=self.authorization,
-            lease_id=self.lease_id,
-            resource_claims=resource_claims,
-        )
-
-
-def _resource_tokens(work_root: Path, item: QueueItem, factory: ActionFactory) -> tuple[ResourceToken, ...]:
-    if item.attempt is None or not factory.lease_id:
+def _resource_tokens(
+    work_root: Path,
+    item: QueueItem,
+    lease_id: str | None,
+    generation: int,
+) -> tuple[ResourceToken, ...]:
+    if item.attempt is None or not lease_id:
         return ()
     resources = parse_item(work_root / "items" / f"{item.item}.md").resources
     if not resources:
         return ()
     try:
-        attempt = require_attempt(work_root, item.attempt, factory.lease_id, factory.generation)
+        attempt = require_attempt(work_root, item.attempt, lease_id, generation)
         result: list[ResourceToken] = []
         for resource_id in resources:
             claim = read_resource_claim(work_root, resource_id, attempt.host_id)
@@ -178,138 +116,29 @@ def _resource_tokens(work_root: Path, item: QueueItem, factory: ActionFactory) -
         raise ActionError(error.code, str(error).partition(": ")[2]) from error
 
 
-def _worker_actions(work_root: Path, items: tuple[QueueItem, ...], factory: ActionFactory) -> tuple[Action, ...]:
-    result: list[Action] = []
-    for item in items:
-        if item.state == WorkState.ACTIVE and item.attempt is not None:
-            resource_claims = _resource_tokens(work_root, item, factory)
-            result.extend(
-                (
-                    factory.make(
-                        ActionKind.CONTINUE,
-                        item.attempt,
-                        f"Continue {item.item}",
-                        subject_revision(work_root, item.item),
-                        resource_claims,
-                    ),
-                    factory.make(
-                        ActionKind.REPORT_BLOCKER,
-                        item.attempt,
-                        f"Report a blocker for {item.item}",
-                        subject_revision(work_root, item.item),
-                        resource_claims,
-                    ),
-                    factory.make(
-                        ActionKind.SUBMIT_REVIEW,
-                        item.attempt,
-                        f"Submit {item.item} for review",
-                        subject_revision(work_root, item.item),
-                        resource_claims,
-                    ),
-                )
-            )
-    return tuple(result)
-
-
-def _active_coordinator_actions(items: tuple[QueueItem, ...], factory: ActionFactory) -> list[Action]:
-    result: list[Action] = []
-    for item in items:
-        if item.state not in {WorkState.ACTIVE, WorkState.REVIEW} or item.attempt is None:
-            continue
-        if item.state == WorkState.ACTIVE:
-            result.extend(
-                (
-                    factory.make(ActionKind.CONTINUE, item.attempt, f"Continue {item.item}"),
-                    factory.make(ActionKind.DISPATCH, item.attempt, f"Prepare a worker launch for {item.item}"),
-                    factory.make(ActionKind.PAUSE, item.attempt, f"Pause and preserve {item.item}"),
-                    factory.make(ActionKind.BLOCK, item.attempt, f"Block {item.item} on a named condition"),
-                )
-            )
-        result.append(factory.make(ActionKind.COMPLETE, item.attempt, f"Accept and complete {item.item}"))
-    return result
-
-
-def _intake_actions(item: QueueItem, factory: ActionFactory) -> list[Action]:
-    return [
-        factory.make(ActionKind.MARK_READY, item.item, f"Mark {item.item} ready"),
-        factory.make(ActionKind.BLOCK_ITEM, item.item, f"Block {item.item} on a named condition"),
-        factory.make(ActionKind.DEFER, item.item, f"Defer {item.item} with a reopen condition"),
-    ]
-
-
-def _item_actions(item: QueueItem, queue: Queue, factory: ActionFactory) -> list[Action]:
-    close = factory.make(ActionKind.CLOSE, item.item, f"Record a terminal decision for {item.item}")
-    if item.state == WorkState.INTAKE:
-        return [*_intake_actions(item, factory), close]
-    if item.state == WorkState.READY:
-        return [
-            factory.make(ActionKind.ACTIVATE, item.item, f"Activate {item.item}"),
-            factory.make(ActionKind.DEFER, item.item, f"Defer {item.item} with a reopen condition"),
-            close,
-        ]
-    dependencies_live = any(dependency in queue.by_id() for dependency in item.depends_on)
-    if item.state in {WorkState.PAUSED, WorkState.BLOCKED} and not dependencies_live:
-        result = [factory.make(ActionKind.RESUME, item.item, f"Return {item.item} to ready")]
-        if item.attempt is None:
-            result.append(factory.make(ActionKind.DEFER, item.item, f"Defer {item.item} with a reopen condition"))
-        return [*result, close]
-    if item.state in {WorkState.PAUSED, WorkState.BLOCKED}:
-        return [close]
-    if item.state == WorkState.DEFERRED:
-        return [factory.make(ActionKind.REOPEN, item.item, f"Reopen {item.item} for intake"), close]
-    return []
-
-
-def _proposal_actions(work_root: Path, factory: ActionFactory) -> list[Action]:
-    result: list[Action] = []
+def _proposal_records(work_root: Path) -> tuple[ProposalRecord, ...]:
     inbox = work_root / "inbox"
-    if inbox.is_dir():
-        for path in sorted(inbox.glob("*.json")):
-            proposal_id = path.stem
-            proposal_revision = hashlib.sha256(path.read_bytes()).hexdigest()
-            result.extend(
-                (
-                    factory.make(
-                        ActionKind.ACCEPT_PROPOSAL, proposal_id, f"Accept proposal {proposal_id}", proposal_revision
-                    ),
-                    factory.make(
-                        ActionKind.MERGE_PROPOSAL, proposal_id, f"Merge proposal {proposal_id}", proposal_revision
-                    ),
-                    factory.make(
-                        ActionKind.RETURN_PROPOSAL, proposal_id, f"Return proposal {proposal_id}", proposal_revision
-                    ),
-                    factory.make(
-                        ActionKind.REJECT_PROPOSAL, proposal_id, f"Reject proposal {proposal_id}", proposal_revision
-                    ),
-                )
-            )
-    return result
+    if not inbox.is_dir():
+        return ()
+    return tuple(
+        ProposalRecord(path.stem, hashlib.sha256(path.read_bytes()).hexdigest())
+        for path in sorted(inbox.glob("*.json"))
+    )
 
 
-def _coordinator_actions(work_root: Path, queue: Queue, factory: ActionFactory) -> tuple[Action, ...]:
-    result = _active_coordinator_actions(queue.items, factory)
-    for item in queue.items:
-        result.extend(_item_actions(item, queue, factory))
-    result.extend(_proposal_actions(work_root, factory))
-    if (work_root / "coordinator.json").is_file():
-        result.append(factory.make(ActionKind.TRANSFER_COORDINATOR, "ledger", "Transfer coordinator ownership"))
-    return tuple(result)
-
-
-def _v2_factory(
-    base_work_root: Path,
+def _v2_actor(
     work_root: Path,
     role: Role,
     lease_id: str | None,
     generation: int | None,
-) -> ActionFactory:
+) -> ActorAuthority:
     match role:
         case Role.OBSERVER:
-            return ActionFactory(state_revision(base_work_root), 0, AuthorizationKind.OBSERVER)
+            return ActorAuthority(role, AuthorizationKind.OBSERVER, 0)
         case Role.WORKER:
             if lease_id is None or generation is None:
                 raise ActionError("LEASE_REQUIRED", "A current worker lease identity and generation are required.")
-            return ActionFactory("", generation, AuthorizationKind.ATTEMPT, lease_id)
+            return ActorAuthority(role, AuthorizationKind.ATTEMPT, generation, lease_id, (), False)
         case Role.COORDINATOR:
             if lease_id is None or generation is None:
                 raise ActionError("LEASE_REQUIRED", "A current coordinator lease identity and generation are required.")
@@ -317,12 +146,12 @@ def _v2_factory(
                 require_coordination(work_root, lease_id, generation)
             except LeaseError as error:
                 raise ActionError(error.code, str(error).partition(": ")[2]) from error
-            return ActionFactory(state_revision(base_work_root), generation, AuthorizationKind.COORDINATION, lease_id)
+            return ActorAuthority(role, AuthorizationKind.COORDINATION, generation, lease_id)
         case _ as unreachable:
             assert_never(unreachable)
 
 
-def _v1_factory(base_work_root: Path, role: Role) -> ActionFactory:
+def _v1_actor(base_work_root: Path, role: Role) -> ActorAuthority:
     match role:
         case Role.OBSERVER:
             authorization = AuthorizationKind.OBSERVER
@@ -332,7 +161,7 @@ def _v1_factory(base_work_root: Path, role: Role) -> ActionFactory:
             authorization = AuthorizationKind.COORDINATOR
         case _ as unreachable:
             assert_never(unreachable)
-    return ActionFactory(state_revision(base_work_root), coordinator_generation(base_work_root), authorization)
+    return ActorAuthority(role, authorization, coordinator_generation(base_work_root))
 
 
 def _owned_worker_items(
@@ -358,6 +187,61 @@ def _owned_worker_items(
     return tuple(owned)
 
 
+def _attempt_state(state: WorkState) -> AttemptState:
+    match state:
+        case WorkState.ACTIVE:
+            return AttemptState.ACTIVE
+        case WorkState.PAUSED:
+            return AttemptState.PAUSED
+        case WorkState.BLOCKED:
+            return AttemptState.BLOCKED
+        case WorkState.REVIEW:
+            return AttemptState.REVIEW
+        case WorkState.INTAKE | WorkState.READY | WorkState.DEFERRED:
+            raise ActionError("WORK_STATE_INVALID", f"State '{state.value}' cannot own an attempt.")
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _snapshot(
+    base_work_root: Path,
+    work_root: Path,
+    items: tuple[QueueItem, ...],
+    actor: ActorAuthority,
+) -> LedgerSnapshot:
+    attempt_items = tuple(item for item in items if item.attempt is not None)
+    attempts = tuple(
+        AttemptRecord(item.attempt, item.item, _attempt_state(item.state))
+        for item in attempt_items
+        if item.attempt is not None
+    )
+    authorities: list[AttemptAuthority] = []
+    subject_revisions: list[SubjectRevision] = []
+    if actor.role == Role.WORKER:
+        for item in attempt_items:
+            if item.attempt not in actor.attempts:
+                continue
+            tokens = _resource_tokens(work_root, item, actor.lease_id, actor.generation)
+            resources = tuple(
+                ResourceAuthority(token.resource_id, token.host_id, token.lease_id, token.generation)
+                for token in tokens
+            )
+            authorities.append(AttemptAuthority(item.attempt, item.item, actor.lease_id, actor.generation, resources))
+            subject_revisions.append(SubjectRevision(item.item, subject_revision(work_root, item.item)))
+    history = work_root / "history" / "items"
+    return LedgerSnapshot(
+        revision=state_revision(base_work_root),
+        generation=actor.generation,
+        items=items,
+        attempts=attempts,
+        proposals=_proposal_records(work_root),
+        subject_revisions=tuple(subject_revisions),
+        attempt_authorities=tuple(authorities),
+        history_items=tuple(path.stem for path in sorted(history.glob("*.md"))) if history.is_dir() else (),
+        can_transfer_coordinator=(work_root / "coordinator.json").is_file(),
+    )
+
+
 def actions_for(
     work_root: Path,
     project_root: Path,
@@ -377,22 +261,30 @@ def actions_for(
     root = authority.work_root
     match authority.version:
         case AuthorityVersion.V1:
-            factory = _v1_factory(work_root, selected_role)
+            actor = _v1_actor(work_root, selected_role)
         case AuthorityVersion.V2:
-            factory = _v2_factory(work_root, root, selected_role, lease_id, generation)
+            actor = _v2_actor(root, selected_role, lease_id, generation)
         case _ as unreachable:
             assert_never(unreachable)
     queue = parse_queue(root / "queue.md")
-    match selected_role:
-        case Role.OBSERVER:
-            return (factory.make(ActionKind.INSPECT, "ledger", "Inspect current work"),)
-        case Role.WORKER:
-            if authority.version == AuthorityVersion.V1:
-                return _worker_actions(root, queue.items, factory)
+    if selected_role == Role.WORKER:
+        if authority.version == AuthorityVersion.V1:
+            attempts = tuple(item.attempt for item in queue.items if item.state == WorkState.ACTIVE and item.attempt)
+        else:
             if lease_id is None or generation is None:
                 raise ActionError("ATTEMPT_LEASE_REQUIRED", "A current attempt lease is required.")
-            return _worker_actions(root, _owned_worker_items(root, queue.items, lease_id, generation), factory)
-        case Role.COORDINATOR:
-            return _coordinator_actions(root, queue, factory)
-        case _ as unreachable:
-            assert_never(unreachable)
+            attempts = tuple(
+                item.attempt for item in _owned_worker_items(root, queue.items, lease_id, generation) if item.attempt
+            )
+        actor = ActorAuthority(
+            actor.role,
+            actor.authorization,
+            actor.generation,
+            actor.lease_id,
+            attempts,
+            actor.revision_scoped,
+        )
+    try:
+        return available_actions(_snapshot(work_root, root, queue.items, actor), actor)
+    except DecisionError as error:
+        raise ActionError(error.code, str(error).partition(": ")[2]) from error

@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Callable
 from copy import replace
 from dataclasses import dataclass
@@ -7,10 +8,12 @@ from typing import Literal, assert_never, cast
 
 from repo_work.actions import Action, ActionKind
 from repo_work.coordinator import CoordinatorRegistration
+from repo_work.decisions import DecisionError, decide
 from repo_work.markdown import (
     CurrentPointer,
     V2HeaderValue,
     encode_string_scalar,
+    parse_attempt,
     parse_current,
     parse_header,
     parse_item,
@@ -23,7 +26,16 @@ from repo_work.markdown import (
     replace_header_fields,
     replace_v2_header_fields,
 )
-from repo_work.model import SCHEMA_V1, SCHEMA_V2, Queue, QueueItem, WorkState
+from repo_work.model import (
+    SCHEMA_V1,
+    SCHEMA_V2,
+    AttemptRecord,
+    LedgerSnapshot,
+    ProposalRecord,
+    Queue,
+    QueueItem,
+    WorkState,
+)
 from repo_work.proposals import Proposal, ProposalDispositionKind, ProposalHistory, read_proposal
 from repo_work.transaction_store import ChangeSet, FileChange, delete_change, write_bytes_change, write_change
 from repo_work.transition_input import (
@@ -604,6 +616,32 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
     handler = HANDLERS.get(action.kind)
     if handler is None:
         raise TransitionPlanError("ACTION_NOT_MUTATING", f"Action '{action.kind.value}' is not a canonical transition.")
+    attempts = tuple(
+        AttemptRecord(attempt.attempt, attempt.item, attempt.state)
+        for item in context.queue.items
+        if item.attempt is not None
+        for attempt in (parse_attempt(work_root / "attempts" / item.attempt / "attempt.md"),)
+    )
+    inbox = work_root / "inbox"
+    proposals = (
+        tuple(ProposalRecord(path.stem, hashlib.sha256(path.read_bytes()).hexdigest()) for path in sorted(inbox.glob("*.json")))
+        if inbox.is_dir()
+        else ()
+    )
+    history = work_root / "history" / "items"
+    snapshot = LedgerSnapshot(
+        revision=context.queue.revision,
+        generation=action.coordinator_generation,
+        items=context.queue.items,
+        attempts=attempts,
+        proposals=proposals,
+        history_items=tuple(path.stem for path in sorted(history.glob("*.md"))) if history.is_dir() else (),
+        can_transfer_coordinator=(work_root / "coordinator.json").is_file(),
+    )
+    try:
+        decide(snapshot, action, value, datetime.now(UTC))
+    except DecisionError as error:
+        raise TransitionPlanError(error.code, str(error).partition(": ")[2]) from error
     changes = handler(context, action, value)
     if context.queue.header.get("schema") != SCHEMA_V2:
         return changes
