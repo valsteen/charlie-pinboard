@@ -3,7 +3,7 @@ requires = ["uv_build>=0.12,<0.13"]
 build-backend = "uv_build"
 
 [project]
-name = "charlie-board"
+name = "charlie-pinboard"
 version = "0.1.0"
 description = "Validated coordination for one repository-owned work ledger"
 readme = "README.md"

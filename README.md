@@ -1,6 +1,6 @@
-# Charlie
+# Charlie Pinboard
 
-[![CI](https://github.com/valsteen/charlie-board/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/charlie-board/actions/workflows/ci.yml)
+[![CI](https://github.com/valsteen/charlie-pinboard/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/charlie-pinboard/actions/workflows/ci.yml)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![uv](https://img.shields.io/badge/managed%20with-uv-DE5FE9?logo=uv)](https://docs.astral.sh/uv/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -73,8 +73,8 @@ The plugin currently supports macOS and Linux. It uses [uv](https://docs.astral.
 Add this repository as a Codex marketplace, then install the plugin:
 
 ```sh
-codex plugin marketplace add valsteen/charlie-board
-codex plugin add charlie-board@charlie-board
+codex plugin marketplace add valsteen/charlie-pinboard
+codex plugin add charlie-pinboard@charlie-pinboard
 ```
 
 Start a Codex task in the repository and ask:
@@ -152,7 +152,7 @@ uv build --no-sources
 scripts/charlie --help
 ```
 
-Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. Its development group includes the YAML parser used for platform-compatible skill validation; the installed `charlie-board` package does not depend on it.
+Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. Its development group includes the YAML parser used for platform-compatible skill validation; the installed `charlie-pinboard` package does not depend on it.
 
 CI validates the plugin and its skills before the repository is published.
 
