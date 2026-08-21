@@ -1,17 +1,17 @@
-# Charlie Pinboard
+# Charlie's pinboard
 
 [![CI](https://github.com/valsteen/charlie-pinboard/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/charlie-pinboard/actions/workflows/ci.yml)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![uv](https://img.shields.io/badge/managed%20with-uv-DE5FE9?logo=uv)](https://docs.astral.sh/uv/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-<img align="right" width="430" src="assets/charlie-investigation-board.png" alt="Pixel-art bard explaining a fantasy investigation board covered with maps, clues, and red thread">
+<img align="right" width="430" src="assets/pinboard-investigation-board.png" alt="Pixel-art bard explaining a fantasy investigation board covered with maps, clues, and red thread">
 
 Keep one trustworthy quest log—and one trustworthy execution brief—while several Codex tasks explore and build in the same repository.
 
-Charlie helps when a feature stops being a straight line. Side tasks can bring back useful discoveries without turning every chat transcript, topic folder, or feature branch into another backlog. When a piece of work is ready, Charlie keeps its scope and checks intact from planning through implementation and review.
+Charlie's pinboard helps when a feature stops being a straight line. Side tasks can bring back useful discoveries without turning every chat transcript, topic folder, or feature branch into another backlog. When a piece of work is ready, the pinboard keeps its scope and checks intact from planning through implementation and review.
 
-Charlie preserves what the party learns, keeps the available paths visible, and carries each chosen piece of work into one trustworthy execution brief without deciding the product for you.
+The pinboard preserves what the party learns, keeps the available paths visible, and carries each chosen piece of work into one trustworthy execution brief without deciding the product for you.
 
 ## An indie RPG feature becomes a campaign
 
@@ -21,7 +21,7 @@ All of that is worth keeping, but not all of it should derail the boss feature. 
 
 ![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** A side task comes back with a warning: “Before we can save the second phase safely, combat abilities need IDs that won’t change underneath us.” The proposal stays in the shared inbox until any chat briefly borrows coordination authority and reviews it; the work list does not change behind your back.
 
-![Pixel-art folded adventure map](assets/map-fills-in.png) **The map fills in as the party travels.** Deep work rarely reveals the whole campaign upfront. While the dragon fight remains the main quest, an experiment may reveal that save games are capturing temporary animation state, a flaw worth returning to later. Charlie lets the plan grow from that evidence without turning every discovery into an interruption: preserve the exact finding, keep the current objective moving when it is not blocked, and leave one compact receipt.
+![Pixel-art folded adventure map](assets/map-fills-in.png) **The map fills in as the party travels.** Deep work rarely reveals the whole campaign upfront. While the dragon fight remains the main quest, an experiment may reveal that save games are capturing temporary animation state, a flaw worth returning to later. The pinboard lets the plan grow from that evidence without turning every discovery into an interruption: preserve the exact finding, keep the current objective moving when it is not blocked, and leave one compact receipt.
 
 > **Saved for later — the animation-state finding is now in `save-game-animation-state` (`intake`); dragon work continues.**
 
@@ -45,7 +45,7 @@ You can select a few quests or say, “Launch all safe work.” The animation qu
 
 ![Pixel-art campfire checkpoint](assets/safe-camp.png) **The party makes camp.** The chat making the scheduling change briefly acquires coordination, records that stable ability IDs come first, then releases it. The dragon task notes exactly where it stopped and what needs to happen before it can pick the feature back up.
 
-![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** Another task fixes the ability IDs, then the dragon task continues from its notes. If an older task tries to update a work list that has since changed, `charlie` asks it to catch up first.
+![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** Another task fixes the ability IDs, then the dragon task continues from its notes. If an older task tries to update a work list that has since changed, `pinboard` asks it to catch up first.
 
 Everything stays ordinary repository work: code, branches, worktrees, Markdown, and conversation. The plugin keeps the work list coherent and gives each implementation one canonical brief, so the task a worker receives is still the task the coordinating chat meant to send.
 
@@ -53,7 +53,7 @@ Everything stays ordinary repository work: code, branches, worktrees, Markdown, 
 
 You plan a change carefully, hand it to another AI, and get back something that is almost right. One half of a protocol was postponed even though both halves had to move together. The exact test commands became “run the relevant checks.” A request to read one section became a tour of half the repository. After seeing the same mistakes recur, they stop looking random: they happen when the task is retold on its way to the worker.
 
-Charlie keeps that retelling out of the workflow. The worker goes back to the accepted attempt brief, while the launch message says only where to work and which checkpoint to pick up. For work that crosses components, a small contract table records who owns what, which parts must move together, and how to prove the result works. Review still gets the final say, but it should not have to reconstruct the task first.
+The pinboard keeps that retelling out of the workflow. The worker goes back to the accepted attempt brief, while the launch message says only where to work and which checkpoint to pick up. For work that crosses components, a small contract table records who owns what, which parts must move together, and how to prove the result works. Review still gets the final say, but it should not have to reconstruct the task first.
 
 ## What it gives you
 
@@ -79,7 +79,7 @@ codex plugin add charlie-pinboard@charlie-pinboard
 
 Start a Codex task in the repository and ask:
 
-> Set up Charlie here and explain how I can use it from one chat or several chats.
+> Set up the pinboard here and explain how I can use it from one chat or several chats.
 
 When another task uncovers something worth keeping, ask it:
 
@@ -126,14 +126,14 @@ The project stores its private working state in ignored local files:
 .codex/topics/
 ```
 
-The Markdown stays readable and easy to inspect in Finder. Each item file is authoritative; `queue.md` is regenerated as a convenient overview. `charlie` checks that these files agree before changing them, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt.
+The Markdown stays readable and easy to inspect in Finder. Each item file is authoritative; `queue.md` is regenerated as a convenient overview. `pinboard` checks that these files agree before changing them, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt.
 
 The plugin contains:
 
-- `charlie`, the primary command that checks and updates the shared state;
-- `$coordinate`, which helps any chat explain the current picture, borrow coordination when needed, and choose what happens next;
-- `$intake`, which lets any task leave a finding for later review;
-- `$deliver`, which follows one accepted brief and returns evidence for independent review.
+- `pinboard`, the primary command that checks and updates the shared state;
+- `$pinboard`, which helps any chat explain the current picture, borrow coordination when needed, and choose what happens next;
+- `$pinboard-intake`, which lets any task leave a finding for later review;
+- `$pinboard-deliver`, which follows one accepted brief and returns evidence for independent review.
 
 ## Runtime and development
 
@@ -149,7 +149,7 @@ uv run --locked coverage run -m unittest discover -v
 uv run --locked coverage report
 uv run --locked python scripts/validate-metadata.py
 uv build --no-sources
-scripts/charlie --help
+scripts/pinboard --help
 ```
 
 Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. Its development group includes the YAML parser used for platform-compatible skill validation; the installed `charlie-pinboard` package does not depend on it.
@@ -159,13 +159,13 @@ CI validates the plugin and its skills before the repository is published.
 <details>
 <summary>Legacy schema-v1 migration</summary>
 
-Existing schema-v1 ledgers need one explicit `charlie migrate --to v2` cutover before lease or resource commands become available. Until then, those commands return `MIGRATION_REQUIRED` rather than pretending legacy permanent ownership has lease semantics.
+Existing schema-v1 ledgers need one explicit `pinboard migrate --to v2` cutover before lease or resource commands become available. Until then, those commands return `MIGRATION_REQUIRED` rather than pretending legacy permanent ownership has lease semantics.
 
 </details>
 
 <details>
 <summary>Temporary command compatibility</summary>
 
-`repo-work` currently invokes the same installed engine as `charlie` so existing local tasks can move over without a flag day. It is a temporary tested alias, not a second product or protocol. The Python module remains `repo_work`, and existing `.codex/work` paths plus `repo-work/*` serialized identifiers remain stable.
+`repo-work` currently invokes the same installed engine as `pinboard` so existing local tasks can move over without a flag day. It is a temporary tested alias, not a second product or protocol. The Python module remains `repo_work`, and existing `.codex/work` paths plus `repo-work/*` serialized identifiers remain stable.
 
 </details>

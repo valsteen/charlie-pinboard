@@ -19,7 +19,9 @@ class PlatformNotSupportedError(RuntimeError):
 def _require_supported_platform() -> None:
     if sys.platform not in SUPPORTED_PLATFORMS:
         supported = ", ".join(sorted(SUPPORTED_PLATFORMS))
-        raise PlatformNotSupportedError(f"PLATFORM_NOT_SUPPORTED: Charlie supports {supported}; found {sys.platform}.")
+        raise PlatformNotSupportedError(
+            f"PLATFORM_NOT_SUPPORTED: The pinboard supports {supported}; found {sys.platform}."
+        )
 
 
 @contextmanager

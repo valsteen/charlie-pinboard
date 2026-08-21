@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pinboard: Intake"
+  short_description: "Preserve a finding in the shared work inbox"
+  default_prompt: "Use $pinboard-intake to preserve this finding in the repository work inbox for the next coordination pass."

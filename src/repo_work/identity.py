@@ -1,4 +1,4 @@
 from typing import Final
 
 DISTRIBUTION_NAME: Final = "charlie-pinboard"
-PROGRAM_NAME: Final = "charlie"
+PROGRAM_NAME: Final = "pinboard"
