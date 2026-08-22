@@ -7,7 +7,12 @@ from unittest.mock import patch
 import msgspec
 
 from charlie_pinboard.domain.model import SCHEMA_V1, SCHEMA_V2, WorkState
-from charlie_pinboard.interfaces.transition_input import ActivateInput, TransitionInputError, parse_transition_input
+from charlie_pinboard.interfaces.transition_input import (
+    AcceptCheckpointInput,
+    ActivateInput,
+    TransitionInputError,
+    parse_transition_input,
+)
 from charlie_pinboard.legacy.atomic import PlatformNotSupportedError, transition_lock
 from charlie_pinboard.legacy.coordinator import CoordinatorError, parse_coordinator, read_coordinator
 from charlie_pinboard.legacy.markdown import (
@@ -66,6 +71,14 @@ class JsonBoundaryTest(unittest.TestCase):
         self.assertEqual("attempt-1", transition.attempt)
         with self.assertRaises(TransitionInputError):
             parse_transition_input("resume", '{"unexpected": true}')
+        checkpoint = parse_transition_input(
+            "accept-checkpoint",
+            '{"checkpoint":"design-accepted","candidate":"sha256:candidate","evidence":"review accepted"}',
+        )
+        self.assertIsInstance(checkpoint, AcceptCheckpointInput)
+        if not isinstance(checkpoint, AcceptCheckpointInput):
+            self.fail("accept-checkpoint payload did not produce AcceptCheckpointInput")
+        self.assertEqual(("design-accepted", "sha256:candidate"), (checkpoint.checkpoint, checkpoint.candidate))
 
     def test_json_reader_reports_syntax_root_and_io_failures(self) -> None:
         missing = Path(tempfile.mkdtemp()) / "missing.json"
@@ -176,6 +189,21 @@ class JsonBoundaryTest(unittest.TestCase):
                 "TRANSITION_INPUT_INVALID",
             ),
             ("close", {"outcome": "later", "reason": "Not terminal."}, "TRANSITION_INPUT_INVALID"),
+            (
+                "accept-checkpoint",
+                {"checkpoint": "Bad Checkpoint", "candidate": "candidate", "evidence": "accepted"},
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                "accept-checkpoint",
+                {"checkpoint": "design-accepted", "candidate": "", "evidence": "accepted"},
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                "accept-checkpoint",
+                {"checkpoint": "design-accepted", "candidate": "candidate", "evidence": ""},
+                "TRANSITION_INPUT_INVALID",
+            ),
             ("unknown", {}, "ACTION_NOT_MUTATING"),
         )
         for kind, value, code in cases:

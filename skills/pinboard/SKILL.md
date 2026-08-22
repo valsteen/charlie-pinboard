@@ -45,7 +45,7 @@ This proportional behavior applies to mutation as well as status. After a succes
 - Let `items/<item>.md` own every nonterminal item's context plus state, dependencies, current attempt, source, next action, and declared resources.
 - Let `queue.md` remain a generated Finder-readable overview. Never edit it as authority.
 - Let `current.md` remain an optional validated coordinator-focus pointer, never a second queue or a limit on concurrent attempts.
-- Let `attempts/<attempt>/` own the execution brief, branch/worktree, renewable ownership lease, result, blocker, and review evidence.
+- Let `attempts/<attempt>/` own the execution brief, branch/worktree, renewable ownership lease, current result and review evidence, blocker, and immutable accepted checkpoint archives.
 - Let `resources/` own project-declared scarce-resource definitions and `leases/resources/` own their host-local exclusive claims.
 - Let `inbox/` hold immutable proposals that have been delivered but not admitted.
 - Let `topics/` organize findings, designs, evidence, and human navigation without owning work state.
@@ -69,7 +69,7 @@ The dispatch prompt identifies the canonical brief, checkpoint, and execution en
 
 Do not end the coordinating turn merely because implementation started. End with a running worker only when the user explicitly requested background execution; report that independent review remains pending and perform it before any acceptance transition.
 
-The chat performing acceptance reviews the frozen candidate without coordination. Only after reaching a complete verdict does it use one-shot coordination for the review outcome. Complete a fully accepted candidate. When review finds an actionable defect, use `return-for-correction:<attempt>` with one concise reason that identifies the durable review evidence. The transition preserves the same attempt and evidence, fences its previous worker and resource authority, and leaves it ready for an explicitly selected worker to reacquire. If an additional reviewer is useful, launch it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
+The chat performing acceptance reviews the frozen candidate without coordination. Only after reaching a complete verdict does it use one-shot coordination for the review outcome. Use `complete:<attempt>` only when the entire work-item outcome is accepted. When an independently buildable checkpoint is accepted and the canonical brief records remaining work, use `accept-checkpoint:<attempt>` with the nominal checkpoint ID, exact candidate identity, and nonempty review evidence. That transition archives the exact current `result.md` and `review.md`, pauses the same item and attempt, fences worker and task-use authority, and retains host-local reservations. Replace the canonical checkpoint section in `attempt.md`, validate it, and only then use the ordinary `resume:<item>` and dispatch flow. When review finds an actionable defect, use `return-for-correction:<attempt>` with one concise reason that identifies the durable review evidence. The transition preserves the same attempt and evidence, fences its previous worker and resource authority, and leaves it ready for an explicitly selected worker to reacquire. If an additional reviewer is useful, launch it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
 
 ## Interpret the available actions
 
@@ -126,6 +126,16 @@ For an explicit terminal human decision about non-active live work, use one `pin
 
 Process newly delivered intake only after the current review, transition, commit, or other atomic repository action ends. Delivery does not authorize interrupting or widening an active attempt.
 
+Intake is scheduling-neutral. It persists an immutable proposal and may change the ledger revision, but it does not pause, activate, admit, reorder, focus, or complete work. When intake is embedded in ongoing coordination, keep a compact continuation anchor in the current task context before invoking it:
+
+- the pre-intake objective;
+- the next action already promised;
+- the exact active or paused item, attempt, proposal, or durable selector that owns the facts after context compaction.
+
+After persistence and optional notification handling, return to that anchor in the same turn. Re-read the durable selector when compaction made conversational memory uncertain; do not create a scheduler or recovery record. Before the final response, reconcile every announced pending action as completed, durably deferred at an exact owner, or blocked by one exact decision.
+
+Deliberate steering is distinct from intake. Insert a genuine prerequisite only at a safe boundary, pause or block the displaced objective through its legal transition, and name the ordinary `resume:<item>` action that restores it. Recovery is for interrupted or inconsistent state, not the normal route back to preserved work.
+
 ### Reconcile material findings before reporting them
 
 Before presenting a discovered out-of-scope finding as planned, preserved, covered, queued, deferred, or future work, determine the disposition of that exact finding. A broader item with a compatible theme is not exact coverage.
@@ -168,6 +178,8 @@ Never absorb the prerequisite silently into the current attempt.
 ## Review and completion
 
 Treat worker completion as a review request, not acceptance. Compare the attempt brief, diff or commit, result receipt, and fresh proportionate verification. Complete the item only when every acceptance criterion is satisfied and current knowledge owners are reconciled.
+
+For accepted intermediate work, use the checkpoint acceptance path above. Its paused item and attempt remain nonterminal, checkpoint evidence remains immutable under the same attempt, and terminal item history remains absent until a later full-outcome completion.
 
 When review rejects the candidate, record the exact correction reason through `return-for-correction:<attempt>` instead of completing the item, manufacturing a new attempt, or editing lifecycle files. Report the outcome compactly: `Returned for correction — <reason>; the same attempt and review evidence are preserved and ready for a named worker to reacquire. No acceptance occurred.` If the executable does not offer that action for an item in review, preserve the review evidence and report the workflow blocker; do not bypass the missing transition.
 

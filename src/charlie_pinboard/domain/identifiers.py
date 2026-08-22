@@ -2,6 +2,8 @@ from typing import NewType
 
 ActionId = NewType("ActionId", str)
 AttemptId = NewType("AttemptId", str)
+CandidateId = NewType("CandidateId", str)
+CheckpointId = NewType("CheckpointId", str)
 HostId = NewType("HostId", str)
 ItemId = NewType("ItemId", str)
 LeaseId = NewType("LeaseId", str)

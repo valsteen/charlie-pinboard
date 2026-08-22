@@ -692,6 +692,7 @@ def _action_from_values(
             ResourceToken(ResourceId(resource_id), HostId(host_id), LeaseId(resource_lease_id), parsed_generation)
         )
     attempt_kinds = {
+        ActionKind.ACCEPT_CHECKPOINT,
         ActionKind.BLOCK,
         ActionKind.COMPLETE,
         ActionKind.CONTINUE,

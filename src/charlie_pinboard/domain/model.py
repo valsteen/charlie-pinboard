@@ -4,6 +4,8 @@ from typing import Final, Literal
 
 from charlie_pinboard.domain.identifiers import (
     AttemptId,
+    CandidateId,
+    CheckpointId,
     HostId,
     ItemId,
     LeaseId,
@@ -103,6 +105,13 @@ class EvidenceInput:
 
 
 @dataclass(frozen=True, slots=True)
+class AcceptCheckpointInput:
+    checkpoint: CheckpointId
+    candidate: CandidateId
+    evidence: str
+
+
+@dataclass(frozen=True, slots=True)
 class CloseInput:
     outcome: CloseOutcome
     reason: str
@@ -140,6 +149,7 @@ type TransitionInput = (
     | ReasonInput
     | BlockInput
     | EvidenceInput
+    | AcceptCheckpointInput
     | CloseInput
     | DeferInput
     | AcceptProposalInput

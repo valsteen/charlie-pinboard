@@ -35,6 +35,8 @@ Worker diff inspection, requirement mapping, and fresh verification are pre-revi
 
 If additional work is useful but not required, invoke `$pinboard-intake` only when the user explicitly wants it preserved. Otherwise mention it in the result without creating shared state.
 
+When authorized intake is nested inside delivery, retain the attempt ID, current accepted objective, and next promised implementation or verification action as a continuation anchor. After the proposal is persisted and optional delivery handling ends, return to that action. Intake alone does not pause or reprioritize the attempt. Before the final result, account for every announced pending action as completed, durably deferred at an exact owner, or blocked by one exact decision.
+
 If a discovered problem blocks the attempt:
 
 1. stop widening the implementation;
@@ -69,6 +71,8 @@ The result must record:
 - preserved unrelated changes;
 - new findings or exact unknowns;
 - whether the attempt is ready for review or blocked.
+
+For an independently buildable checkpoint, report the exact candidate and remaining-work boundary without claiming that the whole item is complete. Checkpoint acceptance belongs to an independent coordinator after review; the worker does not archive its own checkpoint evidence or resume the next checkpoint.
 
 ## Return the candidate for review
 

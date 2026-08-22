@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from charlie_pinboard.legacy.atomic import atomic_write_text
 from charlie_pinboard.legacy.authority import Authority, AuthorityVersion, authority_transaction
-from charlie_pinboard.legacy.leases import LeaseError, LeaseStatus, require_attempt, require_coordination
+from charlie_pinboard.legacy.leases import LeaseError, require_attempt, require_coordination
 from charlie_pinboard.legacy.markdown import ITEM_PATTERN, parse_header, render_v2_header
 from charlie_pinboard.legacy.storage_layout import PathIdentityError, identity_child
 
@@ -21,6 +21,13 @@ class ResourceError(RuntimeError):
 
 class ResourceScope(Enum):
     HOST_LOCAL = "host-local"
+
+
+class ResourceClaimStatus(Enum):
+    ACTIVE = "active"
+    RESERVED = "reserved"
+    RELEASED = "released"
+    REVOKED = "revoked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +47,7 @@ class ResourceClaim:
     generation: int
     acquired_at: datetime
     expires_at: datetime
-    status: LeaseStatus
+    status: ResourceClaimStatus
     attempt_lease_id: str
     attempt_lease_generation: int
 
@@ -212,7 +219,7 @@ def read_resource_claim(work_root: Path, resource_id: str, host_id: str) -> Reso
     try:
         generation = int(_required(header, path, "lease_generation"))
         attempt_generation = int(_required(header, path, "attempt_lease_generation"))
-        status = LeaseStatus(_required(header, path, "lease_status"))
+        status = ResourceClaimStatus(_required(header, path, "lease_status"))
     except ValueError as error:
         raise ResourceError("RESOURCE_CLAIM_INVALID", f"'{path}' has invalid fencing fields.") from error
     if generation < 1 or attempt_generation < 1:
@@ -247,7 +254,7 @@ def read_resource_claim(work_root: Path, resource_id: str, host_id: str) -> Reso
 
 
 def _active(claim: ResourceClaim, current: datetime) -> bool:
-    return claim.status == LeaseStatus.ACTIVE and current < claim.expires_at
+    return claim.status == ResourceClaimStatus.ACTIVE and current < claim.expires_at
 
 
 def claim_resource(
@@ -281,6 +288,15 @@ def claim_resource(
             )
         path = _claim_path(root, resource_id, host_id)
         previous = read_resource_claim(root, resource_id, host_id) if path.is_file() else None
+        if (
+            previous is not None
+            and previous.status == ResourceClaimStatus.RESERVED
+            and previous.attempt_id != attempt_id
+        ):
+            raise ResourceError(
+                "RESOURCE_BUSY",
+                f"Resource '{resource_id}' on '{host_id}' is reserved by paused attempt '{previous.attempt_id}'.",
+            )
         if previous is not None and _active(previous, current):
             try:
                 _require_claim(root, resource_id, host_id, previous.lease_id, previous.generation, current)
@@ -302,7 +318,7 @@ def claim_resource(
             (previous.generation if previous is not None else 0) + 1,
             current,
             current + timedelta(seconds=ttl_seconds),
-            LeaseStatus.ACTIVE,
+            ResourceClaimStatus.ACTIVE,
             attempt_lease_id,
             attempt_lease_generation,
         )
@@ -319,7 +335,7 @@ def _require_claim(
     current: datetime,
 ) -> ResourceClaim:
     claim = read_resource_claim(work_root, resource_id, host_id)
-    if claim.lease_id != lease_id or claim.generation != generation or claim.status != LeaseStatus.ACTIVE:
+    if claim.lease_id != lease_id or claim.generation != generation or claim.status != ResourceClaimStatus.ACTIVE:
         raise ResourceError("LEASE_FENCED", "The resource claim was released, revoked, or superseded.")
     if current >= claim.expires_at:
         raise ResourceError("RESOURCE_CLAIM_REQUIRED", f"The resource claim expired at {claim.expires_at.isoformat()}.")
@@ -375,7 +391,7 @@ def renew_resource(
             claim.generation,
             claim.acquired_at,
             current + timedelta(seconds=ttl_seconds),
-            LeaseStatus.ACTIVE,
+            ResourceClaimStatus.ACTIVE,
             claim.attempt_lease_id,
             claim.attempt_lease_generation,
         )
@@ -405,7 +421,7 @@ def release_resource(
             claim.generation,
             claim.acquired_at,
             current,
-            LeaseStatus.RELEASED,
+            ResourceClaimStatus.RELEASED,
             claim.attempt_lease_id,
             claim.attempt_lease_generation,
         )
@@ -444,7 +460,7 @@ def revoke_resource(
             claim.generation + 1,
             claim.acquired_at,
             current,
-            LeaseStatus.REVOKED,
+            ResourceClaimStatus.REVOKED,
             claim.attempt_lease_id,
             claim.attempt_lease_generation,
         )

@@ -6,7 +6,12 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, assert_never, cast
 
-from charlie_pinboard.domain.decisions import AttemptAuthorityChange, Decision, decide
+from charlie_pinboard.domain.decisions import (
+    AttemptAuthorityChange,
+    CheckpointAcceptanceChange,
+    Decision,
+    decide,
+)
 from charlie_pinboard.domain.errors import DecisionError
 from charlie_pinboard.domain.identifiers import (
     AttemptId,
@@ -21,6 +26,7 @@ from charlie_pinboard.domain.identifiers import (
 from charlie_pinboard.domain.model import (
     SCHEMA_V1,
     SCHEMA_V2,
+    AcceptCheckpointInput,
     AcceptProposalInput,
     ActivateInput,
     AttemptAuthority,
@@ -46,7 +52,7 @@ from charlie_pinboard.domain.model import (
 )
 from charlie_pinboard.legacy.actions import Action, ActionKind
 from charlie_pinboard.legacy.coordinator import CoordinatorRegistration
-from charlie_pinboard.legacy.leases import LeaseStatus, read_attempt_lease
+from charlie_pinboard.legacy.leases import read_attempt_lease
 from charlie_pinboard.legacy.markdown import (
     CurrentPointer,
     Queue,
@@ -67,7 +73,7 @@ from charlie_pinboard.legacy.markdown import (
     replace_v2_header_fields,
 )
 from charlie_pinboard.legacy.proposals import Proposal, ProposalDispositionKind, ProposalHistory, read_proposal
-from charlie_pinboard.legacy.resources import read_resource_claim
+from charlie_pinboard.legacy.resources import ResourceClaimStatus, read_resource_claim
 from charlie_pinboard.legacy.transaction_store import (
     ChangeSet,
     FileChange,
@@ -305,6 +311,7 @@ def _complete(context: PlanContext, action: Action, value: TransitionInput) -> C
     changes = [
         write_change(history_path, history_text),
         write_change(attempt_path, attempt_text),
+        *_terminal_resource_changes(context, cast(Decision, context.decision)),
         _queue_change(context, [candidate for candidate in items if candidate.item != item.item]),
     ]
     if context.current.focus_attempt == action.subject:
@@ -363,6 +370,23 @@ def _closed_attempt_change(context: PlanContext, attempt: str) -> FileChange:
     )
 
 
+def _terminal_resource_changes(context: PlanContext, decision: Decision) -> list[FileChange]:
+    timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    changes: list[FileChange] = []
+    for reservation_change in decision.reservation_changes:
+        reservation = cast(ResourceReservation, reservation_change.before)
+        path = context.work_root / "leases" / "resources" / f"{reservation.reservation_id}.md"
+        text = replace_v2_header_fields(
+            path.read_text(encoding="utf-8"),
+            {
+                "lease_expires_at": timestamp,
+                "lease_status": ResourceClaimStatus.RELEASED.value,
+            },
+        )
+        changes.append(write_change(str(path.relative_to(context.work_root)), text))
+    return changes
+
+
 def _close(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
     value = cast(CloseInput, value)
     items = context.items
@@ -386,6 +410,7 @@ def _close(context: PlanContext, action: Action, value: TransitionInput) -> Chan
     ]
     if item.attempt is not None:
         changes.append(_closed_attempt_change(context, item.attempt))
+        changes.extend(_terminal_resource_changes(context, cast(Decision, context.decision)))
     if context.current.focus_item == item.item or context.current.focus_attempt == item.attempt:
         changes.append(write_change("current.md", _current_text(context, None, None, "select")))
     return ChangeSet(tuple(changes))
@@ -505,6 +530,116 @@ def _return_for_correction(
             _current_text(context, item.item, action.subject, "reacquire-and-continue"),
         ),
     )
+
+
+def _checkpoint_receipt(
+    acceptance: CheckpointAcceptanceChange,
+    result: bytes,
+    review: bytes,
+) -> str:
+    accepted_at = acceptance.accepted_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    return (
+        render_v2_header(
+            {
+                "kind": "work-checkpoint",
+                "schema": SCHEMA_V2,
+                "checkpoint": acceptance.checkpoint,
+                "attempt": acceptance.attempt,
+                "candidate": acceptance.candidate,
+                "evidence": acceptance.evidence,
+                "accepted_at": accepted_at,
+                "result_sha256": hashlib.sha256(result).hexdigest(),
+                "review_sha256": hashlib.sha256(review).hexdigest(),
+            }
+        )
+        + f"\n# Accepted checkpoint: {acceptance.checkpoint}\n\n"
+        + f"Candidate: `{acceptance.candidate}`\n\n"
+        + f"Acceptance evidence: {acceptance.evidence}\n"
+    )
+
+
+def _checkpoint_resource_changes(context: PlanContext, decision: Decision) -> list[FileChange]:
+    changes: list[FileChange] = []
+    for use_lease_change in decision.resource_use_lease_changes:
+        path = context.work_root / "leases" / "resources" / f"{use_lease_change.before.reservation_id}.md"
+        text = replace_v2_header_fields(
+            path.read_text(encoding="utf-8"),
+            {"lease_status": ResourceClaimStatus.RESERVED.value},
+        )
+        changes.append(write_change(str(path.relative_to(context.work_root)), text))
+    return changes
+
+
+def _accept_checkpoint(
+    context: PlanContext,
+    action: Action,
+    value: TransitionInput,
+) -> ChangeSet:
+    value = cast(AcceptCheckpointInput, value)
+    decision = cast(Decision, context.decision)
+    acceptance = cast(CheckpointAcceptanceChange, decision.checkpoint_acceptance_change)
+    items = context.items
+    index = _attempt_index(items, action.subject)
+    item = items[index]
+    attempt_directory = context.work_root / "attempts" / action.subject
+    result_path = attempt_directory / "result.md"
+    review_path = attempt_directory / "review.md"
+    missing = [path.name for path in (result_path, review_path) if not path.is_file()]
+    if missing:
+        raise TransitionPlanError(
+            "CHECKPOINT_EVIDENCE_MISSING",
+            f"Checkpoint acceptance requires top-level {', '.join(missing)}.",
+        )
+    checkpoint_directory = attempt_directory / "checkpoints" / value.checkpoint
+    if checkpoint_directory.exists():
+        raise TransitionPlanError(
+            "CHECKPOINT_ALREADY_EXISTS",
+            f"Checkpoint '{value.checkpoint}' already exists for attempt '{action.subject}'.",
+        )
+    result = result_path.read_bytes()
+    review = review_path.read_bytes()
+    authority_change = cast(AttemptAuthorityChange, decision.attempt_authority_change)
+    timestamp = acceptance.accepted_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
+    attempt_relative = f"attempts/{action.subject}/attempt.md"
+    attempt_path = context.work_root / attempt_relative
+    attempt_text = replace_v2_header_fields(
+        attempt_path.read_text(encoding="utf-8"),
+        {
+            "state": "paused",
+            "owner_task_id": "unclaimed",
+            "owner_host_id": "unclaimed",
+            "lease_id": "unclaimed",
+            "lease_generation": authority_change.after.generation,
+            "lease_acquired_at": timestamp,
+            "lease_expires_at": timestamp,
+            "lease_status": "revoked",
+            "updated": date.today().isoformat(),
+        },
+    )
+    items[index] = replace(
+        item,
+        state=WorkState.PAUSED,
+        next_action="resume",
+        notes=f"Checkpoint {value.checkpoint} accepted; update the next checkpoint brief before resume.",
+    )
+    checkpoint_relative = f"attempts/{action.subject}/checkpoints/{value.checkpoint}"
+    changes = [
+        write_bytes_change(f"{checkpoint_relative}/result.md", result),
+        write_bytes_change(f"{checkpoint_relative}/review.md", review),
+        write_change(f"{checkpoint_relative}/receipt.md", _checkpoint_receipt(acceptance, result, review)),
+        write_change(attempt_relative, attempt_text),
+        *_checkpoint_resource_changes(context, decision),
+        _queue_change(context, items),
+    ]
+    if context.current.focus_attempt == action.subject:
+        changes.append(write_change("current.md", _current_text(context, None, None, "select")))
+    changes.extend(
+        (
+            delete_change(str(result_path.relative_to(context.work_root))),
+            delete_change(str(review_path.relative_to(context.work_root))),
+        )
+    )
+    return ChangeSet(tuple(changes))
 
 
 def _reopen(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
@@ -679,6 +814,7 @@ def _transfer_coordinator(context: PlanContext, action: Action, value: Transitio
 
 
 HANDLERS: dict[ActionKind, PlanHandler] = {
+    ActionKind.ACCEPT_CHECKPOINT: _accept_checkpoint,
     ActionKind.ACTIVATE: _activate,
     ActionKind.PAUSE: _pause_or_block,
     ActionKind.BLOCK: _pause_or_block,
@@ -699,7 +835,7 @@ HANDLERS: dict[ActionKind, PlanHandler] = {
 }
 
 
-def _return_authority_records(
+def _attempt_authority_records(
     context: PlanContext,
     attempt: str,
     item: str,
@@ -720,6 +856,21 @@ def _return_authority_records(
                 raise TransitionPlanError("RESOURCE_CLAIM_INVALID", f"'{path}' has incomplete identity fields.")
             claim = read_resource_claim(context.work_root, resource_id, host_id)
             reservation_id = path.stem
+            match claim.status:
+                case ResourceClaimStatus.ACTIVE:
+                    reservation_state = ReservationState.ACTIVE
+                    use_lease_state = UseLeaseState.ACTIVE
+                case ResourceClaimStatus.RESERVED:
+                    reservation_state = ReservationState.ACTIVE
+                    use_lease_state = UseLeaseState.REVOKED
+                case ResourceClaimStatus.RELEASED:
+                    reservation_state = ReservationState.RELEASED
+                    use_lease_state = UseLeaseState.RELEASED
+                case ResourceClaimStatus.REVOKED:
+                    reservation_state = ReservationState.REVOKED
+                    use_lease_state = UseLeaseState.REVOKED
+                case _ as unreachable:
+                    assert_never(unreachable)
             reservations.append(
                 ResourceReservation(
                     ReservationId(reservation_id),
@@ -727,7 +878,7 @@ def _return_authority_records(
                     ResourceInstanceId(reservation_id),
                     AttemptId(claim.attempt_id),
                     claim.generation,
-                    ReservationState(claim.status.value),
+                    reservation_state,
                 )
             )
             use_leases.append(
@@ -737,10 +888,10 @@ def _return_authority_records(
                     LeaseId(claim.attempt_lease_id),
                     claim.attempt_lease_generation,
                     claim.generation,
-                    UseLeaseState(claim.status.value),
+                    use_lease_state,
                 )
             )
-            if claim.status == LeaseStatus.ACTIVE:
+            if claim.status == ResourceClaimStatus.ACTIVE:
                 resources.append(
                     ResourceAuthority(
                         ResourceId(claim.resource_id),
@@ -760,6 +911,38 @@ def _return_authority_records(
         tuple(reservations),
         tuple(use_leases),
     )
+
+
+def _decision_authority_records(
+    context: PlanContext,
+    action: Action,
+) -> tuple[tuple[AttemptAuthority, ...], tuple[ResourceReservation, ...], tuple[ResourceUseLease, ...]]:
+    if action.kind in {ActionKind.ACCEPT_CHECKPOINT, ActionKind.RETURN_FOR_CORRECTION}:
+        item = context.items[_attempt_index(context.items, action.subject)]
+        authority, reservations, use_leases = _attempt_authority_records(
+            context,
+            action.subject,
+            item.item,
+        )
+        return (authority,), reservations, use_leases
+    if action.kind == ActionKind.COMPLETE and context.queue.header.get("schema") == SCHEMA_V2:
+        item = context.items[_attempt_index(context.items, action.subject)]
+        authority, reservations, use_leases = _attempt_authority_records(
+            context,
+            action.subject,
+            item.item,
+        )
+        return (authority,), reservations, use_leases
+    if action.kind == ActionKind.CLOSE and context.queue.header.get("schema") == SCHEMA_V2:
+        item = context.items[_item_index(context.items, action.subject)]
+        if item.attempt is not None:
+            authority, reservations, use_leases = _attempt_authority_records(
+                context,
+                item.attempt,
+                item.item,
+            )
+            return (authority,), reservations, use_leases
+    return (), (), ()
 
 
 def plan_transition(work_root: Path, project_root: Path, action: Action, value: TransitionInput) -> ChangeSet:
@@ -787,17 +970,7 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
         if inbox.is_dir()
         else ()
     )
-    attempt_authorities: tuple[AttemptAuthority, ...] = ()
-    resource_reservations: tuple[ResourceReservation, ...] = ()
-    resource_use_leases: tuple[ResourceUseLease, ...] = ()
-    if action.kind == ActionKind.RETURN_FOR_CORRECTION:
-        item = context.items[_attempt_index(context.items, action.subject)]
-        authority, resource_reservations, resource_use_leases = _return_authority_records(
-            context,
-            action.subject,
-            item.item,
-        )
-        attempt_authorities = (authority,)
+    attempt_authorities, resource_reservations, resource_use_leases = _decision_authority_records(context, action)
     history = work_root / "history" / "items"
     snapshot_items = tuple(
         WorkItem(

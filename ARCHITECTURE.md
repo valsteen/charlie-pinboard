@@ -94,6 +94,14 @@ This route proves behavior through the production command while keeping weak JSO
 
 An installed status, overview, actions, or validation command enters `interfaces.cli` and resolves the project root through the file adapter. The relevant legacy reader resolves the active authority, parses the Markdown files, validates their agreement, and constructs typed domain records or a read model. The CLI converts that result into human-readable text or stable JSON. Reads do not acquire permanent coordination ownership and do not make a derived view authoritative.
 
+### Nonterminal checkpoint acceptance
+
+`complete` remains the terminal transition for an accepted whole-item outcome. A coordinator may instead apply `accept-checkpoint` to an attempt in review. The domain decision pauses the same item and attempt, fences the attempt lease, revokes task-use authority, retains host-local reservations, and records the typed checkpoint identity, candidate, evidence, and acceptance time without creating terminal item history.
+
+The legacy transition adapter archives the exact top-level `result.md` and `review.md` bytes beneath `attempts/<attempt>/checkpoints/<checkpoint>/`, writes a schema-v2 receipt with their digests, removes the top-level evidence names, clears focus, and marks each retained resource claim `reserved` in the same filesystem transaction. Reserved claims reject competing attempts and parallel launch previews until the original attempt resumes and reacquires task-use authority; a legal terminal close or completion instead releases them atomically so another live attempt can claim them. Duplicate checkpoint identities and missing evidence reject before mutation. The coordinator then replaces and validates the canonical checkpoint section in the same `attempt.md` before using the existing resume and dispatch flow.
+
+Proposal intake remains a scheduling-neutral write to the immutable inbox. Conversation-level continuation after embedded intake is owned by the Pinboard skills through a compact anchor to existing durable state; it adds no scheduler, coordinator-ownership, or recovery record.
+
 ## Temporary compatibility and deletion condition
 
 `pinboard` is the primary command. The installed `repo-work` command is a migration-scoped alias to the same `charlie_pinboard.interfaces.cli` entry point because known local tasks may still invoke it before ledger migration. Existing `.codex/work` locations and `repo-work/*` schemas, journals, and protocol identifiers remain the serialized vocabulary of the known Markdown ledgers; they are not a second Python package identity.

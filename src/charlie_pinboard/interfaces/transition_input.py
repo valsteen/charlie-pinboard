@@ -2,8 +2,9 @@ from typing import Annotated, Final, Literal, assert_never
 
 import msgspec
 
-from charlie_pinboard.domain.identifiers import AttemptId, HostId, ItemId, TaskId
+from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, CheckpointId, HostId, ItemId, TaskId
 from charlie_pinboard.domain.model import (
+    AcceptCheckpointInput,
     AcceptedProposalState,
     AcceptProposalInput,
     ActivateInput,
@@ -57,6 +58,12 @@ class EvidenceInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=Tr
     evidence: NonEmptyLine
 
 
+class AcceptCheckpointInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    checkpoint: Identity
+    candidate: NonEmptyLine
+    evidence: NonEmptyLine
+
+
 class CloseInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     outcome: CloseOutcome
     reason: NonEmptyLine
@@ -90,6 +97,7 @@ type InputPayload = (
     | ReasonInputPayload
     | BlockInputPayload
     | EvidenceInputPayload
+    | AcceptCheckpointInputPayload
     | CloseInputPayload
     | DeferInputPayload
     | AcceptProposalInputPayload
@@ -108,6 +116,7 @@ INPUT_MODELS: dict[str, InputModel] = {
     "block": BlockInputPayload,
     "block-item": BlockInputPayload,
     "complete": EvidenceInputPayload,
+    "accept-checkpoint": AcceptCheckpointInputPayload,
     "close": CloseInputPayload,
     "reopen": EvidenceInputPayload,
     "defer": DeferInputPayload,
@@ -122,7 +131,7 @@ INPUT_MODELS: dict[str, InputModel] = {
 TRANSITION_ACTION_KINDS: Final = tuple(INPUT_MODELS)
 
 
-def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # noqa: C901 - exhaustive boundary conversion
+def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # noqa: C901, PLR0912 - exhaustive boundary conversion
     model = INPUT_MODELS.get(kind)
     if model is None:
         raise TransitionInputError("ACTION_NOT_MUTATING", f"Action '{kind}' is not a canonical transition.")
@@ -140,6 +149,12 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # 
         return BlockInput(payload.reason, tuple(ItemId(value) for value in payload.depends_on))
     if isinstance(payload, EvidenceInputPayload):
         return EvidenceInput(payload.evidence)
+    if isinstance(payload, AcceptCheckpointInputPayload):
+        return AcceptCheckpointInput(
+            CheckpointId(payload.checkpoint),
+            CandidateId(payload.candidate),
+            payload.evidence,
+        )
     if isinstance(payload, CloseInputPayload):
         return CloseInput(payload.outcome, payload.reason)
     if isinstance(payload, DeferInputPayload):

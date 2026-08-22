@@ -7,6 +7,8 @@ description: Preserve one newly discovered project finding in the pinboard's imm
 
 Convert one explicit finding into an immutable proposal. Do not edit the canonical queue or claim admission.
 
+Intake may be standalone or embedded in ongoing Pinboard coordination. Standalone intake may end after its persistence receipt. Before embedded intake, retain a compact continuation anchor containing the pre-intake objective, the next promised action, and the exact durable owner selector. Intake never changes scheduling, so return control to that anchor after persistence and optional notification handling.
+
 ## Preconditions
 
 1. Resolve this plugin's executable relative to this file as `../../scripts/pinboard`.
@@ -47,6 +49,8 @@ Before creating a proposal, distinguish exact prior coverage from a merely relat
 5. Optionally notify that holder with the proposal ID and shared work root. Repository persistence, not messaging, is the correctness boundary.
 6. Report persistence and delivery separately.
 
+For embedded intake, resume the invoking coordinator before the surrounding turn ends. If context compaction obscured the conversation, re-read the anchor's active or paused item, attempt, proposal, or exact selector rather than inventing continuation state. Complete the promised action when it remains in scope; otherwise surface its exact blocker or durably defer it at an exact owner.
+
 If transport is unavailable, no coordination lease exists, or delivery fails, retain the validated proposal in the inbox. Report notification as unavailable without treating that as a persistence failure. Any later chat can discover it through status, so never ask the human to relay the proposal or authorize lease revocation merely to deliver an optional notification.
 
 ## Result language
@@ -66,7 +70,7 @@ When proposal creation fails, `not recorded` is an unresolved state, not a termi
 - `Current work`: blocked or continuing;
 - `Next owner`: this task for a safe retry, or the human for one named decision.
 
-Treat a stale proposal view or a coordination-holder change during optional delivery as expected concurrency. Retry once when doing so needs no new authority. If delivery remains unavailable after persistence, stop with no human action because the inbox is authoritative. If retry needs new authority, changes scope, or overrides another owner, ask exactly one concrete approval question. If persistence was never authorized, ask whether to preserve or dismiss the finding. Never tell the human to contact or notify the coordinating chat.
+Treat a stale proposal view or a coordination-holder change during optional delivery as expected concurrency. Retry once when doing so needs no new authority. If delivery remains unavailable after persistence, stop notification work with no human action because the inbox is authoritative; this does not end an embedded caller's surrounding turn. If retry needs new authority, changes scope, or overrides another owner, ask exactly one concrete approval question. If persistence was never authorized, ask whether to preserve or dismiss the finding. Never tell the human to contact or notify the coordinating chat.
 
 Then use one of these precise lifecycle outcomes:
 

@@ -193,6 +193,11 @@ class CliTest(unittest.TestCase):
         )
         self.assertEqual([], empty["required"])
         self.assertEqual({}, empty["properties"])
+        checkpoint = self.json_schema_root(
+            self.json_object(self.run_json_cli(*common, "input-contract", "accept-checkpoint")["payload_schema"])
+        )
+        self.assertEqual(["checkpoint", "candidate", "evidence"], checkpoint["required"])
+        self.assertFalse(checkpoint["additionalProperties"])
 
         missing_result, _, missing_stderr = self.run_cli(
             *common,

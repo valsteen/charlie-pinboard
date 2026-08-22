@@ -10,7 +10,12 @@ from charlie_pinboard.legacy.atomic import transition_lock
 from charlie_pinboard.legacy.authority import AuthorityVersion, resolve_authority
 from charlie_pinboard.legacy.leases import LeaseError, LeaseStatus, read_attempt_lease
 from charlie_pinboard.legacy.markdown import ITEM_PATTERN, QueueItem, parse_item, parse_queue
-from charlie_pinboard.legacy.resources import ResourceError, read_resource_claim, require_resource
+from charlie_pinboard.legacy.resources import (
+    ResourceClaimStatus,
+    ResourceError,
+    read_resource_claim,
+    require_resource,
+)
 from charlie_pinboard.legacy.storage_layout import PathIdentityError, identity_child
 from charlie_pinboard.legacy.validate import validate_work_state
 
@@ -110,7 +115,12 @@ def _busy_resource_reason(root: Path, resource_id: str, host_id: str, current: d
         if error.code == "RESOURCE_CLAIM_REQUIRED":
             return None
         raise ParallelError(error.code, str(error).partition(": ")[2]) from error
-    if claim.status != LeaseStatus.ACTIVE or current >= claim.expires_at:
+    if claim.status == ResourceClaimStatus.RESERVED:
+        return ParallelReason(
+            ParallelReasonCode.RESOURCE_BUSY,
+            f"Resource '{resource_id}' on '{host_id}' is reserved by paused attempt '{claim.attempt_id}'.",
+        )
+    if claim.status != ResourceClaimStatus.ACTIVE or current >= claim.expires_at:
         return None
     try:
         require_resource(root, resource_id, host_id, claim.lease_id, claim.generation, now=current)

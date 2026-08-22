@@ -8,6 +8,8 @@ from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     AttemptId,
+    CandidateId,
+    CheckpointId,
     ItemId,
     LeaseId,
     LedgerId,
@@ -15,6 +17,7 @@ from charlie_pinboard.domain.identifiers import (
     SubjectId,
 )
 from charlie_pinboard.domain.model import (
+    AcceptCheckpointInput,
     AcceptProposalInput,
     ActivateInput,
     AttemptAuthority,
@@ -44,6 +47,7 @@ from charlie_pinboard.domain.resource_decisions import (
 
 
 class ActionKind(Enum):
+    ACCEPT_CHECKPOINT = "accept-checkpoint"
     ACCEPT_PROPOSAL = "accept-proposal"
     ACTIVATE = "activate"
     BLOCK = "block"
@@ -154,6 +158,15 @@ class AttemptAuthorityChange:
 
 
 @dataclass(frozen=True, slots=True)
+class CheckpointAcceptanceChange:
+    checkpoint: CheckpointId
+    attempt: AttemptId
+    candidate: CandidateId
+    evidence: str
+    accepted_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class TransitionReceipt:
     action_id: ActionId
     item: ItemId | None
@@ -171,6 +184,7 @@ class Decision:
     attempt_authority_change: AttemptAuthorityChange | None = None
     reservation_changes: tuple[ReservationChange, ...] = ()
     resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = ()
+    checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None
 
 
 def _resource_token(value: ResourceAuthority) -> ResourceToken:
@@ -258,11 +272,18 @@ def _active_coordinator_actions(snapshot: LedgerSnapshot, factory: ActionFactory
         ):
             result.append(factory.make(ActionKind.COMPLETE, item.attempt, f"Accept and complete {item.item}"))
         if item.state == WorkState.REVIEW and factory.actor.authorization == AuthorizationKind.COORDINATION:
-            result.append(
-                factory.make(
-                    ActionKind.RETURN_FOR_CORRECTION,
-                    item.attempt,
-                    f"Return {item.item} for correction",
+            result.extend(
+                (
+                    factory.make(
+                        ActionKind.ACCEPT_CHECKPOINT,
+                        item.attempt,
+                        f"Accept a checkpoint for {item.item}",
+                    ),
+                    factory.make(
+                        ActionKind.RETURN_FOR_CORRECTION,
+                        item.attempt,
+                        f"Return {item.item} for correction",
+                    ),
                 )
             )
     return result
@@ -369,6 +390,7 @@ def _result(
     attempt_authority_change: AttemptAuthorityChange | None = None,
     reservation_changes: tuple[ReservationChange, ...] = (),
     resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = (),
+    checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None,
     outcome: str | None = None,
     evidence: str | None = None,
 ) -> Decision:
@@ -380,6 +402,7 @@ def _result(
         attempt_authority_change,
         reservation_changes,
         resource_use_lease_changes,
+        checkpoint_acceptance_change,
     )
 
 
@@ -417,6 +440,28 @@ def _pause_or_block(snapshot: LedgerSnapshot, action: Action, value: TransitionI
     )
 
 
+def _release_attempt_resources(
+    snapshot: LedgerSnapshot,
+    attempt: AttemptId,
+) -> tuple[tuple[ReservationChange, ...], tuple[ResourceUseLeaseChange, ...]]:
+    reservations = tuple(
+        reservation
+        for reservation in snapshot.resource_reservations
+        if reservation.attempt == attempt and reservation.state == ReservationState.ACTIVE
+    )
+    reservation_changes = tuple(
+        ReservationChange(reservation, replace(reservation, state=ReservationState.RELEASED))
+        for reservation in reservations
+    )
+    reservation_ids = {reservation.reservation_id for reservation in reservations}
+    use_lease_changes = tuple(
+        ResourceUseLeaseChange(use_lease, replace(use_lease, state=UseLeaseState.RELEASED))
+        for use_lease in snapshot.resource_use_leases
+        if use_lease.reservation_id in reservation_ids and use_lease.state != UseLeaseState.RELEASED
+    )
+    return reservation_changes, use_lease_changes
+
+
 def _complete(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     attempt_id = AttemptId(action.subject)
     item = _attempt_item(snapshot, attempt_id)
@@ -433,12 +478,15 @@ def _complete(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, 
     if item.item in snapshot.history_items:
         raise DecisionError(DecisionErrorCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     before = AttemptState.REVIEW if item.state == WorkState.REVIEW else AttemptState.ACTIVE
+    reservation_changes, use_lease_changes = _release_attempt_resources(snapshot, attempt_id)
     return _result(
         action,
         now,
         item=item.item,
         item_change=ItemChange(item.item, item.state, None, item.attempt, value.evidence),
         attempt_change=AttemptChange(attempt_id, before, AttemptState.DONE),
+        reservation_changes=reservation_changes,
+        resource_use_lease_changes=use_lease_changes,
         evidence=value.evidence,
     )
 
@@ -456,15 +504,20 @@ def _close(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now
     if item.item in snapshot.history_items:
         raise DecisionError(DecisionErrorCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     attempt_change = None
+    reservation_changes: tuple[ReservationChange, ...] = ()
+    use_lease_changes: tuple[ResourceUseLeaseChange, ...] = ()
     if item.attempt is not None:
         attempt = snapshot.attempts_by_id().get(item.attempt)
         attempt_change = AttemptChange(item.attempt, None if attempt is None else attempt.state, AttemptState.DONE)
+        reservation_changes, use_lease_changes = _release_attempt_resources(snapshot, item.attempt)
     return _result(
         action,
         now,
         item=item.item,
         item_change=ItemChange(item.item, item.state, None, item.attempt, value.reason),
         attempt_change=attempt_change,
+        reservation_changes=reservation_changes,
+        resource_use_lease_changes=use_lease_changes,
         outcome=value.outcome.value,
         evidence=value.reason,
     )
@@ -579,6 +632,67 @@ def _return_for_correction(
     )
 
 
+def _accept_checkpoint(
+    snapshot: LedgerSnapshot,
+    action: Action,
+    value: TransitionInput,
+    now: datetime,
+) -> Decision:
+    attempt_id = AttemptId(action.subject)
+    item = _attempt_item(snapshot, attempt_id)
+    if item.state != WorkState.REVIEW:
+        raise DecisionError(
+            DecisionErrorCode.ACTION_NOT_AVAILABLE,
+            "Only an attempt in review can have a checkpoint accepted.",
+        )
+    if not isinstance(value, AcceptCheckpointInput) or not value.evidence.strip() or not value.candidate.strip():
+        raise DecisionError(
+            DecisionErrorCode.TRANSITION_INPUT_INVALID,
+            "Checkpoint acceptance requires a checkpoint, candidate, and acceptance evidence.",
+        )
+    authorities = tuple(candidate for candidate in snapshot.attempt_authorities if candidate.attempt == attempt_id)
+    if len(authorities) != 1:
+        raise DecisionError(
+            DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED,
+            "Checkpoint acceptance requires exactly one current attempt-authority record to fence.",
+        )
+    authority = authorities[0]
+    authority_change = AttemptAuthorityChange(
+        authority,
+        replace(authority, lease_id=None, generation=authority.generation + 1, resources=()),
+    )
+    reservation_ids = {
+        reservation.reservation_id
+        for reservation in snapshot.resource_reservations
+        if reservation.attempt == attempt_id and reservation.state == ReservationState.ACTIVE
+    }
+    use_lease_changes = tuple(
+        ResourceUseLeaseChange(
+            use_lease,
+            replace(use_lease, state=UseLeaseState.REVOKED),
+        )
+        for use_lease in snapshot.resource_use_leases
+        if use_lease.reservation_id in reservation_ids and use_lease.state == UseLeaseState.ACTIVE
+    )
+    return _result(
+        action,
+        now,
+        item=item.item,
+        item_change=ItemChange(item.item, WorkState.REVIEW, WorkState.PAUSED, item.attempt),
+        attempt_change=AttemptChange(attempt_id, AttemptState.REVIEW, AttemptState.PAUSED),
+        attempt_authority_change=authority_change,
+        resource_use_lease_changes=use_lease_changes,
+        evidence=value.evidence,
+        checkpoint_acceptance_change=CheckpointAcceptanceChange(
+            value.checkpoint,
+            attempt_id,
+            value.candidate,
+            value.evidence,
+            now,
+        ),
+    )
+
+
 def _simple_item_transition(
     snapshot: LedgerSnapshot,
     action: Action,
@@ -654,6 +768,7 @@ def _transfer(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, 
 
 
 DECISION_HANDLERS: dict[ActionKind, DecisionHandler] = {
+    ActionKind.ACCEPT_CHECKPOINT: _accept_checkpoint,
     ActionKind.ACTIVATE: _activate,
     ActionKind.PAUSE: _pause_or_block,
     ActionKind.BLOCK: _pause_or_block,

@@ -90,6 +90,7 @@ def replace(instance: Any, **changes: Any) -> Any:  # noqa: ANN401
 
 def action(kind: ActionKind, subject: str) -> ActionValue:
     if kind in {
+        ActionKind.ACCEPT_CHECKPOINT,
         ActionKind.BLOCK,
         ActionKind.COMPLETE,
         ActionKind.CONTINUE,
