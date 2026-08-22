@@ -94,7 +94,7 @@ Interfaces may call application use cases, adapters, and the temporary legacy ru
 | `leases.py`, `resources.py` | Attempt, coordination, and resource leases persisted in the current filesystem authority |
 | `actions.py`, `revisions.py` | Available-action projection and stale-subject or ledger revision calculation over current files |
 | `transition.py`, `transition_plan.py` | Filesystem-coupled mutation sequencing and translation of pure decisions into legacy file changes |
-| `proposals.py`, `overview.py`, `parallel.py`, `dispatch.py` | Filesystem-backed proposal intake, read models, concurrency previews, and worker-launch preparation |
+| `proposals.py`, `overview.py`, `parallel.py`, `dispatch.py` | Filesystem-backed proposal intake, read models, concurrency previews, and worker-launch preparation, including reviewed-authority and immutable brief-review validation for cross-boundary checkpoints |
 
 The legacy package may use domain values and decisions. It does not define the future SQLite model and is not a source for new steady-state SQLite behavior.
 
@@ -109,6 +109,12 @@ This route proves behavior through the production command while keeping weak JSO
 ### Read or query
 
 An installed status, overview, actions, or validation command enters `interfaces.cli` and resolves the project root through the file adapter. The relevant legacy reader resolves the active authority, parses the Markdown files, validates their agreement, and constructs typed domain records or a read model. The CLI converts that result into human-readable text or stable JSON. Reads do not acquire permanent coordination ownership and do not make a derived view authoritative.
+
+### Worker dispatch
+
+The installed `pinboard dispatch` command enters `interfaces.cli` with one current dispatch action, an exact checkpoint heading, and a typed execution environment. `legacy.dispatch` revalidates that action and the active attempt under the existing authority transaction. Local checkpoints continue directly to canonical prompt rendering.
+
+For a cross-boundary checkpoint, `legacy.dispatch` parses the Contract, reviewed-authority, authoritative-coverage, and lifecycle records into concrete values. It resolves each selected authority against the canonical project, verifies its selected-byte digest, and binds the exact checkpoint and reviewed-authority-table bytes to immutable ready evidence under `attempts/<attempt>/brief-reviews/`. That evidence is an independent planning-review dependency, not a new lifecycle state. Missing, stale, incomplete, non-ready, or same-owner evidence rejects before prompt rendering. The resulting launch prompt remains only a pointer to the canonical brief and execution environment; it does not duplicate those semantics.
 
 ### Nonterminal checkpoint acceptance
 

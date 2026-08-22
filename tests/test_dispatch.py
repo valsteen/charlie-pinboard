@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 import json
 import multiprocessing
@@ -15,6 +16,7 @@ from charlie_pinboard.legacy.dispatch import DispatchError, prepare_dispatch, re
 from .support import create_state
 
 CHECKPOINT = "Sequence 2 — Complete the shared protocol cutover"
+CONTRACT_INVARIANT = "Kotlin and Rust use protocol v13 together."
 CONTRACT_TABLE = """\
 #### Contract table
 
@@ -22,6 +24,10 @@ CONTRACT_TABLE = """\
 | --- | --- | --- | --- | --- | --- |
 | Kotlin and Rust use protocol v13 together. | Extension protocol | Rust connector | Unsupported version is explicit. | `pnpm rust:test` | Re-run after both consumers change. |
 """
+AUTHORITY_COLUMNS = "| Authority ID | Selector | Reviewed SHA-256 | In-scope families |"
+COVERAGE_COLUMNS = "| Authority / invariant family | Required distinction | Required consumer / production observation | Disposition | Brief owner | Cheapest counterexample |"
+REVIEW_COLUMNS = "| Authority / invariant family | Brief owner | Verdict | Cheapest counterexample result |"
+LIFECYCLE_COLUMNS = "| Operation | Allowed source state | Required authority | Required observation / evidence | State and fencing effects | Nearest illegal sibling / stable rejection |"
 ATTEMPT = f"""\
 ---
 kind: work-attempt
@@ -61,6 +67,29 @@ Do not begin sequence 3.
 """
 
 
+def _section_bytes(text: str, heading: str) -> bytes:
+    lines = text.splitlines()
+    heading_line = f"### {heading}"
+    start = lines.index(heading_line)
+    end = next((index for index in range(start + 1, len(lines)) if lines[index].startswith("### ")), len(lines))
+    return ("\n".join(lines[start:end]) + "\n").encode()
+
+
+def _table_lines(section: str, header: str) -> tuple[str, ...]:
+    lines = section.splitlines()
+    start = lines.index(header)
+    rows = [header, lines[start + 1]]
+    for line in lines[start + 2 :]:
+        if not line.startswith("|"):
+            break
+        rows.append(line)
+    return tuple(rows)
+
+
+def _cells(line: str) -> tuple[str, ...]:
+    return tuple(cell.strip() for cell in line.strip()[1:-1].split("|"))
+
+
 def _prepare_waiting_dispatch(
     work: str,
     project: str,
@@ -92,7 +121,120 @@ class DispatchTest(unittest.TestCase):
             result = main(arguments)
         return result, stdout.getvalue(), stderr.getvalue()
 
-    def active_state(self) -> tuple[Path, Path, Path]:
+    def _reviewed_attempt(self, project: Path, *, lifecycle: str | None = None) -> str:
+        architecture = "# Architecture\r\n\r\n## Protocol semantics\r\n\r\nProtocol v13 is shared.\r\n\r\n## Other\r\n\r\nNot selected.\r\n"
+        plan = b'{"consumer":"rust"}\n'
+        (project / "architecture.md").write_bytes(architecture.encode())
+        (project / "plan.json").write_bytes(plan)
+        architecture_digest = hashlib.sha256(b"## Protocol semantics\n\nProtocol v13 is shared.\n\n").hexdigest()
+        plan_digest = hashlib.sha256(plan).hexdigest()
+        lifecycle_text = (
+            "Lifecycle partition: not-applicable — this protocol cutover changes no lifecycle operation."
+            if lifecycle is None
+            else lifecycle
+        )
+        checkpoint = f"""\
+### {CHECKPOINT}
+
+Checkpoint boundary: cross-boundary
+Checkpoint outcome: independently-buildable
+
+#### Reviewed authorities
+
+{AUTHORITY_COLUMNS}
+| --- | --- | --- | --- |
+| architecture | `architecture.md#Protocol semantics` | `{architecture_digest}` | protocol-contract |
+| plan | `plan.json` | `{plan_digest}` | consumer-proof |
+
+{CONTRACT_TABLE}
+
+#### Authoritative coverage
+
+{COVERAGE_COLUMNS}
+| --- | --- | --- | --- | --- | --- |
+| `authority:architecture#protocol-contract` | The protocol version remains shared. | Kotlin and Rust protocol consumers | contract | `contract:{CONTRACT_INVARIANT}` | Keep Kotlin on v12 while Rust moves to v13. |
+| `authority:plan#consumer-proof` | The Rust consumer is verified directly. | Rust connector | acceptance | `criterion:1` | Delete the Rust protocol test. |
+
+{lifecycle_text}
+
+#### Acceptance criteria
+
+1. The production Rust connector accepts protocol v13.
+
+Implement the coherent cutover described here.
+"""
+        return f"""\
+---
+kind: work-attempt
+schema: repo-work/v1
+attempt: universal-reveal-core-1
+item: universal-reveal-core
+state: active
+branch: codex/universal-reveal-core
+base_revision: abc123
+owner: worker-task
+owner_task_id: worker-task
+updated: "2026-08-16"
+---
+
+# Attempt
+
+{checkpoint}
+
+### Sequence 3 — Wire the product UI
+
+Later work.
+"""
+
+    def _write_review(
+        self,
+        work: Path,
+        *,
+        status: str = "complete",
+        verdict: str = "ready",
+        reviewer: str = "brief-reviewer-task",
+        authority_set_digest: str | None = None,
+        omit_last_row: bool = False,
+    ) -> Path:
+        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
+        section_bytes = _section_bytes(attempt_path.read_text(encoding="utf-8"), CHECKPOINT)
+        section = section_bytes.decode()
+        authority_table = _table_lines(section, AUTHORITY_COLUMNS)
+        coverage_rows = _table_lines(section, COVERAGE_COLUMNS)[2:]
+        if omit_last_row:
+            coverage_rows = coverage_rows[:-1]
+        review_rows = "\n".join(
+            f"| {cells[0]} | {cells[4]} | covered | Counterexample rejected. |"
+            for cells in (_cells(row) for row in coverage_rows)
+        )
+        checkpoint_digest = hashlib.sha256(section_bytes).hexdigest()
+        expected_authority_digest = hashlib.sha256(("\n".join(authority_table) + "\n").encode()).hexdigest()
+        review = f"""\
+---
+kind: work-brief-review
+schema: repo-work/v2
+attempt: universal-reveal-core-1
+checkpoint: "{CHECKPOINT}"
+checkpoint_sha256: "{checkpoint_digest}"
+reviewed_authority_set_sha256: "{authority_set_digest or expected_authority_digest}"
+reviewer_task_id: "{reviewer}"
+status: {status}
+verdict: {verdict}
+---
+
+# Brief review
+
+{REVIEW_COLUMNS}
+| --- | --- | --- | --- |
+{review_rows}
+"""
+        review_dir = attempt_path.parent / "brief-reviews"
+        review_dir.mkdir(exist_ok=True)
+        path = review_dir / f"{checkpoint_digest}.md"
+        path.write_text(review, encoding="utf-8")
+        return path
+
+    def active_state(self, *, local: bool = False) -> tuple[Path, Path, Path]:
         project, work = create_state(
             ["| universal-reveal-core | active | — | — | universal-reveal-core-1 | design | continue | Active. |"],
             focus_item="universal-reveal-core",
@@ -100,7 +242,14 @@ class DispatchTest(unittest.TestCase):
             create_active_attempt=True,
         )
         attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(ATTEMPT, encoding="utf-8")
+        if local:
+            local_attempt = ATTEMPT.replace(
+                "Checkpoint boundary: cross-boundary", "Checkpoint boundary: local"
+            ).replace(f"Checkpoint outcome: independently-buildable\n\n{CONTRACT_TABLE}\n", "")
+            attempt_path.write_text(local_attempt, encoding="utf-8")
+        else:
+            attempt_path.write_text(self._reviewed_attempt(project), encoding="utf-8")
+            self._write_review(work)
         environment_path = Path(tempfile.mkdtemp()) / "environment.json"
         environment_path.write_text(
             json.dumps(
@@ -166,7 +315,9 @@ class DispatchTest(unittest.TestCase):
     def test_cross_boundary_checkpoint_requires_a_complete_contract_table(self) -> None:
         project, work, environment = self.active_state()
         attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(ATTEMPT.replace("Rust connector", "—"), encoding="utf-8")
+        attempt_path.write_text(
+            attempt_path.read_text(encoding="utf-8").replace("Rust connector", "—", 1), encoding="utf-8"
+        )
         arguments = self.dispatch_arguments(project, work, environment)
 
         result, _, stderr = self.run_cli(*arguments)
@@ -180,7 +331,9 @@ class DispatchTest(unittest.TestCase):
         attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
         invalid_separator = "| not | a | markdown | table | separator | row |"
         attempt_path.write_text(
-            ATTEMPT.replace("| --- | --- | --- | --- | --- | --- |", invalid_separator),
+            attempt_path.read_text(encoding="utf-8").replace(
+                "| --- | --- | --- | --- | --- | --- |", invalid_separator, 1
+            ),
             encoding="utf-8",
         )
         arguments = self.dispatch_arguments(project, work, environment)
@@ -194,7 +347,9 @@ class DispatchTest(unittest.TestCase):
         project, work, environment = self.active_state()
         attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
         attempt_path.write_text(
-            ATTEMPT.replace("Checkpoint outcome: independently-buildable", "Checkpoint outcome: partial"),
+            attempt_path.read_text(encoding="utf-8").replace(
+                "Checkpoint outcome: independently-buildable", "Checkpoint outcome: partial"
+            ),
             encoding="utf-8",
         )
         arguments = self.dispatch_arguments(project, work, environment)
@@ -207,7 +362,10 @@ class DispatchTest(unittest.TestCase):
     def test_checkpoint_requires_an_explicit_boundary_classification(self) -> None:
         project, work, environment = self.active_state()
         attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(ATTEMPT.replace("Checkpoint boundary: cross-boundary\n", ""), encoding="utf-8")
+        attempt_path.write_text(
+            attempt_path.read_text(encoding="utf-8").replace("Checkpoint boundary: cross-boundary\n", ""),
+            encoding="utf-8",
+        )
         arguments = self.dispatch_arguments(project, work, environment)
 
         result, _, stderr = self.run_cli(*arguments)
@@ -216,20 +374,150 @@ class DispatchTest(unittest.TestCase):
         self.assertIn("DISPATCH_BOUNDARY_MISSING", stderr)
 
     def test_local_checkpoint_does_not_require_a_contract_table(self) -> None:
-        project, work, environment = self.active_state()
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(
-            ATTEMPT.replace("Checkpoint boundary: cross-boundary", "Checkpoint boundary: local").replace(
-                f"{CONTRACT_TABLE}\n", ""
-            ),
-            encoding="utf-8",
-        )
+        project, work, environment = self.active_state(local=True)
         arguments = self.dispatch_arguments(project, work, environment)
 
         result, prompt, stderr = self.run_cli(*arguments)
 
         self.assertEqual(0, result, stderr)
         self.assertIn("sole semantic execution contract", prompt)
+
+    def test_authority_coverage_and_owner_failures_reject_before_launch(self) -> None:
+        cases = (
+            (
+                "absent declared family",
+                "| `authority:plan#consumer-proof` | The Rust consumer is verified directly. | Rust connector | acceptance | `criterion:1` | Delete the Rust protocol test. |",
+                "",
+            ),
+            (
+                "unresolved contract owner",
+                f"`contract:{CONTRACT_INVARIANT}`",
+                "`contract:Missing invariant`",
+            ),
+            (
+                "unknown family",
+                "authority:plan#consumer-proof",
+                "authority:plan#unknown-family",
+            ),
+        )
+        for name, old, new in cases:
+            with self.subTest(name=name):
+                project, work, environment = self.active_state()
+                attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
+                attempt_path.write_text(attempt_path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
+                self._write_review(work)
+
+                result, _, stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
+
+                self.assertEqual(14, result)
+                self.assertIn("DISPATCH_AUTHORITY_COVERAGE_INVALID", stderr)
+
+    def test_changed_reviewed_source_rejects_but_unselected_heading_bytes_do_not(self) -> None:
+        project, work, environment = self.active_state()
+        architecture = project / "architecture.md"
+        architecture.write_bytes(architecture.read_bytes().replace(b"Not selected.", b"Still not selected."))
+
+        accepted, _, accepted_stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
+
+        self.assertEqual(0, accepted, accepted_stderr)
+        architecture.write_bytes(
+            architecture.read_bytes().replace(b"Protocol v13 is shared.", b"Protocol v14 is shared.")
+        )
+        rejected, _, rejected_stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
+        self.assertEqual(14, rejected)
+        self.assertIn("DISPATCH_AUTHORITY_STALE", rejected_stderr)
+
+        project, work, environment = self.active_state()
+        plan = project / "plan.json"
+        plan.write_bytes(plan.read_bytes().replace(b"\n", b"\r\n"))
+        rejected, _, rejected_stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
+        self.assertEqual(14, rejected)
+        self.assertIn("DISPATCH_AUTHORITY_STALE", rejected_stderr)
+
+    def test_lifecycle_partition_shape_and_review_truth_are_separate(self) -> None:
+        lifecycle_table = f"""\
+Lifecycle partition: required
+
+#### Lifecycle partition
+
+{LIFECYCLE_COLUMNS}
+| --- | --- | --- | --- | --- | --- |
+| direct-preserve | active | human authorization | exact observation | revoke and fence | quarantined / stable rejection |
+"""
+        collapsed_lifecycle_table = lifecycle_table.replace(
+            "| direct-preserve | active |", "| direct-preserve | active or quarantined |"
+        )
+        cases = (
+            ("required and reviewed", lifecycle_table, "ready", 0, ""),
+            (
+                "required without table",
+                "Lifecycle partition: required",
+                "ready",
+                14,
+                "DISPATCH_LIFECYCLE_PARTITION_INVALID",
+            ),
+            (
+                "full shape but rejected semantics",
+                collapsed_lifecycle_table,
+                "rejected",
+                14,
+                "DISPATCH_BRIEF_REVIEW_NOT_READY",
+            ),
+        )
+        for name, lifecycle, verdict, expected_result, expected_error in cases:
+            with self.subTest(name=name):
+                project, work, environment = self.active_state()
+                attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
+                attempt_path.write_text(self._reviewed_attempt(project, lifecycle=lifecycle), encoding="utf-8")
+                self._write_review(work, verdict=verdict)
+
+                result, _, stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
+
+                self.assertEqual(expected_result, result, stderr)
+                if expected_error:
+                    self.assertIn(expected_error, stderr)
+
+    def test_absent_stale_mismatched_incomplete_or_nonindependent_review_rejects(self) -> None:
+        cases = (
+            ("absent", "DISPATCH_BRIEF_REVIEW_MISSING"),
+            ("stale", "DISPATCH_BRIEF_REVIEW_MISSING"),
+            ("authority", "DISPATCH_BRIEF_REVIEW_STALE"),
+            ("nonready", "DISPATCH_BRIEF_REVIEW_NOT_READY"),
+            ("incomplete", "DISPATCH_BRIEF_REVIEW_INCOMPLETE"),
+            ("worker", "DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT"),
+        )
+        for mutation, expected in cases:
+            with self.subTest(mutation=mutation):
+                project, work, environment = self.active_state()
+                attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
+                review_path = next((attempt_path.parent / "brief-reviews").glob("*.md"))
+                if mutation == "absent":
+                    review_path.unlink()
+                elif mutation == "stale":
+                    attempt_path.write_text(
+                        attempt_path.read_text(encoding="utf-8").replace(
+                            "The production Rust connector accepts protocol v13.",
+                            "The production Rust connector accepts protocol v13 exactly.",
+                        ),
+                        encoding="utf-8",
+                    )
+                elif mutation == "authority":
+                    review_path.unlink()
+                    self._write_review(work, authority_set_digest="b" * 64)
+                elif mutation == "nonready":
+                    review_path.unlink()
+                    self._write_review(work, verdict="rejected")
+                elif mutation == "incomplete":
+                    review_path.unlink()
+                    self._write_review(work, omit_last_row=True)
+                elif mutation == "worker":
+                    review_path.unlink()
+                    self._write_review(work, reviewer="worker-task")
+
+                result, _, stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
+
+                self.assertEqual(14, result)
+                self.assertIn(expected, stderr)
 
     def test_environment_branch_must_match_the_attempt(self) -> None:
         project, work, environment = self.active_state()
@@ -284,7 +572,10 @@ class DispatchTest(unittest.TestCase):
         with transition_lock(work):
             process.start()
             self.assertTrue(started.wait(timeout=5))
-            attempt_path.write_text(ATTEMPT.replace("Later work.", "Later accepted work."), encoding="utf-8")
+            attempt_path.write_text(
+                attempt_path.read_text(encoding="utf-8").replace("Later work.", "Later accepted work."),
+                encoding="utf-8",
+            )
         process.join(timeout=10)
 
         self.assertEqual(0, process.exitcode)

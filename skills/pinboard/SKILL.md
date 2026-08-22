@@ -58,12 +58,13 @@ One current coordination lease may authorize graph-wide transitions. Disjoint at
 When a coordinating chat launches a worker for an active attempt:
 
 1. Make `attempt.md` the only semantic execution brief. Put the accepted scope, checkpoint, named source selectors, acceptance criteria, and exact checks there.
-2. Give every dispatched checkpoint one explicit `Checkpoint boundary: local` or `Checkpoint boundary: cross-boundary` line. Use `cross-boundary` when that checkpoint changes one contract across multiple production owners or required consumers. Before launching a cross-boundary checkpoint, also record `Checkpoint outcome: independently-buildable` and a compact `Contract table` with these columns: `Invariant`; `Authority / owner`; `Required consumer or production observation`; `Failure classification`; `Exact verification`; `Preflight / final revalidation`.
-3. Select the exact `dispatch:<attempt>` action. Record only `schema`, `checkout`, `branch`, `starting_revision`, and `permissions` in a `repo-work-dispatch/v1` environment JSON file. Permission values are `repository-read`, `repository-write`, `network`, `external-write`, and `live-application`.
-4. Run `pinboard dispatch` with the action tokens, exact checkpoint heading, and environment file. Launch the worker with the rendered prompt unchanged. Use `--prompt` to verify a prompt received through another transport before launch.
-5. Release coordination after dispatch preparation. Retain the worker identifier and its attempt lease. Do not edit the worker's checkout or review candidate while it is still changing.
-6. Wait until the worker finishes or needs attention. A wait timeout, progress update, or successful launch is not a terminal result.
-7. After completion, read `result.md` or `blocker.md`, inspect the stable candidate, and perform the review described below.
+2. Give every dispatched checkpoint one explicit `Checkpoint boundary: local` or `Checkpoint boundary: cross-boundary` line. Use `cross-boundary` when that checkpoint changes one contract across multiple production owners or required consumers. Local checkpoints retain their ordinary lightweight path.
+3. Before launching a cross-boundary checkpoint, read [references/brief-preservation.md](references/brief-preservation.md) completely. Compile the reviewed-authority inventory, authoritative coverage, contract, and lifecycle disposition from the exact named sources. Commission one fresh-context read-only reviewer to test every cheapest counterexample and publish digest-bound ready evidence. When coverage is missing or ambiguous, correct the brief before implementation; do not file a code defect for code that does not exist.
+4. Select the exact `dispatch:<attempt>` action. Record only `schema`, `checkout`, `branch`, `starting_revision`, and `permissions` in a `repo-work-dispatch/v1` environment JSON file. Permission values are `repository-read`, `repository-write`, `network`, `external-write`, and `live-application`.
+5. Run `pinboard dispatch` with the action tokens, exact checkpoint heading, and environment file. Launch the worker with the rendered prompt unchanged. Use `--prompt` to verify a prompt received through another transport before launch.
+6. Release coordination after dispatch preparation. Retain the worker identifier and its attempt lease. Do not edit the worker's checkout or review candidate while it is still changing.
+7. Wait until the worker finishes or needs attention. A wait timeout, progress update, or successful launch is not a terminal result.
+8. After completion, read `result.md` or `blocker.md`, inspect the stable candidate, and perform the review described below.
 
 The dispatch prompt identifies the canonical brief, checkpoint, and execution environment. It must not repeat acceptance semantics, checks, deferrals, or source-reading instructions. Change the attempt first when its contract is wrong.
 
@@ -177,7 +178,7 @@ Never absorb the prerequisite silently into the current attempt.
 
 ## Review and completion
 
-Treat worker completion as a review request, not acceptance. Compare the attempt brief, diff or commit, result receipt, and fresh proportionate verification. Complete the item only when every acceptance criterion is satisfied and current knowledge owners are reconciled.
+Treat worker completion as a review request, not acceptance. Compare the attempt brief, diff or commit, result receipt, and fresh proportionate verification. For a reviewed cross-boundary brief, reuse its compiled authority map and account for every acceptance criterion, contract row, coverage row, and lifecycle sibling row. A correction review may reuse exact unchanged selector digests and owners, but it must re-read changed owners and sweep every changed or neighboring row before returning one complete correction package. Complete the item only when every acceptance criterion is satisfied and current knowledge owners are reconciled.
 
 For accepted intermediate work, use the checkpoint acceptance path above. Its paused item and attempt remain nonterminal, checkpoint evidence remains immutable under the same attempt, and terminal item history remains absent until a later full-outcome completion.
 

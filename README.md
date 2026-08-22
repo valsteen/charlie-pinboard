@@ -53,7 +53,7 @@ Everything stays ordinary repository work: code, branches, worktrees, Markdown, 
 
 You plan a change carefully, hand it to another AI, and get back something that is almost right. One half of a protocol was postponed even though both halves had to move together. The exact test commands became “run the relevant checks.” A request to read one section became a tour of half the repository. After seeing the same mistakes recur, they stop looking random: they happen when the task is retold on its way to the worker.
 
-The pinboard keeps that retelling out of the workflow. The worker goes back to the accepted attempt brief, while the launch message says only where to work and which checkpoint to pick up. For work that crosses components, a small contract table records who owns what, which parts must move together, and how to prove the result works. Review still gets the final say, but it should not have to reconstruct the task first.
+The pinboard keeps that retelling out of the workflow. The worker goes back to the accepted attempt brief, while the launch message says only where to work and which checkpoint to pick up. When consequential work crosses components, the brief is compiled from exact named architecture or plan sections and independently checked against them before launch. That catches a missing state, consumer, or counterexample while the brief is still cheap to correct. Routine local work keeps the lightweight path. Review still gets the final say, but it should not have to reconstruct the task first.
 
 ## What it gives you
 
