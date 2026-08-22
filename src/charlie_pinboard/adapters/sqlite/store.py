@@ -22,6 +22,7 @@ from charlie_pinboard.application.mutations import (
     AttemptAuthorityMutation,
     CoordinationAuthorityMutation,
     DependencyEditMutation,
+    MutationContractError,
     PlanningImpactMutation,
     PlanningResolutionMutation,
     ProposalCreationMutation,
@@ -30,6 +31,7 @@ from charlie_pinboard.application.mutations import (
     ResourceMutation,
     ResourceRequirementEditMutation,
     StoredStateMutation,
+    expected_stored_state,
 )
 from charlie_pinboard.application.stored_state import (
     ArtifactKind,
@@ -1936,49 +1938,17 @@ class _StoredMutationWriter:
                 DecisionErrorCode.ACTION_NOT_AVAILABLE,
                 "The stored work state changed; rediscover the mutation before retrying.",
             )
-        before_project = mutation.before.lifecycle.project
-        after_project = mutation.after.lifecycle.project
-        if (
-            after_project.application != before_project.application
-            or after_project.schema_version != before_project.schema_version
-            or after_project.revision != before_project.revision + 1
-            or after_project.host_epoch != before_project.host_epoch
-            or after_project.created_at != before_project.created_at
-            or after_project.updated_at != mutation.receipt.decided_at
-        ):
+        try:
+            expected = expected_stored_state(mutation)
+        except MutationContractError as error:
+            raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, str(error)) from error
+        if mutation.after != expected:
             raise StorageError(
                 StorageErrorCode.INVARIANT_VIOLATION,
-                "A stored mutation must advance exactly one project revision with stable project identity.",
+                "The supplied stored state does not match the accepted mutation's exact relational delta.",
             )
-        before_history = mutation.before.history.receipts
-        after_history = mutation.after.history.receipts
-        if len(after_history) != len(before_history) + 1 or after_history[:-1] != before_history:
-            raise StorageError(
-                StorageErrorCode.INVARIANT_VIOLATION,
-                "A stored mutation must append exactly one transition receipt.",
-            )
-        stored_receipt = after_history[-1]
-        next_history_id = 1 + max((int(value.history_id) for value in before_history), default=0)
-        expected_outcome = CanonicalJson(
-            json.dumps(
-                {"evidence": mutation.receipt.evidence, "outcome": mutation.receipt.outcome},
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        )
-        if (
-            int(stored_receipt.history_id) != next_history_id
-            or stored_receipt.project_revision != after_project.revision
-            or stored_receipt.action_id != mutation.receipt.action_id
-            or stored_receipt.committed_at != mutation.receipt.decided_at
-            or stored_receipt.outcome_payload != expected_outcome
-        ):
-            raise StorageError(
-                StorageErrorCode.INVARIANT_VIOLATION,
-                "The appended stored receipt does not identify the accepted mutation exactly.",
-            )
-        _StoredStateWriter(self._connection).replace_current(mutation.after)
-        if _StoredStateReader(self._connection).read() != mutation.after:
+        _StoredStateWriter(self._connection).replace_current(expected)
+        if _StoredStateReader(self._connection).read() != expected:
             raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "The stored mutation did not round-trip exactly.")
         return mutation.receipt
 

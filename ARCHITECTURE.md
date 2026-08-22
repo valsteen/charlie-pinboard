@@ -73,7 +73,7 @@ Adapters own concrete filesystem and database mechanics without deciding lifecyc
 
 These SQLite owners are independently buildable primitives. The current production CLI does not compose them yet and continues to use the Markdown authority through `legacy`.
 
-Pure lifecycle, planning, and resource modules continue to decide legality. The application mutation contract carries their accepted outputs, while proposal creation, dependency and requirement edits, authority changes, and reservation or task-use changes use exact typed before/after stored values. Those carrier-only variants add no policy and identify the later `application/service.py` as their producer after current action and operation legality accepts the mutation. SQLite applies the closed union without importing raw input, Markdown, paths, or application orchestration.
+Pure lifecycle, planning, and resource modules continue to decide legality. The application mutation contract derives the exact relational delta for their accepted outputs, while proposal creation, dependency and requirement edits, authority changes, and reservation or task-use changes use typed before/after values bounded to their named record families. Every stored-state mutation carries the complete accepted history-receipt identity. Those carrier-only variants add no policy and identify the later `application/service.py` as their producer after current action and operation legality accepts the mutation. SQLite applies the closed union without importing raw input, Markdown, paths, or application orchestration.
 
 ### Interfaces
 
