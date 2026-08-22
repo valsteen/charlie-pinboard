@@ -620,6 +620,33 @@ class ResourceIntentDecisionTest(unittest.TestCase):
         self.assertEqual(2, len(preserved.use_lease_changes))
         self.assertTrue(all(change.after.state.value == "revoked" for change in preserved.use_lease_changes))
 
+        quarantined = replace(
+            recovery,
+            mutation_reservations=(
+                replace(
+                    recovery.mutation_reservations[0],
+                    state=ReservationState.REVOKED_PENDING_RECOVERY,
+                ),
+            ),
+        )
+        with self.assertRaises(DecisionError) as rejected_quarantine:
+            preserve_resource_state(
+                quarantined,
+                PreserveResourceStateInput(
+                    self.intent_capability,
+                    coordination,
+                    self.recovery_authority,
+                    _observation(quarantined, digest="human-kept-output"),
+                    LeaseId("use-fence-quarantined"),
+                    "Keep the inspected changes.",
+                    None,
+                    None,
+                    None,
+                    SQLITE_NOW + timedelta(seconds=2),
+                ),
+            )
+        self.assertEqual(DecisionErrorCode.RESOURCE_RESERVATION_STALE, rejected_quarantine.exception.code)
+
         for use_state in (UseLeaseState.EXPIRED, UseLeaseState.RELEASED):
             interrupted_use = replace(self.snapshot.mutation_use_leases[-1], state=use_state)
             interrupted = replace(recovery, mutation_use_leases=(interrupted_use,))

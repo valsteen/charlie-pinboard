@@ -879,7 +879,7 @@ def _require_active_intent_reservation(snapshot: LedgerSnapshot, intent: Mutatio
     if reservation is None or reservation.state != ReservationState.ACTIVE:
         raise DecisionError(
             DecisionErrorCode.RESOURCE_RESERVATION_STALE,
-            "Ordinary interruption recovery requires the intent's exact active reservation.",
+            "Resource recovery requires the intent's exact active reservation.",
         )
 
 
@@ -1007,6 +1007,7 @@ def preserve_resource_state(
     _current_coordination_authority(snapshot, value.coordination_authority, value.resolved_at)
     intent = _planned_intent(snapshot, value.intent)
     authority = _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.resolved_at)
+    _require_active_intent_reservation(snapshot, intent)
     if not value.reason.strip() or not value.fence_lease_id:
         raise DecisionError(
             DecisionErrorCode.TRANSITION_INPUT_INVALID,
