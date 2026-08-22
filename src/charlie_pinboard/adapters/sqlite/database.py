@@ -183,54 +183,126 @@ def _sync_database(path: Path) -> None:
         raise StorageError(StorageErrorCode.IO_ERROR, "The initialized database could not be synchronized.") from error
 
 
+def _staging_path(destination: Path) -> Path:
+    return destination.with_name(f".{destination.name}.charlie-pinboard-stage")
+
+
+def _journal_path(path: Path) -> Path:
+    return path.with_name(f"{path.name}-journal")
+
+
+def _cleanup_database_files(path: Path) -> bool:
+    removed = False
+    succeeded = True
+    for candidate in (_journal_path(path), path):
+        try:
+            candidate.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            succeeded = False
+            continue
+        try:
+            candidate.unlink()
+            removed = True
+        except FileNotFoundError:
+            pass
+        except OSError:
+            succeeded = False
+    if removed:
+        try:
+            directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except OSError:
+            succeeded = False
+    return succeeded
+
+
+def _prepare_database_publication(destination: Path) -> Path:
+    staging = _staging_path(destination)
+    if destination.exists():
+        try:
+            resumable = staging.exists() and destination.samefile(staging)
+        except OSError as error:
+            raise StorageError(
+                StorageErrorCode.IO_ERROR, "SQLite publication residue could not be inspected."
+            ) from error
+        if not resumable:
+            raise StorageError(
+                StorageErrorCode.INVARIANT_VIOLATION,
+                f"Database already exists: {destination}",
+            )
+        if not _cleanup_database_files(destination) or not _cleanup_database_files(staging):
+            raise StorageError(StorageErrorCode.IO_ERROR, "SQLite publication residue could not be removed.")
+    elif not _cleanup_database_files(staging):
+        raise StorageError(StorageErrorCode.IO_ERROR, "SQLite staging residue could not be removed.")
+    return staging
+
+
+def _publish_database(staging: Path, destination: Path) -> None:
+    published = False
+    try:
+        try:
+            os.link(staging, destination, follow_symlinks=False)
+        except FileExistsError as error:
+            raise StorageError(
+                StorageErrorCode.INVARIANT_VIOLATION,
+                f"Database already exists: {destination}",
+            ) from error
+        except OSError as error:
+            raise StorageError(StorageErrorCode.IO_ERROR, "The SQLite database could not be published.") from error
+        published = True
+        _sync_database(destination)
+        if not _cleanup_database_files(staging):
+            raise StorageError(StorageErrorCode.IO_ERROR, "SQLite staging cleanup could not be synchronized.")
+    except StorageError:
+        if not published or _cleanup_database_files(destination):
+            _cleanup_database_files(staging)
+        raise
+
+
 def initialize_database(roots: DurableRoots, now: datetime) -> None:
     try:
         ensure_directory_chain(roots)
     except FileIOError as error:
         raise StorageError(StorageErrorCode.IO_ERROR, str(error)) from error
     path = roots.database_path
-    if path.exists():
-        raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, f"Database already exists: {path}")
+    staging = _prepare_database_publication(path)
 
     connection: sqlite3.Connection | None = None
-    created = False
-    initialized = False
     try:
-        connection = sqlite3.connect(path, timeout=BUSY_TIMEOUT_MS / 1_000, isolation_level=None)
-        created = True
-        _configure(connection, OpenMode.READ_WRITE)
-        connection.executescript(schema_bytes().decode("utf-8"))
-        with write_transaction(connection):
-            timestamp = now.isoformat()
-            connection.execute(
-                """
-                INSERT INTO project_meta (
-                    singleton, application, schema_version, revision, host_epoch, created_at, updated_at
-                ) VALUES (1, ?, ?, 0, 1, ?, ?)
-                """,
-                (APPLICATION, SCHEMA_VERSION, timestamp, timestamp),
-            )
-        _verify_current_schema(connection)
-        initialized = True
+        try:
+            connection = sqlite3.connect(staging, timeout=BUSY_TIMEOUT_MS / 1_000, isolation_level=None)
+            _configure(connection, OpenMode.READ_WRITE)
+            connection.executescript(schema_bytes().decode("utf-8"))
+            with write_transaction(connection):
+                timestamp = now.isoformat()
+                connection.execute(
+                    """
+                    INSERT INTO project_meta (
+                        singleton, application, schema_version, revision, host_epoch, created_at, updated_at
+                    ) VALUES (1, ?, ?, 0, 1, ?, ?)
+                    """,
+                    (APPLICATION, SCHEMA_VERSION, timestamp, timestamp),
+                )
+            _verify_current_schema(connection)
+        finally:
+            if connection is not None:
+                connection.close()
+        _sync_database(staging)
     except StorageError:
+        _cleanup_database_files(staging)
         raise
     except (OSError, UnicodeError) as error:
+        _cleanup_database_files(staging)
         raise StorageError(StorageErrorCode.IO_ERROR, "The SQLite database could not be initialized.") from error
     except sqlite3.Error as error:
+        _cleanup_database_files(staging)
         raise _translate_database_error(error) from error
-    finally:
-        if connection is not None:
-            connection.close()
-        if created and not initialized:
-            for candidate in (path, path.with_name(f"{path.name}-journal")):
-                candidate.unlink(missing_ok=True)
-        if initialized:
-            try:
-                _sync_database(path)
-            except StorageError:
-                for candidate in (path, path.with_name(f"{path.name}-journal")):
-                    candidate.unlink(missing_ok=True)
-                raise
+    _publish_database(staging, path)
 
 
 def open_database(path: Path, mode: OpenMode) -> sqlite3.Connection:
@@ -299,36 +371,28 @@ def write_transaction(connection: sqlite3.Connection) -> Generator[sqlite3.Conne
 
 
 def backup_database(source: Path, destination: Path) -> None:
-    if destination.exists():
-        raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, f"Backup destination already exists: {destination}")
+    staging = _prepare_database_publication(destination)
     source_connection = open_database(source, OpenMode.READ_ONLY)
     destination_connection: sqlite3.Connection | None = None
     try:
-        destination_connection = sqlite3.connect(destination, isolation_level=None)
-        source_connection.backup(destination_connection)
-        destination_connection.close()
-        destination_connection = None
-        verified = open_database(destination, OpenMode.READ_ONLY)
-        verified.close()
-        descriptor = os.open(destination, os.O_RDONLY)
         try:
-            os.fsync(descriptor)
+            destination_connection = sqlite3.connect(staging, isolation_level=None)
+            source_connection.backup(destination_connection)
+            destination_connection.close()
+            destination_connection = None
+            verified = open_database(staging, OpenMode.READ_ONLY)
+            verified.close()
         finally:
-            os.close(descriptor)
-        directory = os.open(destination.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+            source_connection.close()
+            if destination_connection is not None:
+                destination_connection.close()
+        _sync_database(staging)
     except StorageError:
-        destination.unlink(missing_ok=True)
+        _cleanup_database_files(staging)
         raise
     except (OSError, sqlite3.Error) as error:
-        destination.unlink(missing_ok=True)
+        _cleanup_database_files(staging)
         if isinstance(error, sqlite3.Error):
             raise _translate_database_error(error) from error
         raise StorageError(StorageErrorCode.IO_ERROR, "The SQLite backup could not be published.") from error
-    finally:
-        source_connection.close()
-        if destination_connection is not None:
-            destination_connection.close()
+    _publish_database(staging, destination)

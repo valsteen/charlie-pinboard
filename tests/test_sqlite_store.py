@@ -295,6 +295,61 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(StorageErrorCode.IO_ERROR, backup_error.exception.code)
         self.assertFalse(backup.exists())
 
+    def test_database_cleanup_failures_preserve_typed_errors_and_resume(self) -> None:
+        prepublication_project = Path(tempfile.mkdtemp()).resolve()
+        prepublication_roots = resolve_durable_roots(prepublication_project)
+        with (
+            patch("charlie_pinboard.adapters.sqlite.database.schema_bytes", return_value=b"\xff"),
+            patch(
+                "charlie_pinboard.adapters.sqlite.database.Path.unlink",
+                side_effect=OSError("injected pre-publication cleanup failure"),
+            ),
+            self.assertRaises(StorageError) as prepublication_error,
+        ):
+            initialize_database(prepublication_roots, SQLITE_NOW)
+        self.assertEqual(StorageErrorCode.IO_ERROR, prepublication_error.exception.code)
+        self.assertFalse(prepublication_roots.database_path.exists())
+        initialize_database(prepublication_roots, SQLITE_NOW)
+
+        synchronization_project = Path(tempfile.mkdtemp()).resolve()
+        synchronization_roots = resolve_durable_roots(synchronization_project)
+        synchronization_failure = StorageError(
+            StorageErrorCode.IO_ERROR,
+            "injected final database synchronization failure",
+        )
+        with (
+            patch(
+                "charlie_pinboard.adapters.sqlite.database._sync_database",
+                side_effect=(None, synchronization_failure),
+            ),
+            patch(
+                "charlie_pinboard.adapters.sqlite.database.Path.unlink",
+                side_effect=OSError("injected published database cleanup failure"),
+            ),
+            self.assertRaises(StorageError) as synchronization_error,
+        ):
+            initialize_database(synchronization_roots, SQLITE_NOW)
+        self.assertIs(synchronization_failure, synchronization_error.exception)
+        initialize_database(synchronization_roots, SQLITE_NOW)
+
+        backup = synchronization_roots.database_path.with_name("cleanup-retry.sqlite3")
+        with (
+            patch("charlie_pinboard.adapters.sqlite.database.os.open", side_effect=OSError("injected backup failure")),
+            patch(
+                "charlie_pinboard.adapters.sqlite.database.Path.unlink",
+                side_effect=OSError("injected backup cleanup failure"),
+            ),
+            self.assertRaises(StorageError) as backup_error,
+        ):
+            backup_database(synchronization_roots.database_path, backup)
+        self.assertEqual(StorageErrorCode.IO_ERROR, backup_error.exception.code)
+        self.assertFalse(backup.exists())
+        backup_database(synchronization_roots.database_path, backup)
+        self.assertEqual(
+            SQLiteWorkStore(synchronization_roots.database_path).snapshot(),
+            SQLiteWorkStore(backup).snapshot(),
+        )
+
     def test_typed_row_boundary_rejects_malformed_current_state(self) -> None:
         cases = (
             (
