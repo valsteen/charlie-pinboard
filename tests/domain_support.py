@@ -1,10 +1,10 @@
 from dataclasses import replace as dataclass_replace
 from typing import Any  # noqa: TID251 - fixture corruption intentionally crosses the typed boundary
 
-from repo_work import history, planning_decisions, resource_decisions
-from repo_work.decisions import Action as ActionValue
-from repo_work.decisions import ActionKind
-from repo_work.identifiers import (
+from charlie_pinboard.domain import history, planning_decisions, resource_decisions
+from charlie_pinboard.domain.decisions import Action as ActionValue
+from charlie_pinboard.domain.decisions import ActionKind
+from charlie_pinboard.domain.identifiers import (
     ActionId,
     AttemptId,
     HostId,
@@ -18,7 +18,7 @@ from repo_work.identifiers import (
     ResourceInstanceId,
     TaskId,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     AcceptedProposalState,
     AttemptState,
     LedgerSnapshot,
@@ -28,59 +28,59 @@ from repo_work.model import (
     Timing,
     UseLeaseState,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     AcceptProposalInput as AcceptProposalInputValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     AttemptAuthority as AttemptAuthorityValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     AttemptRecord as AttemptRecordValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     DeferInput as DeferInputValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     ItemScope as ItemScopeValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     PlanningImpact as PlanningImpactValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     PlanningObligation as PlanningObligationValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     ProposalRecord as ProposalRecordValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     ResourceAuthority as ResourceAuthorityValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     ResourceDefinition as ResourceDefinitionValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     ResourceInstance as ResourceInstanceValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     ResourceRequirement as ResourceRequirementValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     ResourceReservation as ResourceReservationValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     ResourceUseLease as ResourceUseLeaseValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     ScopeAnchor as ScopeAnchorValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     ScopeDependency as ScopeDependencyValue,
 )
-from repo_work.model import (
+from charlie_pinboard.domain.model import (
     TransferCoordinatorInput as TransferCoordinatorInputValue,
 )
-from repo_work.resource_decisions import ResourceDecision
-from repo_work.resource_decisions import ResourceToken as ResourceTokenValue
+from charlie_pinboard.domain.resource_decisions import ResourceDecision
+from charlie_pinboard.domain.resource_decisions import ResourceToken as ResourceTokenValue
 
 
 def replace(instance: Any, **changes: Any) -> Any:  # noqa: ANN401

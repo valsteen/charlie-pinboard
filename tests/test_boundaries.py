@@ -6,9 +6,11 @@ from unittest.mock import patch
 
 import msgspec
 
-from repo_work.atomic import PlatformNotSupportedError, transition_lock
-from repo_work.coordinator import CoordinatorError, parse_coordinator, read_coordinator
-from repo_work.markdown import (
+from charlie_pinboard.domain.model import SCHEMA_V1, SCHEMA_V2, WorkState
+from charlie_pinboard.interfaces.transition_input import ActivateInput, TransitionInputError, parse_transition_input
+from charlie_pinboard.legacy.atomic import PlatformNotSupportedError, transition_lock
+from charlie_pinboard.legacy.coordinator import CoordinatorError, parse_coordinator, read_coordinator
+from charlie_pinboard.legacy.markdown import (
     ParseError,
     Queue,
     QueueItem,
@@ -22,9 +24,7 @@ from repo_work.markdown import (
     render_v2_item,
     replace_header_fields,
 )
-from repo_work.model import SCHEMA_V1, SCHEMA_V2, WorkState
-from repo_work.proposals import ProposalError, parse_proposal, read_proposal
-from repo_work.transition_input import ActivateInput, TransitionInputError, parse_transition_input
+from charlie_pinboard.legacy.proposals import ProposalError, parse_proposal, read_proposal
 
 from .support import JsonObject
 from .test_transition import proposal
@@ -140,7 +140,7 @@ class JsonBoundaryTest(unittest.TestCase):
     def test_platform_contract_rejects_unsupported_systems_explicitly(self) -> None:
         work = Path(tempfile.mkdtemp()) / "work"
         with (
-            patch("repo_work.atomic.sys.platform", "win32"),
+            patch("charlie_pinboard.legacy.atomic.sys.platform", "win32"),
             self.assertRaises(PlatformNotSupportedError),
             transition_lock(work),
         ):

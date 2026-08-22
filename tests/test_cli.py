@@ -8,19 +8,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from repo_work.actions import actions_for, state_revision
-from repo_work.atomic import atomic_write_text as real_atomic_write_text
-from repo_work.cli import main
-from repo_work.leases import LeaseRecord
-from repo_work.leases import acquire_coordination as real_acquire_coordination
-from repo_work.leases import release_coordination as real_release_coordination
-from repo_work.markdown import parse_attempt, parse_current, parse_queue
-from repo_work.migration import migrate_to_v2
-from repo_work.model import AttemptState, WorkState
-from repo_work.root import RootError
-from repo_work.transaction_store import journal_path_for
-from repo_work.transition import apply_action as apply_transition
-from repo_work.validate import validate_work_state
+from charlie_pinboard.adapters.files.root import RootError
+from charlie_pinboard.domain.model import AttemptState, WorkState
+from charlie_pinboard.interfaces.cli import main
+from charlie_pinboard.interfaces.transitions import apply_action as apply_transition
+from charlie_pinboard.legacy.actions import actions_for, state_revision
+from charlie_pinboard.legacy.atomic import atomic_write_text as real_atomic_write_text
+from charlie_pinboard.legacy.leases import LeaseRecord
+from charlie_pinboard.legacy.leases import acquire_coordination as real_acquire_coordination
+from charlie_pinboard.legacy.leases import release_coordination as real_release_coordination
+from charlie_pinboard.legacy.markdown import parse_attempt, parse_current, parse_queue
+from charlie_pinboard.legacy.migration import migrate_to_v2
+from charlie_pinboard.legacy.transaction_store import journal_path_for
+from charlie_pinboard.legacy.validate import validate_work_state
 
 from .support import JsonObject, JsonValue, create_state
 
@@ -244,7 +244,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(before, self.snapshot(work))
 
         with (
-            patch("repo_work.cli.apply_action", side_effect=KeyboardInterrupt),
+            patch("charlie_pinboard.interfaces.cli.apply_action", side_effect=KeyboardInterrupt),
             self.assertRaises(KeyboardInterrupt),
         ):
             self.run_cli(*apply_arguments, "--payload", str(payload))
@@ -332,7 +332,7 @@ class CliTest(unittest.TestCase):
                         raise KeyboardInterrupt
 
                 with (
-                    patch("repo_work.leases.atomic_write_text", side_effect=interrupt_after_write),
+                    patch("charlie_pinboard.legacy.leases.atomic_write_text", side_effect=interrupt_after_write),
                     self.assertRaises(KeyboardInterrupt),
                 ):
                     self.run_cli(
@@ -400,7 +400,7 @@ class CliTest(unittest.TestCase):
             real_release_coordination(work_root, replacement.lease_id, replacement.generation)
             return released
 
-        with patch("repo_work.cli.release_coordination", side_effect=release_then_change):
+        with patch("charlie_pinboard.interfaces.cli.release_coordination", side_effect=release_then_change):
             receipt = self.run_json_cli(
                 *common,
                 "coordination",
@@ -1217,7 +1217,10 @@ class CliTest(unittest.TestCase):
             "local",
         )
         proposal_result, _, proposal_stderr = self.run_cli(*common, "proposal", "--file", str(invalid))
-        with patch("repo_work.cli.resolve_project_root", side_effect=RootError("PROJECT_ROOT_NOT_FOUND", "missing")):
+        with patch(
+            "charlie_pinboard.interfaces.cli.resolve_project_root",
+            side_effect=RootError("PROJECT_ROOT_NOT_FOUND", "missing"),
+        ):
             root_result, _, root_stderr = self.run_cli("root")
         journal_path_for(work).mkdir()
         recovery_result, _, recovery_stderr = self.run_cli(*common, "recover")
@@ -1233,7 +1236,7 @@ class CliTest(unittest.TestCase):
 
     def test_module_entrypoint_delegates_to_cli(self) -> None:
         with patch.object(sys, "argv", ["pinboard", "--version"]), self.assertRaises(SystemExit) as raised:
-            runpy.run_module("repo_work.__main__", run_name="__main__")
+            runpy.run_module("charlie_pinboard.__main__", run_name="__main__")
 
         self.assertEqual(0, raised.exception.code)
 

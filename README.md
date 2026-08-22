@@ -139,6 +139,8 @@ The plugin contains:
 
 The package targets Python 3.14 only. msgspec provides the immutable records and strict JSON decoding used at repository boundaries. `.python-version` pins the current stable 3.14 patch release. uv manages Python installation, the project environment, dependencies, the checked-in lockfile, and command execution.
 
+The [architecture map](ARCHITECTURE.md) explains the current package layers, representative command flows, and the temporary Markdown boundary without requiring readers to reconstruct ownership from imports.
+
 ```sh
 uv sync --locked
 uv run --locked ruff format --check .
@@ -166,6 +168,6 @@ Existing schema-v1 ledgers need one explicit `pinboard migrate --to v2` cutover 
 <details>
 <summary>Temporary command compatibility</summary>
 
-`repo-work` currently invokes the same installed engine as `pinboard` so existing local tasks can move over without a flag day. It is a temporary tested alias, not a second product or protocol. The Python module remains `repo_work`, and existing `.codex/work` paths plus `repo-work/*` serialized identifiers remain stable.
+`repo-work` currently invokes the same installed `charlie_pinboard` engine as `pinboard` so existing local tasks can move over without a flag day. It is a migration-scoped tested alias, not a second product or protocol. Existing `.codex/work` paths plus `repo-work/*` serialized identifiers remain stable until both known local ledgers are migrated and the separately tracked compatibility-removal follow-up deletes the alias and legacy readers.
 
 </details>

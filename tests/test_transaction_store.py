@@ -3,10 +3,10 @@ import unittest
 from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
-from repo_work.actions import actions_for
-from repo_work.authority import AuthorityVersion
-from repo_work.diagnostics import Diagnostic, Severity
-from repo_work.transaction_store import (
+from charlie_pinboard.legacy.actions import actions_for
+from charlie_pinboard.legacy.authority import AuthorityVersion
+from charlie_pinboard.legacy.diagnostics import Diagnostic, Severity
+from charlie_pinboard.legacy.transaction_store import (
     AtomicCommitError,
     ChangeSet,
     FileChange,
@@ -16,7 +16,7 @@ from repo_work.transaction_store import (
     validate_change_set,
     write_change,
 )
-from repo_work.validate import ValidationReport
+from charlie_pinboard.legacy.validate import ValidationReport
 
 from .support import JsonValue, create_state
 
@@ -49,7 +49,7 @@ class TransactionStoreTest(unittest.TestCase):
         invalid = ValidationReport((Diagnostic("INJECTED", Severity.ERROR, work / "queue.md", "postcondition failed"),))
 
         with (
-            patch("repo_work.validate.validate_work_state_during_commit", return_value=invalid),
+            patch("charlie_pinboard.legacy.validate.validate_work_state_during_commit", return_value=invalid),
             self.assertRaisesRegex(AtomicCommitError, "TRANSITION_POSTCONDITION_FAILED"),
         ):
             commit_change_set(work, project, changes, AuthorityVersion.V1)

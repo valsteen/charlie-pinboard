@@ -4,8 +4,10 @@ import unittest
 from copy import replace
 from pathlib import Path
 
-from repo_work.actions import actions_for
-from repo_work.leases import (
+from charlie_pinboard.domain.model import WorkState
+from charlie_pinboard.interfaces.transitions import TransitionError
+from charlie_pinboard.legacy.actions import actions_for
+from charlie_pinboard.legacy.leases import (
     LeaseError,
     acquire_attempt,
     acquire_coordination,
@@ -14,13 +16,17 @@ from repo_work.leases import (
     revoke_attempt,
     revoke_coordination,
 )
-from repo_work.markdown import parse_attempt, parse_current, parse_header, parse_item, parse_queue
-from repo_work.migration import migrate_to_v2
-from repo_work.model import WorkState
-from repo_work.resources import ResourceError, claim_resource, declare_resource, renew_resource, require_resource
-from repo_work.revisions import subject_revision
-from repo_work.transition import TransitionError
-from repo_work.validate import validate_work_state
+from charlie_pinboard.legacy.markdown import parse_attempt, parse_current, parse_header, parse_item, parse_queue
+from charlie_pinboard.legacy.migration import migrate_to_v2
+from charlie_pinboard.legacy.resources import (
+    ResourceError,
+    claim_resource,
+    declare_resource,
+    renew_resource,
+    require_resource,
+)
+from charlie_pinboard.legacy.revisions import subject_revision
+from charlie_pinboard.legacy.validate import validate_work_state
 
 from .support import JsonObject, JsonValue, apply_action, create_proposal, create_state
 

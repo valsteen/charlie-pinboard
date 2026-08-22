@@ -6,11 +6,11 @@ from pathlib import Path
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from repo_work.actions import Action, actions_for
-from repo_work.markdown import Queue, QueueItem, parse_queue, render_queue
-from repo_work.model import WorkState
-from repo_work.transition_input import TransitionInputError, parse_transition_input
-from repo_work.validate import validate_work_state
+from charlie_pinboard.domain.model import WorkState
+from charlie_pinboard.interfaces.transition_input import TransitionInputError, parse_transition_input
+from charlie_pinboard.legacy.actions import Action, actions_for
+from charlie_pinboard.legacy.markdown import Queue, QueueItem, parse_queue, render_queue
+from charlie_pinboard.legacy.validate import validate_work_state
 
 from .support import JsonValue, apply_action, create_state
 

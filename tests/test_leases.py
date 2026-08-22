@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
 
-from repo_work.authority import AuthorityVersion, write_authority_selector
-from repo_work.leases import (
+from charlie_pinboard.legacy.authority import AuthorityVersion, write_authority_selector
+from charlie_pinboard.legacy.leases import (
     LeaseError,
     acquire_attempt,
     acquire_coordination,

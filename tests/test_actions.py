@@ -1,6 +1,6 @@
 import unittest
 
-from repo_work.actions import ActionError, AuthorizationKind, actions_for
+from charlie_pinboard.legacy.actions import ActionError, AuthorizationKind, actions_for
 
 from .support import create_state
 

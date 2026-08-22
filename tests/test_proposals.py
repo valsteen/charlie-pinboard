@@ -3,11 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from repo_work.actions import actions_for
-from repo_work.markdown import parse_queue
-from repo_work.model import WorkState
-from repo_work.proposals import ProposalError
-from repo_work.validate import validate_work_state
+from charlie_pinboard.domain.model import WorkState
+from charlie_pinboard.legacy.actions import actions_for
+from charlie_pinboard.legacy.markdown import parse_queue
+from charlie_pinboard.legacy.proposals import ProposalError
+from charlie_pinboard.legacy.validate import validate_work_state
 
 from .support import JsonObject, apply_action, create_proposal, create_state
 

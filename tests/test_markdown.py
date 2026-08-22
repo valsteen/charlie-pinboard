@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from repo_work.markdown import ParseError, parse_header, parse_queue
-from repo_work.model import WorkState
+from charlie_pinboard.domain.model import WorkState
+from charlie_pinboard.legacy.markdown import ParseError, parse_header, parse_queue
 
 VALID_QUEUE = """\
 ---

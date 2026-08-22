@@ -7,15 +7,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from repo_work.actions import Action, ActionError, actions_for
-from repo_work.cli import main
-from repo_work.decisions import ActionKind, AuthorizationKind, decide
-from repo_work.domain_errors import DecisionError
-from repo_work.identifiers import AttemptId, ItemId
-from repo_work.leases import acquire_attempt, acquire_coordination, release_coordination
-from repo_work.markdown import parse_attempt, parse_current, parse_header, parse_queue
-from repo_work.migration import migrate_to_v2
-from repo_work.model import (
+from charlie_pinboard.domain.decisions import ActionKind, AuthorizationKind, decide
+from charlie_pinboard.domain.errors import DecisionError
+from charlie_pinboard.domain.identifiers import AttemptId, ItemId
+from charlie_pinboard.domain.model import (
     AttemptState,
     LedgerSnapshot,
     ReservationState,
@@ -23,18 +18,23 @@ from repo_work.model import (
     WorkItem,
     WorkState,
 )
-from repo_work.overview import read_overview
-from repo_work.resources import (
+from charlie_pinboard.interfaces.cli import main
+from charlie_pinboard.interfaces.transition_input import ReasonInput
+from charlie_pinboard.interfaces.transitions import TransitionError, apply_action
+from charlie_pinboard.legacy.actions import Action, ActionError, actions_for
+from charlie_pinboard.legacy.leases import acquire_attempt, acquire_coordination, release_coordination
+from charlie_pinboard.legacy.markdown import parse_attempt, parse_current, parse_header, parse_queue
+from charlie_pinboard.legacy.migration import migrate_to_v2
+from charlie_pinboard.legacy.overview import read_overview
+from charlie_pinboard.legacy.resources import (
     ResourceError,
     claim_resource,
     declare_resource,
     read_resource_claim,
     require_resource,
 )
-from repo_work.transaction_store import CommitFailpoint, FileChange, journal_path_for
-from repo_work.transition import TransitionError, apply_action
-from repo_work.transition_input import ReasonInput
-from repo_work.validate import validate_work_state
+from charlie_pinboard.legacy.transaction_store import CommitFailpoint, FileChange, journal_path_for
+from charlie_pinboard.legacy.validate import validate_work_state
 from tests.domain_support import (
     action as make_action,
 )

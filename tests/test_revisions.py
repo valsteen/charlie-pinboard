@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from typing import override
 
-from repo_work.revisions import subject_revision
+from charlie_pinboard.legacy.revisions import subject_revision
 
 ITEM = """---
 kind: work-item

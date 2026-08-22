@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from repo_work.authority import AuthorityVersion, write_authority_selector
-from repo_work.validate import validate_work_state
+from charlie_pinboard.legacy.authority import AuthorityVersion, write_authority_selector
+from charlie_pinboard.legacy.validate import validate_work_state
 
 QUEUE_TEMPLATE = """\
 ---

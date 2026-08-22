@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from repo_work.authority import (
+from charlie_pinboard.legacy.authority import (
     AuthorityError,
     AuthorityVersion,
     authority_transaction,

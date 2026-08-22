@@ -13,11 +13,11 @@ dependencies = [
 ]
 
 [project.scripts]
-pinboard = "repo_work.cli:main"
-repo-work = "repo_work.cli:main"
+pinboard = "charlie_pinboard.interfaces.cli:main"
+repo-work = "charlie_pinboard.interfaces.cli:main"
 
 [tool.uv.build-backend]
-module-name = "repo_work"
+module-name = "charlie_pinboard"
 
 [tool.ruff]
 target-version = "py314"
@@ -35,7 +35,7 @@ select = ["ANN", "ARG", "B", "BLE", "C4", "C90", "E4", "E7", "E9", "F", "I", "PE
 max-complexity = 12
 
 [tool.ruff.lint.isort]
-known-first-party = ["repo_work", "tests"]
+known-first-party = ["charlie_pinboard", "tests"]
 
 [tool.pyrefly]
 python-version = "3.14"
@@ -54,7 +54,7 @@ unknown-variable-type = "warn"
 
 [tool.coverage.run]
 branch = true
-source = ["repo_work"]
+source = ["charlie_pinboard"]
 
 [tool.coverage.report]
 fail_under = 90

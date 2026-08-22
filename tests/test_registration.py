@@ -3,9 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from repo_work.actions import actions_for
-from repo_work.registration import RegistrationError, initialize_work_state, transfer_coordinator
-from repo_work.validate import validate_work_state
+from charlie_pinboard.legacy.actions import actions_for
+from charlie_pinboard.legacy.registration import RegistrationError, initialize_work_state, transfer_coordinator
+from charlie_pinboard.legacy.validate import validate_work_state
 
 
 class RegistrationTest(unittest.TestCase):

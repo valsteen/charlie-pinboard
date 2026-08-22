@@ -7,10 +7,10 @@ import unittest
 from multiprocessing.synchronize import Event as EventType
 from pathlib import Path
 
-from repo_work.actions import Action, actions_for
-from repo_work.atomic import transition_lock
-from repo_work.cli import main
-from repo_work.dispatch import DispatchError, prepare_dispatch, read_dispatch_environment
+from charlie_pinboard.interfaces.cli import main
+from charlie_pinboard.legacy.actions import Action, actions_for
+from charlie_pinboard.legacy.atomic import transition_lock
+from charlie_pinboard.legacy.dispatch import DispatchError, prepare_dispatch, read_dispatch_environment
 
 from .support import create_state
 

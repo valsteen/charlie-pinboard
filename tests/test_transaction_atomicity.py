@@ -7,17 +7,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from repo_work import transaction_store
-from repo_work.actions import Action, actions_for
-from repo_work.authority import resolve_authority
-from repo_work.cli import main
-from repo_work.leases import acquire_coordination
-from repo_work.markdown import parse_queue
-from repo_work.migration import migrate_to_v2
-from repo_work.model import WorkState
-from repo_work.transaction_store import CommitFailpoint, FileChange, journal_path_for
-from repo_work.transition import TransitionError
-from repo_work.validate import validate_work_state
+from charlie_pinboard.domain.model import WorkState
+from charlie_pinboard.interfaces.cli import main
+from charlie_pinboard.interfaces.transitions import TransitionError
+from charlie_pinboard.legacy import transaction_store
+from charlie_pinboard.legacy.actions import Action, actions_for
+from charlie_pinboard.legacy.authority import resolve_authority
+from charlie_pinboard.legacy.leases import acquire_coordination
+from charlie_pinboard.legacy.markdown import parse_queue
+from charlie_pinboard.legacy.migration import migrate_to_v2
+from charlie_pinboard.legacy.transaction_store import CommitFailpoint, FileChange, journal_path_for
+from charlie_pinboard.legacy.validate import validate_work_state
 
 from .support import JsonObject, apply_action, create_state
 
@@ -64,7 +64,7 @@ def _crash_journal_retirement(work: str, project: str, action: Action, recover: 
     def crash_after_retirement(_path: Path) -> None:
         os._exit(74)
 
-    with patch("repo_work.transaction_store._delete_retired_journal", side_effect=crash_after_retirement):
+    with patch("charlie_pinboard.legacy.transaction_store._delete_retired_journal", side_effect=crash_after_retirement):
         if recover:
             transaction_store.recover_pending_commit(resolve_authority(Path(work)).work_root)
         else:

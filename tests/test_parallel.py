@@ -6,13 +6,13 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import patch
 
-from repo_work.actions import actions_for, state_revision
-from repo_work.atomic import transition_lock
-from repo_work.leases import acquire_attempt, acquire_coordination
-from repo_work.migration import migrate_to_v2
-from repo_work.parallel import ParallelError, ParallelOutcome, preview_parallel
-from repo_work.resources import claim_resource, declare_resource, release_resource
-from repo_work.transaction_store import FileChange
+from charlie_pinboard.legacy.actions import actions_for, state_revision
+from charlie_pinboard.legacy.atomic import transition_lock
+from charlie_pinboard.legacy.leases import acquire_attempt, acquire_coordination
+from charlie_pinboard.legacy.migration import migrate_to_v2
+from charlie_pinboard.legacy.parallel import ParallelError, ParallelOutcome, preview_parallel
+from charlie_pinboard.legacy.resources import claim_resource, declare_resource, release_resource
+from charlie_pinboard.legacy.transaction_store import FileChange
 
 from .support import apply_action, create_state
 
@@ -163,7 +163,7 @@ class ParallelPreviewTest(unittest.TestCase):
         with self.assertRaisesRegex(ParallelError, "PARALLEL_TIME_INVALID"):
             preview_parallel(work, project, "studio", now=datetime(2026, 8, 19, 10, 0))
         with (
-            patch("repo_work.parallel._preview_revision", side_effect=("before", "after")),
+            patch("charlie_pinboard.legacy.parallel._preview_revision", side_effect=("before", "after")),
             self.assertRaisesRegex(ParallelError, "STATE_REVISION_STALE"),
         ):
             preview_parallel(work, project, "studio", now=NOW)
@@ -298,7 +298,7 @@ class ParallelPreviewTest(unittest.TestCase):
             return NOW
 
         with (
-            patch("repo_work.parallel._current_time", side_effect=capture_time),
+            patch("charlie_pinboard.legacy.parallel._current_time", side_effect=capture_time),
             ThreadPoolExecutor(max_workers=1) as executor,
         ):
             with transition_lock(work.resolve()):

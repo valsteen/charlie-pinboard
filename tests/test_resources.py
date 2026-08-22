@@ -7,11 +7,11 @@ from pathlib import Path
 from threading import Event
 from unittest.mock import patch
 
-from repo_work import resources as resource_module
-from repo_work.authority import AuthorityVersion, resolve_authority, write_authority_selector
-from repo_work.leases import LeaseRecord, acquire_attempt, acquire_coordination, revoke_attempt
-from repo_work.migration import migrate_to_v2
-from repo_work.resources import (
+from charlie_pinboard.legacy import resources as resource_module
+from charlie_pinboard.legacy.authority import AuthorityVersion, resolve_authority, write_authority_selector
+from charlie_pinboard.legacy.leases import LeaseRecord, acquire_attempt, acquire_coordination, revoke_attempt
+from charlie_pinboard.legacy.migration import migrate_to_v2
+from charlie_pinboard.legacy.resources import (
     ResourceError,
     ResourceScope,
     claim_resource,
@@ -23,7 +23,7 @@ from repo_work.resources import (
     require_resource,
     revoke_resource,
 )
-from repo_work.validate import validate_work_state
+from charlie_pinboard.legacy.validate import validate_work_state
 
 from .support import create_state
 
@@ -233,7 +233,7 @@ class ResourceTest(unittest.TestCase):
             return record
 
         with (
-            patch("repo_work.resources.require_attempt", paused_require_attempt),
+            patch("charlie_pinboard.legacy.resources.require_attempt", paused_require_attempt),
             ThreadPoolExecutor(max_workers=2) as executor,
         ):
             claim_future = executor.submit(

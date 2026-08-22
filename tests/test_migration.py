@@ -5,13 +5,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
 
-from repo_work.actions import actions_for
-from repo_work.authority import AuthorityVersion, resolve_authority
-from repo_work.leases import acquire_coordination
-from repo_work.markdown import parse_attempt, parse_item, parse_queue
-from repo_work.migration import MigrationBoundary, MigrationError, MigrationWriteKind, migrate_to_v2
-from repo_work.transition import TransitionError
-from repo_work.validate import validate_work_state
+from charlie_pinboard.interfaces.transitions import TransitionError
+from charlie_pinboard.legacy.actions import actions_for
+from charlie_pinboard.legacy.authority import AuthorityVersion, resolve_authority
+from charlie_pinboard.legacy.leases import acquire_coordination
+from charlie_pinboard.legacy.markdown import parse_attempt, parse_item, parse_queue
+from charlie_pinboard.legacy.migration import MigrationBoundary, MigrationError, MigrationWriteKind, migrate_to_v2
+from charlie_pinboard.legacy.validate import validate_work_state
 
 from .support import JsonObject, apply_action, create_proposal, create_state
 

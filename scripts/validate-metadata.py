@@ -10,7 +10,10 @@ ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
 PLUGIN_NAME: Final = "charlie-pinboard"
 EXPECTED_SKILLS: Final = frozenset({"pinboard", "pinboard-deliver", "pinboard-intake"})
-EXPECTED_ENTRY_POINTS: Final = {"pinboard": "repo_work.cli:main", "repo-work": "repo_work.cli:main"}
+EXPECTED_ENTRY_POINTS: Final = {
+    "pinboard": "charlie_pinboard.interfaces.cli:main",
+    "repo-work": "charlie_pinboard.interfaces.cli:main",
+}
 
 type YamlScalar = str | int | float | bool | None
 type YamlValue = YamlScalar | list[YamlValue] | dict[str, YamlValue]

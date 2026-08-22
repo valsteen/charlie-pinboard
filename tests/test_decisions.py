@@ -4,7 +4,7 @@ import unittest
 from datetime import UTC, datetime
 from typing import cast
 
-from repo_work.decisions import (
+from charlie_pinboard.domain.decisions import (
     Action,
     ActionKind,
     ActorAuthority,
@@ -13,16 +13,16 @@ from repo_work.decisions import (
     available_actions,
     decide,
 )
-from repo_work.domain_errors import DecisionError, DecisionErrorCode
-from repo_work.history import (
+from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
+from charlie_pinboard.domain.history import (
     item_scope_bytes,
     item_scope_change_outcome,
     item_scope_digest,
     planning_impact_outcome,
     validate_history_outcome,
 )
-from repo_work.identifiers import AttemptId, ItemId
-from repo_work.model import (
+from charlie_pinboard.domain.identifiers import AttemptId, ItemId
+from charlie_pinboard.domain.model import (
     AcceptedProposalState,
     ArtifactRole,
     AttemptState,
@@ -41,7 +41,7 @@ from repo_work.model import (
     WorkItem,
     WorkState,
 )
-from repo_work.planning_decisions import validate_planning_impact
+from charlie_pinboard.domain.planning_decisions import validate_planning_impact
 from tests.domain_support import (
     accept_proposal_input as AcceptProposalInput,
 )
