@@ -8,13 +8,15 @@ from repo_work.diagnostics import Diagnostic, Severity
 from repo_work.leases import LeaseError, read_attempt_lease, read_coordination_lease
 from repo_work.markdown import (
     ParseError,
+    Queue,
+    QueueItem,
     parse_attempt,
     parse_current,
     parse_item,
     parse_queue,
     require_document_header,
 )
-from repo_work.model import SCHEMA_V1, SCHEMA_V2, Queue, QueueItem, WorkState
+from repo_work.model import SCHEMA_V1, SCHEMA_V2, WorkState
 from repo_work.resources import ResourceError, read_resource, read_resource_claim
 from repo_work.storage_layout import journal_path_for
 

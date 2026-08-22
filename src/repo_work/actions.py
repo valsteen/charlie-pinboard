@@ -9,11 +9,11 @@ from repo_work.decisions import (
     ActionKind,
     ActorAuthority,
     AuthorizationKind,
-    DecisionError,
-    ResourceToken,
     Role,
     available_actions,
 )
+from repo_work.domain_errors import DecisionError
+from repo_work.identifiers import AttemptId, HostId, ItemId, LeaseId, ProposalId, ResourceId
 from repo_work.leases import (
     LeaseError,
     read_attempt_lease,
@@ -21,23 +21,24 @@ from repo_work.leases import (
     require_attempt,
     require_coordination,
 )
-from repo_work.markdown import parse_item, parse_queue
+from repo_work.markdown import QueueItem, parse_item, parse_queue
 from repo_work.model import (
     AttemptAuthority,
     AttemptRecord,
     AttemptState,
     LedgerSnapshot,
     ProposalRecord,
-    QueueItem,
     ResourceAuthority,
     SubjectRevision,
+    WorkItem,
     WorkState,
 )
+from repo_work.resource_decisions import ResourceToken
 from repo_work.resources import ResourceError, read_resource_claim, require_resource
 from repo_work.revisions import subject_revision
 from repo_work.validate import validate_work_state
 
-__all__ = ["Action", "ActionError", "ActionKind", "AuthorizationKind", "ResourceToken", "Role", "actions_for"]
+__all__ = ["Action", "ActionError", "ActionKind", "AuthorizationKind", "Role", "actions_for"]
 
 
 class ActionError(RuntimeError):
@@ -110,7 +111,14 @@ def _resource_tokens(
             if claim.attempt_id != item.attempt or claim.task_id != attempt.task_id:
                 raise ActionError("RESOURCE_BUSY", f"Resource '{resource_id}' is not held by this attempt.")
             require_resource(work_root, resource_id, attempt.host_id, claim.lease_id, claim.generation)
-            result.append(ResourceToken(resource_id, attempt.host_id, claim.lease_id, claim.generation))
+            result.append(
+                ResourceToken(
+                    ResourceId(resource_id),
+                    HostId(attempt.host_id),
+                    LeaseId(claim.lease_id),
+                    claim.generation,
+                )
+            )
         return tuple(result)
     except (LeaseError, ResourceError) as error:
         raise ActionError(error.code, str(error).partition(": ")[2]) from error
@@ -121,7 +129,7 @@ def _proposal_records(work_root: Path) -> tuple[ProposalRecord, ...]:
     if not inbox.is_dir():
         return ()
     return tuple(
-        ProposalRecord(path.stem, hashlib.sha256(path.read_bytes()).hexdigest())
+        ProposalRecord(ProposalId(path.stem), hashlib.sha256(path.read_bytes()).hexdigest())
         for path in sorted(inbox.glob("*.json"))
     )
 
@@ -138,7 +146,7 @@ def _v2_actor(
         case Role.WORKER:
             if lease_id is None or generation is None:
                 raise ActionError("LEASE_REQUIRED", "A current worker lease identity and generation are required.")
-            return ActorAuthority(role, AuthorizationKind.ATTEMPT, generation, lease_id, (), False)
+            return ActorAuthority(role, AuthorizationKind.ATTEMPT, generation, LeaseId(lease_id), (), False)
         case Role.COORDINATOR:
             if lease_id is None or generation is None:
                 raise ActionError("LEASE_REQUIRED", "A current coordinator lease identity and generation are required.")
@@ -146,7 +154,7 @@ def _v2_actor(
                 require_coordination(work_root, lease_id, generation)
             except LeaseError as error:
                 raise ActionError(error.code, str(error).partition(": ")[2]) from error
-            return ActorAuthority(role, AuthorizationKind.COORDINATION, generation, lease_id)
+            return ActorAuthority(role, AuthorizationKind.COORDINATION, generation, LeaseId(lease_id))
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -209,9 +217,23 @@ def _snapshot(
     items: tuple[QueueItem, ...],
     actor: ActorAuthority,
 ) -> LedgerSnapshot:
+    snapshot_items = tuple(
+        WorkItem(
+            ItemId(item.item),
+            item.state,
+            item.timing,
+            tuple(ItemId(value) for value in item.depends_on),
+            AttemptId(item.attempt) if item.attempt is not None else None,
+            item.source,
+            item.next_action,
+            item.notes,
+            item.outcome_evidence,
+        )
+        for item in items
+    )
     attempt_items = tuple(item for item in items if item.attempt is not None)
     attempts = tuple(
-        AttemptRecord(item.attempt, item.item, _attempt_state(item.state))
+        AttemptRecord(AttemptId(item.attempt), ItemId(item.item), _attempt_state(item.state))
         for item in attempt_items
         if item.attempt is not None
     )
@@ -226,18 +248,22 @@ def _snapshot(
                 ResourceAuthority(token.resource_id, token.host_id, token.lease_id, token.generation)
                 for token in tokens
             )
-            authorities.append(AttemptAuthority(item.attempt, item.item, actor.lease_id, actor.generation, resources))
-            subject_revisions.append(SubjectRevision(item.item, subject_revision(work_root, item.item)))
+            authorities.append(
+                AttemptAuthority(
+                    AttemptId(item.attempt), ItemId(item.item), actor.lease_id, actor.generation, resources
+                )
+            )
+            subject_revisions.append(SubjectRevision(ItemId(item.item), subject_revision(work_root, item.item)))
     history = work_root / "history" / "items"
     return LedgerSnapshot(
         revision=state_revision(base_work_root),
         generation=actor.generation,
-        items=items,
+        items=snapshot_items,
         attempts=attempts,
         proposals=_proposal_records(work_root),
         subject_revisions=tuple(subject_revisions),
         attempt_authorities=tuple(authorities),
-        history_items=tuple(path.stem for path in sorted(history.glob("*.md"))) if history.is_dir() else (),
+        history_items=tuple(ItemId(path.stem) for path in sorted(history.glob("*.md"))) if history.is_dir() else (),
         can_transfer_coordinator=(work_root / "coordinator.json").is_file(),
     )
 
@@ -269,12 +295,16 @@ def actions_for(
     queue = parse_queue(root / "queue.md")
     if selected_role == Role.WORKER:
         if authority.version == AuthorityVersion.V1:
-            attempts = tuple(item.attempt for item in queue.items if item.state == WorkState.ACTIVE and item.attempt)
+            attempts = tuple(
+                AttemptId(item.attempt) for item in queue.items if item.state == WorkState.ACTIVE and item.attempt
+            )
         else:
             if lease_id is None or generation is None:
                 raise ActionError("ATTEMPT_LEASE_REQUIRED", "A current attempt lease is required.")
             attempts = tuple(
-                item.attempt for item in _owned_worker_items(root, queue.items, lease_id, generation) if item.attempt
+                AttemptId(item.attempt)
+                for item in _owned_worker_items(root, queue.items, lease_id, generation)
+                if item.attempt
             )
         actor = ActorAuthority(
             actor.role,

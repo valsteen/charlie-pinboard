@@ -7,8 +7,8 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from repo_work.actions import Action, actions_for
-from repo_work.markdown import parse_queue, render_queue
-from repo_work.model import Queue, QueueItem, WorkState
+from repo_work.markdown import Queue, QueueItem, parse_queue, render_queue
+from repo_work.model import WorkState
 from repo_work.transition_input import TransitionInputError, parse_transition_input
 from repo_work.validate import validate_work_state
 

@@ -10,6 +10,7 @@ from uuid import uuid4
 from repo_work.atomic import atomic_write, atomic_write_text
 from repo_work.authority import Authority, AuthorityVersion, authority_transaction, write_authority_selector
 from repo_work.markdown import (
+    Queue,
     parse_attempt,
     parse_current,
     parse_header_text,
@@ -20,7 +21,7 @@ from repo_work.markdown import (
     render_v2_item,
     replace_v2_header_fields,
 )
-from repo_work.model import SCHEMA_V2, Queue
+from repo_work.model import SCHEMA_V2
 from repo_work.validate import validate_v2_shadow, validate_work_state
 
 

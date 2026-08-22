@@ -2,25 +2,76 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date
 from enum import Enum
 from pathlib import Path
 from typing import Final, assert_never
 
+from repo_work.identifiers import AttemptId, ItemId, ResourceId
 from repo_work.model import (
     SCHEMA_V1,
     SCHEMA_V2,
     TERMINAL_STATES,
-    Attempt,
     AttemptState,
-    CurrentPointer,
-    Header,
-    HeaderValue,
-    Queue,
-    QueueItem,
-    WorkItemRecord,
     WorkState,
 )
+
+type HeaderValue = str | bool | None
+type Header = dict[str, HeaderValue]
+
+
+@dataclass(frozen=True, slots=True)
+class QueueItem:
+    item: str
+    state: WorkState
+    timing: str | None
+    depends_on: tuple[str, ...]
+    attempt: str | None
+    source: str
+    next_action: str | None
+    notes: str
+    outcome_evidence: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Queue:
+    path: Path
+    header: Header
+    items: tuple[QueueItem, ...]
+    revision: str
+
+    def by_id(self) -> dict[str, QueueItem]:
+        return {item.item: item for item in self.items}
+
+
+@dataclass(frozen=True, slots=True)
+class WorkItemRecord:
+    path: Path
+    item: str
+    user_label: str
+    queue_item: QueueItem | None = None
+    resources: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CurrentPointer:
+    path: Path
+    focus_item: str | None
+    focus_attempt: str | None
+    next_action: str
+
+
+@dataclass(frozen=True, slots=True)
+class Attempt:
+    path: Path
+    attempt: str
+    item: str
+    state: AttemptState
+    branch: str
+    base_revision: str
+    provenance: str
+
 
 ITEM_PATTERN: Final = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 QUEUE_COLUMNS = (
@@ -154,7 +205,7 @@ def _parse_queue_row(
     cells: list[str],
     path: Path,
     line: int,
-    identities: set[str],
+    identities: set[ItemId],
     *,
     schema: str | bool | None,
 ) -> QueueItem:
@@ -165,7 +216,7 @@ def _parse_queue_row(
         raise ParseError("QUEUE_ITEM_INVALID", path, f"Invalid item identity '{item_id}'.", line)
     if item_id in identities:
         raise ParseError("QUEUE_ITEM_DUPLICATE", path, f"Duplicate item '{item_id}'.", line)
-    identities.add(item_id)
+    identities.add(ItemId(item_id))
     if state_value in TERMINAL_STATES:
         raise ParseError("QUEUE_TERMINAL_STATE", path, f"Terminal state '{state_value}' is not nonterminal.", line)
     try:
@@ -176,20 +227,24 @@ def _parse_queue_row(
         depends_on = (
             ()
             if dependencies == "—"
-            else tuple(dependency.strip() for dependency in dependencies.split(",") if dependency.strip())
+            else tuple(ItemId(dependency.strip()) for dependency in dependencies.split(",") if dependency.strip())
         )
         parsed_timing = _generated_optional(timing, "—")
-        parsed_attempt = _generated_optional(attempt, "—")
+        attempt_value = _generated_optional(attempt, "—")
+        parsed_attempt = AttemptId(attempt_value) if attempt_value is not None else None
         parsed_next_action = _generated_optional(next_action, "—")
     else:
         depends_on = tuple(
-            dependency.strip() for dependency in dependencies.split(",") if _optional(dependency.strip()) is not None
+            ItemId(dependency.strip())
+            for dependency in dependencies.split(",")
+            if _optional(dependency.strip()) is not None
         )
         parsed_timing = _optional(timing)
-        parsed_attempt = _optional(attempt)
+        attempt_value = _optional(attempt)
+        parsed_attempt = AttemptId(attempt_value) if attempt_value is not None else None
         parsed_next_action = _optional(next_action)
     return QueueItem(
-        item=item_id,
+        item=ItemId(item_id),
         state=state,
         timing=parsed_timing,
         depends_on=depends_on,
@@ -213,7 +268,7 @@ def _parse_queue_text(text: str, path: Path, header: Header, revision: str) -> Q
     lines = text.splitlines()
     table_start = _queue_table_start(lines, path)
     items: list[QueueItem] = []
-    identities: set[str] = set()
+    identities: set[ItemId] = set()
     for index in range(table_start + 2, len(lines)):
         line = lines[index]
         if not line.strip():
@@ -282,28 +337,32 @@ def parse_item(path: Path) -> WorkItemRecord:
     if not ITEM_PATTERN.fullmatch(item):
         raise ParseError("ITEM_ID_INVALID", path, f"Invalid item identity '{item}'.")
     if schema == SCHEMA_V1:
-        return WorkItemRecord(path=path, item=item, user_label=_required_string(header, path, "user_label"))
+        return WorkItemRecord(path=path, item=ItemId(item), user_label=_required_string(header, path, "user_label"))
     state_value = _required_string(header, path, "state")
     try:
         state = WorkState(state_value)
     except ValueError as error:
         raise ParseError("ITEM_STATE_INVALID", path, f"Unknown state '{state_value}'.") from error
-    depends_on = _generated_string_list(_required_string(header, path, "depends_on"))
+    depends_on = tuple(ItemId(value) for value in _generated_string_list(_required_string(header, path, "depends_on")))
     resources_value = _required_string(header, path, "resources")
-    resources = _generated_string_list(resources_value)
+    resources = tuple(ResourceId(value) for value in _generated_string_list(resources_value))
     if len(resources) != len(set(resources)):
         raise ParseError("ITEM_RESOURCES_DUPLICATE", path, "resources must not contain duplicate identities.")
     queue_item = QueueItem(
-        item=item,
+        item=ItemId(item),
         state=state,
         timing=_generated_optional(_required_string(header, path, "timing"), "—"),
         depends_on=depends_on,
-        attempt=_generated_optional(_required_string(header, path, "attempt"), "—"),
+        attempt=(
+            AttemptId(value)
+            if (value := _generated_optional(_required_string(header, path, "attempt"), "—")) is not None
+            else None
+        ),
         source=_present_string(header, path, "source"),
         next_action=_generated_optional(_required_string(header, path, "next_action"), "—"),
         notes=_present_string(header, path, "notes"),
     )
-    return WorkItemRecord(path, item, _required_string(header, path, "user_label"), queue_item, resources)
+    return WorkItemRecord(path, ItemId(item), _required_string(header, path, "user_label"), queue_item, resources)
 
 
 def parse_current(path: Path) -> CurrentPointer:
@@ -321,8 +380,8 @@ def parse_current(path: Path) -> CurrentPointer:
         raise ParseError("CURRENT_ATTEMPT_INVALID", path, "focus_attempt must be null or an attempt identity.")
     return CurrentPointer(
         path=path,
-        focus_item=focus_item,
-        focus_attempt=focus_attempt,
+        focus_item=ItemId(focus_item) if focus_item is not None else None,
+        focus_attempt=AttemptId(focus_attempt) if focus_attempt is not None else None,
         next_action=_required_string(header, path, "next_action"),
     )
 
@@ -352,8 +411,8 @@ def parse_attempt(path: Path) -> Attempt:
     provenance_field = "owner" if schema == SCHEMA_V1 else "provenance"
     return Attempt(
         path=path,
-        attempt=attempt,
-        item=item,
+        attempt=AttemptId(attempt),
+        item=ItemId(item),
         state=attempt_state,
         branch=_required_string(header, path, "branch"),
         base_revision=_required_string(header, path, "base_revision"),

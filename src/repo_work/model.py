@@ -1,7 +1,19 @@
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import Final, Literal
+
+from repo_work.identifiers import (
+    AttemptId,
+    HostId,
+    ItemId,
+    LeaseId,
+    PlanningImpactId,
+    ProposalId,
+    ReservationId,
+    ResourceId,
+    ResourceInstanceId,
+    TaskId,
+)
 
 SCHEMA_V1: Final = "repo-work/v1"
 SCHEMA_V2: Final = "repo-work/v2"
@@ -27,20 +39,34 @@ class AttemptState(Enum):
     CLOSED = "closed"
 
 
+class AcceptedProposalState(Enum):
+    INTAKE = "intake"
+    READY = "ready"
+    BLOCKED = "blocked"
+    DEFERRED = "deferred"
+
+
+class CloseOutcome(Enum):
+    DONE = "done"
+    DROPPED = "dropped"
+
+
+class Timing(Enum):
+    MUST_NOW = "must-now"
+    CHEAPER_NOW = "cheaper-now"
+    SAFE_TO_DEFER = "safe-to-defer"
+
+
 TERMINAL_STATES: Final = frozenset({"done", "superseded", "dropped"})
 
 
-type HeaderValue = str | bool | None
-type Header = dict[str, HeaderValue]
-
-
 @dataclass(frozen=True, slots=True)
-class QueueItem:
-    item: str
+class WorkItem:
+    item: ItemId
     state: WorkState
     timing: str | None
-    depends_on: tuple[str, ...]
-    attempt: str | None
+    depends_on: tuple[ItemId, ...]
+    attempt: AttemptId | None
     source: str
     next_action: str | None
     notes: str
@@ -48,42 +74,78 @@ class QueueItem:
 
 
 @dataclass(frozen=True, slots=True)
-class Queue:
-    path: Path
-    header: Header
-    items: tuple[QueueItem, ...]
-    revision: str
-
-    def by_id(self) -> dict[str, QueueItem]:
-        return {item.item: item for item in self.items}
+class EmptyInput:
+    pass
 
 
 @dataclass(frozen=True, slots=True)
-class WorkItemRecord:
-    path: Path
-    item: str
-    user_label: str
-    queue_item: QueueItem | None = None
-    resources: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class CurrentPointer:
-    path: Path
-    focus_item: str | None
-    focus_attempt: str | None
-    next_action: str
-
-
-@dataclass(frozen=True, slots=True)
-class Attempt:
-    path: Path
-    attempt: str
-    item: str
-    state: AttemptState
+class ActivateInput:
+    attempt: AttemptId
     branch: str
     base_revision: str
-    provenance: str
+    owner: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReasonInput:
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class BlockInput:
+    reason: str
+    depends_on: tuple[ItemId, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceInput:
+    evidence: str
+
+
+@dataclass(frozen=True, slots=True)
+class CloseInput:
+    outcome: CloseOutcome
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class DeferInput:
+    timing: Timing
+    reopen_condition: str
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptProposalInput:
+    item: ItemId
+    state: AcceptedProposalState
+    next_action: str
+    timing: Timing | None = None
+    depends_on: tuple[ItemId, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class MergeProposalInput:
+    target: ItemId
+
+
+@dataclass(frozen=True, slots=True)
+class TransferCoordinatorInput:
+    task_id: TaskId
+    host_id: HostId
+
+
+type TransitionInput = (
+    EmptyInput
+    | ActivateInput
+    | ReasonInput
+    | BlockInput
+    | EvidenceInput
+    | CloseInput
+    | DeferInput
+    | AcceptProposalInput
+    | MergeProposalInput
+    | TransferCoordinatorInput
+)
 
 
 class ArtifactRole(Enum):
@@ -107,18 +169,18 @@ class ScopeArtifact:
 @dataclass(frozen=True, slots=True)
 class ScopeDependency:
     position: int
-    dependency_id: str
+    dependency_id: ItemId
 
 
 @dataclass(frozen=True, slots=True)
 class ResourceRequirement:
     position: int
-    resource_id: str
+    resource_id: ResourceId
 
 
 @dataclass(frozen=True, slots=True)
 class ItemScope:
-    item_id: str
+    item_id: ItemId
     user_label: str
     trigger: str | None
     why_it_matters: str | None
@@ -131,7 +193,7 @@ class ItemScope:
 
 @dataclass(frozen=True, slots=True)
 class ScopeAnchor:
-    item: str
+    item: ItemId
     revision: int
     digest: str
     scope: ItemScope
@@ -148,7 +210,7 @@ class PlanningDisposition(Enum):
 
 @dataclass(frozen=True, slots=True)
 class PlanningObligation:
-    target: str
+    target: ItemId
     position: int
     observed_scope_revision: int
     observed_scope_digest: str = ""
@@ -157,16 +219,16 @@ class PlanningObligation:
     evaluated_scope_digest: str | None = None
     resulting_scope_revision: int | None = None
     resulting_scope_digest: str | None = None
-    replacements: tuple[str, ...] = ()
+    replacements: tuple[ItemId, ...] = ()
     outcome_evidence: str | None = None
     reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class PlanningImpact:
-    impact_id: str
-    source_item: str
-    source_attempt: str | None
+    impact_id: PlanningImpactId
+    source_item: ItemId
+    source_attempt: AttemptId | None
     source_scope_revision: int
     source_scope_digest: str
     summary: str
@@ -190,33 +252,33 @@ class UseLeaseState(Enum):
 
 @dataclass(frozen=True, slots=True)
 class ResourceDefinition:
-    resource_id: str
+    resource_id: ResourceId
     kind: str
 
 
 @dataclass(frozen=True, slots=True)
 class ResourceInstance:
-    instance_id: str
-    resource_id: str
-    host_id: str
+    instance_id: ResourceInstanceId
+    resource_id: ResourceId
+    host_id: HostId
     subject_revision: int
 
 
 @dataclass(frozen=True, slots=True)
 class ResourceReservation:
-    reservation_id: str
-    resource_id: str
-    instance_id: str
-    attempt: str
+    reservation_id: ReservationId
+    resource_id: ResourceId
+    instance_id: ResourceInstanceId
+    attempt: AttemptId
     generation: int
     state: ReservationState
 
 
 @dataclass(frozen=True, slots=True)
 class ResourceUseLease:
-    lease_id: str
-    reservation_id: str
-    attempt_lease_id: str
+    lease_id: LeaseId
+    reservation_id: ReservationId
+    attempt_lease_id: LeaseId
     attempt_generation: int
     generation: int
     state: UseLeaseState
@@ -224,31 +286,31 @@ class ResourceUseLease:
 
 @dataclass(frozen=True, slots=True)
 class ResourceAuthority:
-    resource_id: str
-    host_id: str
-    lease_id: str
+    resource_id: ResourceId
+    host_id: HostId
+    lease_id: LeaseId
     generation: int
 
 
 @dataclass(frozen=True, slots=True)
 class AttemptAuthority:
-    attempt: str
-    item: str
-    lease_id: str | None
+    attempt: AttemptId
+    item: ItemId
+    lease_id: LeaseId | None
     generation: int
     resources: tuple[ResourceAuthority, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class ProposalRecord:
-    proposal: str
+    proposal: ProposalId
     revision: str
 
 
 @dataclass(frozen=True, slots=True)
 class AttemptRecord:
-    attempt: str
-    item: str
+    attempt: AttemptId
+    item: ItemId
     state: AttemptState
     accepted_scope_revision: int | None = None
     accepted_scope_digest: str | None = None
@@ -257,7 +319,7 @@ class AttemptRecord:
 
 @dataclass(frozen=True, slots=True)
 class SubjectRevision:
-    subject: str
+    subject: ItemId | AttemptId | ProposalId
     revision: str
 
 
@@ -265,12 +327,12 @@ class SubjectRevision:
 class LedgerSnapshot:
     revision: str
     generation: int
-    items: tuple[QueueItem, ...]
+    items: tuple[WorkItem, ...]
     attempts: tuple[AttemptRecord, ...] = ()
     proposals: tuple[ProposalRecord, ...] = ()
     subject_revisions: tuple[SubjectRevision, ...] = ()
     attempt_authorities: tuple[AttemptAuthority, ...] = ()
-    history_items: tuple[str, ...] = ()
+    history_items: tuple[ItemId, ...] = ()
     scopes: tuple[ScopeAnchor, ...] = ()
     planning_impacts: tuple[PlanningImpact, ...] = ()
     resource_definitions: tuple[ResourceDefinition, ...] = ()
@@ -278,23 +340,23 @@ class LedgerSnapshot:
     resource_reservations: tuple[ResourceReservation, ...] = ()
     resource_use_leases: tuple[ResourceUseLease, ...] = ()
     host_epoch: int = 0
-    focus_item: str | None = None
-    focus_attempt: str | None = None
+    focus_item: ItemId | None = None
+    focus_attempt: AttemptId | None = None
     can_transfer_coordinator: bool = False
 
-    def items_by_id(self) -> dict[str, QueueItem]:
+    def items_by_id(self) -> dict[ItemId, WorkItem]:
         return {item.item: item for item in self.items}
 
-    def attempts_by_id(self) -> dict[str, AttemptRecord]:
+    def attempts_by_id(self) -> dict[AttemptId, AttemptRecord]:
         return {attempt.attempt: attempt for attempt in self.attempts}
 
-    def proposal_revisions(self) -> dict[str, str]:
+    def proposal_revisions(self) -> dict[ProposalId, str]:
         return {proposal.proposal: proposal.revision for proposal in self.proposals}
 
-    def subject_revision(self, subject: str) -> str | None:
+    def subject_revision(self, subject: ItemId | AttemptId | ProposalId) -> str | None:
         return next((value.revision for value in self.subject_revisions if value.subject == subject), None)
 
-    def authority_for(self, attempt: str, lease_id: str | None, generation: int) -> AttemptAuthority | None:
+    def authority_for(self, attempt: AttemptId, lease_id: LeaseId | None, generation: int) -> AttemptAuthority | None:
         return next(
             (
                 authority

@@ -4,8 +4,8 @@ from pathlib import Path
 from repo_work.atomic import atomic_write, atomic_write_text, transition_lock
 from repo_work.authority import AuthorityVersion, resolve_authority, write_authority_selector
 from repo_work.coordinator import CoordinatorRegistration, read_coordinator
-from repo_work.markdown import render_current, render_queue, render_v2_header
-from repo_work.model import SCHEMA_V1, SCHEMA_V2, Queue
+from repo_work.markdown import Queue, render_current, render_queue, render_v2_header
+from repo_work.model import SCHEMA_V1, SCHEMA_V2
 from repo_work.transaction_store import (
     ChangeSet,
     commit_change_set,

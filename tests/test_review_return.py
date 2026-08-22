@@ -3,26 +3,24 @@ import io
 import json
 import tempfile
 import unittest
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from repo_work.actions import Action, ActionError, actions_for
 from repo_work.cli import main
-from repo_work.decisions import ActionKind, AuthorizationKind, DecisionError, decide
+from repo_work.decisions import ActionKind, AuthorizationKind, decide
+from repo_work.domain_errors import DecisionError
+from repo_work.identifiers import AttemptId, ItemId
 from repo_work.leases import acquire_attempt, acquire_coordination, release_coordination
 from repo_work.markdown import parse_attempt, parse_current, parse_header, parse_queue
 from repo_work.migration import migrate_to_v2
 from repo_work.model import (
-    AttemptAuthority,
-    AttemptRecord,
     AttemptState,
     LedgerSnapshot,
-    QueueItem,
     ReservationState,
-    ResourceReservation,
-    ResourceUseLease,
     UseLeaseState,
+    WorkItem,
     WorkState,
 )
 from repo_work.overview import read_overview
@@ -37,6 +35,24 @@ from repo_work.transaction_store import CommitFailpoint, FileChange, journal_pat
 from repo_work.transition import TransitionError, apply_action
 from repo_work.transition_input import ReasonInput
 from repo_work.validate import validate_work_state
+from tests.domain_support import (
+    action as make_action,
+)
+from tests.domain_support import (
+    attempt_authority as AttemptAuthority,
+)
+from tests.domain_support import (
+    attempt_record as AttemptRecord,
+)
+from tests.domain_support import (
+    replace,
+)
+from tests.domain_support import (
+    resource_reservation as ResourceReservation,
+)
+from tests.domain_support import (
+    resource_use_lease as ResourceUseLease,
+)
 
 from .support import create_state
 
@@ -151,7 +167,16 @@ def _return_action(fixture: ReviewFixture) -> tuple[Action, str, int]:
 
 class ReviewReturnTest(unittest.TestCase):
     def test_decision_fences_attempt_and_resource_authority_as_one_effect(self) -> None:
-        item = QueueItem("reveal-core", WorkState.REVIEW, None, (), "reveal-core-1", "design", "complete", "")
+        item = WorkItem(
+            ItemId("reveal-core"),
+            WorkState.REVIEW,
+            None,
+            (),
+            AttemptId("reveal-core-1"),
+            "design",
+            "complete",
+            "",
+        )
         authority = AttemptAuthority("reveal-core-1", "reveal-core", "attempt-lease", 4)
         held = ResourceReservation(
             "capture-rig--host",
@@ -172,17 +197,17 @@ class ReviewReturnTest(unittest.TestCase):
             resource_reservations=(held, unrelated),
             resource_use_leases=(use,),
         )
-        action = Action(
-            "return-for-correction:reveal-core-1",
-            ActionKind.RETURN_FOR_CORRECTION,
-            "reveal-core-1",
-            "Return reveal-core for correction",
-            "revision",
-            11,
+        action = replace(
+            make_action(ActionKind.RETURN_FOR_CORRECTION, "reveal-core-1"),
+            label="Return reveal-core for correction",
+            expected_revision="revision",
+            coordinator_generation=11,
             authorization=AuthorizationKind.COORDINATION,
         )
 
-        decision = decide(snapshot, action, ReasonInput("review.md: authority mismatch"), datetime(2026, 8, 22, tzinfo=UTC))
+        decision = decide(
+            snapshot, action, ReasonInput("review.md: authority mismatch"), datetime(2026, 8, 22, tzinfo=UTC)
+        )
 
         self.assertIsNotNone(decision.attempt_authority_change)
         if decision.attempt_authority_change is None:
@@ -289,8 +314,14 @@ class ReviewReturnTest(unittest.TestCase):
         overview_item = read_overview(fixture.work, fixture.project).items[0]
         self.assertEqual(item.notes, overview_item.notes)
         self.assertEqual(AttemptState.ACTIVE, attempt.state)
-        self.assertEqual(("reveal-core", "reveal-core-1", "reacquire-and-continue"), (current.focus_item, current.focus_attempt, current.next_action))
-        self.assertEqual((before_attempt.branch, before_attempt.base_revision, before_attempt.provenance), (attempt.branch, attempt.base_revision, attempt.provenance))
+        self.assertEqual(
+            ("reveal-core", "reveal-core-1", "reacquire-and-continue"),
+            (current.focus_item, current.focus_attempt, current.next_action),
+        )
+        self.assertEqual(
+            (before_attempt.branch, before_attempt.base_revision, before_attempt.provenance),
+            (attempt.branch, attempt.base_revision, attempt.provenance),
+        )
         self.assertEqual("revoked", attempt_header["lease_status"])
         self.assertGreater(int(str(attempt_header["lease_generation"])), fixture.submit.coordinator_generation)
         self.assertEqual("unclaimed", attempt_header["owner_task_id"])
@@ -348,9 +379,12 @@ class ReviewReturnTest(unittest.TestCase):
             replace(authority_action, coordinator_generation=authority_generation + 1),
         )
         for invalid in invalid_authorities:
-            with self.subTest(authority=(invalid.lease_id, invalid.coordinator_generation)), self.assertRaisesRegex(
-                TransitionError,
-                "LEASE_FENCED",
+            with (
+                self.subTest(authority=(invalid.lease_id, invalid.coordinator_generation)),
+                self.assertRaisesRegex(
+                    TransitionError,
+                    "LEASE_FENCED",
+                ),
             ):
                 apply_action(
                     authority_fixture.work,
@@ -400,9 +434,12 @@ class ReviewReturnTest(unittest.TestCase):
         apply_action(fixture.work, fixture.project, action, '{"reason":"review.md: correction required"}')
         after = _snapshot(fixture.root)
         for invalid in (action, complete):
-            with self.subTest(action=invalid.action_id), self.assertRaisesRegex(
-                TransitionError,
-                "STATE_REVISION_STALE|ACTION_NOT_AVAILABLE|LEASE_FENCED",
+            with (
+                self.subTest(action=invalid.action_id),
+                self.assertRaisesRegex(
+                    TransitionError,
+                    "STATE_REVISION_STALE|ACTION_NOT_AVAILABLE|LEASE_FENCED",
+                ),
             ):
                 apply_action(fixture.work, fixture.project, invalid, '{"reason":"repeat"}')
             self.assertEqual(after, _snapshot(fixture.root))

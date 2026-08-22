@@ -8,10 +8,23 @@ from typing import Literal, assert_never, cast
 
 from repo_work.actions import Action, ActionKind
 from repo_work.coordinator import CoordinatorRegistration
-from repo_work.decisions import AttemptAuthorityChange, Decision, DecisionError, decide
+from repo_work.decisions import AttemptAuthorityChange, Decision, decide
+from repo_work.domain_errors import DecisionError
+from repo_work.identifiers import (
+    AttemptId,
+    HostId,
+    ItemId,
+    LeaseId,
+    ProposalId,
+    ReservationId,
+    ResourceId,
+    ResourceInstanceId,
+)
 from repo_work.leases import LeaseStatus, read_attempt_lease
 from repo_work.markdown import (
     CurrentPointer,
+    Queue,
+    QueueItem,
     V2HeaderValue,
     encode_string_scalar,
     parse_attempt,
@@ -34,13 +47,12 @@ from repo_work.model import (
     AttemptRecord,
     LedgerSnapshot,
     ProposalRecord,
-    Queue,
-    QueueItem,
     ReservationState,
     ResourceAuthority,
     ResourceReservation,
     ResourceUseLease,
     UseLeaseState,
+    WorkItem,
     WorkState,
 )
 from repo_work.proposals import Proposal, ProposalDispositionKind, ProposalHistory, read_proposal
@@ -429,9 +441,7 @@ def _submit_review(context: PlanContext, action: Action, _value: TransitionInput
 
 
 def _return_resource_changes(context: PlanContext, decision: Decision, timestamp: str) -> list[FileChange]:
-    use_lease_by_reservation = {
-        change.before.reservation_id: change for change in decision.resource_use_lease_changes
-    }
+    use_lease_by_reservation = {change.before.reservation_id: change for change in decision.resource_use_lease_changes}
     changes: list[FileChange] = []
     for reservation_change in decision.reservation_changes:
         reservation = cast(ResourceReservation, reservation_change.before)
@@ -539,7 +549,11 @@ def _defer(context: PlanContext, action: Action, value: TransitionInput) -> Chan
     if item.state not in {WorkState.INTAKE, WorkState.READY, WorkState.BLOCKED} or item.attempt is not None:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", f"Item '{action.subject}' cannot be deferred now.")
     items[index] = replace(
-        item, state=WorkState.DEFERRED, timing=value.timing, next_action=None, notes=value.reopen_condition
+        item,
+        state=WorkState.DEFERRED,
+        timing=value.timing.value,
+        next_action=None,
+        notes=value.reopen_condition,
     )
     return ChangeSet.of(_queue_change(context, items))
 
@@ -575,7 +589,7 @@ def _accept_proposal(context: PlanContext, action: Action, value: TransitionInpu
     item = QueueItem(
         item=value.item,
         state=WorkState(value.state.value),
-        timing=value.timing,
+        timing=value.timing.value if value.timing is not None else None,
         depends_on=value.depends_on,
         attempt=None,
         source=f"proposal:{action.subject}",
@@ -704,28 +718,41 @@ def _return_authority_records(
             reservation_id = path.stem
             reservations.append(
                 ResourceReservation(
-                    reservation_id,
-                    claim.resource_id,
-                    reservation_id,
-                    claim.attempt_id,
+                    ReservationId(reservation_id),
+                    ResourceId(claim.resource_id),
+                    ResourceInstanceId(reservation_id),
+                    AttemptId(claim.attempt_id),
                     claim.generation,
                     ReservationState(claim.status.value),
                 )
             )
             use_leases.append(
                 ResourceUseLease(
-                    claim.lease_id,
-                    reservation_id,
-                    claim.attempt_lease_id,
+                    LeaseId(claim.lease_id),
+                    ReservationId(reservation_id),
+                    LeaseId(claim.attempt_lease_id),
                     claim.attempt_lease_generation,
                     claim.generation,
                     UseLeaseState(claim.status.value),
                 )
             )
             if claim.status == LeaseStatus.ACTIVE:
-                resources.append(ResourceAuthority(claim.resource_id, claim.host_id, claim.lease_id, claim.generation))
+                resources.append(
+                    ResourceAuthority(
+                        ResourceId(claim.resource_id),
+                        HostId(claim.host_id),
+                        LeaseId(claim.lease_id),
+                        claim.generation,
+                    )
+                )
     return (
-        AttemptAuthority(attempt, item, attempt_lease.lease_id, attempt_lease.generation, tuple(resources)),
+        AttemptAuthority(
+            AttemptId(attempt),
+            ItemId(item),
+            LeaseId(attempt_lease.lease_id),
+            attempt_lease.generation,
+            tuple(resources),
+        ),
         tuple(reservations),
         tuple(use_leases),
     )
@@ -742,14 +769,17 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
     if handler is None:
         raise TransitionPlanError("ACTION_NOT_MUTATING", f"Action '{action.kind.value}' is not a canonical transition.")
     attempts = tuple(
-        AttemptRecord(attempt.attempt, attempt.item, attempt.state)
+        AttemptRecord(AttemptId(attempt.attempt), ItemId(attempt.item), attempt.state)
         for item in context.queue.items
         if item.attempt is not None
         for attempt in (parse_attempt(work_root / "attempts" / item.attempt / "attempt.md"),)
     )
     inbox = work_root / "inbox"
     proposals = (
-        tuple(ProposalRecord(path.stem, hashlib.sha256(path.read_bytes()).hexdigest()) for path in sorted(inbox.glob("*.json")))
+        tuple(
+            ProposalRecord(ProposalId(path.stem), hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in sorted(inbox.glob("*.json"))
+        )
         if inbox.is_dir()
         else ()
     )
@@ -765,14 +795,28 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
         )
         attempt_authorities = (authority,)
     history = work_root / "history" / "items"
+    snapshot_items = tuple(
+        WorkItem(
+            ItemId(item.item),
+            item.state,
+            item.timing,
+            tuple(ItemId(value) for value in item.depends_on),
+            AttemptId(item.attempt) if item.attempt is not None else None,
+            item.source,
+            item.next_action,
+            item.notes,
+            item.outcome_evidence,
+        )
+        for item in context.queue.items
+    )
     snapshot = LedgerSnapshot(
         revision=context.queue.revision,
         generation=action.coordinator_generation,
-        items=context.queue.items,
+        items=snapshot_items,
         attempts=attempts,
         proposals=proposals,
         attempt_authorities=attempt_authorities,
-        history_items=tuple(path.stem for path in sorted(history.glob("*.md"))) if history.is_dir() else (),
+        history_items=tuple(ItemId(path.stem) for path in sorted(history.glob("*.md"))) if history.is_dir() else (),
         resource_reservations=resource_reservations,
         resource_use_leases=resource_use_leases,
         can_transfer_coordinator=(work_root / "coordinator.json").is_file(),

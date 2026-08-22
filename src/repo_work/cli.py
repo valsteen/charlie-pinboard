@@ -17,7 +17,6 @@ from repo_work.actions import (
     ActionError,
     ActionKind,
     AuthorizationKind,
-    ResourceToken,
     Role,
     actions_for,
     state_revision,
@@ -25,6 +24,17 @@ from repo_work.actions import (
 from repo_work.authority import AuthorityVersion, authority_transaction, resolve_authority
 from repo_work.coordinator import read_coordinator
 from repo_work.dispatch import DispatchError, prepare_dispatch, read_dispatch_environment
+from repo_work.identifiers import (
+    ActionId,
+    AttemptId,
+    HostId,
+    ItemId,
+    LeaseId,
+    LedgerId,
+    ProposalId,
+    ResourceId,
+    SubjectId,
+)
 from repo_work.identity import PROGRAM_NAME
 from repo_work.leases import (
     LeaseError,
@@ -46,6 +56,7 @@ from repo_work.overview import OverviewError, OverviewItem, WorkOverview, read_o
 from repo_work.parallel import ParallelError, ParallelItem, ParallelPreview, preview_parallel
 from repo_work.proposals import ProposalError, create_proposal
 from repo_work.registration import RegistrationError, initialize_work_state, initialize_work_state_v2
+from repo_work.resource_decisions import ResourceToken
 from repo_work.resources import (
     ResourceClaim,
     ResourceDeclaration,
@@ -677,17 +688,44 @@ def _action_from_values(
             raise TransitionError(
                 "RESOURCE_CLAIM_INVALID", f"Resource generation '{resource_generation}' is not an integer."
             ) from error
-        resource_claims.append(ResourceToken(resource_id, host_id, resource_lease_id, parsed_generation))
+        resource_claims.append(
+            ResourceToken(ResourceId(resource_id), HostId(host_id), LeaseId(resource_lease_id), parsed_generation)
+        )
+    attempt_kinds = {
+        ActionKind.BLOCK,
+        ActionKind.COMPLETE,
+        ActionKind.CONTINUE,
+        ActionKind.DISPATCH,
+        ActionKind.PAUSE,
+        ActionKind.REPORT_BLOCKER,
+        ActionKind.RETURN_FOR_CORRECTION,
+        ActionKind.SUBMIT_REVIEW,
+    }
+    proposal_kinds = {
+        ActionKind.ACCEPT_PROPOSAL,
+        ActionKind.MERGE_PROPOSAL,
+        ActionKind.REJECT_PROPOSAL,
+        ActionKind.RETURN_PROPOSAL,
+    }
+    subject_id: SubjectId
+    if kind in attempt_kinds:
+        subject_id = AttemptId(subject)
+    elif kind in proposal_kinds:
+        subject_id = ProposalId(subject)
+    elif kind in {ActionKind.INSPECT, ActionKind.TRANSFER_COORDINATOR}:
+        subject_id = LedgerId(subject)
+    else:
+        subject_id = ItemId(subject)
     return Action(
-        action_id=action_id,
+        action_id=ActionId(action_id),
         kind=kind,
-        subject=subject,
+        subject=subject_id,
         label=action_id,
         expected_revision=expected_revision,
         coordinator_generation=generation,
         subject_revision=subject_revision,
         authorization=authorization_kind,
-        lease_id=lease_id,
+        lease_id=LeaseId(lease_id) if lease_id is not None else None,
         resource_claims=tuple(resource_claims),
     )
 

@@ -10,6 +10,8 @@ from repo_work.atomic import PlatformNotSupportedError, transition_lock
 from repo_work.coordinator import CoordinatorError, parse_coordinator, read_coordinator
 from repo_work.markdown import (
     ParseError,
+    Queue,
+    QueueItem,
     parse_attempt,
     parse_current,
     parse_header,
@@ -20,7 +22,7 @@ from repo_work.markdown import (
     render_v2_item,
     replace_header_fields,
 )
-from repo_work.model import SCHEMA_V1, SCHEMA_V2, Queue, QueueItem, WorkState
+from repo_work.model import SCHEMA_V1, SCHEMA_V2, WorkState
 from repo_work.proposals import ProposalError, parse_proposal, read_proposal
 from repo_work.transition_input import ActivateInput, TransitionInputError, parse_transition_input
 

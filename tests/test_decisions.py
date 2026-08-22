@@ -1,7 +1,6 @@
 import hashlib
 import json
 import unittest
-from dataclasses import replace
 from datetime import UTC, datetime
 from typing import cast
 
@@ -10,66 +9,110 @@ from repo_work.decisions import (
     ActionKind,
     ActorAuthority,
     AuthorizationKind,
-    DecisionError,
-    DecisionErrorCode,
-    JsonValue,
-    ResourceToken,
     Role,
-    advance_scope,
-    assign_resource,
     available_actions,
     decide,
-    decide_planning_resolution,
+)
+from repo_work.domain_errors import DecisionError, DecisionErrorCode
+from repo_work.history import (
     item_scope_bytes,
     item_scope_change_outcome,
     item_scope_digest,
     planning_impact_outcome,
-    planning_resolution_outcome,
-    reallocate_resource,
-    release_resource,
-    resolve_planning_obligation,
-    revoke_resource,
     validate_history_outcome,
-    validate_mutation_resources,
-    validate_planning_impact,
 )
+from repo_work.identifiers import AttemptId, ItemId
 from repo_work.model import (
-    ArtifactRole,
-    AttemptAuthority,
-    AttemptRecord,
-    AttemptState,
-    ItemScope,
-    LedgerSnapshot,
-    PlanningDisposition,
-    PlanningImpact,
-    PlanningObligation,
-    ProposalRecord,
-    QueueItem,
-    ReservationState,
-    ResourceAuthority,
-    ResourceDefinition,
-    ResourceInstance,
-    ResourceRequirement,
-    ResourceReservation,
-    ResourceUseLease,
-    ScopeAnchor,
-    ScopeArtifact,
-    ScopeDependency,
-    UseLeaseState,
-    WorkState,
-)
-from repo_work.transition_input import (
     AcceptedProposalState,
-    AcceptProposalInput,
+    ArtifactRole,
+    AttemptState,
     BlockInput,
     CloseInput,
     CloseOutcome,
-    DeferInput,
     EmptyInput,
     EvidenceInput,
+    ItemScope,
+    LedgerSnapshot,
+    PlanningDisposition,
     ReasonInput,
-    TransferCoordinatorInput,
+    ReservationState,
+    ScopeArtifact,
+    UseLeaseState,
+    WorkItem,
+    WorkState,
 )
+from repo_work.planning_decisions import validate_planning_impact
+from tests.domain_support import (
+    accept_proposal_input as AcceptProposalInput,
+)
+from tests.domain_support import (
+    action as make_action,
+)
+from tests.domain_support import (
+    advance_scope,
+    assign_resource,
+    decide_planning_resolution,
+    planning_resolution_outcome,
+    reallocate_resource,
+    release_resource,
+    replace,
+    resolve_planning_obligation,
+    revoke_resource,
+    validate_mutation_resources,
+)
+from tests.domain_support import (
+    attempt_authority as AttemptAuthority,
+)
+from tests.domain_support import (
+    attempt_record as AttemptRecord,
+)
+from tests.domain_support import (
+    defer_input as DeferInput,
+)
+from tests.domain_support import (
+    item_scope as make_item_scope,
+)
+from tests.domain_support import (
+    planning_impact as PlanningImpact,
+)
+from tests.domain_support import (
+    planning_obligation as PlanningObligation,
+)
+from tests.domain_support import (
+    proposal_record as ProposalRecord,
+)
+from tests.domain_support import (
+    resource_authority as ResourceAuthority,
+)
+from tests.domain_support import (
+    resource_definition as ResourceDefinition,
+)
+from tests.domain_support import (
+    resource_instance as ResourceInstance,
+)
+from tests.domain_support import (
+    resource_requirement as ResourceRequirement,
+)
+from tests.domain_support import (
+    resource_reservation as ResourceReservation,
+)
+from tests.domain_support import (
+    resource_token as ResourceToken,
+)
+from tests.domain_support import (
+    resource_use_lease as ResourceUseLease,
+)
+from tests.domain_support import (
+    scope_anchor as ScopeAnchor,
+)
+from tests.domain_support import (
+    scope_dependency as ScopeDependency,
+)
+from tests.domain_support import (
+    transfer_coordinator_input as TransferCoordinatorInput,
+)
+
+type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
 
 NOW = datetime(2026, 8, 21, tzinfo=UTC)
 DIGEST_A = "a" * 64
@@ -110,24 +153,25 @@ def history_without(payload: bytes, member: str) -> bytes:
     return canonical_history(root)
 
 
-def item(item_id: str, state: WorkState, *, attempt: str | None = None) -> QueueItem:
-    return QueueItem(item_id, state, None, (), attempt, "design", "continue", "")
-
-
-def action(kind: ActionKind, subject: str) -> Action:
-    return Action(
-        f"{kind.value}:{subject}",
-        kind,
-        subject,
-        kind.value,
-        "revision",
-        1,
-        authorization=AuthorizationKind.COORDINATOR,
+def item(item_id: str, state: WorkState, *, attempt: str | None = None) -> WorkItem:
+    return WorkItem(
+        ItemId(item_id),
+        state,
+        None,
+        (),
+        AttemptId(attempt) if attempt is not None else None,
+        "design",
+        "continue",
+        "",
     )
 
 
+def action(kind: ActionKind, subject: str) -> Action:
+    return replace(make_action(kind, subject), authorization=AuthorizationKind.COORDINATOR)
+
+
 def native_scope(*, artifacts: tuple[ScopeArtifact, ...] | None = None) -> ItemScope:
-    return ItemScope(
+    return make_item_scope(
         item_id="build-map",
         user_label="Build the map",
         trigger="A route is missing",
@@ -181,7 +225,10 @@ class LifecycleDecisionTest(unittest.TestCase):
         )
         snapshot = LedgerSnapshot("revision", 1, items, planning_impacts=(impact,))
 
-        action_ids = {value.action_id for value in available_actions(snapshot, ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, 1))}
+        action_ids = {
+            value.action_id
+            for value in available_actions(snapshot, ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, 1))
+        }
 
         self.assertIn("activate:unrelated", action_ids)
         self.assertIn("continue:target-1", action_ids)
@@ -260,28 +307,88 @@ class LifecycleDecisionTest(unittest.TestCase):
         cases = (
             (LedgerSnapshot("r", 1, ()), ActionKind.ACTIVATE, "missing", EmptyInput(), "ITEM_NOT_FOUND"),
             (LedgerSnapshot("r", 1, (ready,)), ActionKind.ACTIVATE, "target", EmptyInput(), "TRANSITION_INPUT_INVALID"),
-            (LedgerSnapshot("r", 1, (item("target", WorkState.INTAKE),)), ActionKind.ACTIVATE, "target", EmptyInput(), "ACTION_NOT_AVAILABLE"),
-            (LedgerSnapshot("r", 1, (ready,)), ActionKind.PAUSE, "missing-1", ReasonInput("pause"), "ATTEMPT_NOT_FOUND"),
-            (LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,)), ActionKind.PAUSE, "target-1", ReasonInput("pause"), "ACTION_NOT_AVAILABLE"),
-            (LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)), ActionKind.PAUSE, "target-1", EmptyInput(), "TRANSITION_INPUT_INVALID"),
-            (LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)), ActionKind.BLOCK, "target-1", EmptyInput(), "TRANSITION_INPUT_INVALID"),
-            (LedgerSnapshot("r", 1, (paused,)), ActionKind.COMPLETE, "target-1", EvidenceInput("done"), "ACTION_NOT_AVAILABLE"),
             (
-                LedgerSnapshot("r", 1, (item("source", WorkState.READY), active), attempts=(attempt_active,), planning_impacts=(unresolved,)),
+                LedgerSnapshot("r", 1, (item("target", WorkState.INTAKE),)),
+                ActionKind.ACTIVATE,
+                "target",
+                EmptyInput(),
+                "ACTION_NOT_AVAILABLE",
+            ),
+            (
+                LedgerSnapshot("r", 1, (ready,)),
+                ActionKind.PAUSE,
+                "missing-1",
+                ReasonInput("pause"),
+                "ATTEMPT_NOT_FOUND",
+            ),
+            (
+                LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,)),
+                ActionKind.PAUSE,
+                "target-1",
+                ReasonInput("pause"),
+                "ACTION_NOT_AVAILABLE",
+            ),
+            (
+                LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
+                ActionKind.PAUSE,
+                "target-1",
+                EmptyInput(),
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
+                ActionKind.BLOCK,
+                "target-1",
+                EmptyInput(),
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                LedgerSnapshot("r", 1, (paused,)),
+                ActionKind.COMPLETE,
+                "target-1",
+                EvidenceInput("done"),
+                "ACTION_NOT_AVAILABLE",
+            ),
+            (
+                LedgerSnapshot(
+                    "r",
+                    1,
+                    (item("source", WorkState.READY), active),
+                    attempts=(attempt_active,),
+                    planning_impacts=(unresolved,),
+                ),
                 ActionKind.COMPLETE,
                 "target-1",
                 EvidenceInput("done"),
                 "PLANNING_IMPACT_UNRESOLVED",
             ),
             (
-                LedgerSnapshot("r", 1, (active,), attempts=(replace(attempt_active, accepted_scope_revision=1, accepted_scope_digest=DIGEST_A),), scopes=(stale_scope,)),
+                LedgerSnapshot(
+                    "r",
+                    1,
+                    (active,),
+                    attempts=(replace(attempt_active, accepted_scope_revision=1, accepted_scope_digest=DIGEST_A),),
+                    scopes=(stale_scope,),
+                ),
                 ActionKind.COMPLETE,
                 "target-1",
                 EvidenceInput("done"),
                 "ITEM_SCOPE_STALE",
             ),
-            (LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,), history_items=("target",)), ActionKind.COMPLETE, "target-1", EvidenceInput("done"), "HISTORY_RECORD_EXISTS"),
-            (LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)), ActionKind.CLOSE, "target", CloseInput(CloseOutcome.DONE, "done"), "ACTION_NOT_AVAILABLE"),
+            (
+                LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,), history_items=(ItemId("target"),)),
+                ActionKind.COMPLETE,
+                "target-1",
+                EvidenceInput("done"),
+                "HISTORY_RECORD_EXISTS",
+            ),
+            (
+                LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
+                ActionKind.CLOSE,
+                "target",
+                CloseInput(CloseOutcome.DONE, "done"),
+                "ACTION_NOT_AVAILABLE",
+            ),
             (LedgerSnapshot("r", 1, (ready,)), ActionKind.CLOSE, "target", EmptyInput(), "TRANSITION_INPUT_INVALID"),
             (
                 LedgerSnapshot("r", 1, (ready, replace(item("dependent", WorkState.READY), depends_on=("target",)))),
@@ -290,7 +397,13 @@ class LifecycleDecisionTest(unittest.TestCase):
                 CloseInput(CloseOutcome.DROPPED, "obsolete"),
                 "LIVE_DEPENDENTS",
             ),
-            (LedgerSnapshot("r", 1, (ready,), history_items=("target",)), ActionKind.CLOSE, "target", CloseInput(CloseOutcome.DONE, "done"), "HISTORY_RECORD_EXISTS"),
+            (
+                LedgerSnapshot("r", 1, (ready,), history_items=(ItemId("target"),)),
+                ActionKind.CLOSE,
+                "target",
+                CloseInput(CloseOutcome.DONE, "done"),
+                "HISTORY_RECORD_EXISTS",
+            ),
             (LedgerSnapshot("r", 1, (ready,)), ActionKind.RESUME, "target", EmptyInput(), "ACTION_NOT_AVAILABLE"),
             (
                 LedgerSnapshot("r", 1, (replace(paused, depends_on=("source",)), item("source", WorkState.READY))),
@@ -299,30 +412,90 @@ class LifecycleDecisionTest(unittest.TestCase):
                 EmptyInput(),
                 "DEPENDENCY_NOT_SATISFIED",
             ),
-            (LedgerSnapshot("r", 1, (paused,)), ActionKind.RESUME, "target", EvidenceInput("resume"), "TRANSITION_INPUT_INVALID"),
-            (LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,)), ActionKind.SUBMIT_REVIEW, "target-1", EmptyInput(), "ACTION_NOT_AVAILABLE"),
             (
-                LedgerSnapshot("r", 1, (item("source", WorkState.READY), active), attempts=(attempt_active,), planning_impacts=(unresolved,)),
+                LedgerSnapshot("r", 1, (paused,)),
+                ActionKind.RESUME,
+                "target",
+                EvidenceInput("resume"),
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,)),
+                ActionKind.SUBMIT_REVIEW,
+                "target-1",
+                EmptyInput(),
+                "ACTION_NOT_AVAILABLE",
+            ),
+            (
+                LedgerSnapshot(
+                    "r",
+                    1,
+                    (item("source", WorkState.READY), active),
+                    attempts=(attempt_active,),
+                    planning_impacts=(unresolved,),
+                ),
                 ActionKind.SUBMIT_REVIEW,
                 "target-1",
                 EmptyInput(),
                 "PLANNING_IMPACT_UNRESOLVED",
             ),
             (
-                LedgerSnapshot("r", 1, (active,), attempts=(replace(attempt_active, accepted_scope_revision=1, accepted_scope_digest=DIGEST_A),), scopes=(stale_scope,)),
+                LedgerSnapshot(
+                    "r",
+                    1,
+                    (active,),
+                    attempts=(replace(attempt_active, accepted_scope_revision=1, accepted_scope_digest=DIGEST_A),),
+                    scopes=(stale_scope,),
+                ),
                 ActionKind.SUBMIT_REVIEW,
                 "target-1",
                 EmptyInput(),
                 "ITEM_SCOPE_STALE",
             ),
-            (LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)), ActionKind.SUBMIT_REVIEW, "target-1", EvidenceInput("review"), "TRANSITION_INPUT_INVALID"),
-            (LedgerSnapshot("r", 1, (active,)), ActionKind.BLOCK_ITEM, "target", BlockInput("blocked"), "ACTION_NOT_AVAILABLE"),
-            (LedgerSnapshot("r", 1, (item("target", WorkState.INTAKE),)), ActionKind.REOPEN, "target", EvidenceInput("reopen"), "ACTION_NOT_AVAILABLE"),
-            (LedgerSnapshot("r", 1, (item("target", WorkState.INTAKE),)), ActionKind.MARK_READY, "target", EmptyInput(), "TRANSITION_INPUT_INVALID"),
-            (LedgerSnapshot("r", 1, (active,)), ActionKind.DEFER, "target", DeferInput("safe-to-defer", "later"), "ACTION_NOT_AVAILABLE"),
+            (
+                LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
+                ActionKind.SUBMIT_REVIEW,
+                "target-1",
+                EvidenceInput("review"),
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                LedgerSnapshot("r", 1, (active,)),
+                ActionKind.BLOCK_ITEM,
+                "target",
+                BlockInput("blocked"),
+                "ACTION_NOT_AVAILABLE",
+            ),
+            (
+                LedgerSnapshot("r", 1, (item("target", WorkState.INTAKE),)),
+                ActionKind.REOPEN,
+                "target",
+                EvidenceInput("reopen"),
+                "ACTION_NOT_AVAILABLE",
+            ),
+            (
+                LedgerSnapshot("r", 1, (item("target", WorkState.INTAKE),)),
+                ActionKind.MARK_READY,
+                "target",
+                EmptyInput(),
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                LedgerSnapshot("r", 1, (active,)),
+                ActionKind.DEFER,
+                "target",
+                DeferInput("safe-to-defer", "later"),
+                "ACTION_NOT_AVAILABLE",
+            ),
             (LedgerSnapshot("r", 1, (ready,)), ActionKind.DEFER, "target", EmptyInput(), "TRANSITION_INPUT_INVALID"),
             (LedgerSnapshot("r", 1, ()), ActionKind.ACCEPT_PROPOSAL, "proposal", EmptyInput(), "PROPOSAL_NOT_FOUND"),
-            (LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)), ActionKind.ACCEPT_PROPOSAL, "proposal", EmptyInput(), "TRANSITION_INPUT_INVALID"),
+            (
+                LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)),
+                ActionKind.ACCEPT_PROPOSAL,
+                "proposal",
+                EmptyInput(),
+                "TRANSITION_INPUT_INVALID",
+            ),
             (
                 LedgerSnapshot("r", 1, (ready,), proposals=(ProposalRecord("proposal", "p1"),)),
                 ActionKind.ACCEPT_PROPOSAL,
@@ -330,10 +503,34 @@ class LifecycleDecisionTest(unittest.TestCase):
                 AcceptProposalInput(item="target", state=AcceptedProposalState.READY, next_action="start"),
                 "ITEM_ALREADY_EXISTS",
             ),
-            (LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)), ActionKind.MERGE_PROPOSAL, "proposal", EmptyInput(), "TRANSITION_INPUT_INVALID"),
-            (LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)), ActionKind.REJECT_PROPOSAL, "proposal", EmptyInput(), "TRANSITION_INPUT_INVALID"),
-            (LedgerSnapshot("r", 1, ()), ActionKind.TRANSFER_COORDINATOR, "ledger", TransferCoordinatorInput("task", "host"), "ACTION_NOT_AVAILABLE"),
-            (LedgerSnapshot("r", 1, (), can_transfer_coordinator=True), ActionKind.TRANSFER_COORDINATOR, "ledger", EmptyInput(), "TRANSITION_INPUT_INVALID"),
+            (
+                LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)),
+                ActionKind.MERGE_PROPOSAL,
+                "proposal",
+                EmptyInput(),
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)),
+                ActionKind.REJECT_PROPOSAL,
+                "proposal",
+                EmptyInput(),
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                LedgerSnapshot("r", 1, ()),
+                ActionKind.TRANSFER_COORDINATOR,
+                "ledger",
+                TransferCoordinatorInput("task", "host"),
+                "ACTION_NOT_AVAILABLE",
+            ),
+            (
+                LedgerSnapshot("r", 1, (), can_transfer_coordinator=True),
+                ActionKind.TRANSFER_COORDINATOR,
+                "ledger",
+                EmptyInput(),
+                "TRANSITION_INPUT_INVALID",
+            ),
             (LedgerSnapshot("r", 1, ()), ActionKind.INSPECT, "ledger", EmptyInput(), "ACTION_NOT_MUTATING"),
         )
         for snapshot, kind, subject, value, code in cases:
@@ -361,15 +558,21 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
         self.assertEqual(expected, item_scope_bytes(scope))
         self.assertEqual(hashlib.sha256(expected).hexdigest(), item_scope_digest(scope))
 
-        evidence = ScopeArtifact(ArtifactRole.EVIDENCE, 0, "evidence", "observation", 1, "artifacts/evidence/observation/1.json", DIGEST_A)
-        self.assertEqual(item_scope_bytes(scope), item_scope_bytes(replace(scope, artifacts=(*scope.artifacts, evidence))))
+        evidence = ScopeArtifact(
+            ArtifactRole.EVIDENCE, 0, "evidence", "observation", 1, "artifacts/evidence/observation/1.json", DIGEST_A
+        )
+        self.assertEqual(
+            item_scope_bytes(scope), item_scope_bytes(replace(scope, artifacts=(*scope.artifacts, evidence)))
+        )
 
         anchor = advance_scope(None, "build-map", scope)
-        self.assertIs(anchor, advance_scope(anchor, "build-map", replace(scope, artifacts=(*scope.artifacts, evidence))))
+        self.assertIs(
+            anchor, advance_scope(anchor, "build-map", replace(scope, artifacts=(*scope.artifacts, evidence)))
+        )
         changed = advance_scope(anchor, "build-map", replace(scope, user_label="Build a safer map"))
         self.assertEqual(2, changed.revision)
 
-        legacy = ItemScope("legacy-item", "Legacy item", None, None, None, None)
+        legacy = make_item_scope("legacy-item", "Legacy item", None, None, None, None)
         self.assertEqual(
             b'{"artifacts":[],"dependencies":[],"effect":null,"item_id":"legacy-item",'
             b'"resource_requirements":[],"schema":"item-scope/v1","trigger":null,"unlock":null,'
@@ -481,7 +684,9 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             outcome_evidence="Superseded by smaller items",
         )
         payload = planning_resolution_outcome(superseded, "target").payload
-        self.assertIn(b'"replacements":[{"item_id":"target-a","position":0},{"item_id":"target-b","position":1}]', payload)
+        self.assertIn(
+            b'"replacements":[{"item_id":"target-a","position":0},{"item_id":"target-b","position":1}]', payload
+        )
         impact_history = planning_impact_outcome(impact)
         self.assertEqual("planning-impact/v1", impact_history.outcome_schema)
         validate_history_outcome(impact_history.outcome_schema, impact_history.payload)
@@ -499,7 +704,9 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             replacements=("target-a", "target-b"),
             outcome_evidence="Superseded by smaller items",
         )
-        self.assertEqual("Superseded by smaller items", terminal.item_change.outcome_evidence if terminal.item_change else None)
+        self.assertEqual(
+            "Superseded by smaller items", terminal.item_change.outcome_evidence if terminal.item_change else None
+        )
 
     def test_planning_impact_history_has_frozen_bytes_and_rejects_malformed_records(self) -> None:
         impact = PlanningImpact(
@@ -690,7 +897,15 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
                 "No longer needed",
             ),
         )
-        for disposition, target, target_attempt, expected_state, resulting_revision, resulting_digest, evidence in cases:
+        for (
+            disposition,
+            target,
+            target_attempt,
+            expected_state,
+            resulting_revision,
+            resulting_digest,
+            evidence,
+        ) in cases:
             attempts = (source_attempt,) if target_attempt is None else (source_attempt, target_attempt)
             snapshot = LedgerSnapshot("revision", 1, (source, target), attempts=attempts)
             impact = PlanningImpact(
@@ -748,9 +963,12 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             (PlanningDisposition.UNCHANGED, "", None, None, (), None),
         )
         for disposition, reason, revision, digest, replacements, evidence in resolution_cases:
-            with self.subTest(disposition=disposition.value), self.assertRaisesRegex(
-                DecisionError,
-                "PLANNING_RESOLUTION_INVALID",
+            with (
+                self.subTest(disposition=disposition.value),
+                self.assertRaisesRegex(
+                    DecisionError,
+                    "PLANNING_RESOLUTION_INVALID",
+                ),
             ):
                 resolve_planning_obligation(
                     snapshot,
@@ -891,9 +1109,13 @@ class ResourceAuthorityTest(unittest.TestCase):
                 ),
             ),
         )
-        validate_mutation_resources(snapshot, "attempt-1", ("checkout",), (ResourceToken("checkout", "host-a", "use-1", 5),))
+        validate_mutation_resources(
+            snapshot, "attempt-1", ("checkout",), (ResourceToken("checkout", "host-a", "use-1", 5),)
+        )
         with self.assertRaisesRegex(DecisionError, "RESOURCE_USE_LEASE_STALE"):
-            validate_mutation_resources(snapshot, "attempt-1", ("checkout",), (ResourceToken("checkout", "host-a", "use-1", 4),))
+            validate_mutation_resources(
+                snapshot, "attempt-1", ("checkout",), (ResourceToken("checkout", "host-a", "use-1", 4),)
+            )
 
         invalid_authority = (
             ("absent", replace(snapshot, attempt_authorities=())),
@@ -946,17 +1168,23 @@ class ResourceAuthorityTest(unittest.TestCase):
                 ResourceInstance("instance-b", "workspace", "host-a", 1),
             ),
         )
-        assigned = assign_resource(
-            snapshot,
-            reservation_id="reservation-a",
-            resource_id="workspace",
-            instance_id="instance-a",
-            attempt="attempt-1",
-            generation=1,
-        ).changes[0].after
+        assigned = (
+            assign_resource(
+                snapshot,
+                reservation_id="reservation-a",
+                resource_id="workspace",
+                instance_id="instance-a",
+                attempt="attempt-1",
+                generation=1,
+            )
+            .changes[0]
+            .after
+        )
         with_reservation = replace(snapshot, resource_reservations=(assigned,))
 
-        self.assertEqual(ReservationState.RELEASED, release_resource(with_reservation, "reservation-a").changes[0].after.state)
+        self.assertEqual(
+            ReservationState.RELEASED, release_resource(with_reservation, "reservation-a").changes[0].after.state
+        )
         self.assertEqual(
             ReservationState.REVOKED_PENDING_RECOVERY,
             revoke_resource(with_reservation, "reservation-a", unresolved_intent=True).changes[0].after.state,
@@ -997,13 +1225,21 @@ class ResourceAuthorityTest(unittest.TestCase):
             resource_definitions=(ResourceDefinition("checkout", "git-checkout"),),
             resource_instances=(ResourceInstance("instance-1", "checkout", "host-a", 4),),
             resource_reservations=(reservation,),
-            resource_use_leases=(ResourceUseLease("use-1", "reservation-1", "attempt-lease", 3, 5, UseLeaseState.ACTIVE),),
+            resource_use_leases=(
+                ResourceUseLease("use-1", "reservation-1", "attempt-lease", 3, 5, UseLeaseState.ACTIVE),
+            ),
         )
         token = ResourceToken("checkout", "host-a", "use-1", 5)
         validation_cases = (
             ("duplicate requirement", snapshot, ("checkout", "checkout"), (token,), "RESOURCE_REQUIREMENT_INVALID"),
             ("missing token", snapshot, ("checkout",), (), "RESOURCE_RESERVATION_STALE"),
-            ("missing reservation", replace(snapshot, resource_reservations=()), ("checkout",), (token,), "RESOURCE_RESERVATION_STALE"),
+            (
+                "missing reservation",
+                replace(snapshot, resource_reservations=()),
+                ("checkout",),
+                (token,),
+                "RESOURCE_RESERVATION_STALE",
+            ),
             (
                 "wrong host",
                 snapshot,
@@ -1013,7 +1249,10 @@ class ResourceAuthorityTest(unittest.TestCase):
             ),
             (
                 "inactive use lease",
-                replace(snapshot, resource_use_leases=(replace(snapshot.resource_use_leases[0], state=UseLeaseState.EXPIRED),)),
+                replace(
+                    snapshot,
+                    resource_use_leases=(replace(snapshot.resource_use_leases[0], state=UseLeaseState.EXPIRED),),
+                ),
                 ("checkout",),
                 (token,),
                 "RESOURCE_USE_LEASE_STALE",

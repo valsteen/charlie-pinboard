@@ -8,8 +8,8 @@ from repo_work.actions import state_revision
 from repo_work.atomic import transition_lock
 from repo_work.authority import AuthorityVersion, resolve_authority
 from repo_work.leases import LeaseError, LeaseStatus, read_attempt_lease
-from repo_work.markdown import ITEM_PATTERN, parse_item, parse_queue
-from repo_work.model import QueueItem, WorkState
+from repo_work.markdown import ITEM_PATTERN, QueueItem, parse_item, parse_queue
+from repo_work.model import WorkState
 from repo_work.resources import ResourceError, read_resource_claim, require_resource
 from repo_work.storage_layout import PathIdentityError, identity_child
 from repo_work.validate import validate_work_state
