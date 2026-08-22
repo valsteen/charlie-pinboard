@@ -6,6 +6,8 @@ from charlie_pinboard.application.stored_state import (
     ItemArtifactLink,
     ItemDependency,
     ItemResourceRequirement,
+    ProposalEvidence,
+    ProposalFreshness,
     ResourceInstanceState,
     StoredPlanningObligation,
     StoredPlanningReplacement,
@@ -28,6 +30,7 @@ from charlie_pinboard.domain.model import (
     PlanningImpact,
     PlanningObligation,
     ProposalRecord,
+    ProposalRelationKind,
     ResourceAuthority,
     ResourceDefinition,
     ResourceInstance,
@@ -63,6 +66,14 @@ def _replacement_position(value: StoredPlanningReplacement) -> int:
 
 
 def _obligation_position(value: StoredPlanningObligation) -> int:
+    return value.position
+
+
+def _proposal_evidence_position(value: ProposalEvidence) -> int:
+    return value.position
+
+
+def _proposal_freshness_position(value: ProposalFreshness) -> int:
     return value.position
 
 
@@ -338,7 +349,30 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             ArtifactRecord(artifact.artifact_ref_id, artifact.kind.value) for artifact in state.artifacts.references
         ),
         proposals=tuple(
-            ProposalRecord(proposal.proposal_id, str(proposal.subject_revision))
+            ProposalRecord(
+                proposal.proposal_id,
+                str(proposal.subject_revision),
+                proposal.created_at,
+                proposal.source_task_id,
+                proposal.user_label,
+                proposal.trigger,
+                proposal.why_it_matters,
+                ProposalRelationKind(proposal.relation.value),
+                proposal.relation_item_id,
+                proposal.effect,
+                proposal.unlock,
+                proposal.urgency_evidence,
+                tuple(
+                    value.selector
+                    for value in sorted(state.proposals.evidence, key=_proposal_evidence_position)
+                    if value.proposal_id == proposal.proposal_id
+                ),
+                tuple(
+                    value.assumption
+                    for value in sorted(state.proposals.freshness, key=_proposal_freshness_position)
+                    if value.proposal_id == proposal.proposal_id
+                ),
+            )
             for proposal in state.proposals.proposals
             if proposal.disposition is None
         ),

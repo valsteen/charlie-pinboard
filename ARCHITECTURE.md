@@ -53,8 +53,9 @@ The application layer is the home for top-level use-case sequencing below user-f
 | Module | Current ownership |
 | --- | --- |
 | `stored_state.py` | Complete immutable persistence aggregate, organized into lifecycle, proposal, planning, artifact, authority, resource, history, and focus records |
+| `mutations.py` | Closed typed persistence contract over lifecycle decisions, pure planning and resource decisions, and exact before/after carriers for mutation families whose orchestration remains in the later application service |
 | `decision_projection.py` | Pure projection from complete stored state into the narrower `LedgerSnapshot` consumed by domain decisions |
-| `ports.py` | `WorkStore` and `WorkTransaction` protocols over complete `StoredWorkState` reads and typed decision commits |
+| `ports.py` | `WorkStore` and `WorkTransaction` protocols over complete `StoredWorkState` reads and one closed accepted-mutation commit boundary |
 
 A port is an application-owned description of a capability the use case needs; a concrete file or SQLite store implements that capability from outside the application layer. `StoredWorkState` contains no SQL rows, filesystem paths, adapter exceptions, or active-record behavior. `LedgerSnapshot` remains domain-owned and storage-independent rather than becoming a lossy persistence contract. The current production CLI does not yet run through these ports because the Markdown implementation remains inside the temporary legacy path.
 
@@ -68,9 +69,11 @@ Adapters own concrete filesystem and database mechanics without deciding lifecyc
 | `files/file_io.py` | Verified durable-root creation, immutable single-file publication, and same-directory atomic replacement |
 | `sqlite/schema.sql` | The exact current `charlie-pinboard` / `sqlite-v1` relational schema |
 | `sqlite/database.py` | Raw SQLite connection configuration, exact current-schema verification, transactions, backup, synchronization, and stable storage errors |
-| `sqlite/store.py` | Relational `WorkStore` persistence for complete `StoredWorkState` reads and typed domain-decision commits |
+| `sqlite/store.py` | Relational `WorkStore` persistence for complete `StoredWorkState` reads and exhaustive accepted-mutation commits with one revision and history receipt |
 
 These SQLite owners are independently buildable primitives. The current production CLI does not compose them yet and continues to use the Markdown authority through `legacy`.
+
+Pure lifecycle, planning, and resource modules continue to decide legality. The application mutation contract carries their accepted outputs, while proposal creation, dependency and requirement edits, authority changes, and reservation or task-use changes use exact typed before/after stored values. Those carrier-only variants add no policy and identify the later `application/service.py` as their producer after current action and operation legality accepts the mutation. SQLite applies the closed union without importing raw input, Markdown, paths, or application orchestration.
 
 ### Interfaces
 

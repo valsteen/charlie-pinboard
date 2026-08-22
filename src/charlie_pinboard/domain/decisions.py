@@ -5,6 +5,7 @@ from enum import Enum
 from typing import assert_never
 
 from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
+from charlie_pinboard.domain.history import item_scope_digest
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -15,6 +16,7 @@ from charlie_pinboard.domain.identifiers import (
     LeaseId,
     LedgerId,
     ProposalId,
+    ResourceId,
     SubjectId,
 )
 from charlie_pinboard.domain.model import (
@@ -30,13 +32,18 @@ from charlie_pinboard.domain.model import (
     DeferInput,
     EmptyInput,
     EvidenceInput,
+    ItemScope,
     LedgerSnapshot,
     MergeProposalInput,
+    ProposalRecord,
     ReasonInput,
     ReservationState,
     ResourceAuthority,
     ResourceMutationCapability,
+    ResourceRequirement,
+    ScopeDependency,
     SubmitReviewInput,
+    Timing,
     TransferCoordinatorInput,
     TransitionInput,
     UseLeaseGenerationKind,
@@ -166,6 +173,44 @@ class AttemptChange:
     protected_candidate_before: CandidateId | None = None
     protected_candidate_after: CandidateId | None = None
     candidate_observed_at: datetime | None = None
+    branch: str | None = None
+    base_revision: str | None = None
+    owner: str | None = None
+
+
+class ProposalDispositionKind(Enum):
+    ACCEPTED = "accepted"
+    MERGED = "merged"
+    RETURNED = "returned"
+    REJECTED = "rejected"
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedProposalItem:
+    item: ItemId
+    state: WorkState
+    timing: Timing | None
+    next_action: str
+    dependencies: tuple[ItemId, ...]
+    resource_requirements: tuple[ResourceId, ...]
+    user_label: str
+    source: str
+    trigger: str
+    why_it_matters: str
+    effect: str
+    unlock: str
+    notes: str
+    scope_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalChange:
+    proposal: ProposalId
+    disposition: ProposalDispositionKind
+    target_item: ItemId | None
+    reason: str | None
+    disposed_at: datetime
+    accepted_item: AcceptedProposalItem | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +248,7 @@ class Decision:
     reservation_counter_changes: tuple[ResourceReservationCounterChange, ...] = ()
     resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = ()
     checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None
+    proposal_change: ProposalChange | None = None
 
 
 def _resource_token(value: ResourceAuthority) -> ResourceToken:
@@ -504,6 +550,7 @@ def _result(
     reservation_counter_changes: tuple[ResourceReservationCounterChange, ...] = (),
     resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = (),
     checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None,
+    proposal_change: ProposalChange | None = None,
     outcome: str | None = None,
     evidence: str | None = None,
 ) -> Decision:
@@ -517,6 +564,7 @@ def _result(
         reservation_counter_changes,
         resource_use_lease_changes,
         checkpoint_acceptance_change,
+        proposal_change,
     )
 
 
@@ -545,6 +593,9 @@ def _activate(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, 
             None,
             AttemptState.ACTIVE,
             brief_artifact_ref_id=value.brief_artifact_ref_id,
+            branch=value.branch,
+            base_revision=value.base_revision,
+            owner=value.owner,
         ),
     )
 
@@ -866,32 +917,105 @@ def _defer(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now
 
 
 def _accept_proposal(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
-    _require_proposal(snapshot, ProposalId(action.subject))
+    proposal = _require_proposal(snapshot, ProposalId(action.subject))
     if not isinstance(value, AcceptProposalInput):
         raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Accept proposal requires item input.")
     if value.item in snapshot.items_by_id() or value.item in snapshot.history_items:
         raise DecisionError(DecisionErrorCode.ITEM_ALREADY_EXISTS, f"Item '{value.item}' already exists.")
     change = ItemChange(value.item, None, WorkState(value.state.value))
-    return _result(action, now, item=value.item, item_change=change)
+    accepted_item: AcceptedProposalItem | None = None
+    if (
+        proposal.user_label is not None
+        and proposal.trigger is not None
+        and proposal.why_it_matters is not None
+        and proposal.effect is not None
+        and proposal.unlock is not None
+        and proposal.urgency_evidence is not None
+    ):
+        scope = ItemScope(
+            value.item,
+            proposal.user_label,
+            proposal.trigger,
+            proposal.why_it_matters,
+            proposal.effect,
+            proposal.unlock,
+            tuple(ScopeDependency(position, dependency) for position, dependency in enumerate(value.depends_on)),
+            tuple(
+                ResourceRequirement(position, resource_id)
+                for position, resource_id in enumerate(value.resource_requirements)
+            ),
+        )
+        accepted_item = AcceptedProposalItem(
+            value.item,
+            WorkState(value.state.value),
+            value.timing,
+            value.next_action,
+            value.depends_on,
+            value.resource_requirements,
+            proposal.user_label,
+            f"proposal:{proposal.proposal}",
+            proposal.trigger,
+            proposal.why_it_matters,
+            proposal.effect,
+            proposal.unlock,
+            proposal.urgency_evidence,
+            item_scope_digest(scope),
+        )
+    return _result(
+        action,
+        now,
+        item=value.item,
+        item_change=change,
+        proposal_change=ProposalChange(
+            proposal.proposal,
+            ProposalDispositionKind.ACCEPTED,
+            value.item,
+            None,
+            now,
+            accepted_item,
+        ),
+    )
 
 
-def _require_proposal(snapshot: LedgerSnapshot, proposal: ProposalId) -> None:
-    if proposal not in snapshot.proposal_revisions():
+def _require_proposal(snapshot: LedgerSnapshot, proposal: ProposalId) -> ProposalRecord:
+    record = next((value for value in snapshot.proposals if value.proposal == proposal), None)
+    if record is None:
         raise DecisionError(DecisionErrorCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal}' does not exist.")
+    return record
 
 
 def _merge_proposal(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
-    _require_proposal(snapshot, ProposalId(action.subject))
+    proposal = _require_proposal(snapshot, ProposalId(action.subject))
     if not isinstance(value, MergeProposalInput):
         raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Merge proposal requires a target item.")
-    return _result(action, now)
+    return _result(
+        action,
+        now,
+        proposal_change=ProposalChange(
+            proposal.proposal,
+            ProposalDispositionKind.MERGED,
+            value.target,
+            None,
+            now,
+        ),
+    )
 
 
 def _dispose_proposal(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
-    _require_proposal(snapshot, ProposalId(action.subject))
+    proposal = _require_proposal(snapshot, ProposalId(action.subject))
     if not isinstance(value, ReasonInput):
         raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Proposal disposition requires a reason.")
-    return _result(action, now, evidence=value.reason)
+    disposition = (
+        ProposalDispositionKind.RETURNED
+        if action.kind == ActionKind.RETURN_PROPOSAL
+        else ProposalDispositionKind.REJECTED
+    )
+    return _result(
+        action,
+        now,
+        evidence=value.reason,
+        proposal_change=ProposalChange(proposal.proposal, disposition, None, value.reason, now),
+    )
 
 
 def _transfer(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:

@@ -63,6 +63,14 @@ class Timing(Enum):
     SAFE_TO_DEFER = "safe-to-defer"
 
 
+class ProposalRelationKind(Enum):
+    INDEPENDENT = "independent"
+    PREREQUISITE = "prerequisite"
+    FOLLOW_UP = "follow-up"
+    DUPLICATE = "duplicate"
+    CONTRADICTION = "contradiction"
+
+
 TERMINAL_STATES: Final = frozenset({"done", "superseded", "dropped"})
 
 
@@ -148,6 +156,7 @@ class AcceptProposalInput:
     next_action: str
     timing: Timing | None = None
     depends_on: tuple[ItemId, ...] = ()
+    resource_requirements: tuple[ResourceId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -489,6 +498,18 @@ class AttemptAuthority:
 class ProposalRecord:
     proposal: ProposalId
     revision: str
+    created_at: datetime | None = None
+    source_task_id: TaskId | None = None
+    user_label: str | None = None
+    trigger: str | None = None
+    why_it_matters: str | None = None
+    relation: ProposalRelationKind | None = None
+    relation_item_id: ItemId | None = None
+    effect: str | None = None
+    unlock: str | None = None
+    urgency_evidence: str | None = None
+    evidence: tuple[str, ...] = ()
+    freshness: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
