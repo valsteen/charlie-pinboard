@@ -45,12 +45,21 @@ from charlie_pinboard.domain.decisions import (
     decide,
 )
 from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
-from charlie_pinboard.domain.identifiers import ArtifactRefId, ItemId, LeaseId, MutationIntentId, ReservationId
+from charlie_pinboard.domain.identifiers import (
+    ArtifactRefId,
+    AttemptId,
+    CandidateId,
+    ItemId,
+    LeaseId,
+    MutationIntentId,
+    ReservationId,
+)
 from charlie_pinboard.domain.model import (
     AttemptState,
     EvidenceInput,
     PlanningDisposition,
     ReasonInput,
+    SubmitReviewInput,
     UseLeaseState,
 )
 from charlie_pinboard.domain.resource_decisions import (
@@ -1059,6 +1068,30 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(complete_sqlite_state().authority, completed.authority)
         self.assertIsNone(completed.focus.item_id)
         self.assertIsNone(completed.focus.attempt_id)
+
+    def test_review_submission_commits_exact_caller_supplied_candidate(self) -> None:
+        _path, store = self._store()
+        snapshot = project_decision_snapshot(store.snapshot())
+        actor = ActorAuthority(
+            Role.WORKER,
+            AuthorizationKind.ATTEMPT,
+            3,
+            LeaseId("attempt-lease-a"),
+            (AttemptId("work-a-1"),),
+            False,
+        )
+        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.SUBMIT_REVIEW)
+        candidate = CandidateId("candidate-from-caller")
+        decision = decide(snapshot, action, SubmitReviewInput(candidate), SQLITE_NOW + timedelta(seconds=1))
+
+        with store.write() as transaction:
+            transaction.commit(decision)
+
+        committed = store.snapshot()
+        attempt = committed.lifecycle.attempts[0]
+        self.assertEqual((AttemptState.REVIEW, candidate), (attempt.state, attempt.candidate_revision))
+        self.assertEqual(SQLITE_NOW + timedelta(seconds=1), attempt.candidate_recorded_at)
+        self.assertIn(b'"candidate":"candidate-from-caller"', committed.history.receipts[-1].outcome_payload)
 
     def test_review_return_clears_candidate_and_fences_mutation_authority(self) -> None:
         state = complete_sqlite_state()

@@ -1,14 +1,17 @@
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
-from typing import Final, Literal
+from typing import Final, Literal, NewType
 
 from charlie_pinboard.domain.identifiers import (
+    ArtifactRefId,
     AttemptId,
     CandidateId,
     CheckpointId,
     HostId,
     ItemId,
     LeaseId,
+    MutationIntentId,
     PlanningImpactId,
     ProposalId,
     ReservationId,
@@ -20,6 +23,7 @@ from charlie_pinboard.domain.identifiers import (
 SCHEMA_V1: Final = "repo-work/v1"
 SCHEMA_V2: Final = "repo-work/v2"
 type SchemaV1 = Literal["repo-work/v1"]
+CanonicalJson = NewType("CanonicalJson", bytes)
 
 
 class WorkState(Enum):
@@ -86,6 +90,20 @@ class ActivateInput:
     branch: str
     base_revision: str
     owner: str
+    brief_artifact_ref_id: ArtifactRefId
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyActivateInput:
+    attempt: AttemptId
+    branch: str
+    base_revision: str
+    owner: str
+
+
+@dataclass(frozen=True, slots=True)
+class SubmitReviewInput:
+    candidate: CandidateId
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +164,7 @@ class TransferCoordinatorInput:
 type TransitionInput = (
     EmptyInput
     | ActivateInput
+    | LegacyActivateInput
     | ReasonInput
     | BlockInput
     | EvidenceInput
@@ -155,7 +174,14 @@ type TransitionInput = (
     | AcceptProposalInput
     | MergeProposalInput
     | TransferCoordinatorInput
+    | SubmitReviewInput
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactRecord:
+    artifact_ref_id: ArtifactRefId
+    kind: str
 
 
 class ArtifactRole(Enum):
@@ -277,6 +303,8 @@ class ResourceInstance:
     resource_id: ResourceId
     host_id: HostId
     subject_revision: int
+    discovery_kind: str = ""
+    discovery_fingerprint: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,6 +332,140 @@ class ResourceUseLease:
     generation: int
     state: UseLeaseState
     generation_kind: UseLeaseGenerationKind = UseLeaseGenerationKind.GRANT
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceObservation:
+    instance_id: ResourceInstanceId
+    host_id: HostId
+    locator_schema: str
+    locator: CanonicalJson
+    generation: int
+    digest: str
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CommandAttemptAuthority:
+    host_epoch: int
+    item: ItemId
+    item_subject_revision: str
+    attempt: AttemptId
+    attempt_subject_revision: str
+    task_id: TaskId
+    host_id: HostId
+    lease_id: LeaseId
+    generation: int
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CoordinationCommandAuthority:
+    host_epoch: int
+    task_id: TaskId
+    host_id: HostId
+    lease_id: LeaseId
+    generation: int
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceMutationCapability:
+    resource_id: ResourceId
+    reservation_id: ReservationId
+    reservation_generation: int
+    instance_id: ResourceInstanceId
+    instance_subject_revision: int
+    locator_observation_generation: int
+    locator_observation_digest: str
+    task_use_lease_id: LeaseId
+    task_use_generation: int
+    task_id: TaskId
+    host_id: HostId
+    host_epoch: int
+    attempt_lease_id: LeaseId
+    attempt_lease_generation: int
+
+
+class MutationIntentState(Enum):
+    PLANNED = "planned"
+    ACCEPTED = "accepted"
+    RECONCILED = "reconciled"
+    HUMAN_PRESERVED = "human-preserved"
+    ABANDONED = "abandoned"
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceIntentCapability:
+    resource: ResourceMutationCapability
+    intent_id: MutationIntentId
+    policy_digest: str
+    state: MutationIntentState
+
+
+@dataclass(frozen=True, slots=True)
+class MutationReservation:
+    reservation_id: ReservationId
+    instance_id: ResourceInstanceId
+    resource_id: ResourceId
+    host_id: HostId
+    acquisition_generation: int
+    attempt_id: AttemptId
+    item_id: ItemId
+    state: ReservationState
+    subject_revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class MutationUseLease:
+    reservation_id: ReservationId
+    instance_id: ResourceInstanceId
+    reservation_generation: int
+    attempt_id: AttemptId
+    host_id: HostId
+    instance_subject_revision: int
+    observation_generation: int
+    observation_digest: str
+    task_id: TaskId
+    attempt_lease_id: LeaseId
+    attempt_lease_generation: int
+    lease_id: LeaseId
+    generation: int
+    generation_kind: UseLeaseGenerationKind
+    host_epoch: int
+    expires_at: datetime
+    state: UseLeaseState
+
+
+@dataclass(frozen=True, slots=True)
+class MutationIntent:
+    intent_id: MutationIntentId
+    reservation_id: ReservationId
+    reservation_generation: int
+    instance_id: ResourceInstanceId
+    attempt_id: AttemptId
+    host_id: HostId
+    resource_use_generation: int
+    resource_use_lease_id: LeaseId
+    task_id: TaskId
+    attempt_lease_id: LeaseId
+    attempt_lease_generation: int
+    start_instance_subject_revision: int
+    start_observation_generation: int
+    start_observation_digest: str
+    policy_schema: str
+    policy: CanonicalJson
+    policy_digest: str
+    state: MutationIntentState
+    recorded_at: datetime
+    resolved_at: datetime | None = None
+    result_observation_generation: int | None = None
+    result_observation_digest: str | None = None
+    evidence_schema: str | None = None
+    evidence: CanonicalJson | None = None
+    evidence_digest: str | None = None
+    disposition_task_id: TaskId | None = None
+    disposition_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,7 +498,8 @@ class AttemptRecord:
     state: AttemptState
     accepted_scope_revision: int | None = None
     accepted_scope_digest: str | None = None
-    protected_candidate_revision: str | None = None
+    protected_candidate_revision: CandidateId | None = None
+    brief_artifact_ref_id: ArtifactRefId | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,9 +514,12 @@ class LedgerSnapshot:
     generation: int
     items: tuple[WorkItem, ...]
     attempts: tuple[AttemptRecord, ...] = ()
+    artifacts: tuple[ArtifactRecord, ...] = ()
     proposals: tuple[ProposalRecord, ...] = ()
     subject_revisions: tuple[SubjectRevision, ...] = ()
     attempt_authorities: tuple[AttemptAuthority, ...] = ()
+    command_attempt_authorities: tuple[CommandAttemptAuthority, ...] = ()
+    coordination_authority: CoordinationCommandAuthority | None = None
     history_items: tuple[ItemId, ...] = ()
     scopes: tuple[ScopeAnchor, ...] = ()
     planning_impacts: tuple[PlanningImpact, ...] = ()
@@ -362,6 +528,10 @@ class LedgerSnapshot:
     resource_reservation_counters: tuple[ResourceReservationCounter, ...] = ()
     resource_reservations: tuple[ResourceReservation, ...] = ()
     resource_use_leases: tuple[ResourceUseLease, ...] = ()
+    resource_observations: tuple[ResourceObservation, ...] = ()
+    mutation_reservations: tuple[MutationReservation, ...] = ()
+    mutation_use_leases: tuple[MutationUseLease, ...] = ()
+    mutation_intents: tuple[MutationIntent, ...] = ()
     host_epoch: int = 0
     focus_item: ItemId | None = None
     focus_attempt: AttemptId | None = None

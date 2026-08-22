@@ -1440,13 +1440,19 @@ class _DecisionWriter:
         if change.after is None:
             raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "Attempt changes require a resulting state.")
         clears_candidate = change.after in {AttemptState.ACTIVE, AttemptState.PAUSED, AttemptState.BLOCKED}
+        records_candidate = change.after == AttemptState.REVIEW
+        if records_candidate and (change.protected_candidate_after is None or change.candidate_observed_at is None):
+            raise StorageError(
+                StorageErrorCode.INVARIANT_VIOLATION,
+                "Review submission requires exact protected candidate provenance.",
+            )
         updated = self._connection.execute(
             """
             UPDATE attempts
             SET state = ?, subject_revision = ?, updated_at = ?,
                 origin_updated_at = CASE WHEN origin_kind = 'native' THEN ? ELSE origin_updated_at END,
-                candidate_revision = CASE WHEN ? THEN NULL ELSE candidate_revision END,
-                candidate_recorded_at = CASE WHEN ? THEN NULL ELSE candidate_recorded_at END
+                candidate_revision = CASE WHEN ? THEN NULL WHEN ? THEN ? ELSE candidate_revision END,
+                candidate_recorded_at = CASE WHEN ? THEN NULL WHEN ? THEN ? ELSE candidate_recorded_at END
             WHERE attempt_id = ? AND state = ?
             """,
             (
@@ -1455,7 +1461,11 @@ class _DecisionWriter:
                 decision.receipt.decided_at.isoformat(),
                 decision.receipt.decided_at.isoformat(),
                 clears_candidate,
+                records_candidate,
+                change.protected_candidate_after,
                 clears_candidate,
+                records_candidate,
+                _timestamp(change.candidate_observed_at),
                 change.attempt,
                 change.before.value,
             ),
@@ -1698,6 +1708,8 @@ class _DecisionWriter:
                     "candidate": str(decision.checkpoint_acceptance_change.candidate),
                 }
             )
+        if decision.attempt_change is not None and decision.attempt_change.protected_candidate_after is not None:
+            outcome["candidate"] = str(decision.attempt_change.protected_candidate_after)
         history_id = 1 + max((int(value.history_id) for value in state.history.receipts), default=0)
         self._connection.execute(
             """

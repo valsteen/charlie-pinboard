@@ -7,6 +7,7 @@ from charlie_pinboard.domain.decisions import ActionKind
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     AttemptId,
+    CandidateId,
     HostId,
     ItemId,
     LeaseId,
@@ -201,7 +202,7 @@ def attempt_record(
         state,
         accepted_scope_revision,
         accepted_scope_digest,
-        protected_candidate_revision,
+        CandidateId(protected_candidate_revision) if protected_candidate_revision is not None else None,
     )
 
 

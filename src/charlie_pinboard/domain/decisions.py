@@ -7,6 +7,7 @@ from typing import assert_never
 from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
 from charlie_pinboard.domain.identifiers import (
     ActionId,
+    ArtifactRefId,
     AttemptId,
     CandidateId,
     CheckpointId,
@@ -25,6 +26,7 @@ from charlie_pinboard.domain.model import (
     BlockInput,
     CloseInput,
     CloseOutcome,
+    CommandAttemptAuthority,
     DeferInput,
     EmptyInput,
     EvidenceInput,
@@ -33,8 +35,11 @@ from charlie_pinboard.domain.model import (
     ReasonInput,
     ReservationState,
     ResourceAuthority,
+    ResourceMutationCapability,
+    SubmitReviewInput,
     TransferCoordinatorInput,
     TransitionInput,
+    UseLeaseGenerationKind,
     UseLeaseState,
     WorkItem,
     WorkState,
@@ -98,6 +103,8 @@ class Action:
     authorization: AuthorizationKind = AuthorizationKind.COORDINATOR
     lease_id: LeaseId | None = None
     resource_claims: tuple[ResourceToken, ...] = ()
+    command_authority: CommandAttemptAuthority | None = None
+    resource_capabilities: tuple[ResourceMutationCapability, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +129,8 @@ class ActionFactory:
         label: str,
         subject_revision: str | None = None,
         resource_claims: tuple[ResourceToken, ...] = (),
+        command_authority: CommandAttemptAuthority | None = None,
+        resource_capabilities: tuple[ResourceMutationCapability, ...] = (),
     ) -> Action:
         return Action(
             action_id=ActionId(f"{kind.value}:{subject}"),
@@ -134,6 +143,8 @@ class ActionFactory:
             authorization=self.actor.authorization,
             lease_id=self.actor.lease_id,
             resource_claims=resource_claims,
+            command_authority=command_authority,
+            resource_capabilities=resource_capabilities,
         )
 
 
@@ -151,6 +162,10 @@ class AttemptChange:
     attempt: AttemptId
     before: AttemptState | None
     after: AttemptState | None
+    brief_artifact_ref_id: ArtifactRefId | None = None
+    protected_candidate_before: CandidateId | None = None
+    protected_candidate_after: CandidateId | None = None
+    candidate_observed_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +207,48 @@ class Decision:
 
 def _resource_token(value: ResourceAuthority) -> ResourceToken:
     return ResourceToken(value.resource_id, value.host_id, value.lease_id, value.generation)
+
+
+def _resource_capabilities(
+    snapshot: LedgerSnapshot,
+    authority: CommandAttemptAuthority,
+) -> tuple[ResourceMutationCapability, ...]:
+    reservations = {value.reservation_id: value for value in snapshot.mutation_reservations}
+    result: list[ResourceMutationCapability] = []
+    for use_lease in snapshot.mutation_use_leases:
+        if (
+            use_lease.attempt_id != authority.attempt
+            or use_lease.state != UseLeaseState.ACTIVE
+            or use_lease.generation_kind != UseLeaseGenerationKind.GRANT
+            or use_lease.attempt_lease_id != authority.lease_id
+            or use_lease.attempt_lease_generation != authority.generation
+            or use_lease.task_id != authority.task_id
+            or use_lease.host_id != authority.host_id
+            or use_lease.host_epoch != authority.host_epoch
+        ):
+            continue
+        reservation = reservations.get(use_lease.reservation_id)
+        if reservation is None or reservation.state != ReservationState.ACTIVE:
+            continue
+        result.append(
+            ResourceMutationCapability(
+                reservation.resource_id,
+                reservation.reservation_id,
+                reservation.acquisition_generation,
+                reservation.instance_id,
+                use_lease.instance_subject_revision,
+                use_lease.observation_generation,
+                use_lease.observation_digest,
+                use_lease.lease_id,
+                use_lease.generation,
+                use_lease.task_id,
+                use_lease.host_id,
+                use_lease.host_epoch,
+                use_lease.attempt_lease_id,
+                use_lease.attempt_lease_generation,
+            )
+        )
+    return tuple(result)
 
 
 def _authority(snapshot: LedgerSnapshot, actor: ActorAuthority, attempt: AttemptId) -> AttemptAuthority | None:
@@ -237,16 +294,46 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
         if item is None or authority is None or item.state != WorkState.ACTIVE:
             continue
         claims = tuple(_resource_token(value) for value in authority.resources)
+        command_authority = next(
+            (value for value in snapshot.command_attempt_authorities if value.attempt == attempt),
+            None,
+        )
+        capabilities = _resource_capabilities(snapshot, command_authority) if command_authority is not None else ()
+        legacy_claims = claims if command_authority is None else ()
         revision = snapshot.subject_revision(item.item)
         result.extend(
             (
-                factory.make(ActionKind.CONTINUE, attempt, f"Continue {item.item}", revision, claims),
-                factory.make(ActionKind.REPORT_BLOCKER, attempt, f"Report a blocker for {item.item}", revision, claims),
+                factory.make(
+                    ActionKind.CONTINUE,
+                    attempt,
+                    f"Continue {item.item}",
+                    revision,
+                    legacy_claims,
+                    command_authority,
+                    capabilities,
+                ),
+                factory.make(
+                    ActionKind.REPORT_BLOCKER,
+                    attempt,
+                    f"Report a blocker for {item.item}",
+                    revision,
+                    legacy_claims,
+                    command_authority,
+                    capabilities,
+                ),
             )
         )
         if not _unresolved_target(snapshot, item.item) and not _scope_stale(snapshot, item):
             result.append(
-                factory.make(ActionKind.SUBMIT_REVIEW, attempt, f"Submit {item.item} for review", revision, claims)
+                factory.make(
+                    ActionKind.SUBMIT_REVIEW,
+                    attempt,
+                    f"Submit {item.item} for review",
+                    revision,
+                    legacy_claims,
+                    command_authority,
+                    capabilities,
+                )
             )
     return tuple(result)
 
@@ -356,6 +443,28 @@ def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[
             assert_never(unreachable)
 
 
+def rediscover_action(snapshot: LedgerSnapshot, actor: ActorAuthority, supplied: Action) -> Action:
+    """Reselect one action and compare its complete subject-scoped mutation authority."""
+
+    current = next(
+        (candidate for candidate in available_actions(snapshot, actor) if candidate.action_id == supplied.action_id),
+        None,
+    )
+    if current is None:
+        raise DecisionError(
+            DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Action '{supplied.action_id}' is no longer legal."
+        )
+    comparable = supplied
+    if supplied.authorization == AuthorizationKind.ATTEMPT:
+        comparable = replace(supplied, expected_revision=current.expected_revision)
+    if comparable != current:
+        raise DecisionError(
+            DecisionErrorCode.ACTION_NOT_AVAILABLE,
+            f"Action '{supplied.action_id}' no longer carries the exact current authority.",
+        )
+    return current
+
+
 def _item(snapshot: LedgerSnapshot, item_id: ItemId) -> WorkItem:
     item = snapshot.items_by_id().get(item_id)
     if item is None:
@@ -417,12 +526,26 @@ def _activate(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, 
         raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not ready for activation.")
     if not isinstance(value, ActivateInput):
         raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Activate requires activation input.")
+    artifact = next(
+        (candidate for candidate in snapshot.artifacts if candidate.artifact_ref_id == value.brief_artifact_ref_id),
+        None,
+    )
+    if artifact is None or artifact.kind != "brief":
+        raise DecisionError(
+            DecisionErrorCode.TRANSITION_INPUT_INVALID,
+            "Activation requires one existing brief artifact reference.",
+        )
     return _result(
         action,
         now,
         item=item.item,
         item_change=ItemChange(item.item, item.state, WorkState.ACTIVE, value.attempt),
-        attempt_change=AttemptChange(value.attempt, None, AttemptState.ACTIVE),
+        attempt_change=AttemptChange(
+            value.attempt,
+            None,
+            AttemptState.ACTIVE,
+            brief_artifact_ref_id=value.brief_artifact_ref_id,
+        ),
     )
 
 
@@ -567,16 +690,27 @@ def _submit_review(snapshot: LedgerSnapshot, action: Action, value: TransitionIn
         raise DecisionError(
             DecisionErrorCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
         )
-    if not isinstance(value, EmptyInput):
+    if not isinstance(value, SubmitReviewInput) or not value.candidate.strip():
         raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID, "Submit review does not accept transition data."
+            DecisionErrorCode.TRANSITION_INPUT_INVALID,
+            "Submit review requires the protected candidate revision.",
         )
+    attempt = snapshot.attempts_by_id().get(attempt_id)
+    if attempt is None:
+        raise DecisionError(DecisionErrorCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
     return _result(
         action,
         now,
         item=item.item,
         item_change=ItemChange(item.item, item.state, WorkState.REVIEW, item.attempt),
-        attempt_change=AttemptChange(attempt_id, AttemptState.ACTIVE, AttemptState.REVIEW),
+        attempt_change=AttemptChange(
+            attempt_id,
+            AttemptState.ACTIVE,
+            AttemptState.REVIEW,
+            protected_candidate_before=attempt.protected_candidate_revision,
+            protected_candidate_after=value.candidate,
+            candidate_observed_at=now,
+        ),
     )
 
 
@@ -625,7 +759,12 @@ def _return_for_correction(
         now,
         item=item.item,
         item_change=ItemChange(item.item, WorkState.REVIEW, WorkState.ACTIVE, item.attempt),
-        attempt_change=AttemptChange(attempt_id, AttemptState.REVIEW, AttemptState.ACTIVE),
+        attempt_change=AttemptChange(
+            attempt_id,
+            AttemptState.REVIEW,
+            AttemptState.ACTIVE,
+            protected_candidate_before=snapshot.attempts_by_id()[attempt_id].protected_candidate_revision,
+        ),
         attempt_authority_change=authority_change,
         resource_use_lease_changes=use_lease_changes,
         evidence=value.reason,

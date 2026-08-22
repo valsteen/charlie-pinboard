@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from charlie_pinboard.domain.model import TransitionInput
-from charlie_pinboard.interfaces.transition_input import TransitionInputError, parse_transition_input
+from charlie_pinboard.interfaces.transition_input import TransitionInputError, parse_legacy_transition_input
 from charlie_pinboard.legacy.actions import Action
 from charlie_pinboard.legacy.transaction_store import CommitFailpoint
 from charlie_pinboard.legacy.transition import TransitionError, apply_transition
@@ -9,7 +9,7 @@ from charlie_pinboard.legacy.transition import TransitionError, apply_transition
 
 def _decode_input(kind: str, payload: bytes | str) -> TransitionInput:
     try:
-        return parse_transition_input(kind, payload)
+        return parse_legacy_transition_input(kind, payload)
     except TransitionInputError as error:
         raise TransitionError(error.code, str(error).partition(": ")[2]) from error
 

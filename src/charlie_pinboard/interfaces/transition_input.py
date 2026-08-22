@@ -2,7 +2,15 @@ from typing import Annotated, Final, Literal, assert_never
 
 import msgspec
 
-from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, CheckpointId, HostId, ItemId, TaskId
+from charlie_pinboard.domain.identifiers import (
+    ArtifactRefId,
+    AttemptId,
+    CandidateId,
+    CheckpointId,
+    HostId,
+    ItemId,
+    TaskId,
+)
 from charlie_pinboard.domain.model import (
     AcceptCheckpointInput,
     AcceptedProposalState,
@@ -14,8 +22,10 @@ from charlie_pinboard.domain.model import (
     DeferInput,
     EmptyInput,
     EvidenceInput,
+    LegacyActivateInput,
     MergeProposalInput,
     ReasonInput,
+    SubmitReviewInput,
     Timing,
     TransferCoordinatorInput,
     TransitionInput,
@@ -43,6 +53,18 @@ class ActivateInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=Tr
     branch: NonEmptyLine
     base_revision: NonEmptyLine
     owner: NonEmptyLine
+
+
+class StoredActivateInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    attempt: Identity
+    branch: NonEmptyLine
+    base_revision: NonEmptyLine
+    owner: NonEmptyLine
+    brief_artifact_ref_id: Annotated[int, msgspec.Meta(ge=1)]
+
+
+class SubmitReviewInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    candidate: NonEmptyLine
 
 
 class ReasonInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -94,6 +116,8 @@ class TransferCoordinatorInputPayload(msgspec.Struct, frozen=True, forbid_unknow
 type InputPayload = (
     EmptyInputPayload
     | ActivateInputPayload
+    | StoredActivateInputPayload
+    | SubmitReviewInputPayload
     | ReasonInputPayload
     | BlockInputPayload
     | EvidenceInputPayload
@@ -108,7 +132,7 @@ type InputModel = type[InputPayload]
 
 
 INPUT_MODELS: dict[str, InputModel] = {
-    "activate": ActivateInputPayload,
+    "activate": StoredActivateInputPayload,
     "pause": ReasonInputPayload,
     "return-proposal": ReasonInputPayload,
     "reject-proposal": ReasonInputPayload,
@@ -124,15 +148,25 @@ INPUT_MODELS: dict[str, InputModel] = {
     "merge-proposal": MergeProposalInputPayload,
     "transfer-coordinator": TransferCoordinatorInputPayload,
     "resume": EmptyInputPayload,
-    "submit-review": EmptyInputPayload,
+    "submit-review": SubmitReviewInputPayload,
     "return-for-correction": ReasonInputPayload,
+}
+
+LEGACY_INPUT_MODELS: dict[str, InputModel] = {
+    **INPUT_MODELS,
+    "activate": ActivateInputPayload,
+    "submit-review": EmptyInputPayload,
 }
 
 TRANSITION_ACTION_KINDS: Final = tuple(INPUT_MODELS)
 
 
-def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # noqa: C901, PLR0912 - exhaustive boundary conversion
-    model = INPUT_MODELS.get(kind)
+def _parse_transition_input(  # noqa: C901, PLR0912 - exhaustive boundary conversion
+    kind: str,
+    data: bytes | str,
+    models: dict[str, InputModel],
+) -> TransitionInput:
+    model = models.get(kind)
     if model is None:
         raise TransitionInputError("ACTION_NOT_MUTATING", f"Action '{kind}' is not a canonical transition.")
     try:
@@ -142,7 +176,17 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # 
     if isinstance(payload, EmptyInputPayload):
         return EmptyInput()
     if isinstance(payload, ActivateInputPayload):
-        return ActivateInput(AttemptId(payload.attempt), payload.branch, payload.base_revision, payload.owner)
+        return LegacyActivateInput(AttemptId(payload.attempt), payload.branch, payload.base_revision, payload.owner)
+    if isinstance(payload, StoredActivateInputPayload):
+        return ActivateInput(
+            AttemptId(payload.attempt),
+            payload.branch,
+            payload.base_revision,
+            payload.owner,
+            ArtifactRefId(payload.brief_artifact_ref_id),
+        )
+    if isinstance(payload, SubmitReviewInputPayload):
+        return SubmitReviewInput(CandidateId(payload.candidate))
     if isinstance(payload, ReasonInputPayload):
         return ReasonInput(payload.reason)
     if isinstance(payload, BlockInputPayload):
@@ -174,8 +218,25 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # 
     assert_never(payload)
 
 
+def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:
+    return _parse_transition_input(kind, data, INPUT_MODELS)
+
+
+def parse_legacy_transition_input(kind: str, data: bytes | str) -> TransitionInput:
+    """Decode the temporary Markdown route without presenting it as the SQLite command contract."""
+
+    return _parse_transition_input(kind, data, LEGACY_INPUT_MODELS)
+
+
 def encoded_transition_input_schema(kind: str) -> bytes:
     model = INPUT_MODELS.get(kind)
+    if model is None:
+        raise TransitionInputError("ACTION_NOT_MUTATING", f"Action '{kind}' has no canonical transition input.")
+    return msgspec.json.encode(msgspec.json.schema(model), order="sorted")
+
+
+def encoded_legacy_transition_input_schema(kind: str) -> bytes:
+    model = LEGACY_INPUT_MODELS.get(kind)
     if model is None:
         raise TransitionInputError("ACTION_NOT_MUTATING", f"Action '{kind}' has no canonical transition input.")
     return msgspec.json.encode(msgspec.json.schema(model), order="sorted")

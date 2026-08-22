@@ -30,8 +30,8 @@ from charlie_pinboard.interfaces.transition_input import (
     TRANSITION_ACTION_KINDS,
     CloseOutcome,
     TransitionInputError,
-    encoded_transition_input_schema,
-    parse_transition_input,
+    encoded_legacy_transition_input_schema,
+    parse_legacy_transition_input,
 )
 from charlie_pinboard.interfaces.transitions import TransitionError, apply_action
 from charlie_pinboard.legacy.actions import (
@@ -287,7 +287,7 @@ class InputContractView(msgspec.Struct, frozen=True):
 
     @classmethod
     def from_kind(cls, kind: str) -> InputContractView:
-        return cls(kind, msgspec.Raw(encoded_transition_input_schema(kind)))
+        return cls(kind, msgspec.Raw(encoded_legacy_transition_input_schema(kind)))
 
 
 class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
@@ -1064,7 +1064,7 @@ def _coordinated_transition(context: CommandContext) -> CoordinatedTransitionVie
     kind_value, separator, _ = context.arguments.action_id.partition(":")
     if not separator:
         raise TransitionError("ACTION_ID_INVALID", "Action identity must be 'kind:subject'.")
-    parse_transition_input(kind_value, payload)
+    parse_legacy_transition_input(kind_value, payload)
     with _borrow_coordination(context) as lease:
         available = actions_for(
             context.work,

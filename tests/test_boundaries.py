@@ -62,6 +62,7 @@ class JsonBoundaryTest(unittest.TestCase):
                     "branch": "codex/attempt-1",
                     "base_revision": "abc123",
                     "owner": "worker",
+                    "brief_artifact_ref_id": 7,
                 }
             ),
         )
@@ -69,6 +70,7 @@ class JsonBoundaryTest(unittest.TestCase):
         if not isinstance(transition, ActivateInput):
             self.fail("activate payload did not produce ActivateInput")
         self.assertEqual("attempt-1", transition.attempt)
+        self.assertEqual(7, transition.brief_artifact_ref_id)
         with self.assertRaises(TransitionInputError):
             parse_transition_input("resume", '{"unexpected": true}')
         checkpoint = parse_transition_input(

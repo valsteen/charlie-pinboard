@@ -8,11 +8,14 @@ from typing import Literal, assert_never, cast
 
 from charlie_pinboard.domain.decisions import (
     AttemptAuthorityChange,
+    AttemptChange,
     CheckpointAcceptanceChange,
     Decision,
+    ItemChange,
+    TransitionReceipt,
     decide,
 )
-from charlie_pinboard.domain.errors import DecisionError
+from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
 from charlie_pinboard.domain.identifiers import (
     AttemptId,
     HostId,
@@ -28,15 +31,17 @@ from charlie_pinboard.domain.model import (
     SCHEMA_V2,
     AcceptCheckpointInput,
     AcceptProposalInput,
-    ActivateInput,
     AttemptAuthority,
     AttemptRecord,
+    AttemptState,
     BlockInput,
     CloseInput,
     CloseOutcome,
     DeferInput,
+    EmptyInput,
     EvidenceInput,
     LedgerSnapshot,
+    LegacyActivateInput,
     MergeProposalInput,
     ProposalRecord,
     ReasonInput,
@@ -153,7 +158,7 @@ def _attempt_index(items: list[QueueItem], attempt: str) -> int:
     return index
 
 
-def _attempt_text(context: PlanContext, item: str, value: ActivateInput) -> str:
+def _attempt_text(context: PlanContext, item: str, value: LegacyActivateInput) -> str:
     updated = date.today().isoformat()
     schema = SCHEMA_V2 if context.queue.header.get("schema") == SCHEMA_V2 else SCHEMA_V1
     if schema == SCHEMA_V2:
@@ -198,7 +203,7 @@ def _attempt_text(context: PlanContext, item: str, value: ActivateInput) -> str:
 
 
 def _activate(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(ActivateInput, value)
+    value = cast(LegacyActivateInput, value)
     items = context.items
     index = _item_index(items, action.subject)
     if items[index].state != WorkState.READY:
@@ -955,6 +960,58 @@ def _decision_authority_records(
     return (), (), (), ()
 
 
+def _decide_legacy_transition(
+    snapshot: LedgerSnapshot,
+    action: Action,
+    value: TransitionInput,
+    now: datetime,
+) -> Decision:
+    """Keep the temporary Markdown command shape separate from the richer SQLite contract."""
+
+    if action.kind == ActionKind.ACTIVATE:
+        item = snapshot.items_by_id().get(ItemId(action.subject))
+        if item is None:
+            raise DecisionError(DecisionErrorCode.ITEM_NOT_FOUND, f"Item '{action.subject}' does not exist.")
+        if item.state != WorkState.READY:
+            raise DecisionError(
+                DecisionErrorCode.ACTION_NOT_AVAILABLE,
+                f"Item '{item.item}' is not ready for activation.",
+            )
+        if not isinstance(value, LegacyActivateInput):
+            raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Activate requires activation input.")
+        return Decision(
+            action,
+            ItemChange(item.item, item.state, WorkState.ACTIVE, value.attempt),
+            AttemptChange(value.attempt, None, AttemptState.ACTIVE),
+            TransitionReceipt(action.action_id, item.item, action.kind.value, None, now),
+        )
+    if action.kind == ActionKind.SUBMIT_REVIEW:
+        if not isinstance(value, EmptyInput):
+            raise DecisionError(
+                DecisionErrorCode.TRANSITION_INPUT_INVALID,
+                "The temporary Markdown submit-review route accepts no transition data.",
+            )
+        item = next((candidate for candidate in snapshot.items if candidate.attempt == action.subject), None)
+        if item is None:
+            raise DecisionError(
+                DecisionErrorCode.ATTEMPT_NOT_FOUND,
+                f"Attempt '{action.subject}' does not name a live item.",
+            )
+        if item.state != WorkState.ACTIVE:
+            raise DecisionError(
+                DecisionErrorCode.ACTION_NOT_AVAILABLE,
+                "Only an active attempt can be submitted for review.",
+            )
+        attempt_id = AttemptId(action.subject)
+        return Decision(
+            action,
+            ItemChange(item.item, item.state, WorkState.REVIEW, item.attempt),
+            AttemptChange(attempt_id, AttemptState.ACTIVE, AttemptState.REVIEW),
+            TransitionReceipt(action.action_id, item.item, action.kind.value, None, now),
+        )
+    return decide(snapshot, action, value, now)
+
+
 def plan_transition(work_root: Path, project_root: Path, action: Action, value: TransitionInput) -> ChangeSet:
     context = PlanContext(
         work_root,
@@ -1015,7 +1072,7 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
         can_transfer_coordinator=(work_root / "coordinator.json").is_file(),
     )
     try:
-        decision = decide(snapshot, action, value, datetime.now(UTC))
+        decision = _decide_legacy_transition(snapshot, action, value, datetime.now(UTC))
     except DecisionError as error:
         raise TransitionPlanError(error.code.value, str(error).partition(": ")[2]) from error
     context = replace(context, decision=decision)

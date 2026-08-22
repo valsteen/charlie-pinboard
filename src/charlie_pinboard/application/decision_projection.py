@@ -2,6 +2,7 @@ from typing import assert_never
 
 from charlie_pinboard.application.stored_state import (
     AttemptLeaseState,
+    CoordinationLeaseState,
     ItemArtifactLink,
     ItemDependency,
     ItemResourceRequirement,
@@ -12,18 +13,25 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
 )
-from charlie_pinboard.domain.identifiers import AttemptId, ItemId
+from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, ItemId
 from charlie_pinboard.domain.model import (
+    ArtifactRecord,
     AttemptAuthority,
     AttemptRecord,
+    CommandAttemptAuthority,
+    CoordinationCommandAuthority,
     ItemScope,
     LedgerSnapshot,
+    MutationIntent,
+    MutationReservation,
+    MutationUseLease,
     PlanningImpact,
     PlanningObligation,
     ProposalRecord,
     ResourceAuthority,
     ResourceDefinition,
     ResourceInstance,
+    ResourceObservation,
     ResourceRequirement,
     ResourceReservation,
     ResourceReservationCounter,
@@ -273,6 +281,42 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         )
         for lease in state.authority.attempt_leases
     )
+    command_attempt_authorities = tuple(
+        CommandAttemptAuthority(
+            state.lifecycle.project.host_epoch,
+            attempt_by_id[lease.attempt_id].item_id,
+            str(
+                next(
+                    item.subject_revision
+                    for item in state.lifecycle.work_items
+                    if item.item_id == attempt_by_id[lease.attempt_id].item_id
+                )
+            ),
+            lease.attempt_id,
+            str(attempt_by_id[lease.attempt_id].subject_revision),
+            anchor.task_id,
+            anchor.host_id,
+            anchor.lease_id,
+            lease.generation,
+            lease.expires_at,
+        )
+        for lease in state.authority.attempt_leases
+        if lease.state == AttemptLeaseState.ACTIVE
+        for anchor in (attempt_anchors[(lease.attempt_id, lease.generation)],)
+    )
+    coordination_authority = (
+        CoordinationCommandAuthority(
+            state.lifecycle.project.host_epoch,
+            state.authority.coordination.task_id,
+            state.authority.coordination.host_id,
+            state.authority.coordination.lease_id,
+            state.authority.coordination.generation,
+            state.authority.coordination.expires_at,
+        )
+        if state.authority.coordination is not None
+        and state.authority.coordination.state == CoordinationLeaseState.ACTIVE
+        else None
+    )
 
     return LedgerSnapshot(
         revision=str(state.lifecycle.project.revision),
@@ -285,9 +329,13 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
                 attempt.state,
                 attempt.accepted_scope_revision,
                 attempt.accepted_scope_digest,
-                attempt.candidate_revision,
+                CandidateId(attempt.candidate_revision) if attempt.candidate_revision is not None else None,
+                attempt.brief_artifact_ref_id,
             )
             for attempt in state.lifecycle.attempts
+        ),
+        artifacts=tuple(
+            ArtifactRecord(artifact.artifact_ref_id, artifact.kind.value) for artifact in state.artifacts.references
         ),
         proposals=tuple(
             ProposalRecord(proposal.proposal_id, str(proposal.subject_revision))
@@ -305,6 +353,8 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             for proposal in state.proposals.proposals
         ),
         attempt_authorities=attempt_authorities,
+        command_attempt_authorities=command_attempt_authorities,
+        coordination_authority=coordination_authority,
         history_items=tuple(item.item_id for item in state.lifecycle.work_items if _live_state(item.state) is None),
         scopes=scopes,
         planning_impacts=planning_impacts,
@@ -317,6 +367,8 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
                 instance.resource_id,
                 instance.host_id,
                 instance.subject_revision,
+                instance.discovery_kind,
+                instance.discovery_fingerprint,
             )
             for instance in state.resources.instances
             if instance.instance_id in active_instance_ids
@@ -338,6 +390,86 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             for reservation in state.resources.reservations
         ),
         resource_use_leases=projected_use_leases,
+        resource_observations=tuple(
+            ResourceObservation(
+                locator.instance_id,
+                locator.host_id,
+                locator.locator_schema,
+                locator.locator,
+                locator.observation_generation,
+                locator.observation_digest,
+                locator.observed_at,
+            )
+            for locator in state.resources.locators
+        ),
+        mutation_reservations=tuple(
+            MutationReservation(
+                reservation.reservation_id,
+                reservation.instance_id,
+                reservation.resource_id,
+                reservation.host_id,
+                reservation.acquisition_generation,
+                reservation.attempt_id,
+                reservation.item_id,
+                reservation.state,
+                reservation.subject_revision,
+            )
+            for reservation in state.resources.reservations
+        ),
+        mutation_use_leases=tuple(
+            MutationUseLease(
+                use_lease.reservation_id,
+                use_lease.instance_id,
+                use_lease.reservation_generation,
+                use_lease.attempt_id,
+                use_lease.host_id,
+                use_lease.instance_subject_revision,
+                use_lease.observation_generation,
+                use_lease.observation_digest,
+                use_lease.task_id,
+                use_lease.attempt_lease_id,
+                use_lease.attempt_lease_generation,
+                use_lease.lease_id,
+                use_lease.generation,
+                use_lease.generation_kind,
+                use_lease.host_epoch,
+                use_lease.expires_at,
+                use_lease.state,
+            )
+            for use_lease in state.resources.use_leases
+        ),
+        mutation_intents=tuple(
+            MutationIntent(
+                intent.intent_id,
+                intent.reservation_id,
+                intent.reservation_generation,
+                intent.instance_id,
+                intent.attempt_id,
+                intent.host_id,
+                intent.resource_use_generation,
+                intent.resource_use_lease_id,
+                intent.task_id,
+                intent.attempt_lease_id,
+                intent.attempt_lease_generation,
+                intent.start_instance_subject_revision,
+                intent.start_observation_generation,
+                intent.start_observation_digest,
+                intent.policy_schema,
+                intent.policy,
+                intent.policy_digest,
+                intent.state,
+                intent.recorded_at,
+                intent.resolved_at,
+                intent.result_observation_generation,
+                intent.result_observation_digest,
+                intent.evidence_schema,
+                intent.evidence,
+                intent.evidence_digest,
+                intent.disposition_task_id,
+                intent.disposition_reason,
+            )
+            for intent in state.resources.mutation_intents
+        ),
         host_epoch=state.lifecycle.project.host_epoch,
         focus_item=state.focus.item_id,
         focus_attempt=state.focus.attempt_id,

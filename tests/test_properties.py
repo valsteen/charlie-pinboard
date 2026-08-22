@@ -49,6 +49,7 @@ class ParseRenderProperties(unittest.TestCase):
             "branch": "codex/reveal-core",
             "base_revision": "abc123",
             "owner": "worker",
+            "brief_artifact_ref_id": 1,
         }
 
         with self.assertRaises(TransitionInputError):

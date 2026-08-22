@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Literal, NewType
+from typing import Literal
 
 from charlie_pinboard.domain.identifiers import (
     ActionId,
@@ -23,14 +23,14 @@ from charlie_pinboard.domain.identifiers import (
 from charlie_pinboard.domain.model import (
     ArtifactRole,
     AttemptState,
+    CanonicalJson,
+    MutationIntentState,
     PlanningDisposition,
     ReservationState,
     Timing,
     UseLeaseGenerationKind,
     UseLeaseState,
 )
-
-CanonicalJson = NewType("CanonicalJson", bytes)
 
 
 class OriginKind(Enum):
@@ -97,14 +97,6 @@ class AttemptLeaseState(Enum):
     RELEASED = "released"
     REVOKED = "revoked"
     EXPIRED = "expired"
-
-
-class MutationIntentState(Enum):
-    PLANNED = "planned"
-    ACCEPTED = "accepted"
-    RECONCILED = "reconciled"
-    HUMAN_PRESERVED = "human-preserved"
-    ABANDONED = "abandoned"
 
 
 class TransitionHistoryActionKind(Enum):
