@@ -3,6 +3,7 @@ import json
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import cast
 
 from repo_work.decisions import (
     Action,
@@ -11,6 +12,7 @@ from repo_work.decisions import (
     AuthorizationKind,
     DecisionError,
     DecisionErrorCode,
+    JsonValue,
     ResourceToken,
     Role,
     advance_scope,
@@ -72,6 +74,40 @@ from repo_work.transition_input import (
 NOW = datetime(2026, 8, 21, tzinfo=UTC)
 DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64
+
+
+def canonical_history(value: JsonValue) -> bytes:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+
+
+def history_replace(payload: bytes, path: tuple[str | int, ...], value: JsonValue) -> bytes:
+    root = cast(JsonValue, json.loads(payload))
+    if not isinstance(root, dict):
+        raise AssertionError("History fixture must be an object.")
+    current: JsonValue = root
+    for segment in path[:-1]:
+        if isinstance(segment, str) and isinstance(current, dict):  # noqa: SIM114 - preserves type narrowing
+            current = current[segment]
+        elif isinstance(segment, int) and isinstance(current, list):
+            current = current[segment]
+        else:
+            raise AssertionError("History fixture path is invalid.")
+    final = path[-1]
+    if isinstance(final, str) and isinstance(current, dict):  # noqa: SIM114 - preserves type narrowing
+        current[final] = value
+    elif isinstance(final, int) and isinstance(current, list):
+        current[final] = value
+    else:
+        raise AssertionError("History fixture path is invalid.")
+    return canonical_history(root)
+
+
+def history_without(payload: bytes, member: str) -> bytes:
+    root = cast(JsonValue, json.loads(payload))
+    if not isinstance(root, dict):
+        raise AssertionError("History fixture must be an object.")
+    del root[member]
+    return canonical_history(root)
 
 
 def item(item_id: str, state: WorkState, *, attempt: str | None = None) -> QueueItem:
@@ -420,11 +456,9 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             resulting_scope_revision=2,
             resulting_scope_digest=DIGEST_B,
         )
-        self.assertEqual("planning-impact-resolution/v1", planning_resolution_outcome(revised, "target").outcome_schema)
-        validate_history_outcome(
-            "planning-impact-resolution/v1",
-            planning_resolution_outcome(revised, "target").payload,
-        )
+        resolution_history = planning_resolution_outcome(revised, "target")
+        self.assertEqual("planning-impact-resolution/v1", resolution_history.outcome_schema)
+        validate_history_outcome(resolution_history.outcome_schema, resolution_history.payload)
 
         with self.assertRaisesRegex(DecisionError, "PLANNING_RESOLUTION_INVALID"):
             resolve_planning_obligation(
@@ -466,6 +500,103 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             outcome_evidence="Superseded by smaller items",
         )
         self.assertEqual("Superseded by smaller items", terminal.item_change.outcome_evidence if terminal.item_change else None)
+
+    def test_planning_impact_history_has_frozen_bytes_and_rejects_malformed_records(self) -> None:
+        impact = PlanningImpact(
+            "impact-1",
+            "source",
+            "source-1",
+            1,
+            DIGEST_A,
+            "Target needs refinement",
+            "Observed mismatch",
+            (PlanningObligation("target", 0, 1, DIGEST_A),),
+        )
+        fixture = (
+            b'{"evidence":"Observed mismatch","impact_id":"impact-1","source":{"attempt_id":"source-1","item_id":"source",'
+            b'"scope":{"scope_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scope_revision":1}},'
+            b'"summary":"Target needs refinement","targets":[{"item_id":"target","position":0,"scope":'
+            b'{"scope_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scope_revision":1}}]}\n'
+        )
+        outcome = planning_impact_outcome(impact)
+        self.assertEqual(fixture, outcome.payload)
+        target_scope: dict[str, JsonValue] = {"scope_digest": DIGEST_A, "scope_revision": 1}
+        target: dict[str, JsonValue] = {"item_id": "target", "position": 0, "scope": target_scope}
+        invalid_payloads = (
+            history_without(fixture, "evidence"),
+            history_replace(fixture, ("unexpected",), None),
+            history_replace(fixture, ("source", "scope", "scope_revision"), True),
+            history_replace(fixture, ("summary",), None),
+            history_replace(fixture, ("impact_id",), ""),
+            history_replace(fixture, ("targets", 0, "position"), 1),
+            history_replace(fixture, ("targets",), [target, {**target, "position": 1}]),
+            history_replace(fixture, ("targets", 0, "scope", "scope_digest"), "not-a-digest"),
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), self.assertRaisesRegex(DecisionError, "HISTORY_OUTCOME_INVALID"):
+                validate_history_outcome(outcome.outcome_schema, payload)
+
+    def test_planning_resolution_history_has_frozen_bytes_and_rejects_malformed_records(self) -> None:
+        snapshot = LedgerSnapshot(
+            "revision",
+            1,
+            (item("source", WorkState.ACTIVE, attempt="source-1"), item("target", WorkState.READY)),
+            attempts=(AttemptRecord("source-1", "source", AttemptState.ACTIVE),),
+        )
+        impact = PlanningImpact(
+            "impact-1",
+            "source",
+            "source-1",
+            1,
+            DIGEST_A,
+            "Target needs refinement",
+            "Observed mismatch",
+            (PlanningObligation("target", 0, 1, DIGEST_A),),
+        )
+        revised = resolve_planning_obligation(
+            snapshot,
+            impact,
+            "target",
+            PlanningDisposition.REVISED,
+            reason="Updated scope",
+            resulting_scope_revision=2,
+            resulting_scope_digest=DIGEST_B,
+        )
+        fixture = (
+            b'{"disposition":"revised","evaluated_scope":{"scope_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            b'"scope_revision":1},"impact_id":"impact-1","observed_scope":{"scope_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            b'"scope_revision":1},"outcome_evidence":null,"reason":"Updated scope","replacements":[],"resulting_scope":'
+            b'{"scope_digest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","scope_revision":2},'
+            b'"target_item_id":"target"}\n'
+        )
+        outcome = planning_resolution_outcome(revised, "target")
+        self.assertEqual(fixture, outcome.payload)
+        superseded = resolve_planning_obligation(
+            snapshot,
+            impact,
+            "target",
+            PlanningDisposition.SUPERSEDED,
+            reason="Split work",
+            replacements=("target-a", "target-b"),
+            outcome_evidence="Superseded by smaller items",
+        )
+        superseded_payload = planning_resolution_outcome(superseded, "target").payload
+        invalid_payloads = (
+            history_without(fixture, "reason"),
+            history_replace(fixture, ("unexpected",), None),
+            history_replace(fixture, ("evaluated_scope", "scope_revision"), True),
+            history_replace(fixture, ("reason",), None),
+            history_replace(fixture, ("target_item_id",), ""),
+            history_replace(fixture, ("resulting_scope",), None),
+            history_replace(fixture, ("outcome_evidence",), "unexpected"),
+            history_replace(fixture, ("replacements",), [{"item_id": "target-a", "position": 0}]),
+            history_replace(fixture, ("resulting_scope", "scope_digest"), "not-a-digest"),
+            history_replace(fixture, ("resulting_scope",), {"scope_digest": DIGEST_A, "scope_revision": 1}),
+            history_replace(superseded_payload, ("replacements", 1, "position"), 2),
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), self.assertRaisesRegex(DecisionError, "HISTORY_OUTCOME_INVALID"):
+                validate_history_outcome(outcome.outcome_schema, payload)
 
     def test_planning_impact_rejections_cover_identity_scope_and_evidence(self) -> None:
         source = item("source", WorkState.ACTIVE, attempt="source-1")
@@ -682,19 +813,54 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
         first = advance_scope(None, "build-map", native_scope())
         second = advance_scope(first, "build-map", replace(native_scope(), effect="Add safe navigable routes"))
         outcome = item_scope_change_outcome(first, second)
+        fixture = (
+            b'{"after":{"scope_digest":"15f7f87cb61537942075eddacc25d029ba505c53e23006e6f5d4f4f091f91192","scope_revision":2,'
+            b'"semantic":{"artifacts":[{"content_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",'
+            b'"key":"route-design","kind":"design","position":0,"revision":1,"role":"design","selector":"artifacts/designs/route-design/1.md"},'
+            b'{"content_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","key":"route-plan","kind":"plan",'
+            b'"position":0,"revision":2,"role":"plan","selector":"artifacts/plans/route-plan/2.md"},{"content_sha256":'
+            b'"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","key":"route-needs","kind":"requirements",'
+            b'"position":0,"revision":1,"role":"requirements","selector":"artifacts/requirements/route-needs/1.md"}],"dependencies":'
+            b'[{"dependency_id":"survey-west","position":0},{"dependency_id":"survey-east","position":1}],"effect":"Add safe navigable routes",'
+            b'"item_id":"build-map","resource_requirements":[{"position":0,"resource_id":"checkout-main"}],"schema":"item-scope/v1",'
+            b'"trigger":"A route is missing","unlock":"Reach the next area","user_label":"Build the map","why_it_matters":"The party cannot travel"}},'
+            b'"before":{"scope_digest":"c9b3d4f68dc05ffe1a54183d4405109abeefa54704c51e991c94cada57d6c94b","scope_revision":1,'
+            b'"semantic":{"artifacts":[{"content_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",'
+            b'"key":"route-design","kind":"design","position":0,"revision":1,"role":"design","selector":"artifacts/designs/route-design/1.md"},'
+            b'{"content_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","key":"route-plan","kind":"plan",'
+            b'"position":0,"revision":2,"role":"plan","selector":"artifacts/plans/route-plan/2.md"},{"content_sha256":'
+            b'"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","key":"route-needs","kind":"requirements",'
+            b'"position":0,"revision":1,"role":"requirements","selector":"artifacts/requirements/route-needs/1.md"}],"dependencies":'
+            b'[{"dependency_id":"survey-west","position":0},{"dependency_id":"survey-east","position":1}],"effect":"Add navigable routes",'
+            b'"item_id":"build-map","resource_requirements":[{"position":0,"resource_id":"checkout-main"}],"schema":"item-scope/v1",'
+            b'"trigger":"A route is missing","unlock":"Reach the next area","user_label":"Build the map","why_it_matters":"The party cannot travel"}},'
+            b'"item_id":"build-map"}\n'
+        )
         self.assertEqual("item-scope-change/v1", outcome.outcome_schema)
-        self.assertTrue(outcome.payload.endswith(b"\n"))
+        self.assertEqual(fixture, outcome.payload)
         validate_history_outcome(outcome.outcome_schema, outcome.payload)
 
         with self.assertRaisesRegex(DecisionError, "HISTORY_OUTCOME_INVALID"):
             item_scope_change_outcome(first, replace(second, revision=3))
 
-        decoded = json.loads(outcome.payload)
+        decoded = json.loads(fixture)
+        before_null = json.loads(fixture)
+        before_null["before"] = None
+        empty_identity = json.loads(fixture)
+        empty_identity["item_id"] = ""
+        digest_mismatch = json.loads(fixture)
+        digest_mismatch["after"]["scope_digest"] = DIGEST_A
+        relational_mismatch = json.loads(fixture)
+        relational_mismatch["after"]["scope_revision"] = 3
         invalid_payloads = (
-            json.dumps({**decoded, "extra": None}, separators=(",", ":"), sort_keys=True).encode() + b"\n",
-            json.dumps({key: value for key, value in decoded.items() if key != "item_id"}, separators=(",", ":"), sort_keys=True).encode() + b"\n",
-            outcome.payload.replace(b'"scope_revision":2', b'"scope_revision":true', 1),
-            outcome.payload[:-1],
+            canonical_history({**decoded, "extra": None}),
+            canonical_history({key: value for key, value in decoded.items() if key != "item_id"}),
+            fixture.replace(b'"scope_revision":2', b'"scope_revision":true', 1),
+            canonical_history(before_null),
+            canonical_history(empty_identity),
+            canonical_history(digest_mismatch),
+            canonical_history(relational_mismatch),
+            fixture[:-1],
         )
         for payload in invalid_payloads:
             with self.subTest(payload=payload), self.assertRaisesRegex(DecisionError, "HISTORY_OUTCOME_INVALID"):
