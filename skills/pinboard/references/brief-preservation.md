@@ -11,7 +11,7 @@ Use this procedure only for a checkpoint declared `Checkpoint boundary: cross-bo
    | Authority ID | Selector | Reviewed SHA-256 | In-scope families |
    | --- | --- | --- | --- |
 
-   Use a unique kebab-case authority ID. A selector is a project-relative file, optionally followed by `#` and one literal unique Markdown heading. Hash whole-file bytes unchanged. For a heading selector, hash the heading through the line before the next heading of equal or higher level, serialized with LF line endings and one final LF. List one or more unique comma-separated kebab-case families per authority.
+   Use a unique kebab-case authority ID. A selector is a project-relative file, optionally followed by `#` and one literal unique Markdown H1–H6 heading. The first `#` separates the path; later `#` characters are literal heading text. Hash whole-file bytes unchanged. For a heading selector, hash the heading through the line before the next heading of equal or higher level, serialized with LF line endings and one final LF. List one or more unique comma-separated kebab-case families per authority.
 4. Add one `Authoritative coverage` table:
 
    | Authority / invariant family | Required distinction | Required consumer / production observation | Disposition | Brief owner | Cheapest counterexample |
@@ -34,7 +34,7 @@ Use this procedure only for a checkpoint declared `Checkpoint boundary: cross-bo
 
 ## Review before dispatch
 
-Commission one read-only reviewer in fresh context after the checkpoint is compiled and before implementation begins. The reviewer task identity must differ from the attempt owner.
+Commission one read-only reviewer in fresh context after the checkpoint is compiled and before implementation begins. The reviewer task identity must differ from the attempt owner, and both task identities must be canonical values without surrounding whitespace.
 
 Give the reviewer the canonical checkpoint and its selectors. The reviewer must:
 
@@ -50,7 +50,7 @@ Missing coverage is a brief defect. Correct `attempt.md`, create a new digest-bo
 
 Normalize the exact checkpoint section with LF line endings and one final LF, then compute its SHA-256. Compute the reviewed-authority-set SHA-256 over the exact LF-normalized `Reviewed authorities` table bytes, from its header row through its last data row, in source order and with one final LF.
 
-Publish a complete ready verdict only at:
+Prepare a complete ready verdict for the canonical path:
 
 ```text
 attempts/<attempt>/brief-reviews/<checkpoint-sha256>.md
@@ -77,7 +77,9 @@ Its body contains exactly one result row per coverage row:
 | Authority / invariant family | Brief owner | Verdict | Cheapest counterexample result |
 | --- | --- | --- | --- |
 
-Copy the coverage reference and owner exactly, use `covered`, and record the concrete counterexample result. Preserve incomplete or rejected work separately at `brief-reviews/rejected/<checkpoint-sha256>-<review-id>.md`; never publish it under the ready filename. A corrected checkpoint has a new digest and never overwrites prior evidence.
+Copy the coverage reference and owner exactly, use `covered`, and record the concrete counterexample result. Keep the candidate outside the canonical ready path, then pass it to the existing dispatch command with `--brief-review <candidate-file> --review-id <kebab-case-review-id>`. Dispatch validates the candidate before publication under its existing lock. It creates the canonical path once, reuses byte-identical evidence, and never overwrites differing evidence. A differing ready collision is preserved at `brief-reviews/rejected/<checkpoint-sha256>-<review-id>.md`, then dispatch rejects with `DISPATCH_BRIEF_REVIEW_COLLISION`. Reusing that rejected identity is safe only for identical bytes.
+
+Preserve incomplete or rejected work directly under the rejected directory; never offer it as the ready candidate. A corrected checkpoint has a new digest and never overwrites prior evidence. Omit both publication arguments when validated ready evidence already exists. Publication arguments are cross-boundary-only and never change the canonical prompt.
 
 `pinboard dispatch` recomputes the checkpoint, authority-table, and selected-source digests under the existing dispatch lock. It rejects absent, stale, mismatched, incomplete, non-ready, or same-owner review evidence before rendering the canonical prompt.
 

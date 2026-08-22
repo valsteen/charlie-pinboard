@@ -7,17 +7,18 @@ from typing import Annotated, Final, Literal, NewType, assert_never
 
 import msgspec
 
+from charlie_pinboard.domain.identifiers import TaskId
 from charlie_pinboard.domain.model import AttemptState
 from charlie_pinboard.legacy.actions import Action, ActionKind, actions_for, coordinator_generation
-from charlie_pinboard.legacy.atomic import PlatformNotSupportedError
+from charlie_pinboard.legacy.atomic import PlatformNotSupportedError, atomic_create
 from charlie_pinboard.legacy.authority import AuthorityVersion, authority_transaction, resolve_authority
 from charlie_pinboard.legacy.leases import LeaseError, require_coordination
-from charlie_pinboard.legacy.markdown import Header, ParseError, parse_attempt, parse_header
+from charlie_pinboard.legacy.markdown import Header, ParseError, parse_attempt, parse_header, parse_header_text
 
 type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
 type DispatchSchema = Literal["repo-work-dispatch/v1"]
 
-HEADING: Final = re.compile(r"^(#{2,6})\s+(.+?)\s*$")
+HEADING: Final = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 CONTRACT_COLUMNS: Final = (
     "Invariant",
     "Authority / owner",
@@ -40,6 +41,7 @@ DEFERRAL: Final = re.compile(
 )
 ACCEPTANCE_CRITERION: Final = re.compile(r"^(?P<number>[1-9][0-9]*)\.\s+\S")
 REVIEWED_AUTHORITY_COLUMNS: Final = ("Authority ID", "Selector", "Reviewed SHA-256", "In-scope families")
+REVIEW_ID: Final = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 COVERAGE_COLUMNS: Final = (
     "Authority / invariant family",
     "Required distinction",
@@ -320,12 +322,7 @@ def _authority_selector(cell: str) -> AuthoritySelector:
     value = _code_value(cell)
     relative, separator, heading = value.partition("#")
     relative_path = Path(relative)
-    if (
-        not relative
-        or relative_path.is_absolute()
-        or ".." in relative_path.parts
-        or (separator and (not heading or "#" in heading))
-    ):
+    if not relative or relative_path.is_absolute() or ".." in relative_path.parts or (separator and not heading):
         raise DispatchError(
             "DISPATCH_AUTHORITY_SELECTOR_INVALID",
             f"Authority selector '{value}' must name one project-relative file and optional literal heading.",
@@ -595,41 +592,42 @@ def _validate_lifecycle_partition(section: tuple[str, ...]) -> tuple[LifecycleRe
     return tuple(records)
 
 
-def _header_string(header: Header, field: str, path: Path) -> str:
+def _header_string(header: Header, field: str, source: str) -> str:
     value = header.get(field)
     if not isinstance(value, str) or not value.strip():
-        raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", f"Brief review '{path}' needs string field '{field}'.")
+        raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", f"Brief review '{source}' needs string field '{field}'.")
     return value
 
 
-def _review_metadata(path: Path) -> BriefReviewMetadata:
+def _review_metadata_bytes(data: bytes, source: str) -> BriefReviewMetadata:
     try:
-        header = parse_header(path)
-    except (OSError, ParseError) as error:
-        raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot parse brief review '{path}': {error}") from error
+        text = data.decode("utf-8")
+        header = parse_header_text(text)
+    except (UnicodeError, ValueError) as error:
+        raise DispatchError(
+            "DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot parse brief review '{source}': {error}"
+        ) from error
     if header.get("kind") != "work-brief-review" or header.get("schema") != "repo-work/v2":
         raise DispatchError(
             "DISPATCH_BRIEF_REVIEW_INVALID",
             "Brief review kind and schema must be 'work-brief-review' and 'repo-work/v2'.",
         )
     return BriefReviewMetadata(
-        _header_string(header, "attempt", path),
-        _header_string(header, "checkpoint", path),
-        _header_string(header, "checkpoint_sha256", path),
-        _header_string(header, "reviewed_authority_set_sha256", path),
-        _header_string(header, "reviewer_task_id", path),
-        _header_string(header, "status", path),
-        _header_string(header, "verdict", path),
+        _header_string(header, "attempt", source),
+        _header_string(header, "checkpoint", source),
+        _header_string(header, "checkpoint_sha256", source),
+        _header_string(header, "reviewed_authority_set_sha256", source),
+        _header_string(header, "reviewer_task_id", source),
+        _header_string(header, "status", source),
+        _header_string(header, "verdict", source),
     )
 
 
-def _validate_review_rows(review_path: Path, coverage: tuple[CoverageRecord, ...]) -> None:
+def _validate_review_rows(data: bytes, source: str, coverage: tuple[CoverageRecord, ...]) -> None:
     try:
-        review_lines = tuple(review_path.read_text(encoding="utf-8").splitlines())
-    except (OSError, UnicodeError) as error:
-        raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot read brief review '{review_path}': {error}"
-        ) from error
+        review_lines = tuple(data.decode("utf-8").splitlines())
+    except UnicodeError as error:
+        raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot read brief review '{source}': {error}") from error
     table = _markdown_table(
         review_lines,
         BRIEF_REVIEW_COLUMNS,
@@ -659,7 +657,9 @@ def _validate_review_rows(review_path: Path, coverage: tuple[CoverageRecord, ...
         )
 
 
-def _validate_brief_review(
+def _validate_brief_review_bytes(
+    data: bytes,
+    source: str,
     attempt_path: Path,
     attempt_id: str,
     checkpoint: str,
@@ -669,13 +669,7 @@ def _validate_brief_review(
 ) -> None:
     checkpoint_sha256 = hashlib.sha256(_normalized_section_bytes(section)).hexdigest()
     authority_set_sha256 = hashlib.sha256(authority_table).hexdigest()
-    review_path = attempt_path.parent / "brief-reviews" / f"{checkpoint_sha256}.md"
-    if not review_path.is_file():
-        raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_MISSING",
-            f"Ready brief review '{review_path}' does not exist for the exact checkpoint bytes.",
-        )
-    metadata = _review_metadata(review_path)
+    metadata = _review_metadata_bytes(data, source)
     if metadata.attempt != attempt_id or metadata.checkpoint != checkpoint:
         raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", "Brief review names a different attempt or checkpoint.")
     if (
@@ -697,17 +691,83 @@ def _validate_brief_review(
     owner = attempt_header.get("owner_task_id", attempt_header.get("owner"))
     if not isinstance(owner, str) or not owner.strip():
         raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", "The attempt has no concrete owner task identity.")
-    if metadata.reviewer_task_id == owner:
+    reviewer_task_id = TaskId(metadata.reviewer_task_id.strip())
+    owner_task_id = TaskId(owner.strip())
+    if reviewer_task_id == owner_task_id:
         raise DispatchError(
             "DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT",
             "The brief reviewer must be a different task from the attempt owner.",
+        )
+    if metadata.reviewer_task_id != reviewer_task_id or owner != owner_task_id:
+        raise DispatchError(
+            "DISPATCH_BRIEF_REVIEW_INVALID",
+            "Brief reviewer and attempt owner task identities must not contain surrounding whitespace.",
         )
     if metadata.status != "complete" or metadata.verdict != "ready":
         raise DispatchError(
             "DISPATCH_BRIEF_REVIEW_NOT_READY",
             "Brief review must be complete with a ready verdict before dispatch.",
         )
-    _validate_review_rows(review_path, coverage)
+    _validate_review_rows(data, source, coverage)
+
+
+def _publish_or_read_brief_review(
+    attempt_path: Path,
+    checkpoint_sha256: str,
+    candidate: bytes | None,
+    review_id: str | None,
+) -> tuple[bytes, str]:
+    review_path = attempt_path.parent / "brief-reviews" / f"{checkpoint_sha256}.md"
+    if candidate is None:
+        if review_id is not None:
+            raise DispatchError(
+                "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
+                "--review-id requires --brief-review.",
+            )
+        try:
+            return review_path.read_bytes(), str(review_path)
+        except OSError as error:
+            raise DispatchError(
+                "DISPATCH_BRIEF_REVIEW_MISSING",
+                f"Ready brief review '{review_path}' does not exist for the exact checkpoint bytes.",
+            ) from error
+    if review_id is None or REVIEW_ID.fullmatch(review_id) is None:
+        raise DispatchError(
+            "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
+            "--brief-review requires one kebab-case --review-id.",
+        )
+    try:
+        atomic_create(review_path, candidate)
+        return candidate, str(review_path)
+    except FileExistsError:
+        try:
+            existing = review_path.read_bytes()
+        except OSError as error:
+            raise DispatchError(
+                "DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot read existing ready review '{review_path}': {error}"
+            ) from error
+        if existing == candidate:
+            return existing, str(review_path)
+        rejected_path = review_path.parent / "rejected" / f"{checkpoint_sha256}-{review_id}.md"
+        try:
+            atomic_create(rejected_path, candidate)
+        except FileExistsError:
+            try:
+                rejected = rejected_path.read_bytes()
+            except OSError as error:
+                raise DispatchError(
+                    "DISPATCH_BRIEF_REVIEW_INVALID",
+                    f"Cannot read existing rejected review '{rejected_path}': {error}",
+                ) from error
+            if rejected != candidate:
+                raise DispatchError(
+                    "DISPATCH_BRIEF_REVIEW_COLLISION",
+                    f"Rejected review identity '{review_id}' already names different evidence.",
+                ) from None
+        raise DispatchError(
+            "DISPATCH_BRIEF_REVIEW_COLLISION",
+            f"Ready review '{review_path}' already exists with different evidence; later evidence is at '{rejected_path}'.",
+        ) from None
 
 
 def _validate_semantic_preservation(
@@ -717,12 +777,36 @@ def _validate_semantic_preservation(
     section: tuple[str, ...],
     project_root: Path,
     contracts: tuple[ContractRecord, ...],
+    brief_review: bytes | None,
+    review_id: str | None,
 ) -> None:
     authorities, authority_table = _reviewed_authorities(section)
     coverage = _coverage_records(section, authorities, contracts)
     _validate_lifecycle_partition(section)
     _validate_authority_digests(project_root, authorities)
-    _validate_brief_review(attempt_path, attempt_id, checkpoint, section, authority_table, coverage)
+    checkpoint_sha256 = hashlib.sha256(_normalized_section_bytes(section)).hexdigest()
+    if brief_review is not None:
+        _validate_brief_review_bytes(
+            brief_review,
+            "--brief-review",
+            attempt_path,
+            attempt_id,
+            checkpoint,
+            section,
+            authority_table,
+            coverage,
+        )
+    review_bytes, source = _publish_or_read_brief_review(attempt_path, checkpoint_sha256, brief_review, review_id)
+    _validate_brief_review_bytes(
+        review_bytes,
+        source,
+        attempt_path,
+        attempt_id,
+        checkpoint,
+        section,
+        authority_table,
+        coverage,
+    )
 
 
 def _checkpoint_boundary(section: tuple[str, ...]) -> CheckpointBoundary:
@@ -806,6 +890,8 @@ def prepare_dispatch(
     checkpoint: str,
     environment: DispatchEnvironment,
     supplied_prompt: bytes | None = None,
+    brief_review: bytes | None = None,
+    review_id: str | None = None,
 ) -> str:
     try:
         with authority_transaction(work_root) as authority:
@@ -817,6 +903,8 @@ def prepare_dispatch(
                 checkpoint,
                 environment,
                 supplied_prompt,
+                brief_review,
+                review_id,
             )
     except PlatformNotSupportedError as error:
         message = str(error).partition(": ")[2] or str(error)
@@ -831,6 +919,8 @@ def _prepare_dispatch_locked(
     checkpoint: str,
     environment: DispatchEnvironment,
     supplied_prompt: bytes | None,
+    brief_review: bytes | None,
+    review_id: str | None,
 ) -> str:
     _require_current_dispatch_action(base_work_root, project_root, action)
     attempt_path = work_root / "attempts" / action.subject / "attempt.md"
@@ -846,9 +936,28 @@ def _prepare_dispatch_locked(
     if not checkout.is_dir():
         raise DispatchError("DISPATCH_CHECKOUT_MISSING", f"Checkout '{checkout}' is not a directory.")
     section = _checkpoint_section(attempt.path, checkpoint)
-    if _checkpoint_boundary(section) == CheckpointBoundary.CROSS_BOUNDARY:
-        contracts = _validate_cross_boundary_checkpoint(section)
-        _validate_semantic_preservation(attempt.path, attempt.attempt, checkpoint, section, project_root, contracts)
+    boundary = _checkpoint_boundary(section)
+    match boundary:
+        case CheckpointBoundary.LOCAL:
+            if brief_review is not None or review_id is not None:
+                raise DispatchError(
+                    "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
+                    "Local checkpoints do not publish cross-boundary brief reviews.",
+                )
+        case CheckpointBoundary.CROSS_BOUNDARY:
+            contracts = _validate_cross_boundary_checkpoint(section)
+            _validate_semantic_preservation(
+                attempt.path,
+                attempt.attempt,
+                checkpoint,
+                section,
+                project_root,
+                contracts,
+                brief_review,
+                review_id,
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
     prompt = _canonical_prompt(attempt.path, attempt.attempt, checkpoint, environment)
     if supplied_prompt is not None and supplied_prompt != prompt.encode():
         raise DispatchError(

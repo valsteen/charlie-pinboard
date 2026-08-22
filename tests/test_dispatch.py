@@ -265,13 +265,21 @@ verdict: {verdict}
         )
         return project, work, environment_path
 
-    def dispatch_arguments(self, project: Path, work: Path, environment: Path) -> tuple[str, ...]:
+    def dispatch_arguments(
+        self,
+        project: Path,
+        work: Path,
+        environment: Path,
+        *,
+        brief_review: Path | None = None,
+        review_id: str | None = None,
+    ) -> tuple[str, ...]:
         action = next(
             action
             for action in actions_for(work, project, "coordinator")
             if action.action_id == "dispatch:universal-reveal-core-1"
         )
-        return (
+        arguments = (
             "--project-root",
             str(project),
             "--work-root",
@@ -288,6 +296,11 @@ verdict: {verdict}
             "--environment",
             str(environment),
         )
+        if brief_review is not None:
+            arguments += ("--brief-review", str(brief_review))
+        if review_id is not None:
+            arguments += ("--review-id", review_id)
+        return arguments
 
     def test_real_contradictory_launch_is_rejected_but_canonical_launch_is_accepted(self) -> None:
         project, work, environment = self.active_state()
@@ -433,6 +446,95 @@ verdict: {verdict}
         rejected, _, rejected_stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
         self.assertEqual(14, rejected)
         self.assertIn("DISPATCH_AUTHORITY_STALE", rejected_stderr)
+
+    def test_heading_selectors_support_h1_through_h6_and_literal_hash_characters(self) -> None:
+        cases = (
+            ("h1", "# Protocol semantics", "Protocol semantics"),
+            ("h2 with literal hash", "## Protocol # semantics", "Protocol # semantics"),
+            ("h3", "### Protocol semantics", "Protocol semantics"),
+            ("h4", "#### Protocol semantics", "Protocol semantics"),
+            ("h5", "##### Protocol semantics", "Protocol semantics"),
+            ("h6", "###### Protocol semantics", "Protocol semantics"),
+        )
+        old_digest = hashlib.sha256(b"## Protocol semantics\n\nProtocol v13 is shared.\n\n").hexdigest()
+        for name, heading_line, selector_heading in cases:
+            with self.subTest(name=name):
+                project, work, environment = self.active_state()
+                source = f"{heading_line}\r\n\r\nProtocol v13 is shared.\r\n\r\n# Other\r\n\r\nNot selected.\r\n"
+                (project / "architecture.md").write_bytes(source.encode())
+                selected = f"{heading_line}\n\nProtocol v13 is shared.\n\n".encode()
+                digest = hashlib.sha256(selected).hexdigest()
+                attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
+                attempt_path.write_text(
+                    attempt_path.read_text(encoding="utf-8")
+                    .replace("architecture.md#Protocol semantics", f"architecture.md#{selector_heading}")
+                    .replace(old_digest, digest),
+                    encoding="utf-8",
+                )
+                self._write_review(work)
+
+                result, _, stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
+
+                self.assertEqual(0, result, stderr)
+
+    def test_padded_same_owner_reviewer_identity_rejects(self) -> None:
+        project, work, environment = self.active_state()
+        review_path = next((work / "attempts" / "universal-reveal-core-1" / "brief-reviews").glob("*.md"))
+        review_path.unlink()
+        self._write_review(work, reviewer=" worker-task ")
+
+        result, _, stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
+
+        self.assertEqual(14, result)
+        self.assertIn("DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT", stderr)
+
+    def test_ready_review_publication_reuses_identical_and_preserves_differing_collision(self) -> None:
+        project, work, environment = self.active_state()
+        review_dir = work / "attempts" / "universal-reveal-core-1" / "brief-reviews"
+        ready_path = next(review_dir.glob("*.md"))
+        ready_bytes = ready_path.read_bytes()
+        ready_path.unlink()
+        candidate_path = project / "ready-review.md"
+        candidate_path.write_bytes(ready_bytes)
+
+        created, _, created_stderr = self.run_cli(
+            *self.dispatch_arguments(
+                project,
+                work,
+                environment,
+                brief_review=candidate_path,
+                review_id="reviewer-a",
+            )
+        )
+        reused, _, reused_stderr = self.run_cli(
+            *self.dispatch_arguments(
+                project,
+                work,
+                environment,
+                brief_review=candidate_path,
+                review_id="reviewer-a",
+            )
+        )
+        later_bytes = ready_bytes.replace(b"Counterexample rejected.", b"Counterexample rejected again.")
+        later_path = project / "later-ready-review.md"
+        later_path.write_bytes(later_bytes)
+        collided, _, collided_stderr = self.run_cli(
+            *self.dispatch_arguments(
+                project,
+                work,
+                environment,
+                brief_review=later_path,
+                review_id="reviewer-b",
+            )
+        )
+
+        rejected_path = review_dir / "rejected" / f"{ready_path.stem}-reviewer-b.md"
+        self.assertEqual(0, created, created_stderr)
+        self.assertEqual(0, reused, reused_stderr)
+        self.assertEqual(14, collided)
+        self.assertIn("DISPATCH_BRIEF_REVIEW_COLLISION", collided_stderr)
+        self.assertEqual(ready_bytes, ready_path.read_bytes())
+        self.assertEqual(later_bytes, rejected_path.read_bytes())
 
     def test_lifecycle_partition_shape_and_review_truth_are_separate(self) -> None:
         lifecycle_table = f"""\

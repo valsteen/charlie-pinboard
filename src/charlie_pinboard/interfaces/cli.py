@@ -151,6 +151,8 @@ class CliArguments(argparse.Namespace):
     checkpoint: str
     environment: Path
     prompt: Path | None
+    brief_review: Path | None
+    review_id: str | None
     operation: str
     lease_id: str | None
     authorization: str
@@ -582,6 +584,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Verify this transported prompt instead of rendering the canonical prompt.",
     )
+    dispatch.add_argument(
+        "--brief-review",
+        type=Path,
+        help="Validate and publish one complete ready review for this exact cross-boundary checkpoint.",
+    )
+    dispatch.add_argument(
+        "--review-id",
+        help="Kebab-case identity used only when preserving a differing later review.",
+    )
     migrate = commands.add_parser("migrate", help="Migrate a schema-v1 ledger through one atomic v2 cutover.")
     migrate.add_argument("--to", choices=("v2",), required=True)
     migrate.add_argument("--json", action="store_true")
@@ -972,6 +983,15 @@ def _prepare_dispatch(context: CommandContext) -> int:
                 "DISPATCH_PROMPT_UNREADABLE",
                 f"Cannot read '{context.arguments.prompt}': {error}",
             ) from error
+    brief_review: bytes | None = None
+    if context.arguments.brief_review is not None:
+        try:
+            brief_review = context.arguments.brief_review.read_bytes()
+        except OSError as error:
+            raise DispatchError(
+                "DISPATCH_BRIEF_REVIEW_INVALID",
+                f"Cannot read '{context.arguments.brief_review}': {error}",
+            ) from error
     prompt = prepare_dispatch(
         context.work,
         context.project,
@@ -986,6 +1006,8 @@ def _prepare_dispatch(context: CommandContext) -> int:
         context.arguments.checkpoint,
         environment,
         supplied_prompt,
+        brief_review,
+        context.arguments.review_id,
     )
     if supplied_prompt is None:
         sys.stdout.write(prompt)
