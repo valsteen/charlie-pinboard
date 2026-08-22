@@ -4,10 +4,12 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
 from enum import Enum
+from functools import cache
 from pathlib import Path
 from urllib.parse import quote
 
 from charlie_pinboard.adapters.files.file_io import DurableRoots, FileIOError, ensure_directory_chain
+from charlie_pinboard.domain.errors import DecisionError
 
 APPLICATION = "charlie-pinboard"
 SCHEMA_VERSION = 1
@@ -96,6 +98,43 @@ def _required_meta(connection: sqlite3.Connection) -> tuple[str, int]:
     return application, version
 
 
+def _schema_signature(connection: sqlite3.Connection) -> tuple[tuple[str, str, str, str | None], ...]:
+    rows = connection.execute(
+        """
+        SELECT type, name, tbl_name, sql
+        FROM sqlite_schema
+        WHERE name NOT LIKE 'sqlite_%'
+        ORDER BY type, name
+        """
+    ).fetchall()
+    signature: list[tuple[str, str, str, str | None]] = []
+    for row in rows:
+        object_type, name, table_name, sql = row
+        if (
+            not isinstance(object_type, str)
+            or not isinstance(name, str)
+            or not isinstance(table_name, str)
+            or (sql is not None and not isinstance(sql, str))
+        ):
+            raise StorageError(StorageErrorCode.INVALID_STATE, "The current SQLite schema metadata is malformed.")
+        signature.append((object_type, name, table_name, sql))
+    return tuple(signature)
+
+
+@cache
+def _expected_schema_signature() -> tuple[tuple[str, str, str, str | None], ...]:
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.executescript(schema_bytes().decode("utf-8"))
+        return _schema_signature(connection)
+    except StorageError:
+        raise
+    except (sqlite3.Error, UnicodeError) as error:
+        raise StorageError(StorageErrorCode.IO_ERROR, "The installed SQLite schema is invalid.") from error
+    finally:
+        connection.close()
+
+
 def _verify_current_schema(connection: sqlite3.Connection) -> None:
     application, version = _required_meta(connection)
     if application != APPLICATION:
@@ -111,6 +150,8 @@ def _verify_current_schema(connection: sqlite3.Connection) -> None:
     if version > SCHEMA_VERSION:
         raise StorageError(StorageErrorCode.SCHEMA_TOO_NEW, f"Schema sqlite-v{version} is newer than {SCHEMA_ID}.")
     try:
+        if _schema_signature(connection) != _expected_schema_signature():
+            raise StorageError(StorageErrorCode.INVALID_STATE, "The database does not have the exact current schema.")
         quick_check = connection.execute("PRAGMA quick_check").fetchone()
         foreign_key_errors = connection.execute("PRAGMA foreign_key_check").fetchone()
     except sqlite3.Error as error:
@@ -237,9 +278,15 @@ def write_transaction(connection: sqlite3.Connection) -> Generator[sqlite3.Conne
         except sqlite3.Error as error:
             connection.rollback()
             raise _translate_database_error(error) from error
-        except Exception:
+        except DecisionError:
             connection.rollback()
             raise
+        except Exception as error:
+            connection.rollback()
+            raise StorageError(
+                StorageErrorCode.OPERATION_FAILED,
+                "The application operation failed inside the SQLite transaction.",
+            ) from error
         try:
             connection.commit()
         except sqlite3.Error as error:

@@ -26,7 +26,12 @@ from charlie_pinboard.adapters.sqlite.database import (
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.application.stored_state import (
+    ItemScopeRevision,
     MutationIntentState,
+    PlanningObligationState,
+    ResourceInstanceState,
+    StoredPlanningObligation,
+    StoredPlanningReplacement,
     StoredWorkItemState,
     StoredWorkState,
     TransitionHistoryActionKind,
@@ -41,7 +46,18 @@ from charlie_pinboard.domain.decisions import (
 )
 from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
 from charlie_pinboard.domain.identifiers import ArtifactRefId, ItemId, LeaseId, MutationIntentId, ReservationId
-from charlie_pinboard.domain.model import AttemptState, EvidenceInput, ReasonInput
+from charlie_pinboard.domain.model import (
+    AttemptState,
+    EvidenceInput,
+    PlanningDisposition,
+    ReasonInput,
+    UseLeaseState,
+)
+from charlie_pinboard.domain.resource_decisions import (
+    ResourceUseLeaseChange,
+    reallocate_resource,
+    revoke_resource,
+)
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
 
@@ -146,9 +162,15 @@ class SQLiteStoreTest(unittest.TestCase):
             self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, invariant_error.exception.code)
             self.assertEqual(0, connection.execute("SELECT revision FROM project_meta").fetchone()[0])
 
-            with self.assertRaisesRegex(RuntimeError, "injected application failure"), write_transaction(connection):
+            domain_error = DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "injected domain rejection")
+            with self.assertRaises(DecisionError) as preserved, write_transaction(connection):
+                raise domain_error
+            self.assertIs(domain_error, preserved.exception)
+
+            with self.assertRaises(StorageError) as operation_error, write_transaction(connection):
                 connection.execute("UPDATE project_meta SET revision = 9")
                 raise RuntimeError("injected application failure")
+            self.assertEqual(StorageErrorCode.OPERATION_FAILED, operation_error.exception.code)
             self.assertEqual(0, connection.execute("SELECT revision FROM project_meta").fetchone()[0])
         finally:
             connection.close()
@@ -176,6 +198,20 @@ class SQLiteStoreTest(unittest.TestCase):
         with self.assertRaises(StorageError) as no_metadata_error:
             open_database(no_metadata, OpenMode.READ_WRITE)
         self.assertEqual(StorageErrorCode.INVALID_STATE, no_metadata_error.exception.code)
+
+        incomplete_schema = path.with_name("incomplete-schema.sqlite3")
+        connection = sqlite3.connect(incomplete_schema)
+        try:
+            connection.execute(
+                "CREATE TABLE project_meta (singleton INTEGER, application TEXT, schema_version INTEGER)"
+            )
+            connection.execute("INSERT INTO project_meta VALUES (1, 'charlie-pinboard', 1)")
+            connection.commit()
+        finally:
+            connection.close()
+        with self.assertRaises(StorageError) as incomplete_schema_error:
+            open_database(incomplete_schema, OpenMode.READ_WRITE)
+        self.assertEqual(StorageErrorCode.INVALID_STATE, incomplete_schema_error.exception.code)
 
         invalid_types = path.with_name("invalid-types.sqlite3")
         invalid_types_connection = sqlite3.connect(invalid_types)
@@ -298,6 +334,31 @@ class SQLiteStoreTest(unittest.TestCase):
                 "declared relational literal",
                 "UPDATE resources SET scope = 'host-local' WHERE resource_id = 'workspace'",
                 True,
+            ),
+            (
+                "attempt generation exceeds its counter",
+                "UPDATE attempt_lease_counters SET generation_high_water = 2 WHERE attempt_id = 'work-a-1'",
+                False,
+            ),
+            (
+                "reservation generation exceeds its counter",
+                "UPDATE resource_reservation_counters SET generation_high_water = 0 WHERE instance_id = 'workspace-on-host'",
+                False,
+            ),
+            (
+                "active use lease host epoch",
+                "UPDATE resource_use_leases SET host_epoch = 99 WHERE reservation_id = 'reservation-a' AND generation = 3",
+                False,
+            ),
+            (
+                "active use lease instance revision",
+                "UPDATE resource_use_leases SET instance_subject_revision = 99 WHERE reservation_id = 'reservation-a' AND generation = 3",
+                False,
+            ),
+            (
+                "active use lease locator observation",
+                "UPDATE resource_use_leases SET observation_generation = 99 WHERE reservation_id = 'reservation-a' AND generation = 3",
+                False,
             ),
         )
         for name, statement, ignore_constraints in cases:
@@ -469,6 +530,15 @@ class SQLiteStoreTest(unittest.TestCase):
         ):
             self._assert_state_rejected(name, candidate)
 
+        collected_anchors = replace(
+            state,
+            authority=replace(state.authority, attempt_generations=(), attempt_leases=()),
+            resources=replace(state.resources, use_leases=(), mutation_intents=()),
+        )
+        _path, collected_store = self._store(populated=False)
+        collected_store.initialize_state(collected_anchors)
+        self.assertEqual(collected_anchors, collected_store.snapshot())
+
         portable = path.with_name("portable.sqlite3")
         backup_database(path, portable)
         connection = open_database(portable, OpenMode.READ_WRITE)
@@ -550,13 +620,165 @@ class SQLiteStoreTest(unittest.TestCase):
         )
         missing_primary_replacement = replace(state, planning=replace(state.planning, replacements=()))
 
+        low_attempt_counter = replace(
+            state,
+            authority=replace(
+                state.authority,
+                attempt_counters=(replace(state.authority.attempt_counters[0], generation_high_water=2),),
+            ),
+        )
+        low_reservation_counter = replace(
+            state,
+            resources=replace(
+                state.resources,
+                reservation_counters=(
+                    state.resources.reservation_counters[0],
+                    replace(state.resources.reservation_counters[1], generation_high_water=0),
+                ),
+            ),
+        )
+        active_use = state.resources.use_leases[2]
+        stale_host_epoch = replace(
+            state,
+            resources=replace(
+                state.resources,
+                use_leases=(*state.resources.use_leases[:2], replace(active_use, host_epoch=99)),
+            ),
+        )
+        stale_instance_revision = replace(
+            state,
+            resources=replace(
+                state.resources,
+                use_leases=(*state.resources.use_leases[:2], replace(active_use, instance_subject_revision=99)),
+            ),
+        )
+        stale_observation = replace(
+            state,
+            resources=replace(
+                state.resources,
+                use_leases=(*state.resources.use_leases[:2], replace(active_use, observation_generation=99)),
+            ),
+        )
+
         for name, candidate in (
             ("valid attempt anchors cannot be cross-wired", crosswired_valid_attempt),
             ("one planned intent per grant", duplicate_planned_intent),
             ("resolved intent evidence is complete", partial_intent_evidence),
             ("superseded obligation needs a primary replacement", missing_primary_replacement),
+            ("attempt counter fences every retained generation", low_attempt_counter),
+            ("reservation counter fences every acquisition", low_reservation_counter),
+            ("active task use matches the host epoch", stale_host_epoch),
+            ("active task use matches the instance revision", stale_instance_revision),
+            ("active task use matches the locator observation", stale_observation),
         ):
             self._assert_state_rejected(name, candidate)
+
+    def test_planning_shape_acceptance_matrix(self) -> None:
+        state = complete_sqlite_state()
+        obligation = state.planning.obligations[0]
+        impact = state.planning.impacts[0]
+        item_c = ItemId("work-c")
+
+        unresolved = replace(
+            state,
+            planning=replace(
+                state.planning,
+                impacts=(replace(impact, primary_target_item_id=item_c),),
+                obligations=(
+                    StoredPlanningObligation(
+                        impact.impact_id,
+                        item_c,
+                        0,
+                        1,
+                        SQLITE_DIGEST,
+                        PlanningObligationState.UNRESOLVED,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        SQLITE_NOW,
+                        None,
+                    ),
+                ),
+                replacements=(),
+            ),
+        )
+
+        revised_digest = "b" * 64
+        revised_items = list(state.lifecycle.work_items)
+        revised_items[3] = replace(revised_items[3], scope_revision=2, scope_digest=revised_digest)
+        revised = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                work_items=tuple(revised_items),
+                scope_revisions=(
+                    *state.lifecycle.scope_revisions,
+                    ItemScopeRevision(item_c, 2, revised_digest, 7, SQLITE_NOW),
+                ),
+            ),
+            planning=replace(
+                state.planning,
+                impacts=(replace(impact, primary_target_item_id=item_c),),
+                obligations=(
+                    replace(
+                        obligation,
+                        target_item_id=item_c,
+                        state=PlanningObligationState.RESOLVED,
+                        disposition=PlanningDisposition.REVISED,
+                        evaluated_scope_revision=1,
+                        evaluated_scope_digest=SQLITE_DIGEST,
+                        resulting_scope_revision=2,
+                        resulting_scope_digest=revised_digest,
+                        primary_replacement_item_id=None,
+                        outcome_evidence=None,
+                    ),
+                ),
+                replacements=(),
+            ),
+        )
+
+        shaped_items = list(state.lifecycle.work_items)
+        shaped_items[3] = replace(
+            shaped_items[3],
+            state=StoredWorkItemState.SUPERSEDED,
+            outcome_evidence="work-c superseded",
+        )
+        converging_obligation = replace(
+            obligation,
+            target_item_id=item_c,
+            position=1,
+            primary_replacement_item_id=ItemId("work-a"),
+            outcome_evidence="work-c superseded",
+        )
+        shaped = replace(
+            state,
+            lifecycle=replace(state.lifecycle, work_items=tuple(shaped_items)),
+            planning=replace(
+                state.planning,
+                obligations=(obligation, converging_obligation),
+                replacements=(
+                    StoredPlanningReplacement(impact.impact_id, ItemId("work-b"), ItemId("work-c"), 0),
+                    StoredPlanningReplacement(impact.impact_id, ItemId("work-b"), ItemId("work-a"), 1),
+                    StoredPlanningReplacement(impact.impact_id, item_c, ItemId("work-a"), 0),
+                ),
+            ),
+        )
+
+        for name, candidate in (
+            ("unresolved target", unresolved),
+            ("revised target scope", revised),
+            ("one-to-many and many-to-one supersession", shaped),
+        ):
+            with self.subTest(name=name):
+                _path, store = self._store(populated=False)
+                store.initialize_state(candidate)
+                self.assertEqual(candidate, store.snapshot())
 
     def test_candidate_and_relational_acceptance_matrix(self) -> None:
         state = complete_sqlite_state()
@@ -645,6 +867,15 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(DecisionErrorCode.ACTION_NOT_AVAILABLE, stale.exception.code)
         self.assertEqual(committed, store.snapshot())
 
+        stale_subject_decision = replace(
+            decision,
+            action=replace(decision.action, expected_revision="", subject_revision="stale-subject"),
+        )
+        with self.assertRaises(DecisionError) as stale_subject, store.write() as transaction:
+            transaction.commit(stale_subject_decision)
+        self.assertEqual(DecisionErrorCode.ACTION_NOT_AVAILABLE, stale_subject.exception.code)
+        self.assertEqual(committed, store.snapshot())
+
         failed_path, failed_store = self._store()
         failed_initial = failed_store.snapshot()
         failed_snapshot = project_decision_snapshot(failed_initial)
@@ -670,6 +901,12 @@ class SQLiteStoreTest(unittest.TestCase):
             connection.close()
         with self.assertRaises(StorageError), failed_store.write() as transaction:
             transaction.commit(failed_decision)
+        cleanup = sqlite3.connect(failed_path)
+        try:
+            cleanup.execute("DROP TRIGGER reject_test_history")
+            cleanup.commit()
+        finally:
+            cleanup.close()
         self.assertEqual(failed_initial, failed_store.snapshot())
 
     def test_direct_completion_commits_one_domain_decision_atomically(self) -> None:
@@ -751,10 +988,95 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(4, returned.authority.attempt_counters[0].generation_high_water)
         self.assertEqual("revoked", returned.authority.attempt_leases[0].state.value)
         self.assertEqual(
-            ((1, "revoked"), (2, "revoked"), (3, "revoked")),
+            ((1, "revoked"), (2, "revoked"), (3, "revoked"), (4, "revoked")),
             tuple((value.generation, value.state.value) for value in returned.resources.use_leases),
         )
         self.assertEqual("active", returned.resources.reservations[0].state.value)
+        self.assertEqual(
+            ((1, "grant", "revoked"), (2, "fence", "revoked"), (3, "grant", "revoked"), (4, "fence", "revoked")),
+            tuple(
+                (value.generation, value.generation_kind.value, value.state.value)
+                for value in returned.resources.use_leases
+            ),
+        )
+
+    def test_resource_revocation_and_reallocation_persist_domain_decisions(self) -> None:
+        _path, revocation_store = self._store()
+        revocation_snapshot = project_decision_snapshot(revocation_store.snapshot())
+        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, revocation_snapshot.generation)
+        action = next(
+            value for value in available_actions(revocation_snapshot, actor) if value.kind == ActionKind.PAUSE
+        )
+        base_decision = decide(
+            revocation_snapshot,
+            action,
+            ReasonInput("Persist the resource decision."),
+            SQLITE_NOW + timedelta(seconds=1),
+        )
+        revoked = revoke_resource(revocation_snapshot, ReservationId("reservation-a"), unresolved_intent=True)
+        active_use = revocation_snapshot.resource_use_leases[-1]
+        revoke_decision = replace(
+            base_decision,
+            item_change=None,
+            attempt_change=None,
+            reservation_changes=revoked.changes,
+            reservation_counter_changes=revoked.counter_changes,
+            resource_use_lease_changes=(
+                ResourceUseLeaseChange(active_use, replace(active_use, state=UseLeaseState.REVOKED)),
+            ),
+        )
+        with revocation_store.write() as transaction:
+            transaction.commit(revoke_decision)
+        revoked_state = revocation_store.snapshot()
+        self.assertEqual(2, revoked_state.resources.reservation_counters[1].generation_high_water)
+        self.assertEqual("revoked-pending-recovery", revoked_state.resources.reservations[0].state.value)
+        self.assertEqual((1, 2, 3, 4), tuple(value.generation for value in revoked_state.resources.use_leases))
+
+        state = complete_sqlite_state()
+        active_instances = (
+            replace(state.resources.instances[0], state=ResourceInstanceState.ACTIVE),
+            state.resources.instances[1],
+        )
+        reallocatable = replace(state, resources=replace(state.resources, instances=active_instances))
+        _path, reallocation_store = self._store(populated=False)
+        reallocation_store.initialize_state(reallocatable)
+        reallocation_snapshot = project_decision_snapshot(reallocation_store.snapshot())
+        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, reallocation_snapshot.generation)
+        action = next(
+            value for value in available_actions(reallocation_snapshot, actor) if value.kind == ActionKind.PAUSE
+        )
+        base_decision = decide(
+            reallocation_snapshot,
+            action,
+            ReasonInput("Persist the resource reallocation."),
+            SQLITE_NOW + timedelta(seconds=1),
+        )
+        reallocated = reallocate_resource(
+            reallocation_snapshot,
+            ReservationId("reservation-a"),
+            replacement_id=ReservationId("reservation-b"),
+            instance_id=active_instances[0].instance_id,
+            generation=1,
+        )
+        active_use = reallocation_snapshot.resource_use_leases[-1]
+        reallocate_decision = replace(
+            base_decision,
+            item_change=None,
+            attempt_change=None,
+            reservation_changes=reallocated.changes,
+            reservation_counter_changes=reallocated.counter_changes,
+            resource_use_lease_changes=(
+                ResourceUseLeaseChange(active_use, replace(active_use, state=UseLeaseState.RELEASED)),
+            ),
+        )
+        with reallocation_store.write() as transaction:
+            transaction.commit(reallocate_decision)
+        reallocated_state = reallocation_store.snapshot()
+        self.assertEqual(
+            (("reservation-a", "released"), ("reservation-b", "active")),
+            tuple((value.reservation_id, value.state.value) for value in reallocated_state.resources.reservations),
+        )
+        self.assertEqual(1, reallocated_state.resources.reservation_counters[0].generation_high_water)
 
 
 if __name__ == "__main__":

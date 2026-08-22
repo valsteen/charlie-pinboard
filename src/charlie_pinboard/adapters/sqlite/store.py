@@ -177,6 +177,72 @@ def _expect(row: sqlite3.Row, key: str, expected: str) -> None:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} must be {expected!r}.")
 
 
+def _validate_attempt_authority(state: StoredWorkState, error_code: StorageErrorCode) -> None:
+    attempt_counters = {value.attempt_id: value.generation_high_water for value in state.authority.attempt_counters}
+    for anchor in state.authority.attempt_generations:
+        high_water = attempt_counters.get(anchor.attempt_id)
+        if high_water is None or anchor.generation > high_water:
+            raise StorageError(error_code, "An attempt generation exceeds its retained counter.")
+    for lease in state.authority.attempt_leases:
+        high_water = attempt_counters.get(lease.attempt_id)
+        if high_water is None or lease.generation != high_water:
+            raise StorageError(error_code, "The current attempt lease does not match its retained counter.")
+
+
+def _validate_reservation_authority(state: StoredWorkState, error_code: StorageErrorCode) -> None:
+    reservation_counters = {
+        value.instance_id: value.generation_high_water for value in state.resources.reservation_counters
+    }
+    for reservation in state.resources.reservations:
+        high_water = reservation_counters.get(reservation.instance_id)
+        if high_water is None or reservation.acquisition_generation > high_water:
+            raise StorageError(error_code, "A reservation generation exceeds its retained instance counter.")
+
+
+def _validate_use_authority(state: StoredWorkState, error_code: StorageErrorCode) -> None:
+    instances = {value.instance_id: value for value in state.resources.instances}
+    locators = {value.instance_id: value for value in state.resources.locators}
+    reservations = {value.reservation_id: value for value in state.resources.reservations}
+    use_leases_by_reservation: dict[ReservationId, dict[int, StoredResourceUseLease]] = {}
+    for lease in state.resources.use_leases:
+        use_leases_by_reservation.setdefault(lease.reservation_id, {})[lease.generation] = lease
+    for reservation_id, generations in use_leases_by_reservation.items():
+        latest_generation = max(generations)
+        for lease in generations.values():
+            if lease.generation_kind == UseLeaseGenerationKind.GRANT and lease.state == UseLeaseState.REVOKED:
+                fence = generations.get(lease.generation + 1)
+                if (
+                    fence is None
+                    or fence.generation_kind != UseLeaseGenerationKind.FENCE
+                    or fence.state != UseLeaseState.REVOKED
+                ):
+                    raise StorageError(error_code, "A revoked task-use grant has no immediately following fence.")
+            if lease.state != UseLeaseState.ACTIVE:
+                continue
+            reservation = reservations.get(reservation_id)
+            instance = instances.get(lease.instance_id)
+            locator = locators.get(lease.instance_id)
+            if (
+                lease.generation != latest_generation
+                or lease.generation_kind != UseLeaseGenerationKind.GRANT
+                or reservation is None
+                or reservation.state != ReservationState.ACTIVE
+                or lease.host_epoch != state.lifecycle.project.host_epoch
+                or instance is None
+                or lease.instance_subject_revision != instance.subject_revision
+                or locator is None
+                or lease.observation_generation != locator.observation_generation
+                or lease.observation_digest != locator.observation_digest
+            ):
+                raise StorageError(error_code, "An active task-use lease contradicts current resource authority.")
+
+
+def _validate_current_state(state: StoredWorkState, error_code: StorageErrorCode) -> None:
+    _validate_attempt_authority(state, error_code)
+    _validate_reservation_authority(state, error_code)
+    _validate_use_authority(state, error_code)
+
+
 class _StoredStateReader:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
@@ -185,7 +251,7 @@ class _StoredStateReader:
         return tuple(self._connection.execute(query).fetchall())
 
     def read(self) -> StoredWorkState:
-        return StoredWorkState(
+        state = StoredWorkState(
             self._lifecycle(),
             self._proposals(),
             self._planning(),
@@ -195,6 +261,8 @@ class _StoredStateReader:
             self._history(),
             self._focus(),
         )
+        _validate_current_state(state, StorageErrorCode.INVALID_STATE)
+        return state
 
     def _project(self) -> ProjectRecord:
         rows = self._rows("SELECT * FROM project_meta ORDER BY singleton")
@@ -664,6 +732,7 @@ class _StoredStateWriter:
             raise StorageError(
                 StorageErrorCode.INVALID_STATE, "Stored state does not match the current application schema."
             )
+        _validate_current_state(state, StorageErrorCode.INVARIANT_VIOLATION)
         occupied = sum(
             _integer(row, "count")
             for table in (
@@ -1284,6 +1353,7 @@ class _DecisionWriter:
         )
         if updated.rowcount != 1:
             self._stale()
+        _StoredStateReader(self._connection).read()
         return decision.receipt
 
     def _stale(self) -> Never:
@@ -1446,10 +1516,44 @@ class _DecisionWriter:
     def _apply_reservations(self, decision: Decision, revision: int) -> None:
         for change in decision.reservation_changes:
             if change.before is None:
-                raise StorageError(
-                    StorageErrorCode.INVARIANT_VIOLATION,
-                    "Reservation assignment requires the later application-service integration checkpoint.",
+                instance = self._connection.execute(
+                    "SELECT resource_id, host_id FROM resource_instances WHERE instance_id = ?",
+                    (change.after.instance_id,),
+                ).fetchone()
+                attempt = self._connection.execute(
+                    "SELECT item_id FROM attempts WHERE attempt_id = ?",
+                    (change.after.attempt,),
+                ).fetchone()
+                if (
+                    instance is None
+                    or attempt is None
+                    or instance["resource_id"] != change.after.resource_id
+                    or change.after.state != ReservationState.ACTIVE
+                ):
+                    raise StorageError(
+                        StorageErrorCode.INVARIANT_VIOLATION,
+                        "Reservation assignment does not match a current instance and attempt.",
+                    )
+                self._connection.execute(
+                    """
+                    INSERT INTO resource_reservations (
+                        reservation_id, instance_id, resource_id, host_id, generation, attempt_id,
+                        item_id, status, subject_revision, created_at, ended_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)
+                    """,
+                    (
+                        change.after.reservation_id,
+                        change.after.instance_id,
+                        change.after.resource_id,
+                        instance["host_id"],
+                        change.after.generation,
+                        change.after.attempt,
+                        attempt["item_id"],
+                        revision,
+                        decision.receipt.decided_at.isoformat(),
+                    ),
                 )
+                continue
             if change.before.generation != change.after.generation:
                 raise StorageError(
                     StorageErrorCode.INVARIANT_VIOLATION,
@@ -1481,7 +1585,10 @@ class _DecisionWriter:
     def _apply_use_leases(self, decision: Decision) -> None:
         for change in decision.resource_use_lease_changes:
             if (
-                change.before.reservation_id != change.after.reservation_id
+                change.before.lease_id != change.after.lease_id
+                or change.before.reservation_id != change.after.reservation_id
+                or change.before.attempt_lease_id != change.after.attempt_lease_id
+                or change.before.attempt_generation != change.after.attempt_generation
                 or change.before.generation != change.after.generation
                 or change.before.generation_kind != change.after.generation_kind
             ):
@@ -1502,6 +1609,31 @@ class _DecisionWriter:
             )
             if updated.rowcount != 1:
                 self._stale()
+            if change.before.state == UseLeaseState.ACTIVE and change.after.state == UseLeaseState.REVOKED:
+                timestamp = decision.receipt.decided_at.isoformat()
+                fenced = self._connection.execute(
+                    """
+                    INSERT INTO resource_use_leases (
+                        reservation_id, instance_id, reservation_generation, attempt_id, host_id,
+                        instance_subject_revision, observation_generation, observation_digest, task_id,
+                        attempt_lease_id, attempt_lease_generation, lease_id, generation, generation_kind,
+                        host_epoch, acquired_at, expires_at, status
+                    )
+                    SELECT
+                        reservation_id, instance_id, reservation_generation, attempt_id, host_id,
+                        instance_subject_revision, observation_generation, observation_digest, task_id,
+                        attempt_lease_id, attempt_lease_generation, lease_id, generation + 1, 'fence',
+                        host_epoch, ?, ?, 'revoked'
+                    FROM resource_use_leases
+                    WHERE reservation_id = ? AND generation = ? AND generation_kind = 'grant' AND status = 'revoked'
+                    """,
+                    (timestamp, timestamp, change.before.reservation_id, change.before.generation),
+                )
+                if fenced.rowcount != 1:
+                    raise StorageError(
+                        StorageErrorCode.INVARIANT_VIOLATION,
+                        "Task-use revocation could not install its immediately following fence.",
+                    )
 
     def _apply_focus(self, decision: Decision, revision: int) -> None:
         if decision.item_change is None:
