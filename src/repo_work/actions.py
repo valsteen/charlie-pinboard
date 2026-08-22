@@ -287,4 +287,4 @@ def actions_for(
     try:
         return available_actions(_snapshot(work_root, root, queue.items, actor), actor)
     except DecisionError as error:
-        raise ActionError(error.code, str(error).partition(": ")[2]) from error
+        raise ActionError(error.code.value, str(error).partition(": ")[2]) from error

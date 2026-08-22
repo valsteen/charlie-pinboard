@@ -780,7 +780,7 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
     try:
         decision = decide(snapshot, action, value, datetime.now(UTC))
     except DecisionError as error:
-        raise TransitionPlanError(error.code, str(error).partition(": ")[2]) from error
+        raise TransitionPlanError(error.code.value, str(error).partition(": ")[2]) from error
     context = replace(context, decision=decision)
     changes = handler(context, action, value)
     if context.queue.header.get("schema") != SCHEMA_V2:

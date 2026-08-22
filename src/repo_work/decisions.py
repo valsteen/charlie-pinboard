@@ -45,12 +45,40 @@ from repo_work.transition_input import (
 type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
 
 
-class DecisionError(RuntimeError):
-    code: str
+class DecisionErrorCode(Enum):
+    ACTION_NOT_AVAILABLE = "ACTION_NOT_AVAILABLE"
+    ACTION_NOT_MUTATING = "ACTION_NOT_MUTATING"
+    ATTEMPT_AUTHORITY_REQUIRED = "ATTEMPT_AUTHORITY_REQUIRED"
+    ATTEMPT_LEASE_REQUIRED = "ATTEMPT_LEASE_REQUIRED"
+    ATTEMPT_NOT_FOUND = "ATTEMPT_NOT_FOUND"
+    DEPENDENCY_NOT_SATISFIED = "DEPENDENCY_NOT_SATISFIED"
+    HISTORY_OUTCOME_INVALID = "HISTORY_OUTCOME_INVALID"
+    HISTORY_RECORD_EXISTS = "HISTORY_RECORD_EXISTS"
+    ITEM_ALREADY_EXISTS = "ITEM_ALREADY_EXISTS"
+    ITEM_NOT_FOUND = "ITEM_NOT_FOUND"
+    ITEM_SCOPE_INVALID = "ITEM_SCOPE_INVALID"
+    ITEM_SCOPE_STALE = "ITEM_SCOPE_STALE"
+    LIVE_DEPENDENTS = "LIVE_DEPENDENTS"
+    PLANNING_ACTION_STALE = "PLANNING_ACTION_STALE"
+    PLANNING_IMPACT_INVALID = "PLANNING_IMPACT_INVALID"
+    PLANNING_IMPACT_UNRESOLVED = "PLANNING_IMPACT_UNRESOLVED"
+    PLANNING_OBLIGATION_NOT_FOUND = "PLANNING_OBLIGATION_NOT_FOUND"
+    PLANNING_RESOLUTION_INVALID = "PLANNING_RESOLUTION_INVALID"
+    PROPOSAL_NOT_FOUND = "PROPOSAL_NOT_FOUND"
+    RESOURCE_INSTANCE_REQUIRED = "RESOURCE_INSTANCE_REQUIRED"
+    RESOURCE_INSTANCE_RESERVED = "RESOURCE_INSTANCE_RESERVED"
+    RESOURCE_REQUIREMENT_INVALID = "RESOURCE_REQUIREMENT_INVALID"
+    RESOURCE_RESERVATION_STALE = "RESOURCE_RESERVATION_STALE"
+    RESOURCE_USE_LEASE_STALE = "RESOURCE_USE_LEASE_STALE"
+    TRANSITION_INPUT_INVALID = "TRANSITION_INPUT_INVALID"
 
-    def __init__(self, code: str, message: str) -> None:
+
+class DecisionError(RuntimeError):
+    code: DecisionErrorCode
+
+    def __init__(self, code: DecisionErrorCode, message: str) -> None:
         self.code = code
-        super().__init__(f"{code}: {message}")
+        super().__init__(f"{code.value}: {message}")
 
 
 class ActionKind(Enum):
@@ -247,13 +275,13 @@ def validate_mutation_resources(
 ) -> None:
     authorities = tuple(value for value in snapshot.attempt_authorities if value.attempt == attempt)
     if len(authorities) != 1 or authorities[0].lease_id is None:
-        raise DecisionError("ATTEMPT_AUTHORITY_REQUIRED", "Mutation requires one current attempt authority.")
+        raise DecisionError(DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED, "Mutation requires one current attempt authority.")
     authority = authorities[0]
     if len(required_resources) != len(set(required_resources)):
-        raise DecisionError("RESOURCE_REQUIREMENT_INVALID", "Required resources must be unique.")
+        raise DecisionError(DecisionErrorCode.RESOURCE_REQUIREMENT_INVALID, "Required resources must be unique.")
     token_by_resource = {token.resource_id: token for token in tokens}
     if set(token_by_resource) != set(required_resources) or len(token_by_resource) != len(tokens):
-        raise DecisionError("RESOURCE_RESERVATION_STALE", "Mutation requires one exact token per resource requirement.")
+        raise DecisionError(DecisionErrorCode.RESOURCE_RESERVATION_STALE, "Mutation requires one exact token per resource requirement.")
     instances = {value.instance_id: value for value in snapshot.resource_instances}
     for resource_id in required_resources:
         reservation = next(
@@ -267,13 +295,13 @@ def validate_mutation_resources(
             None,
         )
         if reservation is None:
-            raise DecisionError("RESOURCE_RESERVATION_STALE", f"Resource '{resource_id}' is not reserved by this attempt.")
+            raise DecisionError(DecisionErrorCode.RESOURCE_RESERVATION_STALE, f"Resource '{resource_id}' is not reserved by this attempt.")
         instance = instances.get(reservation.instance_id)
         token = token_by_resource[resource_id]
         if instance is None or instance.host_id != token.host_id:
-            raise DecisionError("RESOURCE_INSTANCE_REQUIRED", f"Resource '{resource_id}' has no matching host-local instance.")
+            raise DecisionError(DecisionErrorCode.RESOURCE_INSTANCE_REQUIRED, f"Resource '{resource_id}' has no matching host-local instance.")
         if ResourceAuthority(token.resource_id, token.host_id, token.lease_id, token.generation) not in authority.resources:
-            raise DecisionError("RESOURCE_USE_LEASE_STALE", f"Resource '{resource_id}' is not held by this attempt authority.")
+            raise DecisionError(DecisionErrorCode.RESOURCE_USE_LEASE_STALE, f"Resource '{resource_id}' is not held by this attempt authority.")
         use_lease = next(
             (
                 value
@@ -288,7 +316,7 @@ def validate_mutation_resources(
             None,
         )
         if use_lease is None:
-            raise DecisionError("RESOURCE_USE_LEASE_STALE", f"Resource '{resource_id}' has no current mutation lease.")
+            raise DecisionError(DecisionErrorCode.RESOURCE_USE_LEASE_STALE, f"Resource '{resource_id}' has no current mutation lease.")
 
 
 def _reservation(snapshot: LedgerSnapshot, reservation_id: str) -> ResourceReservation:
@@ -297,7 +325,7 @@ def _reservation(snapshot: LedgerSnapshot, reservation_id: str) -> ResourceReser
         None,
     )
     if reservation is None:
-        raise DecisionError("RESOURCE_RESERVATION_STALE", f"Reservation '{reservation_id}' does not exist.")
+        raise DecisionError(DecisionErrorCode.RESOURCE_RESERVATION_STALE, f"Reservation '{reservation_id}' does not exist.")
     return reservation
 
 
@@ -313,16 +341,16 @@ def assign_resource(
     definitions = {value.resource_id for value in snapshot.resource_definitions}
     instance = next((value for value in snapshot.resource_instances if value.instance_id == instance_id), None)
     if resource_id not in definitions or instance is None or instance.resource_id != resource_id:
-        raise DecisionError("RESOURCE_INSTANCE_REQUIRED", "Assignment requires a matching definition and instance.")
+        raise DecisionError(DecisionErrorCode.RESOURCE_INSTANCE_REQUIRED, "Assignment requires a matching definition and instance.")
     if generation < 1 or not reservation_id:
-        raise DecisionError("RESOURCE_RESERVATION_STALE", "Reservation identity and generation must be current.")
+        raise DecisionError(DecisionErrorCode.RESOURCE_RESERVATION_STALE, "Reservation identity and generation must be current.")
     active = tuple(
         value for value in snapshot.resource_reservations if value.state == ReservationState.ACTIVE
     )
     if any(value.instance_id == instance_id for value in active):
-        raise DecisionError("RESOURCE_INSTANCE_RESERVED", f"Instance '{instance_id}' is already reserved.")
+        raise DecisionError(DecisionErrorCode.RESOURCE_INSTANCE_RESERVED, f"Instance '{instance_id}' is already reserved.")
     if any(value.attempt == attempt and value.resource_id == resource_id for value in active):
-        raise DecisionError("RESOURCE_INSTANCE_RESERVED", "The attempt already has this resource requirement assigned.")
+        raise DecisionError(DecisionErrorCode.RESOURCE_INSTANCE_RESERVED, "The attempt already has this resource requirement assigned.")
     reservation = ResourceReservation(
         reservation_id,
         resource_id,
@@ -337,7 +365,7 @@ def assign_resource(
 def release_resource(snapshot: LedgerSnapshot, reservation_id: str) -> ResourceDecision:
     reservation = _reservation(snapshot, reservation_id)
     if reservation.state != ReservationState.ACTIVE:
-        raise DecisionError("RESOURCE_RESERVATION_STALE", "Only an active reservation can be released.")
+        raise DecisionError(DecisionErrorCode.RESOURCE_RESERVATION_STALE, "Only an active reservation can be released.")
     released = replace(reservation, state=ReservationState.RELEASED)
     return ResourceDecision(ResourceDecisionKind.RELEASE, (ReservationChange(reservation, released),))
 
@@ -350,7 +378,7 @@ def revoke_resource(
 ) -> ResourceDecision:
     reservation = _reservation(snapshot, reservation_id)
     if reservation.state != ReservationState.ACTIVE:
-        raise DecisionError("RESOURCE_RESERVATION_STALE", "Only an active reservation can be revoked.")
+        raise DecisionError(DecisionErrorCode.RESOURCE_RESERVATION_STALE, "Only an active reservation can be revoked.")
     state = ReservationState.REVOKED_PENDING_RECOVERY if unresolved_intent else ReservationState.REVOKED
     revoked = replace(reservation, generation=reservation.generation + 1, state=state)
     return ResourceDecision(ResourceDecisionKind.REVOKE, (ReservationChange(reservation, revoked),))
@@ -497,7 +525,7 @@ def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[
         case Role.WORKER:
             result = _worker_actions(snapshot, factory)
             if not result:
-                raise DecisionError("ATTEMPT_LEASE_REQUIRED", "The supplied attempt lease is not current for an active item.")
+                raise DecisionError(DecisionErrorCode.ATTEMPT_LEASE_REQUIRED, "The supplied attempt lease is not current for an active item.")
             return result
         case Role.COORDINATOR:
             result = _active_coordinator_actions(snapshot, factory)
@@ -522,14 +550,14 @@ def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[
 
 def _nonempty(value: str, field: str) -> None:
     if not value:
-        raise DecisionError("ITEM_SCOPE_INVALID", f"{field} must be nonempty.")
+        raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, f"{field} must be nonempty.")
 
 
 def _positioned(positions: list[int], identities: list[str], field: str) -> None:
     if sorted(positions) != list(range(len(positions))) or len(positions) != len(set(positions)):
-        raise DecisionError("ITEM_SCOPE_INVALID", f"{field} positions must be zero-based and gapless.")
+        raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, f"{field} positions must be zero-based and gapless.")
     if len(identities) != len(set(identities)) or any(not value for value in identities):
-        raise DecisionError("ITEM_SCOPE_INVALID", f"{field} identities must be unique and nonempty.")
+        raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, f"{field} identities must be unique and nonempty.")
 
 
 def _semantic_artifacts(scope: ItemScope) -> tuple[dict[str, int | str], ...]:
@@ -539,11 +567,11 @@ def _semantic_artifacts(scope: ItemScope) -> tuple[dict[str, int | str], ...]:
     role_positions: dict[ArtifactRole, list[int]] = {}
     for artifact in artifacts:
         if artifact.position < 0:
-            raise DecisionError("ITEM_SCOPE_INVALID", "Artifact positions must be non-negative.")
+            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Artifact positions must be non-negative.")
         if artifact.kind != artifact.role.value:
-            raise DecisionError("ITEM_SCOPE_INVALID", "Semantic artifact kind must equal its role.")
+            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Semantic artifact kind must equal its role.")
         if artifact.revision < 1:
-            raise DecisionError("ITEM_SCOPE_INVALID", "Artifact revisions must be positive.")
+            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Artifact revisions must be positive.")
         for field, value in (
             ("artifact key", artifact.key),
             ("artifact selector", artifact.selector),
@@ -553,19 +581,19 @@ def _semantic_artifacts(scope: ItemScope) -> tuple[dict[str, int | str], ...]:
         if len(artifact.content_sha256) != 64 or any(
             character not in "0123456789abcdef" for character in artifact.content_sha256
         ):
-            raise DecisionError("ITEM_SCOPE_INVALID", "Artifact content digest must be lowercase SHA-256.")
+            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Artifact content digest must be lowercase SHA-256.")
         selector_parts = artifact.selector.split("/")
         if artifact.selector.startswith("/") or any(part in {"", ".", ".."} for part in selector_parts):
-            raise DecisionError("ITEM_SCOPE_INVALID", "Artifact selector must be a canonical relative POSIX path.")
+            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Artifact selector must be a canonical relative POSIX path.")
         identity = (artifact.kind, artifact.key, artifact.revision)
         if identity in identities:
-            raise DecisionError("ITEM_SCOPE_INVALID", "Semantic artifact identities must be unique.")
+            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Semantic artifact identities must be unique.")
         identities.add(identity)
         role_positions.setdefault(artifact.role, []).append(artifact.position)
     for role, positions in role_positions.items():
         ordered = sorted(positions)
         if ordered != list(range(len(ordered))) or len(ordered) != len(set(ordered)):
-            raise DecisionError("ITEM_SCOPE_INVALID", f"Artifact positions for role '{role.value}' must be gapless.")
+            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, f"Artifact positions for role '{role.value}' must be gapless.")
     return tuple(
         {
             "content_sha256": artifact.content_sha256,
@@ -606,7 +634,7 @@ def item_scope_bytes(scope: ItemScope) -> bytes:
         ("unlock", scope.unlock),
     ):
         if value == "":
-            raise DecisionError("ITEM_SCOPE_INVALID", f"{field} must be nonempty or null.")
+            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, f"{field} must be nonempty or null.")
     _positioned(
         [value.position for value in scope.dependencies],
         [value.dependency_id for value in scope.dependencies],
@@ -647,7 +675,7 @@ def item_scope_digest(scope: ItemScope) -> str:
 
 def _anchor_value(revision: int, digest: str) -> dict[str, JsonValue]:
     if revision < 1 or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Scope anchors require a positive revision and lowercase SHA-256.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope anchors require a positive revision and lowercase SHA-256.")
     return {"scope_digest": digest, "scope_revision": revision}
 
 
@@ -666,14 +694,14 @@ def _history_bytes(value: JsonValue) -> bytes:
 
 def item_scope_change_outcome(before: ScopeAnchor | None, after: ScopeAnchor) -> HistoryOutcome:
     if after.digest != item_scope_digest(after.scope):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "After scope digest does not match its semantic value.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "After scope digest does not match its semantic value.")
     if before is not None:
         if before.item != after.item or before.revision + 1 != after.revision or before.digest == after.digest:
-            raise DecisionError("HISTORY_OUTCOME_INVALID", "Scope changes require consecutive unequal anchors for one item.")
+            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope changes require consecutive unequal anchors for one item.")
         if before.digest != item_scope_digest(before.scope):
-            raise DecisionError("HISTORY_OUTCOME_INVALID", "Before scope digest does not match its semantic value.")
+            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Before scope digest does not match its semantic value.")
     elif after.revision != 1:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "An initial scope starts at revision one.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "An initial scope starts at revision one.")
     payload: dict[str, JsonValue] = {
         "after": _scope_snapshot_value(after),
         "before": None if before is None else _scope_snapshot_value(before),
@@ -712,9 +740,9 @@ def planning_impact_outcome(impact: PlanningImpact) -> HistoryOutcome:
 def planning_resolution_outcome(impact: PlanningImpact, target: str) -> HistoryOutcome:
     obligation = next((value for value in impact.obligations if value.target == target), None)
     if obligation is None or obligation.disposition is None or obligation.reason is None:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Planning resolution must name one resolved obligation.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Planning resolution must name one resolved obligation.")
     if obligation.evaluated_scope_revision is None or obligation.evaluated_scope_digest is None:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Planning resolution requires its evaluated scope.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Planning resolution requires its evaluated scope.")
     resulting_scope = None
     if obligation.resulting_scope_revision is not None and obligation.resulting_scope_digest is not None:
         resulting_scope = _anchor_value(obligation.resulting_scope_revision, obligation.resulting_scope_digest)
@@ -743,16 +771,16 @@ def planning_resolution_outcome(impact: PlanningImpact, target: str) -> HistoryO
 
 def _outcome_mapping(value: JsonValue, keys: frozenset[str]) -> dict[str, JsonValue]:
     if not isinstance(value, dict):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome records must be JSON objects.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome records must be JSON objects.")
     result = value
     if set(result) != keys or any(not isinstance(key, str) for key in result):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome record members do not match the schema.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome record members do not match the schema.")
     return result
 
 
 def _outcome_array(value: JsonValue) -> list[JsonValue]:
     if not isinstance(value, list):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome collection must be a JSON array.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome collection must be a JSON array.")
     return value
 
 
@@ -768,13 +796,13 @@ def _outcome_string(value: JsonValue, *, nullable: bool = False) -> str | None:
     if value is None and nullable:
         return None
     if not isinstance(value, str) or not value:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome string must be nonempty.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome string must be nonempty.")
     return value
 
 
 def _outcome_integer(value: JsonValue, *, positive: bool = False) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or (positive and value < 1) or (not positive and value < 0):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome integer has an invalid type or range.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome integer has an invalid type or range.")
     return value
 
 
@@ -783,7 +811,7 @@ def _validate_anchor_record(value: JsonValue) -> tuple[int, str]:
     revision = _outcome_integer(record["scope_revision"], positive=True)
     digest = _outcome_string(record["scope_digest"])
     if digest is None or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Scope digest must be lowercase SHA-256.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope digest must be lowercase SHA-256.")
     return revision, digest
 
 
@@ -795,7 +823,7 @@ def _validate_positioned_records(
     positions = [_outcome_integer(record["position"]) for record in records]
     identities = [identity(record) for record in records]
     if positions != list(range(len(records))) or len(identities) != len(set(identities)):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome positions or identities are not canonical.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome positions or identities are not canonical.")
 
 
 def _validate_semantic_scope(value: JsonValue) -> tuple[str, str]:
@@ -815,7 +843,7 @@ def _validate_semantic_scope(value: JsonValue) -> tuple[str, str]:
     )
     record = _outcome_mapping(value, keys)
     if record["schema"] != "item-scope/v1":
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Semantic scope schema is not item-scope/v1.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Semantic scope schema is not item-scope/v1.")
     item_id = _outcome_string(record["item_id"])
     _outcome_string(record["user_label"])
     for field in ("trigger", "why_it_matters", "effect", "unlock"):
@@ -849,21 +877,21 @@ def _validate_semantic_scope(value: JsonValue) -> tuple[str, str]:
         selector = _outcome_string(artifact["selector"])
         digest = _outcome_string(artifact["content_sha256"])
         if role not in {"requirements", "plan", "design"} or kind != role or selector is None or digest is None:
-            raise DecisionError("HISTORY_OUTCOME_INVALID", "Semantic artifact identity is invalid.")
+            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Semantic artifact identity is invalid.")
         if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-            raise DecisionError("HISTORY_OUTCOME_INVALID", "Artifact digest must be lowercase SHA-256.")
+            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Artifact digest must be lowercase SHA-256.")
         artifact_positions.setdefault(role, []).append(position)
         identity = (kind, key, revision)
         if identity in artifact_identities:
-            raise DecisionError("HISTORY_OUTCOME_INVALID", "Semantic artifact identity is duplicated.")
+            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Semantic artifact identity is duplicated.")
         artifact_identities.add(identity)
         artifact_order.append((role, position, kind, key, revision))
     if any(positions != list(range(len(positions))) for positions in artifact_positions.values()):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Artifact role positions are not canonical.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Artifact role positions are not canonical.")
     if artifact_order != sorted(artifact_order):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Artifact order is not canonical.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Artifact order is not canonical.")
     if item_id is None:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Scope item ID is missing.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope item ID is missing.")
     digest = hashlib.sha256(_history_bytes(record)).hexdigest()
     return item_id, digest
 
@@ -875,7 +903,7 @@ def _validate_scope_snapshot(value: JsonValue) -> tuple[str, int, str]:
     )
     item_id, computed = _validate_semantic_scope(record["semantic"])
     if digest != computed:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Scope digest does not match its semantic value.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope digest does not match its semantic value.")
     return item_id, revision, digest
 
 
@@ -884,14 +912,14 @@ def _validate_scope_change(value: dict[str, JsonValue]) -> None:
     item_id = _outcome_string(record["item_id"])
     after_item, after_revision, after_digest = _validate_scope_snapshot(record["after"])
     if item_id != after_item:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Scope outcome item IDs do not match.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope outcome item IDs do not match.")
     if record["before"] is None:
         if after_revision != 1:
-            raise DecisionError("HISTORY_OUTCOME_INVALID", "Initial scope revision must be one.")
+            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Initial scope revision must be one.")
         return
     before_item, before_revision, before_digest = _validate_scope_snapshot(record["before"])
     if before_item != item_id or before_revision + 1 != after_revision or before_digest == after_digest:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Scope outcome anchors are not a semantic change.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope outcome anchors are not a semantic change.")
 
 
 def _validate_planning_impact_outcome(value: dict[str, JsonValue]) -> None:
@@ -908,7 +936,7 @@ def _validate_planning_impact_outcome(value: dict[str, JsonValue]) -> None:
         for value in _outcome_array(record["targets"])
     ]
     if not targets:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Planning impact targets cannot be empty.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Planning impact targets cannot be empty.")
     for target in targets:
         _validate_anchor_record(target["scope"])
     _validate_positioned_records(targets, identity=lambda value: _outcome_string(value["item_id"]) or "")
@@ -938,7 +966,7 @@ def _validate_planning_resolution_outcome(value: dict[str, JsonValue]) -> None:
     try:
         disposition = PlanningDisposition(disposition_text)
     except ValueError as error:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Planning disposition is invalid.") from error
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Planning disposition is invalid.") from error
     replacements = [
         _outcome_mapping(value, frozenset({"position", "item_id"}))
         for value in _outcome_array(record["replacements"])
@@ -949,30 +977,30 @@ def _validate_planning_resolution_outcome(value: dict[str, JsonValue]) -> None:
     if disposition == PlanningDisposition.REVISED:
         resulting_revision, resulting_digest = _validate_anchor_record(resulting)
         if resulting_revision != evaluated_revision + 1 or resulting_digest == evaluated_digest:
-            raise DecisionError("HISTORY_OUTCOME_INVALID", "Revised scope anchor is invalid.")
+            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Revised scope anchor is invalid.")
     elif resulting is not None:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Only revised resolution may carry a resulting scope.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Only revised resolution may carry a resulting scope.")
     terminal = disposition in {PlanningDisposition.DROPPED, PlanningDisposition.SUPERSEDED}
     if terminal != (outcome_evidence is not None):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Terminal outcome evidence does not match disposition.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Terminal outcome evidence does not match disposition.")
     if (disposition == PlanningDisposition.SUPERSEDED) != bool(replacements):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Replacement records do not match disposition.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Replacement records do not match disposition.")
 
 
 def validate_history_outcome(outcome_schema: str, payload: bytes) -> None:
     if not payload.endswith(b"\n"):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome JSON requires one final LF.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome JSON requires one final LF.")
     try:
         decoded = cast(JsonValue, json.loads(payload))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome is not valid UTF-8 JSON.") from error
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome is not valid UTF-8 JSON.") from error
     if not isinstance(decoded, dict):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome root must be a JSON object.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome root must be a JSON object.")
     record = decoded
     if any(not isinstance(key, str) for key in record):
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome member names must be strings.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome member names must be strings.")
     if _history_bytes(record) != payload:
-        raise DecisionError("HISTORY_OUTCOME_INVALID", "Outcome JSON is not canonical.")
+        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome JSON is not canonical.")
     match outcome_schema:
         case "item-scope-change/v1":
             _validate_scope_change(record)
@@ -981,12 +1009,12 @@ def validate_history_outcome(outcome_schema: str, payload: bytes) -> None:
         case "planning-impact-resolution/v1":
             _validate_planning_resolution_outcome(record)
         case _:
-            raise DecisionError("HISTORY_OUTCOME_INVALID", f"Unsupported outcome schema '{outcome_schema}'.")
+            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, f"Unsupported outcome schema '{outcome_schema}'.")
 
 
 def advance_scope(previous: ScopeAnchor | None, item: str, scope: ItemScope) -> ScopeAnchor:
     if scope.item_id != item:
-        raise DecisionError("ITEM_SCOPE_INVALID", "Scope item ID must match its owning item.")
+        raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Scope item ID must match its owning item.")
     digest = item_scope_digest(scope)
     if previous is not None and previous.digest == digest:
         return previous
@@ -996,46 +1024,46 @@ def advance_scope(previous: ScopeAnchor | None, item: str, scope: ItemScope) -> 
 def _validate_impact_scopes(snapshot: LedgerSnapshot, impact: PlanningImpact) -> None:
     live = snapshot.items_by_id()
     if impact.source_scope_revision < 1 or not impact.source_scope_digest:
-        raise DecisionError("PLANNING_IMPACT_INVALID", "Planning impact source scope must be an exact anchor.")
+        raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_INVALID, "Planning impact source scope must be an exact anchor.")
     if not impact.summary or not impact.evidence:
-        raise DecisionError("PLANNING_IMPACT_INVALID", "Planning impact summary and evidence must be nonempty.")
+        raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_INVALID, "Planning impact summary and evidence must be nonempty.")
     if not impact.obligations:
-        raise DecisionError("PLANNING_IMPACT_INVALID", "Planning impacts require at least one explicit target.")
+        raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_INVALID, "Planning impacts require at least one explicit target.")
     positions = [value.position for value in impact.obligations]
     targets = [value.target for value in impact.obligations]
     if sorted(positions) != list(range(len(positions))) or len(positions) != len(set(positions)):
-        raise DecisionError("PLANNING_IMPACT_INVALID", "Planning impact target positions must be gapless.")
+        raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_INVALID, "Planning impact target positions must be gapless.")
     if len(targets) != len(set(targets)) or any(target not in live for target in targets):
-        raise DecisionError("PLANNING_IMPACT_INVALID", "Planning impact targets must be unique live items.")
+        raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_INVALID, "Planning impact targets must be unique live items.")
     if any(value.observed_scope_revision < 1 or not value.observed_scope_digest for value in impact.obligations):
-        raise DecisionError("PLANNING_IMPACT_INVALID", "Every target requires an exact observed scope anchor.")
+        raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_INVALID, "Every target requires an exact observed scope anchor.")
     scopes = {value.item: value for value in snapshot.scopes}
     source_scope = scopes.get(impact.source_item)
     if source_scope is not None and (source_scope.revision, source_scope.digest) != (
         impact.source_scope_revision,
         impact.source_scope_digest,
     ):
-        raise DecisionError("PLANNING_ACTION_STALE", "Planning impact source scope changed before recording.")
+        raise DecisionError(DecisionErrorCode.PLANNING_ACTION_STALE, "Planning impact source scope changed before recording.")
     for obligation in impact.obligations:
         target_scope = scopes.get(obligation.target)
         if target_scope is not None and (target_scope.revision, target_scope.digest) != (
             obligation.observed_scope_revision,
             obligation.observed_scope_digest,
         ):
-            raise DecisionError("PLANNING_ACTION_STALE", f"Target '{obligation.target}' scope changed before recording.")
+            raise DecisionError(DecisionErrorCode.PLANNING_ACTION_STALE, f"Target '{obligation.target}' scope changed before recording.")
 
 
 def validate_planning_impact(snapshot: LedgerSnapshot, impact: PlanningImpact) -> None:
     live = snapshot.items_by_id()
     if impact.source_item not in live:
-        raise DecisionError("PLANNING_IMPACT_INVALID", "Planning impact source must be a live item.")
+        raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_INVALID, "Planning impact source must be a live item.")
     if impact.source_attempt is not None:
         attempt = snapshot.attempts_by_id().get(impact.source_attempt)
         if attempt is None or attempt.item != impact.source_item or attempt.state in {
             AttemptState.DONE,
             AttemptState.CLOSED,
         }:
-            raise DecisionError("PLANNING_IMPACT_INVALID", "Planning impact source attempt must be live and owned by the source item.")
+            raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_INVALID, "Planning impact source attempt must be live and owned by the source item.")
     _validate_impact_scopes(snapshot, impact)
 
 
@@ -1054,19 +1082,19 @@ def _validate_resolution(
             or not resulting_scope_digest
             or resulting_scope_digest == evaluated_scope_digest
         ):
-            raise DecisionError("PLANNING_RESOLUTION_INVALID", "Revised disposition requires a newer target scope.")
+            raise DecisionError(DecisionErrorCode.PLANNING_RESOLUTION_INVALID, "Revised disposition requires a newer target scope.")
     elif resulting_scope_revision is not None or resulting_scope_digest is not None:
-        raise DecisionError("PLANNING_RESOLUTION_INVALID", "Only revised disposition accepts a resulting scope anchor.")
+        raise DecisionError(DecisionErrorCode.PLANNING_RESOLUTION_INVALID, "Only revised disposition accepts a resulting scope anchor.")
     if disposition == PlanningDisposition.SUPERSEDED:
         if not replacements or len(replacements) != len(set(replacements)):
-            raise DecisionError("PLANNING_RESOLUTION_INVALID", "Superseded disposition requires ordered unique replacements.")
+            raise DecisionError(DecisionErrorCode.PLANNING_RESOLUTION_INVALID, "Superseded disposition requires ordered unique replacements.")
     elif replacements:
-        raise DecisionError("PLANNING_RESOLUTION_INVALID", "Only superseded disposition accepts replacements.")
+        raise DecisionError(DecisionErrorCode.PLANNING_RESOLUTION_INVALID, "Only superseded disposition accepts replacements.")
     if disposition in {PlanningDisposition.DROPPED, PlanningDisposition.SUPERSEDED}:
         if outcome_evidence is None or not outcome_evidence.strip():
-            raise DecisionError("PLANNING_RESOLUTION_INVALID", "Terminal disposition requires outcome evidence.")
+            raise DecisionError(DecisionErrorCode.PLANNING_RESOLUTION_INVALID, "Terminal disposition requires outcome evidence.")
     elif outcome_evidence is not None:
-        raise DecisionError("PLANNING_RESOLUTION_INVALID", "Nonterminal disposition cannot carry outcome evidence.")
+        raise DecisionError(DecisionErrorCode.PLANNING_RESOLUTION_INVALID, "Nonterminal disposition cannot carry outcome evidence.")
 
 
 def resolve_planning_obligation(
@@ -1083,13 +1111,13 @@ def resolve_planning_obligation(
 ) -> PlanningImpact:
     validate_planning_impact(snapshot, impact)
     if not reason:
-        raise DecisionError("PLANNING_RESOLUTION_INVALID", "Resolution reason must be nonempty.")
+        raise DecisionError(DecisionErrorCode.PLANNING_RESOLUTION_INVALID, "Resolution reason must be nonempty.")
     index = next((position for position, value in enumerate(impact.obligations) if value.target == target), None)
     if index is None:
-        raise DecisionError("PLANNING_OBLIGATION_NOT_FOUND", f"Target '{target}' is not part of the impact.")
+        raise DecisionError(DecisionErrorCode.PLANNING_OBLIGATION_NOT_FOUND, f"Target '{target}' is not part of the impact.")
     current = impact.obligations[index]
     if current.disposition is not None:
-        raise DecisionError("PLANNING_ACTION_STALE", f"Target '{target}' is already reconciled.")
+        raise DecisionError(DecisionErrorCode.PLANNING_ACTION_STALE, f"Target '{target}' is already reconciled.")
     evaluated_scope = next((value for value in snapshot.scopes if value.item == target), None)
     evaluated_scope_revision = (
         current.observed_scope_revision if evaluated_scope is None else evaluated_scope.revision
@@ -1133,11 +1161,11 @@ def decide_planning_resolution(
 ) -> PlanningResolutionDecision:
     item = _item(snapshot, target)
     if disposition == PlanningDisposition.DEFERRED and item.attempt is not None:
-        raise DecisionError("PLANNING_RESOLUTION_INVALID", "A target with a retained attempt must be blocked, not deferred.")
+        raise DecisionError(DecisionErrorCode.PLANNING_RESOLUTION_INVALID, "A target with a retained attempt must be blocked, not deferred.")
     if disposition == PlanningDisposition.SUPERSEDED:
         live = snapshot.items_by_id()
         if any(replacement not in live or replacement == target for replacement in replacements):
-            raise DecisionError("PLANNING_RESOLUTION_INVALID", "Replacements must be distinct live items.")
+            raise DecisionError(DecisionErrorCode.PLANNING_RESOLUTION_INVALID, "Replacements must be distinct live items.")
     updated = resolve_planning_obligation(
         snapshot,
         impact,
@@ -1162,7 +1190,7 @@ def decide_planning_resolution(
             )
     elif disposition == PlanningDisposition.DEFERRED:
         if item.state not in {WorkState.INTAKE, WorkState.READY, WorkState.BLOCKED}:
-            raise DecisionError("PLANNING_RESOLUTION_INVALID", "The target cannot be deferred from its current state.")
+            raise DecisionError(DecisionErrorCode.PLANNING_RESOLUTION_INVALID, "The target cannot be deferred from its current state.")
         item_change = ItemChange(item.item, item.state, WorkState.DEFERRED)
     elif disposition in {PlanningDisposition.DROPPED, PlanningDisposition.SUPERSEDED}:
         item_change = ItemChange(item.item, item.state, None, item.attempt, outcome_evidence)
@@ -1179,14 +1207,14 @@ def decide_planning_resolution(
 def _item(snapshot: LedgerSnapshot, item_id: str) -> QueueItem:
     item = snapshot.items_by_id().get(item_id)
     if item is None:
-        raise DecisionError("ITEM_NOT_FOUND", f"Item '{item_id}' does not exist.")
+        raise DecisionError(DecisionErrorCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
     return item
 
 
 def _attempt_item(snapshot: LedgerSnapshot, attempt: str) -> QueueItem:
     item = _item_for_attempt(snapshot, attempt)
     if item is None:
-        raise DecisionError("ATTEMPT_NOT_FOUND", f"Attempt '{attempt}' does not exist.")
+        raise DecisionError(DecisionErrorCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt}' does not exist.")
     return item
 
 
@@ -1224,9 +1252,9 @@ def _result(
 def _activate(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     item = _item(snapshot, action.subject)
     if item.state != WorkState.READY or _unresolved_target(snapshot, item.item):
-        raise DecisionError("ACTION_NOT_AVAILABLE", f"Item '{item.item}' is not ready for activation.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not ready for activation.")
     if not isinstance(value, ActivateInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Activate requires activation input.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Activate requires activation input.")
     return _result(
         action,
         now,
@@ -1239,11 +1267,11 @@ def _activate(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, 
 def _pause_or_block(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     item = _attempt_item(snapshot, action.subject)
     if item.state != WorkState.ACTIVE:
-        raise DecisionError("ACTION_NOT_AVAILABLE", "The named attempt is not active.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "The named attempt is not active.")
     if action.kind == ActionKind.PAUSE and not isinstance(value, ReasonInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Pause requires a reason.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Pause requires a reason.")
     if action.kind == ActionKind.BLOCK and not isinstance(value, BlockInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Block requires a reason and dependencies.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Block requires a reason and dependencies.")
     target = WorkState.PAUSED if action.kind == ActionKind.PAUSE else WorkState.BLOCKED
     return _result(
         action,
@@ -1257,15 +1285,15 @@ def _pause_or_block(snapshot: LedgerSnapshot, action: Action, value: TransitionI
 def _complete(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     item = _attempt_item(snapshot, action.subject)
     if item.state not in {WorkState.ACTIVE, WorkState.REVIEW}:
-        raise DecisionError("ACTION_NOT_AVAILABLE", "The named attempt is not active or in review.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "The named attempt is not active or in review.")
     if _unresolved_target(snapshot, item.item) or _unresolved_source(snapshot, item.item):
-        raise DecisionError("PLANNING_IMPACT_UNRESOLVED", "Resolve planning impacts before completion.")
+        raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_UNRESOLVED, "Resolve planning impacts before completion.")
     if _scope_stale(snapshot, item):
-        raise DecisionError("ITEM_SCOPE_STALE", "The attempt has not accepted the item's current semantic scope.")
+        raise DecisionError(DecisionErrorCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope.")
     if not isinstance(value, EvidenceInput) or not value.evidence.strip():
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Completion requires outcome evidence.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Completion requires outcome evidence.")
     if item.item in snapshot.history_items:
-        raise DecisionError("HISTORY_RECORD_EXISTS", f"History already contains '{item.item}'.")
+        raise DecisionError(DecisionErrorCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     before = AttemptState.REVIEW if item.state == WorkState.REVIEW else AttemptState.ACTIVE
     return _result(
         action,
@@ -1280,13 +1308,13 @@ def _complete(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, 
 def _close(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     item = _item(snapshot, action.subject)
     if item.state in {WorkState.ACTIVE, WorkState.REVIEW}:
-        raise DecisionError("ACTION_NOT_AVAILABLE", "Active or review work requires the acceptance path.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "Active or review work requires the acceptance path.")
     if not isinstance(value, CloseInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Close requires terminal outcome input.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Close requires terminal outcome input.")
     if value.outcome == CloseOutcome.DROPPED and any(item.item in candidate.depends_on for candidate in snapshot.items):
-        raise DecisionError("LIVE_DEPENDENTS", f"Item '{item.item}' still has live dependents.")
+        raise DecisionError(DecisionErrorCode.LIVE_DEPENDENTS, f"Item '{item.item}' still has live dependents.")
     if item.item in snapshot.history_items:
-        raise DecisionError("HISTORY_RECORD_EXISTS", f"History already contains '{item.item}'.")
+        raise DecisionError(DecisionErrorCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     attempt_change = None
     if item.attempt is not None:
         attempt = snapshot.attempts_by_id().get(item.attempt)
@@ -1305,11 +1333,11 @@ def _close(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now
 def _resume(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     item = _item(snapshot, action.subject)
     if item.state not in {WorkState.PAUSED, WorkState.BLOCKED}:
-        raise DecisionError("ACTION_NOT_AVAILABLE", f"Item '{item.item}' is not paused or blocked.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not paused or blocked.")
     if any(dependency in snapshot.items_by_id() for dependency in item.depends_on):
-        raise DecisionError("DEPENDENCY_NOT_SATISFIED", f"Item '{item.item}' still has a live dependency.")
+        raise DecisionError(DecisionErrorCode.DEPENDENCY_NOT_SATISFIED, f"Item '{item.item}' still has a live dependency.")
     if not isinstance(value, EmptyInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Resume does not accept transition data.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Resume does not accept transition data.")
     target = WorkState.ACTIVE if item.attempt is not None else WorkState.READY
     attempt_change = None
     if item.attempt is not None:
@@ -1327,13 +1355,13 @@ def _resume(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, no
 def _submit_review(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     item = _attempt_item(snapshot, action.subject)
     if item.state != WorkState.ACTIVE:
-        raise DecisionError("ACTION_NOT_AVAILABLE", "Only an active attempt can be submitted for review.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "Only an active attempt can be submitted for review.")
     if _unresolved_target(snapshot, item.item):
-        raise DecisionError("PLANNING_IMPACT_UNRESOLVED", "Resolve target planning impacts before review.")
+        raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_UNRESOLVED, "Resolve target planning impacts before review.")
     if _scope_stale(snapshot, item):
-        raise DecisionError("ITEM_SCOPE_STALE", "The attempt has not accepted the item's current semantic scope.")
+        raise DecisionError(DecisionErrorCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope.")
     if not isinstance(value, EmptyInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Submit review does not accept transition data.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Submit review does not accept transition data.")
     return _result(
         action,
         now,
@@ -1351,13 +1379,13 @@ def _return_for_correction(
 ) -> Decision:
     item = _attempt_item(snapshot, action.subject)
     if item.state != WorkState.REVIEW:
-        raise DecisionError("ACTION_NOT_AVAILABLE", "Only an attempt in review can be returned for correction.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "Only an attempt in review can be returned for correction.")
     if not isinstance(value, ReasonInput) or not value.reason.strip():
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Returning a review requires a correction reason.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Returning a review requires a correction reason.")
     authorities = tuple(candidate for candidate in snapshot.attempt_authorities if candidate.attempt == action.subject)
     if len(authorities) != 1:
         raise DecisionError(
-            "ATTEMPT_AUTHORITY_REQUIRED",
+            DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED,
             "Returning a review requires exactly one current attempt-authority record to fence.",
         )
     authority = authorities[0]
@@ -1409,57 +1437,57 @@ def _simple_item_transition(
     else:
         expected, target, valid = item.state, WorkState.BLOCKED, isinstance(value, BlockInput)
         if item.state not in {WorkState.INTAKE, WorkState.READY}:
-            raise DecisionError("ACTION_NOT_AVAILABLE", f"Item '{item.item}' cannot be blocked now.")
+            raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot be blocked now.")
     if item.state != expected:
-        raise DecisionError("ACTION_NOT_AVAILABLE", f"Item '{item.item}' cannot perform '{action.kind.value}' now.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot perform '{action.kind.value}' now.")
     if not valid:
-        raise DecisionError("TRANSITION_INPUT_INVALID", f"Input for '{action.kind.value}' is invalid.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, f"Input for '{action.kind.value}' is invalid.")
     return _result(action, now, item=item.item, item_change=ItemChange(item.item, item.state, target))
 
 
 def _defer(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     item = _item(snapshot, action.subject)
     if item.state not in {WorkState.INTAKE, WorkState.READY, WorkState.BLOCKED} or item.attempt is not None:
-        raise DecisionError("ACTION_NOT_AVAILABLE", f"Item '{item.item}' cannot be deferred now.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot be deferred now.")
     if not isinstance(value, DeferInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Defer requires a reopen condition.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Defer requires a reopen condition.")
     return _result(action, now, item=item.item, item_change=ItemChange(item.item, item.state, WorkState.DEFERRED))
 
 
 def _accept_proposal(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     _require_proposal(snapshot, action.subject)
     if not isinstance(value, AcceptProposalInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Accept proposal requires item input.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Accept proposal requires item input.")
     if value.item in snapshot.items_by_id() or value.item in snapshot.history_items:
-        raise DecisionError("ITEM_ALREADY_EXISTS", f"Item '{value.item}' already exists.")
+        raise DecisionError(DecisionErrorCode.ITEM_ALREADY_EXISTS, f"Item '{value.item}' already exists.")
     change = ItemChange(value.item, None, WorkState(value.state.value))
     return _result(action, now, item=value.item, item_change=change)
 
 
 def _require_proposal(snapshot: LedgerSnapshot, proposal: str) -> None:
     if proposal not in snapshot.proposal_revisions():
-        raise DecisionError("PROPOSAL_NOT_FOUND", f"Proposal '{proposal}' does not exist.")
+        raise DecisionError(DecisionErrorCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal}' does not exist.")
 
 
 def _merge_proposal(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     _require_proposal(snapshot, action.subject)
     if not isinstance(value, MergeProposalInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Merge proposal requires a target item.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Merge proposal requires a target item.")
     return _result(action, now)
 
 
 def _dispose_proposal(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     _require_proposal(snapshot, action.subject)
     if not isinstance(value, ReasonInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Proposal disposition requires a reason.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Proposal disposition requires a reason.")
     return _result(action, now, evidence=value.reason)
 
 
 def _transfer(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     if not snapshot.can_transfer_coordinator:
-        raise DecisionError("ACTION_NOT_AVAILABLE", "This ledger does not use transferable coordinator ownership.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "This ledger does not use transferable coordinator ownership.")
     if not isinstance(value, TransferCoordinatorInput):
-        raise DecisionError("TRANSITION_INPUT_INVALID", "Coordinator transfer requires a task and host.")
+        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Coordinator transfer requires a task and host.")
     return _result(action, now)
 
 
@@ -1487,5 +1515,5 @@ DECISION_HANDLERS: dict[ActionKind, DecisionHandler] = {
 def decide(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
     handler = DECISION_HANDLERS.get(action.kind)
     if handler is None:
-        raise DecisionError("ACTION_NOT_MUTATING", f"Action '{action.kind.value}' is not a canonical transition.")
+        raise DecisionError(DecisionErrorCode.ACTION_NOT_MUTATING, f"Action '{action.kind.value}' is not a canonical transition.")
     return handler(snapshot, action, value, now)

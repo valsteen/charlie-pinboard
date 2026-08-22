@@ -10,6 +10,7 @@ from repo_work.decisions import (
     ActorAuthority,
     AuthorizationKind,
     DecisionError,
+    DecisionErrorCode,
     ResourceToken,
     Role,
     advance_scope,
@@ -302,7 +303,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         for snapshot, kind, subject, value, code in cases:
             with self.subTest(kind=kind.value, code=code), self.assertRaises(DecisionError) as raised:
                 decide(snapshot, action(kind, subject), value, NOW)
-            self.assertEqual(code, raised.exception.code)
+            self.assertEqual(DecisionErrorCode(code), raised.exception.code)
 
 
 class ScopeAndPlanningContractTest(unittest.TestCase):
@@ -389,7 +390,7 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
         for scope in invalid:
             with self.subTest(scope=scope), self.assertRaises(DecisionError) as raised:
                 item_scope_bytes(scope)
-            self.assertEqual("ITEM_SCOPE_INVALID", raised.exception.code)
+            self.assertEqual(DecisionErrorCode.ITEM_SCOPE_INVALID, raised.exception.code)
 
     def test_planning_resolution_enforces_scope_replacement_and_evidence_contracts(self) -> None:
         snapshot = LedgerSnapshot(
@@ -519,7 +520,10 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
         for candidate, invalid_impact in cases:
             with self.subTest(impact=invalid_impact), self.assertRaises(DecisionError) as raised:
                 validate_planning_impact(candidate, invalid_impact)
-            self.assertIn(raised.exception.code, {"PLANNING_IMPACT_INVALID", "PLANNING_ACTION_STALE"})
+            self.assertIn(
+                raised.exception.code,
+                {DecisionErrorCode.PLANNING_IMPACT_INVALID, DecisionErrorCode.PLANNING_ACTION_STALE},
+            )
 
     def test_planning_dispositions_produce_exact_lifecycle_effects(self) -> None:
         source = item("source", WorkState.ACTIVE, attempt="source-1")
@@ -852,7 +856,7 @@ class ResourceAuthorityTest(unittest.TestCase):
         for name, candidate, requirements, tokens, code in validation_cases:
             with self.subTest(name=name), self.assertRaises(DecisionError) as raised:
                 validate_mutation_resources(candidate, "attempt-1", requirements, tokens)
-            self.assertEqual(code, raised.exception.code)
+            self.assertEqual(DecisionErrorCode(code), raised.exception.code)
 
         lifecycle_cases = (
             (
@@ -935,7 +939,7 @@ class ResourceAuthorityTest(unittest.TestCase):
         for name, operation, code in lifecycle_cases:
             with self.subTest(name=name), self.assertRaises(DecisionError) as raised:
                 operation()
-            self.assertEqual(code, raised.exception.code)
+            self.assertEqual(DecisionErrorCode(code), raised.exception.code)
 
 
 if __name__ == "__main__":
