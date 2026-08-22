@@ -849,6 +849,40 @@ def _interrupted_use_lease(snapshot: LedgerSnapshot, intent: MutationIntent) -> 
     return use_lease
 
 
+def _require_intent_start_observation(snapshot: LedgerSnapshot, intent: MutationIntent) -> None:
+    instance = next(
+        (value for value in snapshot.resource_instances if value.instance_id == intent.instance_id),
+        None,
+    )
+    observation = next(
+        (value for value in snapshot.resource_observations if value.instance_id == intent.instance_id),
+        None,
+    )
+    if (
+        instance is None
+        or observation is None
+        or instance.subject_revision != intent.start_instance_subject_revision
+        or observation.generation != intent.start_observation_generation
+        or observation.digest != intent.start_observation_digest
+    ):
+        raise DecisionError(
+            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+            "Interruption recovery requires the intent's exact starting observation.",
+        )
+
+
+def _require_active_intent_reservation(snapshot: LedgerSnapshot, intent: MutationIntent) -> None:
+    reservation = next(
+        (value for value in snapshot.mutation_reservations if value.reservation_id == intent.reservation_id),
+        None,
+    )
+    if reservation is None or reservation.state != ReservationState.ACTIVE:
+        raise DecisionError(
+            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+            "Ordinary interruption recovery requires the intent's exact active reservation.",
+        )
+
+
 def _validate_recovery_attempt(
     snapshot: LedgerSnapshot,
     intent: MutationIntent,
@@ -914,6 +948,8 @@ def abandon_mutation_intent(
                     DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
                     "Clean interruption requires released or expired prior use authority.",
                 )
+            _require_intent_start_observation(snapshot, intent)
+            _require_active_intent_reservation(snapshot, intent)
             _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.decided_at)
         case _ as unreachable:
             raise AssertionError(unreachable)
@@ -946,6 +982,8 @@ def reconcile_interrupted_observation(
             DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
             "Reconciliation requires interrupted prior use authority.",
         )
+    _require_intent_start_observation(snapshot, intent)
+    _require_active_intent_reservation(snapshot, intent)
     authority = _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.resolved_at)
     return _advance_intent(
         snapshot,
@@ -980,18 +1018,18 @@ def preserve_resource_state(
             "Human preserve evidence must be wholly present or absent.",
         )
     old_use = _interrupted_use_lease(snapshot, intent)
+    fence = replace(
+        old_use,
+        lease_id=value.fence_lease_id,
+        generation=old_use.generation + 1,
+        generation_kind=UseLeaseGenerationKind.FENCE,
+        state=UseLeaseState.REVOKED,
+    )
     if old_use.state == UseLeaseState.ACTIVE:
         revoked = replace(old_use, state=UseLeaseState.REVOKED)
-        fence = replace(
-            old_use,
-            lease_id=value.fence_lease_id,
-            generation=old_use.generation + 1,
-            generation_kind=UseLeaseGenerationKind.FENCE,
-            state=UseLeaseState.REVOKED,
-        )
         use_changes = (MutationUseLeaseChange(old_use, revoked), MutationUseLeaseChange(None, fence))
     else:
-        use_changes = ()
+        use_changes = (MutationUseLeaseChange(None, fence),)
     decision = _advance_intent(
         snapshot,
         intent,

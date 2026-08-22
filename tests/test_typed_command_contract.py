@@ -491,6 +491,81 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             ),
         )
         self.assertEqual(MutationIntentState.ABANDONED, clean.intent_change.after.state)
+
+        starting_observation = next(
+            candidate
+            for candidate in interrupted.resource_observations
+            if candidate.instance_id == self.capability.instance_id
+        )
+        drifted_observation = replace(
+            starting_observation,
+            generation=starting_observation.generation + 1,
+            digest="drifted-start",
+        )
+        recovery_variants = (
+            (
+                "observation-drift",
+                replace(
+                    interrupted,
+                    resource_observations=tuple(
+                        drifted_observation if candidate.instance_id == drifted_observation.instance_id else candidate
+                        for candidate in interrupted.resource_observations
+                    ),
+                ),
+                "drifted-start",
+                DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+            ),
+            (
+                "reservation-revoked-pending-recovery",
+                replace(
+                    interrupted,
+                    mutation_reservations=(
+                        replace(
+                            interrupted.mutation_reservations[0],
+                            state=ReservationState.REVOKED_PENDING_RECOVERY,
+                        ),
+                    ),
+                ),
+                SQLITE_DIGEST,
+                DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+            ),
+        )
+        for name, candidate_snapshot, current_digest, expected_code in recovery_variants:
+            with (
+                self.subTest(name=name, operation="clean-abandon"),
+                self.assertRaises(DecisionError) as rejected,
+            ):
+                abandon_mutation_intent(
+                    candidate_snapshot,
+                    AbandonMutationIntentInput(
+                        self.intent_capability,
+                        self.recovery_authority,
+                        _observation(candidate_snapshot, digest=current_digest),
+                        AbandonmentForm.CLEAN_INTERRUPTION,
+                        "The interrupted dispatch made no changes.",
+                        SQLITE_NOW + timedelta(seconds=2),
+                    ),
+                )
+            self.assertEqual(expected_code, rejected.exception.code)
+            with (
+                self.subTest(name=name, operation="reconcile"),
+                self.assertRaises(DecisionError) as rejected,
+            ):
+                reconcile_interrupted_observation(
+                    candidate_snapshot,
+                    ReconcileInterruptedObservationInput(
+                        self.intent_capability,
+                        self.recovery_authority,
+                        _observation(candidate_snapshot, digest="interrupted-output"),
+                        "change-evidence/v1",
+                        CanonicalJson(b"{}"),
+                        "evidence-digest",
+                        ResolverEvidenceDecision.ACCEPTED,
+                        SQLITE_NOW + timedelta(seconds=2),
+                    ),
+                )
+            self.assertEqual(expected_code, rejected.exception.code)
+
         with self.assertRaises(DecisionError) as unsupported:
             reconcile_interrupted_observation(
                 interrupted,
@@ -544,6 +619,32 @@ class ResourceIntentDecisionTest(unittest.TestCase):
         self.assertEqual(MutationIntentState.HUMAN_PRESERVED, preserved.intent_change.after.state)
         self.assertEqual(2, len(preserved.use_lease_changes))
         self.assertTrue(all(change.after.state.value == "revoked" for change in preserved.use_lease_changes))
+
+        for use_state in (UseLeaseState.EXPIRED, UseLeaseState.RELEASED):
+            interrupted_use = replace(self.snapshot.mutation_use_leases[-1], state=use_state)
+            interrupted = replace(recovery, mutation_use_leases=(interrupted_use,))
+            with self.subTest(use_state=use_state):
+                preserved_interruption = preserve_resource_state(
+                    interrupted,
+                    PreserveResourceStateInput(
+                        self.intent_capability,
+                        coordination,
+                        self.recovery_authority,
+                        _observation(interrupted, digest="human-kept-output"),
+                        LeaseId(f"use-fence-{use_state.value}"),
+                        "Keep the inspected changes.",
+                        None,
+                        None,
+                        None,
+                        SQLITE_NOW + timedelta(seconds=2),
+                    ),
+                )
+                self.assertEqual(1, len(preserved_interruption.use_lease_changes))
+                fence_change = preserved_interruption.use_lease_changes[0]
+                self.assertIsNone(fence_change.before)
+                self.assertEqual(interrupted_use.generation + 1, fence_change.after.generation)
+                self.assertEqual(UseLeaseGenerationKind.FENCE, fence_change.after.generation_kind)
+                self.assertEqual(UseLeaseState.REVOKED, fence_change.after.state)
 
         fenced = self._fenced_snapshot()
         resolved = resolve_fenced_resource_intent(
