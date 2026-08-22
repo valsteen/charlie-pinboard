@@ -41,8 +41,10 @@ from charlie_pinboard.domain.model import (
 )
 from charlie_pinboard.domain.resource_decisions import (
     ReservationChange,
+    ResourceReservationCounterChange,
     ResourceToken,
     ResourceUseLeaseChange,
+    current_authorizing_grant,
 )
 
 
@@ -183,6 +185,7 @@ class Decision:
     receipt: TransitionReceipt
     attempt_authority_change: AttemptAuthorityChange | None = None
     reservation_changes: tuple[ReservationChange, ...] = ()
+    reservation_counter_changes: tuple[ResourceReservationCounterChange, ...] = ()
     resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = ()
     checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None
 
@@ -389,6 +392,7 @@ def _result(
     attempt_change: AttemptChange | None = None,
     attempt_authority_change: AttemptAuthorityChange | None = None,
     reservation_changes: tuple[ReservationChange, ...] = (),
+    reservation_counter_changes: tuple[ResourceReservationCounterChange, ...] = (),
     resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = (),
     checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None,
     outcome: str | None = None,
@@ -401,6 +405,7 @@ def _result(
         _receipt(action, item, outcome or action.kind.value, evidence, now),
         attempt_authority_change,
         reservation_changes,
+        reservation_counter_changes,
         resource_use_lease_changes,
         checkpoint_acceptance_change,
     )
@@ -453,11 +458,11 @@ def _release_attempt_resources(
         ReservationChange(reservation, replace(reservation, state=ReservationState.RELEASED))
         for reservation in reservations
     )
-    reservation_ids = {reservation.reservation_id for reservation in reservations}
     use_lease_changes = tuple(
         ResourceUseLeaseChange(use_lease, replace(use_lease, state=UseLeaseState.RELEASED))
-        for use_lease in snapshot.resource_use_leases
-        if use_lease.reservation_id in reservation_ids and use_lease.state != UseLeaseState.RELEASED
+        for reservation in reservations
+        if (use_lease := current_authorizing_grant(snapshot.resource_use_leases, reservation.reservation_id))
+        is not None
     )
     return reservation_changes, use_lease_changes
 
@@ -602,22 +607,18 @@ def _return_for_correction(
         authority,
         replace(authority, lease_id=None, generation=authority.generation + 1, resources=()),
     )
-    reservations = tuple(candidate for candidate in snapshot.resource_reservations if candidate.attempt == attempt_id)
-    reservation_changes = tuple(
-        ReservationChange(
-            reservation,
-            replace(reservation, generation=reservation.generation + 1, state=ReservationState.REVOKED),
-        )
-        for reservation in reservations
+    reservation_ids = tuple(
+        reservation.reservation_id
+        for reservation in snapshot.resource_reservations
+        if reservation.attempt == attempt_id and reservation.state == ReservationState.ACTIVE
     )
-    reservation_ids = {reservation.reservation_id for reservation in reservations}
     use_lease_changes = tuple(
         ResourceUseLeaseChange(
             use_lease,
-            replace(use_lease, generation=use_lease.generation + 1, state=UseLeaseState.REVOKED),
+            replace(use_lease, state=UseLeaseState.REVOKED),
         )
-        for use_lease in snapshot.resource_use_leases
-        if use_lease.reservation_id in reservation_ids
+        for reservation_id in reservation_ids
+        if (use_lease := current_authorizing_grant(snapshot.resource_use_leases, reservation_id)) is not None
     )
     return _result(
         action,
@@ -626,7 +627,6 @@ def _return_for_correction(
         item_change=ItemChange(item.item, WorkState.REVIEW, WorkState.ACTIVE, item.attempt),
         attempt_change=AttemptChange(attempt_id, AttemptState.REVIEW, AttemptState.ACTIVE),
         attempt_authority_change=authority_change,
-        reservation_changes=reservation_changes,
         resource_use_lease_changes=use_lease_changes,
         evidence=value.reason,
     )
@@ -661,18 +661,18 @@ def _accept_checkpoint(
         authority,
         replace(authority, lease_id=None, generation=authority.generation + 1, resources=()),
     )
-    reservation_ids = {
+    reservation_ids = tuple(
         reservation.reservation_id
         for reservation in snapshot.resource_reservations
         if reservation.attempt == attempt_id and reservation.state == ReservationState.ACTIVE
-    }
+    )
     use_lease_changes = tuple(
         ResourceUseLeaseChange(
             use_lease,
             replace(use_lease, state=UseLeaseState.REVOKED),
         )
-        for use_lease in snapshot.resource_use_leases
-        if use_lease.reservation_id in reservation_ids and use_lease.state == UseLeaseState.ACTIVE
+        for reservation_id in reservation_ids
+        if (use_lease := current_authorizing_grant(snapshot.resource_use_leases, reservation_id)) is not None
     )
     return _result(
         action,

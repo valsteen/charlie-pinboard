@@ -43,6 +43,7 @@ from charlie_pinboard.domain.model import (
     ReservationState,
     ResourceAuthority,
     ResourceReservation,
+    ResourceReservationCounter,
     ResourceUseLease,
     TransferCoordinatorInput,
     TransitionInput,
@@ -470,18 +471,14 @@ def _submit_review(context: PlanContext, action: Action, _value: TransitionInput
 
 
 def _return_resource_changes(context: PlanContext, decision: Decision, timestamp: str) -> list[FileChange]:
-    use_lease_by_reservation = {change.before.reservation_id: change for change in decision.resource_use_lease_changes}
     changes: list[FileChange] = []
-    for reservation_change in decision.reservation_changes:
-        reservation = cast(ResourceReservation, reservation_change.before)
-        use_lease_change = use_lease_by_reservation[reservation.reservation_id]
-        path = context.work_root / "leases" / "resources" / f"{reservation.reservation_id}.md"
+    for use_lease_change in decision.resource_use_lease_changes:
+        path = context.work_root / "leases" / "resources" / f"{use_lease_change.before.reservation_id}.md"
         text = replace_v2_header_fields(
             path.read_text(encoding="utf-8"),
             {
-                "lease_generation": use_lease_change.after.generation,
                 "lease_expires_at": timestamp,
-                "lease_status": "revoked",
+                "lease_status": ResourceClaimStatus.RESERVED.value,
             },
         )
         changes.append(write_change(str(path.relative_to(context.work_root)), text))
@@ -839,9 +836,15 @@ def _attempt_authority_records(
     context: PlanContext,
     attempt: str,
     item: str,
-) -> tuple[AttemptAuthority, tuple[ResourceReservation, ...], tuple[ResourceUseLease, ...]]:
+) -> tuple[
+    AttemptAuthority,
+    tuple[ResourceReservationCounter, ...],
+    tuple[ResourceReservation, ...],
+    tuple[ResourceUseLease, ...],
+]:
     attempt_lease = read_attempt_lease(context.work_root, attempt)
     reservations: list[ResourceReservation] = []
+    counters: list[ResourceReservationCounter] = []
     use_leases: list[ResourceUseLease] = []
     resources: list[ResourceAuthority] = []
     directory = context.work_root / "leases" / "resources"
@@ -881,6 +884,7 @@ def _attempt_authority_records(
                     reservation_state,
                 )
             )
+            counters.append(ResourceReservationCounter(ResourceInstanceId(reservation_id), claim.generation))
             use_leases.append(
                 ResourceUseLease(
                     LeaseId(claim.lease_id),
@@ -908,6 +912,7 @@ def _attempt_authority_records(
             attempt_lease.generation,
             tuple(resources),
         ),
+        tuple(counters),
         tuple(reservations),
         tuple(use_leases),
     )
@@ -916,33 +921,38 @@ def _attempt_authority_records(
 def _decision_authority_records(
     context: PlanContext,
     action: Action,
-) -> tuple[tuple[AttemptAuthority, ...], tuple[ResourceReservation, ...], tuple[ResourceUseLease, ...]]:
+) -> tuple[
+    tuple[AttemptAuthority, ...],
+    tuple[ResourceReservationCounter, ...],
+    tuple[ResourceReservation, ...],
+    tuple[ResourceUseLease, ...],
+]:
     if action.kind in {ActionKind.ACCEPT_CHECKPOINT, ActionKind.RETURN_FOR_CORRECTION}:
         item = context.items[_attempt_index(context.items, action.subject)]
-        authority, reservations, use_leases = _attempt_authority_records(
+        authority, counters, reservations, use_leases = _attempt_authority_records(
             context,
             action.subject,
             item.item,
         )
-        return (authority,), reservations, use_leases
+        return (authority,), counters, reservations, use_leases
     if action.kind == ActionKind.COMPLETE and context.queue.header.get("schema") == SCHEMA_V2:
         item = context.items[_attempt_index(context.items, action.subject)]
-        authority, reservations, use_leases = _attempt_authority_records(
+        authority, counters, reservations, use_leases = _attempt_authority_records(
             context,
             action.subject,
             item.item,
         )
-        return (authority,), reservations, use_leases
+        return (authority,), counters, reservations, use_leases
     if action.kind == ActionKind.CLOSE and context.queue.header.get("schema") == SCHEMA_V2:
         item = context.items[_item_index(context.items, action.subject)]
         if item.attempt is not None:
-            authority, reservations, use_leases = _attempt_authority_records(
+            authority, counters, reservations, use_leases = _attempt_authority_records(
                 context,
                 item.attempt,
                 item.item,
             )
-            return (authority,), reservations, use_leases
-    return (), (), ()
+            return (authority,), counters, reservations, use_leases
+    return (), (), (), ()
 
 
 def plan_transition(work_root: Path, project_root: Path, action: Action, value: TransitionInput) -> ChangeSet:
@@ -970,7 +980,12 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
         if inbox.is_dir()
         else ()
     )
-    attempt_authorities, resource_reservations, resource_use_leases = _decision_authority_records(context, action)
+    (
+        attempt_authorities,
+        resource_reservation_counters,
+        resource_reservations,
+        resource_use_leases,
+    ) = _decision_authority_records(context, action)
     history = work_root / "history" / "items"
     snapshot_items = tuple(
         WorkItem(
@@ -994,6 +1009,7 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
         proposals=proposals,
         attempt_authorities=attempt_authorities,
         history_items=tuple(ItemId(path.stem) for path in sorted(history.glob("*.md"))) if history.is_dir() else (),
+        resource_reservation_counters=resource_reservation_counters,
         resource_reservations=resource_reservations,
         resource_use_leases=resource_use_leases,
         can_transfer_coordinator=(work_root / "coordinator.json").is_file(),

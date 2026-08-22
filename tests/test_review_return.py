@@ -17,6 +17,7 @@ from charlie_pinboard.domain.model import (
     AttemptState,
     LedgerSnapshot,
     ReservationState,
+    UseLeaseGenerationKind,
     UseLeaseState,
     WorkItem,
     WorkState,
@@ -53,6 +54,9 @@ from tests.domain_support import (
 )
 from tests.domain_support import (
     resource_reservation as ResourceReservation,
+)
+from tests.domain_support import (
+    resource_reservation_counter as ResourceReservationCounter,
 )
 from tests.domain_support import (
     resource_use_lease as ResourceUseLease,
@@ -259,15 +263,55 @@ class ReviewReturnTest(unittest.TestCase):
             7,
             ReservationState.ACTIVE,
         )
+        fenced_reservation = replace(
+            held,
+            reservation_id="fenced-capture-rig--host",
+            instance_id="fenced-capture-rig--host",
+            generation=1,
+        )
         use = ResourceUseLease("use-lease", held.reservation_id, "attempt-lease", 4, 7, UseLeaseState.ACTIVE)
+        fenced_grant = ResourceUseLease(
+            "fenced-grant",
+            fenced_reservation.reservation_id,
+            "old-attempt-lease",
+            3,
+            1,
+            UseLeaseState.ACTIVE,
+            UseLeaseGenerationKind.GRANT,
+        )
+        later_fence = replace(
+            fenced_grant,
+            lease_id="later-fence",
+            generation=2,
+            state=UseLeaseState.REVOKED,
+            generation_kind=UseLeaseGenerationKind.FENCE,
+        )
+        historical_grant = ResourceUseLease(
+            "old-grant",
+            held.reservation_id,
+            "old-attempt-lease",
+            3,
+            5,
+            UseLeaseState.REVOKED,
+            UseLeaseGenerationKind.GRANT,
+        )
+        historical_fence = ResourceUseLease(
+            "old-fence",
+            held.reservation_id,
+            "old-attempt-lease",
+            3,
+            6,
+            UseLeaseState.REVOKED,
+            UseLeaseGenerationKind.FENCE,
+        )
         snapshot = LedgerSnapshot(
             "revision",
             11,
             (item,),
             attempts=(AttemptRecord("reveal-core-1", "reveal-core", AttemptState.REVIEW),),
             attempt_authorities=(authority,),
-            resource_reservations=(held,),
-            resource_use_leases=(use,),
+            resource_reservations=(held, fenced_reservation),
+            resource_use_leases=(historical_grant, historical_fence, use, fenced_grant, later_fence),
         )
         action = replace(
             make_action(ActionKind.ACCEPT_CHECKPOINT, "reveal-core-1"),
@@ -340,16 +384,64 @@ class ReviewReturnTest(unittest.TestCase):
             7,
             ReservationState.ACTIVE,
         )
+        fenced_reservation = replace(
+            held,
+            reservation_id="fenced-capture-rig--host",
+            instance_id="fenced-capture-rig--host",
+            generation=1,
+        )
         unrelated = replace(held, reservation_id="other--host", attempt="other-1")
+        historical = replace(
+            held,
+            reservation_id="old-capture-rig--host",
+            instance_id="old-capture-rig--host",
+            generation=6,
+            state=ReservationState.RELEASED,
+        )
         use = ResourceUseLease("use-lease", held.reservation_id, "attempt-lease", 4, 7, UseLeaseState.ACTIVE)
+        fenced_grant = ResourceUseLease(
+            "fenced-grant",
+            fenced_reservation.reservation_id,
+            "old-attempt-lease",
+            3,
+            1,
+            UseLeaseState.ACTIVE,
+            UseLeaseGenerationKind.GRANT,
+        )
+        later_fence = replace(
+            fenced_grant,
+            lease_id="later-fence",
+            generation=2,
+            state=UseLeaseState.REVOKED,
+            generation_kind=UseLeaseGenerationKind.FENCE,
+        )
+        historical_grant = ResourceUseLease(
+            "old-grant",
+            held.reservation_id,
+            "old-attempt-lease",
+            3,
+            5,
+            UseLeaseState.REVOKED,
+            UseLeaseGenerationKind.GRANT,
+        )
+        historical_fence = ResourceUseLease(
+            "old-fence",
+            held.reservation_id,
+            "old-attempt-lease",
+            3,
+            6,
+            UseLeaseState.REVOKED,
+            UseLeaseGenerationKind.FENCE,
+        )
         snapshot = LedgerSnapshot(
             "revision",
             11,
             (item,),
             attempts=(AttemptRecord("reveal-core-1", "reveal-core", AttemptState.REVIEW),),
             attempt_authorities=(authority,),
-            resource_reservations=(held, unrelated),
-            resource_use_leases=(use,),
+            resource_reservation_counters=(ResourceReservationCounter(held.instance_id, 7),),
+            resource_reservations=(historical, held, fenced_reservation, unrelated),
+            resource_use_leases=(historical_grant, historical_fence, use, fenced_grant, later_fence),
         )
         action = replace(
             make_action(ActionKind.RETURN_FOR_CORRECTION, "reveal-core-1"),
@@ -371,12 +463,10 @@ class ReviewReturnTest(unittest.TestCase):
             replace(authority, lease_id=None, generation=5, resources=()),
             decision.attempt_authority_change.after,
         )
+        self.assertEqual((), decision.reservation_changes)
+        self.assertEqual((), decision.reservation_counter_changes)
         self.assertEqual(
-            ((held, replace(held, generation=8, state=ReservationState.REVOKED)),),
-            tuple((change.before, change.after) for change in decision.reservation_changes),
-        )
-        self.assertEqual(
-            ((use, replace(use, generation=8, state=UseLeaseState.REVOKED)),),
+            ((use, replace(use, state=UseLeaseState.REVOKED)),),
             tuple((change.before, change.after) for change in decision.resource_use_lease_changes),
         )
         with self.assertRaisesRegex(DecisionError, "ATTEMPT_AUTHORITY_REQUIRED"):
@@ -485,8 +575,8 @@ class ReviewReturnTest(unittest.TestCase):
         self.assertEqual(fixture.review, directory.joinpath("review.md").read_bytes())
         self.assertEqual(fixture.unrelated, directory.joinpath("notes.txt").read_bytes())
         claim = read_resource_claim(fixture.root, "capture-rig", "host")
-        self.assertEqual("revoked", claim.status.value)
-        self.assertGreater(claim.generation, fixture.resource_generation)
+        self.assertEqual("reserved", claim.status.value)
+        self.assertEqual(fixture.resource_generation, claim.generation)
         with self.assertRaisesRegex(TransitionError, "LEASE_FENCED|ACTION_NOT_AVAILABLE"):
             apply_action(fixture.work, fixture.project, fixture.submit, "{}")
         with self.assertRaisesRegex(ResourceError, "LEASE_FENCED"):

@@ -15,7 +15,9 @@ from charlie_pinboard.domain.model import (
     ReservationState,
     ResourceAuthority,
     ResourceReservation,
+    ResourceReservationCounter,
     ResourceUseLease,
+    UseLeaseGenerationKind,
     UseLeaseState,
 )
 
@@ -48,9 +50,33 @@ class ResourceUseLeaseChange:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceReservationCounterChange:
+    before: ResourceReservationCounter
+    after: ResourceReservationCounter
+
+
+@dataclass(frozen=True, slots=True)
 class ResourceDecision:
     kind: ResourceDecisionKind
     changes: tuple[ReservationChange, ...]
+    counter_changes: tuple[ResourceReservationCounterChange, ...] = ()
+
+
+def _use_lease_generation(value: ResourceUseLease) -> int:
+    return value.generation
+
+
+def current_authorizing_grant(
+    use_leases: tuple[ResourceUseLease, ...],
+    reservation_id: ReservationId,
+) -> ResourceUseLease | None:
+    retained = tuple(value for value in use_leases if value.reservation_id == reservation_id)
+    if not retained:
+        return None
+    latest = max(retained, key=_use_lease_generation)
+    if latest.state != UseLeaseState.ACTIVE or latest.generation_kind != UseLeaseGenerationKind.GRANT:
+        return None
+    return latest
 
 
 def validate_mutation_resources(
@@ -105,20 +131,14 @@ def validate_mutation_resources(
                 DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
                 f"Resource '{resource_id}' is not held by this attempt authority.",
             )
-        use_lease = next(
-            (
-                value
-                for value in snapshot.resource_use_leases
-                if value.reservation_id == reservation.reservation_id
-                and value.lease_id == token.lease_id
-                and value.generation == token.generation
-                and value.attempt_lease_id == authority.lease_id
-                and value.attempt_generation == authority.generation
-                and value.state == UseLeaseState.ACTIVE
-            ),
-            None,
-        )
-        if use_lease is None:
+        use_lease = current_authorizing_grant(snapshot.resource_use_leases, reservation.reservation_id)
+        if (
+            use_lease is None
+            or use_lease.lease_id != token.lease_id
+            or use_lease.generation != token.generation
+            or use_lease.attempt_lease_id != authority.lease_id
+            or use_lease.attempt_generation != authority.generation
+        ):
             raise DecisionError(
                 DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
                 f"Resource '{resource_id}' has no current mutation lease.",
@@ -136,6 +156,26 @@ def _reservation(snapshot: LedgerSnapshot, reservation_id: ReservationId) -> Res
             f"Reservation '{reservation_id}' does not exist.",
         )
     return reservation
+
+
+def _reservation_counter(
+    snapshot: LedgerSnapshot,
+    instance_id: ResourceInstanceId,
+) -> ResourceReservationCounter:
+    counters = tuple(value for value in snapshot.resource_reservation_counters if value.instance_id == instance_id)
+    if len(counters) != 1:
+        raise DecisionError(
+            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+            f"Instance '{instance_id}' requires one reservation counter.",
+        )
+    return counters[0]
+
+
+def _advance_counter(counter: ResourceReservationCounter) -> ResourceReservationCounterChange:
+    return ResourceReservationCounterChange(
+        counter,
+        replace(counter, generation_high_water=counter.generation_high_water + 1),
+    )
 
 
 def assign_resource(
@@ -159,16 +199,26 @@ def assign_resource(
             DecisionErrorCode.RESOURCE_RESERVATION_STALE,
             "Reservation identity and generation must be current.",
         )
-    active = tuple(value for value in snapshot.resource_reservations if value.state == ReservationState.ACTIVE)
-    if any(value.instance_id == instance_id for value in active):
+    exclusive = tuple(
+        value
+        for value in snapshot.resource_reservations
+        if value.state in {ReservationState.ACTIVE, ReservationState.REVOKED_PENDING_RECOVERY}
+    )
+    if any(value.instance_id == instance_id for value in exclusive):
         raise DecisionError(
             DecisionErrorCode.RESOURCE_INSTANCE_RESERVED,
             f"Instance '{instance_id}' is already reserved.",
         )
-    if any(value.attempt == attempt and value.resource_id == resource_id for value in active):
+    if any(value.attempt == attempt and value.resource_id == resource_id for value in exclusive):
         raise DecisionError(
             DecisionErrorCode.RESOURCE_INSTANCE_RESERVED,
             "The attempt already has this resource requirement assigned.",
+        )
+    counter_change = _advance_counter(_reservation_counter(snapshot, instance_id))
+    if generation != counter_change.after.generation_high_water:
+        raise DecisionError(
+            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+            "Assignment generation must advance the instance reservation counter exactly once.",
         )
     reservation = ResourceReservation(
         reservation_id,
@@ -178,7 +228,11 @@ def assign_resource(
         generation,
         ReservationState.ACTIVE,
     )
-    return ResourceDecision(ResourceDecisionKind.ASSIGN, (ReservationChange(None, reservation),))
+    return ResourceDecision(
+        ResourceDecisionKind.ASSIGN,
+        (ReservationChange(None, reservation),),
+        (counter_change,),
+    )
 
 
 def release_resource(snapshot: LedgerSnapshot, reservation_id: ReservationId) -> ResourceDecision:
@@ -205,8 +259,13 @@ def revoke_resource(
             "Only an active reservation can be revoked.",
         )
     state = ReservationState.REVOKED_PENDING_RECOVERY if unresolved_intent else ReservationState.REVOKED
-    revoked = replace(reservation, generation=reservation.generation + 1, state=state)
-    return ResourceDecision(ResourceDecisionKind.REVOKE, (ReservationChange(reservation, revoked),))
+    revoked = replace(reservation, state=state)
+    counter_change = _advance_counter(_reservation_counter(snapshot, reservation.instance_id))
+    return ResourceDecision(
+        ResourceDecisionKind.REVOKE,
+        (ReservationChange(reservation, revoked),),
+        (counter_change,),
+    )
 
 
 def reallocate_resource(
@@ -225,12 +284,17 @@ def reallocate_resource(
             value for value in snapshot.resource_reservations if value.reservation_id != reservation_id
         ),
     )
-    assigned = assign_resource(
+    assigned_decision = assign_resource(
         remaining,
         reservation_id=replacement_id,
         resource_id=previous.resource_id,
         instance_id=instance_id,
         attempt=previous.attempt,
         generation=generation,
-    ).changes[0]
-    return ResourceDecision(ResourceDecisionKind.REALLOCATE, (released, assigned))
+    )
+    assigned = assigned_decision.changes[0]
+    return ResourceDecision(
+        ResourceDecisionKind.REALLOCATE,
+        (released, assigned),
+        assigned_decision.counter_changes,
+    )

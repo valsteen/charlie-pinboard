@@ -26,6 +26,7 @@ from charlie_pinboard.domain.model import (
     ReservationState,
     ScopeArtifact,
     Timing,
+    UseLeaseGenerationKind,
     UseLeaseState,
 )
 from charlie_pinboard.domain.model import (
@@ -66,6 +67,9 @@ from charlie_pinboard.domain.model import (
 )
 from charlie_pinboard.domain.model import (
     ResourceReservation as ResourceReservationValue,
+)
+from charlie_pinboard.domain.model import (
+    ResourceReservationCounter as ResourceReservationCounterValue,
 )
 from charlie_pinboard.domain.model import (
     ResourceUseLease as ResourceUseLeaseValue,
@@ -260,6 +264,10 @@ def resource_reservation(
     )
 
 
+def resource_reservation_counter(instance_id: str, generation_high_water: int) -> ResourceReservationCounterValue:
+    return ResourceReservationCounterValue(ResourceInstanceId(instance_id), generation_high_water)
+
+
 def resource_use_lease(
     lease_id: str,
     reservation_id: str,
@@ -267,6 +275,7 @@ def resource_use_lease(
     attempt_generation: int,
     generation: int,
     state: UseLeaseState,
+    generation_kind: UseLeaseGenerationKind = UseLeaseGenerationKind.GRANT,
 ) -> ResourceUseLeaseValue:
     return ResourceUseLeaseValue(
         LeaseId(lease_id),
@@ -275,6 +284,7 @@ def resource_use_lease(
         attempt_generation,
         generation,
         state,
+        generation_kind,
     )
 
 

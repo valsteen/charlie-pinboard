@@ -37,6 +37,7 @@ from charlie_pinboard.domain.model import (
     ReasonInput,
     ReservationState,
     ScopeArtifact,
+    UseLeaseGenerationKind,
     UseLeaseState,
     WorkItem,
     WorkState,
@@ -95,6 +96,9 @@ from tests.domain_support import (
 )
 from tests.domain_support import (
     resource_reservation as ResourceReservation,
+)
+from tests.domain_support import (
+    resource_reservation_counter as ResourceReservationCounter,
 )
 from tests.domain_support import (
     resource_token as ResourceToken,
@@ -238,16 +242,78 @@ class LifecycleDecisionTest(unittest.TestCase):
 
     def test_terminal_decisions_require_and_return_outcome_evidence(self) -> None:
         active = item("target", WorkState.REVIEW, attempt="target-1")
+        reservation = ResourceReservation(
+            "reservation-1",
+            "checkout",
+            "instance-1",
+            "target-1",
+            2,
+            ReservationState.ACTIVE,
+        )
+        fenced_reservation = replace(
+            reservation,
+            reservation_id="fenced-reservation",
+            instance_id="fenced-instance",
+            generation=1,
+        )
+        current_grant = ResourceUseLease(
+            "current-grant",
+            reservation.reservation_id,
+            "attempt-lease",
+            3,
+            5,
+            UseLeaseState.ACTIVE,
+            UseLeaseGenerationKind.GRANT,
+        )
+        historical_grant = replace(
+            current_grant,
+            lease_id="historical-grant",
+            generation=3,
+            state=UseLeaseState.REVOKED,
+        )
+        historical_fence = replace(
+            current_grant,
+            lease_id="historical-fence",
+            generation=4,
+            state=UseLeaseState.REVOKED,
+            generation_kind=UseLeaseGenerationKind.FENCE,
+        )
+        fenced_grant = replace(
+            current_grant,
+            lease_id="fenced-grant",
+            reservation_id=fenced_reservation.reservation_id,
+            generation=1,
+        )
+        later_fence = replace(
+            fenced_grant,
+            lease_id="later-fence",
+            generation=2,
+            state=UseLeaseState.REVOKED,
+            generation_kind=UseLeaseGenerationKind.FENCE,
+        )
         snapshot = LedgerSnapshot(
             "revision",
             1,
             (active,),
             attempts=(AttemptRecord("target-1", "target", AttemptState.REVIEW),),
+            resource_reservations=(reservation, fenced_reservation),
+            resource_use_leases=(historical_grant, historical_fence, current_grant, fenced_grant, later_fence),
         )
 
         completed = decide(snapshot, action(ActionKind.COMPLETE, "target-1"), EvidenceInput("review accepted"), NOW)
         self.assertEqual("review accepted", completed.receipt.evidence)
         self.assertEqual("review accepted", completed.item_change.outcome_evidence if completed.item_change else None)
+        self.assertEqual(
+            (
+                (reservation, replace(reservation, state=ReservationState.RELEASED)),
+                (fenced_reservation, replace(fenced_reservation, state=ReservationState.RELEASED)),
+            ),
+            tuple((change.before, change.after) for change in completed.reservation_changes),
+        )
+        self.assertEqual(
+            ((current_grant, replace(current_grant, state=UseLeaseState.RELEASED)),),
+            tuple((change.before, change.after) for change in completed.resource_use_lease_changes),
+        )
 
         with self.assertRaisesRegex(DecisionError, "TRANSITION_INPUT_INVALID"):
             decide(snapshot, action(ActionKind.COMPLETE, "target-1"), EmptyInput(), NOW)
@@ -1147,6 +1213,24 @@ class ResourceAuthorityTest(unittest.TestCase):
                     ),
                 ),
             ),
+            (
+                "later fence",
+                replace(
+                    snapshot,
+                    resource_use_leases=(
+                        snapshot.resource_use_leases[0],
+                        ResourceUseLease(
+                            "use-fence",
+                            "reservation-1",
+                            "attempt-lease",
+                            3,
+                            6,
+                            UseLeaseState.REVOKED,
+                            UseLeaseGenerationKind.FENCE,
+                        ),
+                    ),
+                ),
+            ),
         )
         for name, invalid_snapshot in invalid_authority:
             with self.subTest(name=name), self.assertRaises(DecisionError):
@@ -1167,38 +1251,72 @@ class ResourceAuthorityTest(unittest.TestCase):
                 ResourceInstance("instance-a", "workspace", "host-a", 1),
                 ResourceInstance("instance-b", "workspace", "host-a", 1),
             ),
+            resource_reservation_counters=(
+                ResourceReservationCounter("instance-a", 0),
+                ResourceReservationCounter("instance-b", 0),
+            ),
         )
-        assigned = (
-            assign_resource(
-                snapshot,
-                reservation_id="reservation-a",
-                resource_id="workspace",
-                instance_id="instance-a",
-                attempt="attempt-1",
-                generation=1,
-            )
-            .changes[0]
-            .after
+        assignment = assign_resource(
+            snapshot,
+            reservation_id="reservation-a",
+            resource_id="workspace",
+            instance_id="instance-a",
+            attempt="attempt-1",
+            generation=1,
         )
-        with_reservation = replace(snapshot, resource_reservations=(assigned,))
+        assigned = assignment.changes[0].after
+        self.assertEqual(
+            ((ResourceReservationCounter("instance-a", 0), ResourceReservationCounter("instance-a", 1)),),
+            tuple((change.before, change.after) for change in assignment.counter_changes),
+        )
+        with_reservation = replace(
+            snapshot,
+            resource_reservations=(assigned,),
+            resource_reservation_counters=(
+                assignment.counter_changes[0].after,
+                ResourceReservationCounter("instance-b", 0),
+            ),
+        )
 
         self.assertEqual(
             ReservationState.RELEASED, release_resource(with_reservation, "reservation-a").changes[0].after.state
         )
+        revoked = revoke_resource(with_reservation, "reservation-a", unresolved_intent=True)
+        self.assertEqual(ReservationState.REVOKED_PENDING_RECOVERY, revoked.changes[0].after.state)
+        self.assertEqual(assigned.generation, revoked.changes[0].after.generation)
         self.assertEqual(
-            ReservationState.REVOKED_PENDING_RECOVERY,
-            revoke_resource(with_reservation, "reservation-a", unresolved_intent=True).changes[0].after.state,
+            ((ResourceReservationCounter("instance-a", 1), ResourceReservationCounter("instance-a", 2)),),
+            tuple((change.before, change.after) for change in revoked.counter_changes),
         )
+        quarantined_snapshot = replace(with_reservation, resource_reservations=(revoked.changes[0].after,))
+        quarantine_conflicts = (
+            ("same instance", "instance-a", "attempt-2"),
+            ("same attempt requirement", "instance-b", "attempt-1"),
+        )
+        for name, instance_id, attempt in quarantine_conflicts:
+            with self.subTest(quarantine=name), self.assertRaisesRegex(DecisionError, "RESOURCE_INSTANCE_RESERVED"):
+                assign_resource(
+                    quarantined_snapshot,
+                    reservation_id="quarantine-conflict",
+                    resource_id="workspace",
+                    instance_id=instance_id,
+                    attempt=attempt,
+                    generation=2 if instance_id == "instance-a" else 1,
+                )
         reallocated = reallocate_resource(
             with_reservation,
             "reservation-a",
             replacement_id="reservation-b",
             instance_id="instance-b",
-            generation=2,
+            generation=1,
         )
         self.assertEqual(
             (ReservationState.RELEASED, ReservationState.ACTIVE),
             tuple(change.after.state for change in reallocated.changes),
+        )
+        self.assertEqual(
+            ((ResourceReservationCounter("instance-b", 0), ResourceReservationCounter("instance-b", 1)),),
+            tuple((change.before, change.after) for change in reallocated.counter_changes),
         )
 
     def test_resource_rejections_distinguish_identity_reservation_instance_and_lease_failures(self) -> None:
@@ -1224,6 +1342,7 @@ class ResourceAuthorityTest(unittest.TestCase):
             attempt_authorities=(authority,),
             resource_definitions=(ResourceDefinition("checkout", "git-checkout"),),
             resource_instances=(ResourceInstance("instance-1", "checkout", "host-a", 4),),
+            resource_reservation_counters=(ResourceReservationCounter("instance-1", 2),),
             resource_reservations=(reservation,),
             resource_use_leases=(
                 ResourceUseLease("use-1", "reservation-1", "attempt-lease", 3, 5, UseLeaseState.ACTIVE),
@@ -1313,6 +1432,10 @@ class ResourceAuthorityTest(unittest.TestCase):
                         resource_instances=(
                             *snapshot.resource_instances,
                             ResourceInstance("instance-2", "checkout", "host-a", 4),
+                        ),
+                        resource_reservation_counters=(
+                            *snapshot.resource_reservation_counters,
+                            ResourceReservationCounter("instance-2", 0),
                         ),
                     ),
                     reservation_id="new",

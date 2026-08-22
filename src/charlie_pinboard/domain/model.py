@@ -260,6 +260,11 @@ class UseLeaseState(Enum):
     EXPIRED = "expired"
 
 
+class UseLeaseGenerationKind(Enum):
+    GRANT = "grant"
+    FENCE = "fence"
+
+
 @dataclass(frozen=True, slots=True)
 class ResourceDefinition:
     resource_id: ResourceId
@@ -285,6 +290,12 @@ class ResourceReservation:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceReservationCounter:
+    instance_id: ResourceInstanceId
+    generation_high_water: int
+
+
+@dataclass(frozen=True, slots=True)
 class ResourceUseLease:
     lease_id: LeaseId
     reservation_id: ReservationId
@@ -292,6 +303,7 @@ class ResourceUseLease:
     attempt_generation: int
     generation: int
     state: UseLeaseState
+    generation_kind: UseLeaseGenerationKind = UseLeaseGenerationKind.GRANT
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +359,7 @@ class LedgerSnapshot:
     planning_impacts: tuple[PlanningImpact, ...] = ()
     resource_definitions: tuple[ResourceDefinition, ...] = ()
     resource_instances: tuple[ResourceInstance, ...] = ()
+    resource_reservation_counters: tuple[ResourceReservationCounter, ...] = ()
     resource_reservations: tuple[ResourceReservation, ...] = ()
     resource_use_leases: tuple[ResourceUseLease, ...] = ()
     host_epoch: int = 0

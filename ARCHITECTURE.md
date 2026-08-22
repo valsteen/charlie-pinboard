@@ -50,7 +50,13 @@ Only identity and composition entry files sit at the package root.
 
 The application layer is the home for top-level use-case sequencing below user-facing entry points. It coordinates domain decisions through abstract capabilities and transactions. It does not decide lifecycle legality, decode JSON, render Markdown, know filesystem paths, issue SQL, or construct concrete adapters.
 
-`application/ports.py` defines the current `WorkStore` and `WorkTransaction` protocols. A port is an application-owned description of a capability the use case needs; a concrete file or SQLite store implements that capability from outside the application layer. The current production CLI does not yet run through these ports because the Markdown implementation remains inside the temporary legacy path.
+| Module | Current ownership |
+| --- | --- |
+| `stored_state.py` | Complete immutable persistence aggregate, organized into lifecycle, proposal, planning, artifact, authority, resource, history, and focus records |
+| `decision_projection.py` | Pure projection from complete stored state into the narrower `LedgerSnapshot` consumed by domain decisions |
+| `ports.py` | `WorkStore` and `WorkTransaction` protocols over complete `StoredWorkState` reads and typed decision commits |
+
+A port is an application-owned description of a capability the use case needs; a concrete file or SQLite store implements that capability from outside the application layer. `StoredWorkState` contains no SQL rows, filesystem paths, adapter exceptions, or active-record behavior. `LedgerSnapshot` remains domain-owned and storage-independent rather than becoming a lossy persistence contract. The current production CLI does not yet run through these ports because the Markdown implementation remains inside the temporary legacy path.
 
 ### Adapters
 
