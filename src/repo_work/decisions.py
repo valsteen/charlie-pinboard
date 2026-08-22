@@ -20,6 +20,7 @@ from repo_work.model import (
     ResourceAuthority,
     ResourceRequirement,
     ResourceReservation,
+    ResourceUseLease,
     ScopeAnchor,
     ScopeArtifact,
     ScopeDependency,
@@ -165,20 +166,18 @@ class AttemptChange:
 
 
 @dataclass(frozen=True, slots=True)
+class AttemptAuthorityChange:
+    before: AttemptAuthority
+    after: AttemptAuthority
+
+
+@dataclass(frozen=True, slots=True)
 class TransitionReceipt:
     action_id: str
     item: str | None
     outcome: str
     evidence: str | None
     decided_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class Decision:
-    action: Action
-    item_change: ItemChange | None
-    attempt_change: AttemptChange | None
-    receipt: TransitionReceipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +197,23 @@ class ResourceDecisionKind(Enum):
 class ReservationChange:
     before: ResourceReservation | None
     after: ResourceReservation
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceUseLeaseChange:
+    before: ResourceUseLease
+    after: ResourceUseLease
+
+
+@dataclass(frozen=True, slots=True)
+class Decision:
+    action: Action
+    item_change: ItemChange | None
+    attempt_change: AttemptChange | None
+    receipt: TransitionReceipt
+    attempt_authority_change: AttemptAuthorityChange | None = None
+    reservation_changes: tuple[ReservationChange, ...] = ()
+    resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1182,10 +1198,21 @@ def _result(
     item: str | None = None,
     item_change: ItemChange | None = None,
     attempt_change: AttemptChange | None = None,
+    attempt_authority_change: AttemptAuthorityChange | None = None,
+    reservation_changes: tuple[ReservationChange, ...] = (),
+    resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = (),
     outcome: str | None = None,
     evidence: str | None = None,
 ) -> Decision:
-    return Decision(action, item_change, attempt_change, _receipt(action, item, outcome or action.kind.value, evidence, now))
+    return Decision(
+        action,
+        item_change,
+        attempt_change,
+        _receipt(action, item, outcome or action.kind.value, evidence, now),
+        attempt_authority_change,
+        reservation_changes,
+        resource_use_lease_changes,
+    )
 
 
 def _activate(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
@@ -1321,12 +1348,43 @@ def _return_for_correction(
         raise DecisionError("ACTION_NOT_AVAILABLE", "Only an attempt in review can be returned for correction.")
     if not isinstance(value, ReasonInput) or not value.reason.strip():
         raise DecisionError("TRANSITION_INPUT_INVALID", "Returning a review requires a correction reason.")
+    authorities = tuple(candidate for candidate in snapshot.attempt_authorities if candidate.attempt == action.subject)
+    if len(authorities) != 1:
+        raise DecisionError(
+            "ATTEMPT_AUTHORITY_REQUIRED",
+            "Returning a review requires exactly one current attempt-authority record to fence.",
+        )
+    authority = authorities[0]
+    authority_change = AttemptAuthorityChange(
+        authority,
+        replace(authority, lease_id=None, generation=authority.generation + 1, resources=()),
+    )
+    reservations = tuple(candidate for candidate in snapshot.resource_reservations if candidate.attempt == action.subject)
+    reservation_changes = tuple(
+        ReservationChange(
+            reservation,
+            replace(reservation, generation=reservation.generation + 1, state=ReservationState.REVOKED),
+        )
+        for reservation in reservations
+    )
+    reservation_ids = {reservation.reservation_id for reservation in reservations}
+    use_lease_changes = tuple(
+        ResourceUseLeaseChange(
+            use_lease,
+            replace(use_lease, generation=use_lease.generation + 1, state=UseLeaseState.REVOKED),
+        )
+        for use_lease in snapshot.resource_use_leases
+        if use_lease.reservation_id in reservation_ids
+    )
     return _result(
         action,
         now,
         item=item.item,
         item_change=ItemChange(item.item, WorkState.REVIEW, WorkState.ACTIVE, item.attempt),
         attempt_change=AttemptChange(action.subject, AttemptState.REVIEW, AttemptState.ACTIVE),
+        attempt_authority_change=authority_change,
+        reservation_changes=reservation_changes,
+        resource_use_lease_changes=use_lease_changes,
         evidence=value.reason,
     )
 

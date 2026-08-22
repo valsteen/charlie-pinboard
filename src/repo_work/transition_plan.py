@@ -8,7 +8,8 @@ from typing import Literal, assert_never, cast
 
 from repo_work.actions import Action, ActionKind
 from repo_work.coordinator import CoordinatorRegistration
-from repo_work.decisions import DecisionError, decide
+from repo_work.decisions import AttemptAuthorityChange, Decision, DecisionError, decide
+from repo_work.leases import LeaseStatus, read_attempt_lease
 from repo_work.markdown import (
     CurrentPointer,
     V2HeaderValue,
@@ -29,14 +30,21 @@ from repo_work.markdown import (
 from repo_work.model import (
     SCHEMA_V1,
     SCHEMA_V2,
+    AttemptAuthority,
     AttemptRecord,
     LedgerSnapshot,
     ProposalRecord,
     Queue,
     QueueItem,
+    ReservationState,
+    ResourceAuthority,
+    ResourceReservation,
+    ResourceUseLease,
+    UseLeaseState,
     WorkState,
 )
 from repo_work.proposals import Proposal, ProposalDispositionKind, ProposalHistory, read_proposal
+from repo_work.resources import read_resource_claim
 from repo_work.transaction_store import ChangeSet, FileChange, delete_change, write_bytes_change, write_change
 from repo_work.transition_input import (
     AcceptProposalInput,
@@ -67,6 +75,7 @@ class PlanContext:
     project_root: Path
     queue: Queue
     current: CurrentPointer
+    decision: Decision | None = None
 
     @property
     def items(self) -> list[QueueItem]:
@@ -419,33 +428,19 @@ def _submit_review(context: PlanContext, action: Action, _value: TransitionInput
     return ChangeSet(tuple(changes))
 
 
-def _integer_header(path: Path, field: str) -> int:
-    value = parse_header(path).get(field)
-    if not isinstance(value, str):
-        raise TransitionPlanError("LEASE_INVALID", f"'{path}' has no {field}.")
-    try:
-        result = int(value)
-    except ValueError as error:
-        raise TransitionPlanError("LEASE_INVALID", f"'{path}' has an invalid {field}.") from error
-    if result < 0:
-        raise TransitionPlanError("LEASE_INVALID", f"'{path}' has a negative {field}.")
-    return result
-
-
-def _return_resource_changes(context: PlanContext, attempt: str, timestamp: str) -> list[FileChange]:
-    directory = context.work_root / "leases" / "resources"
-    if not directory.is_dir():
-        return []
+def _return_resource_changes(context: PlanContext, decision: Decision, timestamp: str) -> list[FileChange]:
+    use_lease_by_reservation = {
+        change.before.reservation_id: change for change in decision.resource_use_lease_changes
+    }
     changes: list[FileChange] = []
-    for path in sorted(directory.glob("*.md")):
-        header = parse_header(path)
-        if header.get("kind") != "resource-claim" or header.get("attempt") != attempt:
-            continue
-        generation = _integer_header(path, "lease_generation")
+    for reservation_change in decision.reservation_changes:
+        reservation = cast(ResourceReservation, reservation_change.before)
+        use_lease_change = use_lease_by_reservation[reservation.reservation_id]
+        path = context.work_root / "leases" / "resources" / f"{reservation.reservation_id}.md"
         text = replace_v2_header_fields(
             path.read_text(encoding="utf-8"),
             {
-                "lease_generation": generation + 1,
+                "lease_generation": use_lease_change.after.generation,
                 "lease_expires_at": timestamp,
                 "lease_status": "revoked",
             },
@@ -454,15 +449,18 @@ def _return_resource_changes(context: PlanContext, attempt: str, timestamp: str)
     return changes
 
 
-def _return_for_correction(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
+def _return_for_correction(
+    context: PlanContext,
+    action: Action,
+    value: TransitionInput,
+) -> ChangeSet:
     value = cast(ReasonInput, value)
+    decision = cast(Decision, context.decision)
     items = context.items
     index = _attempt_index(items, action.subject)
     item = items[index]
-    if item.state != WorkState.REVIEW:
-        raise TransitionPlanError("ACTION_NOT_AVAILABLE", "Only an attempt in review can be returned for correction.")
     attempt_path = context.work_root / "attempts" / action.subject / "attempt.md"
-    generation = _integer_header(attempt_path, "lease_generation")
+    authority_change = cast(AttemptAuthorityChange, decision.attempt_authority_change)
     timestamp = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     attempt_text = replace_v2_header_fields(
         attempt_path.read_text(encoding="utf-8"),
@@ -471,7 +469,7 @@ def _return_for_correction(context: PlanContext, action: Action, value: Transiti
             "owner_task_id": "unclaimed",
             "owner_host_id": "unclaimed",
             "lease_id": "unclaimed",
-            "lease_generation": generation + 1,
+            "lease_generation": authority_change.after.generation,
             "lease_acquired_at": timestamp,
             "lease_expires_at": timestamp,
             "lease_status": "revoked",
@@ -486,7 +484,7 @@ def _return_for_correction(context: PlanContext, action: Action, value: Transiti
     )
     return ChangeSet.of(
         write_change(str(attempt_path.relative_to(context.work_root)), attempt_text),
-        *_return_resource_changes(context, action.subject, timestamp),
+        *_return_resource_changes(context, decision, timestamp),
         _queue_change(context, items),
         write_change(
             "current.md",
@@ -683,6 +681,56 @@ HANDLERS: dict[ActionKind, PlanHandler] = {
 }
 
 
+def _return_authority_records(
+    context: PlanContext,
+    attempt: str,
+    item: str,
+) -> tuple[AttemptAuthority, tuple[ResourceReservation, ...], tuple[ResourceUseLease, ...]]:
+    attempt_lease = read_attempt_lease(context.work_root, attempt)
+    reservations: list[ResourceReservation] = []
+    use_leases: list[ResourceUseLease] = []
+    resources: list[ResourceAuthority] = []
+    directory = context.work_root / "leases" / "resources"
+    if directory.is_dir():
+        for path in sorted(directory.glob("*.md")):
+            header = parse_header(path)
+            if header.get("kind") != "resource-claim" or header.get("attempt") != attempt:
+                continue
+            resource_id = header.get("resource")
+            host_id = header.get("owner_host_id")
+            if not isinstance(resource_id, str) or not isinstance(host_id, str):
+                raise TransitionPlanError("RESOURCE_CLAIM_INVALID", f"'{path}' has incomplete identity fields.")
+            claim = read_resource_claim(context.work_root, resource_id, host_id)
+            reservation_id = path.stem
+            reservations.append(
+                ResourceReservation(
+                    reservation_id,
+                    claim.resource_id,
+                    reservation_id,
+                    claim.attempt_id,
+                    claim.generation,
+                    ReservationState(claim.status.value),
+                )
+            )
+            use_leases.append(
+                ResourceUseLease(
+                    claim.lease_id,
+                    reservation_id,
+                    claim.attempt_lease_id,
+                    claim.attempt_lease_generation,
+                    claim.generation,
+                    UseLeaseState(claim.status.value),
+                )
+            )
+            if claim.status == LeaseStatus.ACTIVE:
+                resources.append(ResourceAuthority(claim.resource_id, claim.host_id, claim.lease_id, claim.generation))
+    return (
+        AttemptAuthority(attempt, item, attempt_lease.lease_id, attempt_lease.generation, tuple(resources)),
+        tuple(reservations),
+        tuple(use_leases),
+    )
+
+
 def plan_transition(work_root: Path, project_root: Path, action: Action, value: TransitionInput) -> ChangeSet:
     context = PlanContext(
         work_root,
@@ -705,6 +753,17 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
         if inbox.is_dir()
         else ()
     )
+    attempt_authorities: tuple[AttemptAuthority, ...] = ()
+    resource_reservations: tuple[ResourceReservation, ...] = ()
+    resource_use_leases: tuple[ResourceUseLease, ...] = ()
+    if action.kind == ActionKind.RETURN_FOR_CORRECTION:
+        item = context.items[_attempt_index(context.items, action.subject)]
+        authority, resource_reservations, resource_use_leases = _return_authority_records(
+            context,
+            action.subject,
+            item.item,
+        )
+        attempt_authorities = (authority,)
     history = work_root / "history" / "items"
     snapshot = LedgerSnapshot(
         revision=context.queue.revision,
@@ -712,13 +771,17 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
         items=context.queue.items,
         attempts=attempts,
         proposals=proposals,
+        attempt_authorities=attempt_authorities,
         history_items=tuple(path.stem for path in sorted(history.glob("*.md"))) if history.is_dir() else (),
+        resource_reservations=resource_reservations,
+        resource_use_leases=resource_use_leases,
         can_transfer_coordinator=(work_root / "coordinator.json").is_file(),
     )
     try:
-        decide(snapshot, action, value, datetime.now(UTC))
+        decision = decide(snapshot, action, value, datetime.now(UTC))
     except DecisionError as error:
         raise TransitionPlanError(error.code, str(error).partition(": ")[2]) from error
+    context = replace(context, decision=decision)
     changes = handler(context, action, value)
     if context.queue.header.get("schema") != SCHEMA_V2:
         return changes

@@ -4,14 +4,27 @@ import json
 import tempfile
 import unittest
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from repo_work.actions import Action, ActionError, actions_for
 from repo_work.cli import main
+from repo_work.decisions import ActionKind, AuthorizationKind, DecisionError, decide
 from repo_work.leases import acquire_attempt, acquire_coordination, release_coordination
 from repo_work.markdown import parse_attempt, parse_current, parse_header, parse_queue
 from repo_work.migration import migrate_to_v2
-from repo_work.model import AttemptState, WorkState
+from repo_work.model import (
+    AttemptAuthority,
+    AttemptRecord,
+    AttemptState,
+    LedgerSnapshot,
+    QueueItem,
+    ReservationState,
+    ResourceReservation,
+    ResourceUseLease,
+    UseLeaseState,
+    WorkState,
+)
 from repo_work.overview import read_overview
 from repo_work.resources import (
     ResourceError,
@@ -22,6 +35,7 @@ from repo_work.resources import (
 )
 from repo_work.transaction_store import CommitFailpoint, FileChange, journal_path_for
 from repo_work.transition import TransitionError, apply_action
+from repo_work.transition_input import ReasonInput
 from repo_work.validate import validate_work_state
 
 from .support import create_state
@@ -136,6 +150,64 @@ def _return_action(fixture: ReviewFixture) -> tuple[Action, str, int]:
 
 
 class ReviewReturnTest(unittest.TestCase):
+    def test_decision_fences_attempt_and_resource_authority_as_one_effect(self) -> None:
+        item = QueueItem("reveal-core", WorkState.REVIEW, None, (), "reveal-core-1", "design", "complete", "")
+        authority = AttemptAuthority("reveal-core-1", "reveal-core", "attempt-lease", 4)
+        held = ResourceReservation(
+            "capture-rig--host",
+            "capture-rig",
+            "capture-rig--host",
+            "reveal-core-1",
+            7,
+            ReservationState.ACTIVE,
+        )
+        unrelated = replace(held, reservation_id="other--host", attempt="other-1")
+        use = ResourceUseLease("use-lease", held.reservation_id, "attempt-lease", 4, 7, UseLeaseState.ACTIVE)
+        snapshot = LedgerSnapshot(
+            "revision",
+            11,
+            (item,),
+            attempts=(AttemptRecord("reveal-core-1", "reveal-core", AttemptState.REVIEW),),
+            attempt_authorities=(authority,),
+            resource_reservations=(held, unrelated),
+            resource_use_leases=(use,),
+        )
+        action = Action(
+            "return-for-correction:reveal-core-1",
+            ActionKind.RETURN_FOR_CORRECTION,
+            "reveal-core-1",
+            "Return reveal-core for correction",
+            "revision",
+            11,
+            authorization=AuthorizationKind.COORDINATION,
+        )
+
+        decision = decide(snapshot, action, ReasonInput("review.md: authority mismatch"), datetime(2026, 8, 22, tzinfo=UTC))
+
+        self.assertIsNotNone(decision.attempt_authority_change)
+        if decision.attempt_authority_change is None:
+            self.fail("return decision omitted attempt-authority fencing")
+        self.assertEqual(authority, decision.attempt_authority_change.before)
+        self.assertEqual(
+            replace(authority, lease_id=None, generation=5, resources=()),
+            decision.attempt_authority_change.after,
+        )
+        self.assertEqual(
+            ((held, replace(held, generation=8, state=ReservationState.REVOKED)),),
+            tuple((change.before, change.after) for change in decision.reservation_changes),
+        )
+        self.assertEqual(
+            ((use, replace(use, generation=8, state=UseLeaseState.REVOKED)),),
+            tuple((change.before, change.after) for change in decision.resource_use_lease_changes),
+        )
+        with self.assertRaisesRegex(DecisionError, "ATTEMPT_AUTHORITY_REQUIRED"):
+            decide(
+                replace(snapshot, attempt_authorities=()),
+                action,
+                ReasonInput("review.md: authority mismatch"),
+                datetime(2026, 8, 22, tzinfo=UTC),
+            )
+
     def test_review_action_visibility_is_role_and_state_scoped(self) -> None:
         fixture = _review_fixture()
         action, lease_id, generation = _return_action(fixture)
