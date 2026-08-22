@@ -130,6 +130,40 @@ class SQLiteStoreTest(unittest.TestCase):
             open_database(malformed, OpenMode.READ_WRITE)
         self.assertEqual(StorageErrorCode.INVALID_STATE, malformed_error.exception.code)
 
+    def test_unsupported_wal_schema_is_rejected_without_mutation(self) -> None:
+        newer_wal, _ = self._store(populated=False)
+        connection = sqlite3.connect(newer_wal)
+        try:
+            self.assertEqual("wal", connection.execute("PRAGMA journal_mode = WAL").fetchone()[0])
+            connection.execute("PRAGMA ignore_check_constraints = ON")
+            connection.execute("UPDATE project_meta SET schema_version = 2")
+            connection.commit()
+        finally:
+            connection.close()
+        before_rejection = tuple(
+            (candidate.name, candidate.read_bytes())
+            for candidate in sorted(newer_wal.parent.iterdir())
+            if candidate.is_file()
+        )
+
+        with self.assertRaises(StorageError) as newer_error:
+            open_database(newer_wal, OpenMode.READ_WRITE)
+
+        self.assertEqual(StorageErrorCode.SCHEMA_TOO_NEW, newer_error.exception.code)
+        self.assertEqual(
+            before_rejection,
+            tuple(
+                (candidate.name, candidate.read_bytes())
+                for candidate in sorted(newer_wal.parent.iterdir())
+                if candidate.is_file()
+            ),
+        )
+        mode_probe = sqlite3.connect(newer_wal)
+        try:
+            self.assertEqual("wal", mode_probe.execute("PRAGMA journal_mode").fetchone()[0])
+        finally:
+            mode_probe.close()
+
     def test_storage_error_contract_is_stable_across_real_failures(self) -> None:
         path, _store = self._store(populated=False)
 

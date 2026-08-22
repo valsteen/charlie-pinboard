@@ -42,8 +42,9 @@ class StorageError(RuntimeError):
         super().__init__(f"{code.value}: {message}")
 
 
-def _database_uri(path: Path, mode: OpenMode) -> str:
-    return f"file:{quote(str(path.absolute()), safe='/')}?mode={mode.value}"
+def _database_uri(path: Path, mode: OpenMode, *, immutable: bool = False) -> str:
+    immutable_query = "&immutable=1" if immutable else ""
+    return f"file:{quote(str(path.absolute()), safe='/')}?mode={mode.value}{immutable_query}"
 
 
 def _translate_database_error(error: sqlite3.Error, *, opening: bool = False) -> StorageError:
@@ -69,15 +70,17 @@ def _translate_database_error(error: sqlite3.Error, *, opening: bool = False) ->
     return StorageError(StorageErrorCode.OPERATION_FAILED, "The SQLite storage operation failed.")
 
 
-def _configure(connection: sqlite3.Connection, mode: OpenMode) -> None:
+def _configure_connection(connection: sqlite3.Connection) -> None:
     connection.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     connection.execute("PRAGMA foreign_keys = ON")
     enabled = connection.execute("PRAGMA foreign_keys").fetchone()
     if enabled is None or enabled[0] != 1:
         raise StorageError(StorageErrorCode.INVALID_STATE, "SQLite foreign-key enforcement is unavailable.")
-    if mode == OpenMode.READ_WRITE:
-        connection.execute("PRAGMA journal_mode = DELETE")
-        connection.execute("PRAGMA synchronous = FULL")
+
+
+def _configure_writes(connection: sqlite3.Connection) -> None:
+    connection.execute("PRAGMA journal_mode = DELETE")
+    connection.execute("PRAGMA synchronous = FULL")
 
 
 def _required_meta(connection: sqlite3.Connection) -> tuple[str, int]:
@@ -276,7 +279,8 @@ def initialize_database(roots: DurableRoots, now: datetime) -> None:
     try:
         try:
             connection = sqlite3.connect(staging, timeout=BUSY_TIMEOUT_MS / 1_000, isolation_level=None)
-            _configure(connection, OpenMode.READ_WRITE)
+            _configure_connection(connection)
+            _configure_writes(connection)
             connection.executescript(schema_bytes().decode("utf-8"))
             with write_transaction(connection):
                 timestamp = now.isoformat()
@@ -305,18 +309,26 @@ def initialize_database(roots: DurableRoots, now: datetime) -> None:
     _publish_database(staging, path)
 
 
-def open_database(path: Path, mode: OpenMode) -> sqlite3.Connection:
+def _open_verified_database(
+    path: Path,
+    mode: OpenMode,
+    *,
+    configure_writes: bool,
+    immutable: bool = False,
+) -> sqlite3.Connection:
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(
-            _database_uri(path, mode),
+            _database_uri(path, mode, immutable=immutable),
             uri=True,
             timeout=BUSY_TIMEOUT_MS / 1_000,
             isolation_level=None,
         )
         connection.row_factory = sqlite3.Row
-        _configure(connection, mode)
+        _configure_connection(connection)
         _verify_current_schema(connection)
+        if configure_writes:
+            _configure_writes(connection)
         return connection
     except StorageError:
         if connection is not None:
@@ -326,6 +338,12 @@ def open_database(path: Path, mode: OpenMode) -> sqlite3.Connection:
         if connection is not None:
             connection.close()
         raise _translate_database_error(error, opening=True) from error
+
+
+def open_database(path: Path, mode: OpenMode) -> sqlite3.Connection:
+    preflight = _open_verified_database(path, OpenMode.READ_ONLY, configure_writes=False, immutable=True)
+    preflight.close()
+    return _open_verified_database(path, mode, configure_writes=mode == OpenMode.READ_WRITE)
 
 
 @contextmanager
