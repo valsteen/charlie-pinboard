@@ -60,7 +60,17 @@ A port is an application-owned description of a capability the use case needs; a
 
 ### Adapters
 
-`adapters/files/root.py` discovers the project root from Git and derives the conventional `.codex/work` location. It owns that concrete environment interaction, not ledger legality, command presentation, Markdown parsing, or transactions. No SQLite adapter package exists in the current implementation.
+Adapters own concrete filesystem and database mechanics without deciding lifecycle legality or presenting commands.
+
+| Module | Current ownership |
+| --- | --- |
+| `files/root.py` | Git-backed project-root discovery and the conventional `.codex/work` location |
+| `files/file_io.py` | Verified durable-root creation, immutable single-file publication, and same-directory atomic replacement |
+| `sqlite/schema.sql` | The exact current `charlie-pinboard` / `sqlite-v1` relational schema |
+| `sqlite/database.py` | Raw SQLite connection configuration, exact current-schema verification, transactions, backup, synchronization, and stable storage errors |
+| `sqlite/store.py` | Relational `WorkStore` persistence for complete `StoredWorkState` reads and typed domain-decision commits |
+
+These SQLite owners are independently buildable primitives. The current production CLI does not compose them yet and continues to use the Markdown authority through `legacy`.
 
 ### Interfaces
 
@@ -128,4 +138,4 @@ There is no `repo_work` source directory, import alias, package metadata target,
 
 ## Current and future structure
 
-This document maps implemented owners. Today there is no SQLite schema module, SQLite adapter package, artifact store, query service, or SQLite-backed application service under `charlie_pinboard`. Later checkpoints may add those owners under the same dependency direction: application services and queries over application-owned ports, concrete SQLite or file adapters outside application, and interface composition at the edge. Those future modules become part of this map only when implementation exists; empty directories and diagram-only packages are intentionally absent.
+This document maps implemented owners. Today the package includes the current SQLite schema, raw database boundary, relational store, and durable single-file primitives, but no artifact service, query service, SQLite-backed application service, or interface composition for them. The Markdown-backed CLI remains authoritative. Later checkpoints may add the remaining owners under the same dependency direction: application services and queries over application-owned ports, concrete SQLite or file adapters outside application, and interface composition at the edge. Those future modules become part of this map only when implementation exists; empty directories and diagram-only packages are intentionally absent.

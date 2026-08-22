@@ -422,6 +422,14 @@ class SQLiteStoreTest(unittest.TestCase):
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         with (
+            patch("charlie_pinboard.adapters.files.file_io.Path.mkdir", side_effect=OSError("injected mkdir failure")),
+            self.assertRaises(StorageError) as creation_error,
+        ):
+            initialize_database(roots, SQLITE_NOW)
+        self.assertEqual(StorageErrorCode.IO_ERROR, creation_error.exception.code)
+        self.assertFalse(roots.database_path.exists())
+
+        with (
             patch("charlie_pinboard.adapters.files.file_io.os.fsync", side_effect=OSError("injected sync failure")),
             self.assertRaises(StorageError) as synchronization_error,
         ):
@@ -441,6 +449,14 @@ class SQLiteStoreTest(unittest.TestCase):
         ):
             create_immutable(publication, b"evidence")
         self.assertFalse(publication.exists())
+
+        cleanup_tolerant = roots.artifacts_root / "cleanup-tolerant.md"
+        with patch(
+            "charlie_pinboard.adapters.files.file_io.Path.unlink",
+            side_effect=OSError("injected staging cleanup failure"),
+        ):
+            created = create_immutable(cleanup_tolerant, b"durable evidence")
+        self.assertEqual((16, b"durable evidence"), (created.size, cleanup_tolerant.read_bytes()))
 
     def test_complete_stored_state_and_relational_contract_matrix(self) -> None:
         path, store = self._store()
@@ -659,6 +675,20 @@ class SQLiteStoreTest(unittest.TestCase):
                 use_leases=(*state.resources.use_leases[:2], replace(active_use, observation_generation=99)),
             ),
         )
+        next_attempt_anchor = replace(
+            state.authority.attempt_generations[0],
+            generation=4,
+            lease_id=LeaseId("attempt-lease-current"),
+        )
+        superseded_attempt_authority = replace(
+            state,
+            authority=replace(
+                state.authority,
+                attempt_counters=(replace(state.authority.attempt_counters[0], generation_high_water=4),),
+                attempt_generations=(*state.authority.attempt_generations, next_attempt_anchor),
+                attempt_leases=(replace(state.authority.attempt_leases[0], generation=4),),
+            ),
+        )
 
         for name, candidate in (
             ("valid attempt anchors cannot be cross-wired", crosswired_valid_attempt),
@@ -670,6 +700,7 @@ class SQLiteStoreTest(unittest.TestCase):
             ("active task use matches the host epoch", stale_host_epoch),
             ("active task use matches the instance revision", stale_instance_revision),
             ("active task use matches the locator observation", stale_observation),
+            ("active task use matches current attempt authority", superseded_attempt_authority),
         ):
             self._assert_state_rejected(name, candidate)
 

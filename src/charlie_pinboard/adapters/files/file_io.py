@@ -76,8 +76,12 @@ def ensure_directory_chain(roots: DurableRoots) -> None:
     for component in (*roots.work_components, "artifacts"):
         _validate_component(component)
         child = current / component
-        with suppress(FileExistsError):
+        try:
             child.mkdir()
+        except FileExistsError:
+            pass
+        except OSError as error:
+            raise FileIOError(f"Durable-root component could not be created: {child}") from error
         if child.is_symlink() or not child.is_dir():
             raise FileIOError(f"Durable-root component is not a real directory: {child}")
         _sync_directory(current)
@@ -98,6 +102,17 @@ def _write_and_sync(path: Path, content: bytes) -> DurableFile:
     return DurableFile(digest.hexdigest(), len(content))
 
 
+def _cleanup_staging(path: Path, parent: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+    with suppress(FileIOError):
+        _sync_directory(parent)
+
+
 def create_immutable(path: Path, content: bytes) -> DurableFile:
     parent = _verified_directory(path.parent, label="Immutable-file parent")
     staging = parent / f".repo-work-stage-{secrets.token_hex(16)}"
@@ -108,15 +123,14 @@ def create_immutable(path: Path, content: bytes) -> DurableFile:
         except FileExistsError as error:
             raise FileIOError(f"Immutable file already exists: {path}") from error
         _sync_directory(parent)
-        staging.unlink()
-        _sync_directory(parent)
+        _cleanup_staging(staging, parent)
         return result
     except FileIOError:
         raise
     except OSError as error:
         raise FileIOError(f"Immutable file could not be published: {path}") from error
     finally:
-        staging.unlink(missing_ok=True)
+        _cleanup_staging(staging, parent)
 
 
 def atomic_replace(path: Path, content: bytes) -> DurableFile:
@@ -132,4 +146,4 @@ def atomic_replace(path: Path, content: bytes) -> DurableFile:
     except OSError as error:
         raise FileIOError(f"Replacement file could not be published: {path}") from error
     finally:
-        staging.unlink(missing_ok=True)
+        _cleanup_staging(staging, parent)

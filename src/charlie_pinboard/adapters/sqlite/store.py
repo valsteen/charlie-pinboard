@@ -203,6 +203,8 @@ def _validate_use_authority(state: StoredWorkState, error_code: StorageErrorCode
     instances = {value.instance_id: value for value in state.resources.instances}
     locators = {value.instance_id: value for value in state.resources.locators}
     reservations = {value.reservation_id: value for value in state.resources.reservations}
+    attempt_leases = {value.attempt_id: value for value in state.authority.attempt_leases}
+    attempt_anchors = {(value.attempt_id, value.generation): value for value in state.authority.attempt_generations}
     use_leases_by_reservation: dict[ReservationId, dict[int, StoredResourceUseLease]] = {}
     for lease in state.resources.use_leases:
         use_leases_by_reservation.setdefault(lease.reservation_id, {})[lease.generation] = lease
@@ -222,6 +224,12 @@ def _validate_use_authority(state: StoredWorkState, error_code: StorageErrorCode
             reservation = reservations.get(reservation_id)
             instance = instances.get(lease.instance_id)
             locator = locators.get(lease.instance_id)
+            attempt_lease = attempt_leases.get(lease.attempt_id)
+            attempt_anchor = (
+                None
+                if attempt_lease is None
+                else attempt_anchors.get((attempt_lease.attempt_id, attempt_lease.generation))
+            )
             if (
                 lease.generation != latest_generation
                 or lease.generation_kind != UseLeaseGenerationKind.GRANT
@@ -233,6 +241,13 @@ def _validate_use_authority(state: StoredWorkState, error_code: StorageErrorCode
                 or locator is None
                 or lease.observation_generation != locator.observation_generation
                 or lease.observation_digest != locator.observation_digest
+                or attempt_lease is None
+                or attempt_lease.state != AttemptLeaseState.ACTIVE
+                or attempt_anchor is None
+                or lease.attempt_lease_generation != attempt_lease.generation
+                or lease.attempt_lease_id != attempt_anchor.lease_id
+                or lease.task_id != attempt_anchor.task_id
+                or lease.host_id != attempt_anchor.host_id
             ):
                 raise StorageError(error_code, "An active task-use lease contradicts current resource authority.")
 
