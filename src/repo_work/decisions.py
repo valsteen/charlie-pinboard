@@ -245,6 +245,10 @@ def validate_mutation_resources(
     required_resources: tuple[str, ...],
     tokens: tuple[ResourceToken, ...],
 ) -> None:
+    authorities = tuple(value for value in snapshot.attempt_authorities if value.attempt == attempt)
+    if len(authorities) != 1 or authorities[0].lease_id is None:
+        raise DecisionError("ATTEMPT_AUTHORITY_REQUIRED", "Mutation requires one current attempt authority.")
+    authority = authorities[0]
     if len(required_resources) != len(set(required_resources)):
         raise DecisionError("RESOURCE_REQUIREMENT_INVALID", "Required resources must be unique.")
     token_by_resource = {token.resource_id: token for token in tokens}
@@ -268,6 +272,8 @@ def validate_mutation_resources(
         token = token_by_resource[resource_id]
         if instance is None or instance.host_id != token.host_id:
             raise DecisionError("RESOURCE_INSTANCE_REQUIRED", f"Resource '{resource_id}' has no matching host-local instance.")
+        if ResourceAuthority(token.resource_id, token.host_id, token.lease_id, token.generation) not in authority.resources:
+            raise DecisionError("RESOURCE_USE_LEASE_STALE", f"Resource '{resource_id}' is not held by this attempt authority.")
         use_lease = next(
             (
                 value
@@ -275,6 +281,8 @@ def validate_mutation_resources(
                 if value.reservation_id == reservation.reservation_id
                 and value.lease_id == token.lease_id
                 and value.generation == token.generation
+                and value.attempt_lease_id == authority.lease_id
+                and value.attempt_generation == authority.generation
                 and value.state == UseLeaseState.ACTIVE
             ),
             None,
@@ -356,10 +364,8 @@ def reallocate_resource(
     instance_id: str,
     generation: int,
 ) -> ResourceDecision:
+    previous = _reservation(snapshot, reservation_id)
     released = release_resource(snapshot, reservation_id).changes[0]
-    previous = released.before
-    if previous is None:
-        raise DecisionError("RESOURCE_RESERVATION_STALE", "Reallocation requires an existing reservation.")
     remaining = replace(
         snapshot,
         resource_reservations=tuple(
