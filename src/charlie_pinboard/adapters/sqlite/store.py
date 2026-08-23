@@ -177,6 +177,12 @@ def _canonical_json(row: sqlite3.Row, key: str) -> CanonicalJson:
     return CanonicalJson(bytes(decoded))
 
 
+def _stored_json(row: sqlite3.Row, key: str) -> CanonicalJson:
+    """Return JSON bytes whose canonical whitespace is owned by the stored history schema."""
+
+    return CanonicalJson(_text(row, key).encode("utf-8"))
+
+
 def _optional_canonical_json(row: sqlite3.Row, key: str) -> CanonicalJson | None:
     value = _optional_text(row, key)
     if value is None:
@@ -729,9 +735,9 @@ class _StoredStateReader:
                     None if (task := _optional_text(row, "actor_task_id")) is None else TaskId(task),
                     None if (host := _optional_text(row, "actor_host_id")) is None else HostId(host),
                     _text(row, "input_schema"),
-                    _canonical_json(row, "input_json"),
+                    _stored_json(row, "input_json"),
                     _text(row, "outcome_schema"),
-                    _canonical_json(row, "outcome_json"),
+                    _stored_json(row, "outcome_json"),
                     _time(row, "committed_at"),
                 )
             )
@@ -1951,7 +1957,7 @@ class _StoredMutationWriter:
         _StoredStateWriter(self._connection).replace_current(expected)
         if _StoredStateReader(self._connection).read() != expected:
             raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "The stored mutation did not round-trip exactly.")
-        return mutation.receipt
+        return mutation.receipt.transition
 
 
 class _SQLiteWorkTransaction:

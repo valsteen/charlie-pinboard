@@ -15,6 +15,7 @@ from charlie_pinboard.application.mutations import (
     CoordinationAuthorityMutation,
     DependencyEditMutation,
     MutationContractError,
+    MutationReceipt,
     PlanningImpactMutation,
     PlanningResolutionMutation,
     ProposalCreationMutation,
@@ -66,6 +67,7 @@ from charlie_pinboard.domain.decisions import (
 from charlie_pinboard.domain.decisions import (
     decide as decision_outcome,
 )
+from charlie_pinboard.domain.history import HistoryOutcome, planning_impact_outcome, planning_resolution_outcome
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -173,7 +175,7 @@ class MutationPersistenceTest(unittest.TestCase):
             None,
             "mutation/v1",
             CanonicalJson(b"{}"),
-            "mutation-receipt/v1",
+            "transition-receipt/v1",
             CanonicalJson(
                 json.dumps(
                     {"evidence": receipt.evidence, "outcome": receipt.outcome},
@@ -199,6 +201,30 @@ class MutationPersistenceTest(unittest.TestCase):
 
     def _stored_receipt(self, after: StoredWorkState) -> StoredTransitionReceipt:
         return after.history.receipts[-1]
+
+    def _mutation_receipt(self, receipt: TransitionReceipt, after: StoredWorkState) -> MutationReceipt:
+        stored = self._stored_receipt(after)
+        return MutationReceipt(
+            receipt,
+            stored.history_id,
+            stored.project_revision,
+            stored.action_kind,
+            stored.subject_id,
+            stored.artifact_ref_id,
+            stored.authorization,
+            stored.actor_task_id,
+            stored.actor_host_id,
+            stored.input_schema,
+            stored.input_payload,
+        )
+
+    def _history_outcome(self, after: StoredWorkState, outcome: HistoryOutcome) -> StoredWorkState:
+        stored_receipt = replace(
+            self._stored_receipt(after),
+            outcome_schema=outcome.outcome_schema,
+            outcome_payload=CanonicalJson(outcome.payload),
+        )
+        return replace(after, history=HistoryRecords((*after.history.receipts[:-1], stored_receipt)))
 
     def test_activation_decision_retains_and_persists_creation_facts(self) -> None:
         store = self._store()
@@ -242,6 +268,7 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         self.assertEqual(13, reopened.lifecycle.project.revision)
         self.assertEqual(2, len(reopened.history.receipts))
+        self.assertEqual("transition-receipt/v1", reopened.history.receipts[-1].outcome_schema)
 
     def test_proposal_acceptance_round_trips_semantics_and_ordered_dependencies(self) -> None:
         store = self._store()
@@ -300,7 +327,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 project=replace(after.lifecycle.project, revision=14),
             ),
         )
-        mutation = DependencyEditMutation(before, invalid, receipt, self._stored_receipt(after))
+        mutation = DependencyEditMutation(before, invalid, self._mutation_receipt(receipt, after))
         with self.assertRaises(StorageError), store.write() as transaction:
             transaction.commit(mutation)
         self.assertEqual(before, store.snapshot())
@@ -310,7 +337,7 @@ class MutationPersistenceTest(unittest.TestCase):
         items[0] = replace(items[0], scope_digest="invalid")
         constrained = replace(after, lifecycle=replace(after.lifecycle, work_items=tuple(items)))
         with self.assertRaises(StorageError), store.write() as transaction:
-            transaction.commit(DependencyEditMutation(before, constrained, receipt, self._stored_receipt(after)))
+            transaction.commit(DependencyEditMutation(before, constrained, self._mutation_receipt(receipt, after)))
         self.assertEqual(before, store.snapshot())
 
     def test_two_writers_reject_the_stale_typed_mutation_without_partial_state(self) -> None:
@@ -327,7 +354,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 coordination=replace(coordination, expires_at=coordination.expires_at + timedelta(minutes=1)),
             ),
         )
-        first_mutation = CoordinationAuthorityMutation(before, after, receipt, self._stored_receipt(after))
+        first_mutation = CoordinationAuthorityMutation(before, after, self._mutation_receipt(receipt, after))
         with first.write() as transaction:
             transaction.commit(first_mutation)
 
@@ -340,7 +367,9 @@ class MutationPersistenceTest(unittest.TestCase):
             ),
         )
         stale_mutation = CoordinationAuthorityMutation(
-            before, stale_after, stale_receipt, self._stored_receipt(stale_after)
+            before,
+            stale_after,
+            self._mutation_receipt(stale_receipt, stale_after),
         )
         with self.assertRaises(StorageError), second.write() as transaction:
             transaction.commit(stale_mutation)
@@ -375,7 +404,7 @@ class MutationPersistenceTest(unittest.TestCase):
             after,
             proposals=replace(before.proposals, proposals=(*before.proposals.proposals, proposal)),
         )
-        mutation = ProposalCreationMutation(before, after, receipt, self._stored_receipt(after))
+        mutation = ProposalCreationMutation(before, after, self._mutation_receipt(receipt, after))
         with store.write() as transaction:
             transaction.commit(mutation)
         with self.assertRaises(StorageError), store.write() as transaction:
@@ -416,7 +445,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 dependencies=dependencies,
             ),
         )
-        mutation = DependencyEditMutation(before, after, receipt, self._stored_receipt(after))
+        mutation = DependencyEditMutation(before, after, self._mutation_receipt(receipt, after))
         with store.write() as transaction:
             transaction.commit(mutation)
         with self.assertRaises(StorageError), store.write() as transaction:
@@ -477,7 +506,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 ),
             ),
         )
-        mutation = ResourceRequirementEditMutation(before, after, receipt, self._stored_receipt(after))
+        mutation = ResourceRequirementEditMutation(before, after, self._mutation_receipt(receipt, after))
         with store.write() as transaction:
             transaction.commit(mutation)
         with self.assertRaises(StorageError), store.write() as transaction:
@@ -501,7 +530,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 coordination=replace(coordination, expires_at=coordination.expires_at + timedelta(minutes=1)),
             ),
         )
-        mutation = CoordinationAuthorityMutation(before, after, receipt, self._stored_receipt(after))
+        mutation = CoordinationAuthorityMutation(before, after, self._mutation_receipt(receipt, after))
         with store.write() as transaction:
             transaction.commit(mutation)
         with self.assertRaises(StorageError), store.write() as transaction:
@@ -519,7 +548,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 attempt_leases=(replace(lease, expires_at=lease.expires_at + timedelta(minutes=1)),),
             ),
         )
-        mutation = AttemptAuthorityMutation(before, after, receipt, self._stored_receipt(after))
+        mutation = AttemptAuthorityMutation(before, after, self._mutation_receipt(receipt, after))
         with store.write() as transaction:
             transaction.commit(mutation)
         with self.assertRaises(StorageError), store.write() as transaction:
@@ -536,7 +565,7 @@ class MutationPersistenceTest(unittest.TestCase):
             for value in before.resources.use_leases
         )
         after = replace(after, resources=replace(before.resources, use_leases=leases))
-        mutation = ReservationTaskUseMutation(before, after, receipt, self._stored_receipt(after))
+        mutation = ReservationTaskUseMutation(before, after, self._mutation_receipt(receipt, after))
         with store.write() as transaction:
             transaction.commit(mutation)
         with self.assertRaises(StorageError), store.write() as transaction:
@@ -598,12 +627,17 @@ class MutationPersistenceTest(unittest.TestCase):
                 before.planning.replacements,
             ),
         )
-        mutation = PlanningImpactMutation(impact, before, after, receipt, self._stored_receipt(after))
+        after = self._history_outcome(after, cast(HistoryOutcome, planning_impact_outcome(impact)))
+        mutation = PlanningImpactMutation(impact, before, after, self._mutation_receipt(receipt, after))
         with store.write() as transaction:
             transaction.commit(mutation)
         with self.assertRaises(StorageError), store.write() as transaction:
             transaction.commit(mutation)
         self.assertEqual(after, store.snapshot())
+        self.assertEqual(
+            cast(HistoryOutcome, planning_impact_outcome(impact)).payload,
+            store.snapshot().history.receipts[-1].outcome_payload,
+        )
 
         before = store.snapshot()
         receipt, common_after = self._receipt_state(before, "inspect:planning-resolution-block")
@@ -616,25 +650,42 @@ class MutationPersistenceTest(unittest.TestCase):
                 project_decision_snapshot(before),
                 recorded_impact,
                 target.item_id,
-                PlanningDisposition.BLOCKED,
-                reason="The changed outcome must be replanned before activation.",
+                PlanningDisposition.SUPERSEDED,
+                reason="The changed outcome is now owned by the replacement item.",
+                replacements=(ItemId("legacy-work"),),
+                outcome_evidence="The replacement item retains the accepted outcome.",
             ),
         )
         draft = PlanningResolutionMutation(
             resolution,
+            target.item_id,
             before,
             common_after,
-            receipt,
-            self._stored_receipt(common_after),
+            self._mutation_receipt(receipt, common_after),
         )
         resolved_after = expected_stored_state(draft)
         mutation = replace(draft, after=resolved_after)
+        with self.assertRaises(StorageError), store.write() as transaction:
+            transaction.commit(replace(mutation, target=ItemId("legacy-work")))
+        self.assertEqual(before, store.snapshot())
         with store.write() as transaction:
             transaction.commit(mutation)
         reopened_item = next(
             value for value in store.snapshot().lifecycle.work_items if value.item_id == target.item_id
         )
-        self.assertEqual(StoredWorkItemState.BLOCKED, reopened_item.state)
+        self.assertEqual(StoredWorkItemState.SUPERSEDED, reopened_item.state)
+        self.assertEqual(
+            (ItemId("legacy-work"),),
+            tuple(
+                value.replacement_item_id
+                for value in store.snapshot().planning.replacements
+                if value.impact_id == impact.impact_id
+            ),
+        )
+        self.assertEqual(
+            cast(HistoryOutcome, planning_resolution_outcome(resolution.impact, target.item_id)).payload,
+            store.snapshot().history.receipts[-1].outcome_payload,
+        )
 
     def test_resource_decisions_determine_release_and_reallocation_rows(self) -> None:
         baseline = complete_sqlite_state()
@@ -672,7 +723,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 ),
             ),
         )
-        mutation = ResourceMutation(decision, before, after, receipt, self._stored_receipt(after))
+        mutation = ResourceMutation(decision, before, after, self._mutation_receipt(receipt, after))
         with store.write() as transaction:
             transaction.commit(mutation)
         with self.assertRaises(StorageError), store.write() as transaction:
@@ -692,7 +743,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 generation=2,
             ),
         )
-        draft = ResourceMutation(decision, before, common_after, receipt, self._stored_receipt(common_after))
+        draft = ResourceMutation(decision, before, common_after, self._mutation_receipt(receipt, common_after))
         reallocated_after = expected_stored_state(draft)
         mutation = replace(draft, after=reallocated_after)
         with store.write() as transaction:
@@ -709,7 +760,7 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         self.assertEqual(2, counter.generation_high_water)
 
-    def test_planning_replacements_and_resource_intent_evidence_persist_exactly(self) -> None:
+    def test_already_resolved_planning_target_rejects_and_resource_intent_evidence_persists_exactly(self) -> None:
         store = self._store()
         before = store.snapshot()
         receipt, after = self._receipt_state(before, "inspect:planning-resolution")
@@ -725,15 +776,20 @@ class MutationPersistenceTest(unittest.TestCase):
         impact = project_decision_snapshot(before).planning_impacts[0]
         obligation = replace(impact.obligations[0], replacements=(ItemId("work-c"), ItemId("legacy-work")))
         decision = PlanningResolutionDecision(replace(impact, obligations=(obligation,)), None, None)
-        mutation = PlanningResolutionMutation(decision, before, after, receipt, self._stored_receipt(after))
-        with store.write() as transaction:
-            transaction.commit(mutation)
+        after = self._history_outcome(
+            after,
+            cast(HistoryOutcome, planning_resolution_outcome(decision.impact, ItemId("work-b"))),
+        )
+        mutation = PlanningResolutionMutation(
+            decision,
+            ItemId("work-b"),
+            before,
+            after,
+            self._mutation_receipt(receipt, after),
+        )
         with self.assertRaises(StorageError), store.write() as transaction:
             transaction.commit(mutation)
-        self.assertEqual(
-            (ItemId("work-c"), ItemId("legacy-work")),
-            tuple(value.replacement_item_id for value in store.snapshot().planning.replacements),
-        )
+        self.assertEqual(before, store.snapshot())
 
         store = self._store()
         before = store.snapshot()
@@ -756,7 +812,7 @@ class MutationPersistenceTest(unittest.TestCase):
             disposition_reason="The observed resource remained unchanged.",
         )
         decision = ResourceIntentDecision(IntentDecisionKind.ABANDON, MutationIntentChange(intent, intent_after))
-        mutation = ResourceIntentMutation(decision, before, after, receipt, self._stored_receipt(after))
+        mutation = ResourceIntentMutation(decision, before, after, self._mutation_receipt(receipt, after))
         with store.write() as transaction:
             transaction.commit(mutation)
         with self.assertRaises(StorageError), store.write() as transaction:
@@ -800,8 +856,7 @@ class MutationPersistenceTest(unittest.TestCase):
             registration,
             before,
             common_after,
-            receipt,
-            self._stored_receipt(common_after),
+            self._mutation_receipt(receipt, common_after),
         )
         registered_after = expected_stored_state(draft)
         with store.write() as transaction:
@@ -852,8 +907,7 @@ class MutationPersistenceTest(unittest.TestCase):
             advanced,
             before,
             common_after,
-            receipt,
-            self._stored_receipt(common_after),
+            self._mutation_receipt(receipt, common_after),
         )
         advanced_after = expected_stored_state(draft)
         with store.write() as transaction:
@@ -1015,13 +1069,15 @@ class MutationPersistenceTest(unittest.TestCase):
         receipt, after = self._receipt_state(before, "inspect:missing-history")
         missing_history = replace(after, history=before.history)
         with self.assertRaises(StorageError), store.write() as transaction:
-            transaction.commit(DependencyEditMutation(before, missing_history, receipt, self._stored_receipt(after)))
+            transaction.commit(DependencyEditMutation(before, missing_history, self._mutation_receipt(receipt, after)))
         self.assertEqual(before, store.snapshot())
 
         wrong_receipt = replace(after.history.receipts[-1], history_id=HistoryId(9))
         mismatched_history = replace(after, history=HistoryRecords((*before.history.receipts, wrong_receipt)))
         with self.assertRaises(StorageError), store.write() as transaction:
-            transaction.commit(DependencyEditMutation(before, mismatched_history, receipt, wrong_receipt))
+            transaction.commit(
+                DependencyEditMutation(before, mismatched_history, self._mutation_receipt(receipt, after))
+            )
         self.assertEqual(before, store.snapshot())
 
         snapshot = project_decision_snapshot(before)
@@ -1105,8 +1161,7 @@ class MutationPersistenceTest(unittest.TestCase):
                     decision,
                     before,
                     unchanged_after,
-                    receipt,
-                    self._stored_receipt(unchanged_after),
+                    self._mutation_receipt(receipt, unchanged_after),
                 )
             )
         self.assertEqual(before, store.snapshot())
@@ -1115,14 +1170,14 @@ class MutationPersistenceTest(unittest.TestCase):
         store = self._store()
         before = store.snapshot()
         receipt, common_after = self._receipt_state(before, "inspect:invalid-owned-delta")
-        stored_receipt = self._stored_receipt(common_after)
+        mutation_receipt = self._mutation_receipt(receipt, common_after)
         empty_carriers = (
-            ProposalCreationMutation(before, common_after, receipt, stored_receipt),
-            DependencyEditMutation(before, common_after, receipt, stored_receipt),
-            ResourceRequirementEditMutation(before, common_after, receipt, stored_receipt),
-            CoordinationAuthorityMutation(before, common_after, receipt, stored_receipt),
-            AttemptAuthorityMutation(before, common_after, receipt, stored_receipt),
-            ReservationTaskUseMutation(before, common_after, receipt, stored_receipt),
+            ProposalCreationMutation(before, common_after, mutation_receipt),
+            DependencyEditMutation(before, common_after, mutation_receipt),
+            ResourceRequirementEditMutation(before, common_after, mutation_receipt),
+            CoordinationAuthorityMutation(before, common_after, mutation_receipt),
+            AttemptAuthorityMutation(before, common_after, mutation_receipt),
+            ReservationTaskUseMutation(before, common_after, mutation_receipt),
         )
         for mutation in empty_carriers:
             with self.subTest(mutation=mutation), self.assertRaises(MutationContractError):
@@ -1169,7 +1224,7 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         for malformed in (fewer_items, reordered_items, changed_state, unrelated_scope):
             with self.subTest(malformed=malformed), self.assertRaises(MutationContractError):
-                expected_stored_state(DependencyEditMutation(before, malformed, receipt, stored_receipt))
+                expected_stored_state(DependencyEditMutation(before, malformed, mutation_receipt))
 
         snapshot = project_decision_snapshot(before)
         existing_impact = snapshot.planning_impacts[0]
@@ -1184,21 +1239,20 @@ class MutationPersistenceTest(unittest.TestCase):
             (),
         )
         pure_noops = (
-            PlanningImpactMutation(existing_impact, before, common_after, receipt, stored_receipt),
-            PlanningImpactMutation(empty_impact, before, common_after, receipt, stored_receipt),
+            PlanningImpactMutation(existing_impact, before, common_after, mutation_receipt),
+            PlanningImpactMutation(empty_impact, before, common_after, mutation_receipt),
             PlanningResolutionMutation(
                 PlanningResolutionDecision(existing_impact, None, None),
+                existing_impact.obligations[0].target,
                 before,
                 common_after,
-                receipt,
-                stored_receipt,
+                mutation_receipt,
             ),
             ResourceMutation(
                 ResourceDecision(ResourceDecisionKind.RELEASE, ()),
                 before,
                 common_after,
-                receipt,
-                stored_receipt,
+                mutation_receipt,
             ),
         )
         intent = snapshot.mutation_intents[0]
@@ -1206,8 +1260,7 @@ class MutationPersistenceTest(unittest.TestCase):
             ResourceIntentDecision(IntentDecisionKind.ABANDON, MutationIntentChange(intent, intent)),
             before,
             common_after,
-            receipt,
-            stored_receipt,
+            mutation_receipt,
         )
         for mutation in (*pure_noops, intent_noop):
             with self.subTest(mutation=mutation), self.assertRaises(MutationContractError):
@@ -1227,8 +1280,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 DependencyEditMutation(
                     before,
                     unrelated_after,
-                    receipt,
-                    stored_receipt,
+                    mutation_receipt,
                 )
             )
         self.assertEqual(before, store.snapshot())
@@ -1247,6 +1299,29 @@ class MutationPersistenceTest(unittest.TestCase):
             ),
         )
         accepted = after.history.receipts[-1]
+        mutation_receipt = self._mutation_receipt(receipt, after)
+        changed_identities = (
+            replace(mutation_receipt, history_id=HistoryId(9)),
+            replace(mutation_receipt, project_revision=99),
+            replace(mutation_receipt, transition=replace(receipt, action_id=ActionId("different-action"))),
+            replace(mutation_receipt, action_kind=TransitionHistoryActionKind.ACTIVATE),
+            replace(mutation_receipt, subject_id=HistorySubjectId("work-b")),
+            replace(mutation_receipt, artifact_ref_id=ArtifactRefId(1)),
+            replace(mutation_receipt, authorization=TransitionHistoryAuthorizationKind.ATTEMPT),
+            replace(mutation_receipt, actor_task_id=TaskId("different-task")),
+            replace(mutation_receipt, actor_host_id=HostId("different-host")),
+            replace(mutation_receipt, input_schema="unrelated/v9"),
+            replace(mutation_receipt, input_payload=CanonicalJson(b'{"different":true}')),
+            replace(
+                mutation_receipt,
+                transition=replace(receipt, decided_at=receipt.decided_at + timedelta(seconds=1)),
+            ),
+        )
+        for changed_identity in changed_identities:
+            with self.subTest(identity=changed_identity), self.assertRaises(StorageError), store.write() as transaction:
+                transaction.commit(CoordinationAuthorityMutation(before, after, changed_identity))
+            self.assertEqual(before, store.snapshot())
+
         changed_receipts = (
             replace(accepted, history_id=HistoryId(9)),
             replace(accepted, project_revision=99),
@@ -1268,7 +1343,11 @@ class MutationPersistenceTest(unittest.TestCase):
                 changed_after = replace(after, history=HistoryRecords((*before.history.receipts, changed_receipt)))
                 with self.assertRaises(StorageError), store.write() as transaction:
                     transaction.commit(
-                        CoordinationAuthorityMutation(before, changed_after, receipt, self._stored_receipt(after))
+                        CoordinationAuthorityMutation(
+                            before,
+                            changed_after,
+                            self._mutation_receipt(receipt, after),
+                        )
                     )
                 self.assertEqual(before, store.snapshot())
 
