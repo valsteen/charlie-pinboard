@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing
 import tempfile
 import unittest
+from dataclasses import replace
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
 from typing import cast
@@ -11,6 +12,7 @@ from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import StorageError, initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
+from charlie_pinboard.application.mutations import project_transition_mutation
 from charlie_pinboard.domain.decisions import (
     Action,
     ActionKind,
@@ -33,16 +35,18 @@ def _commit_same_pause(
     results: multiprocessing.queues.Queue[str],
 ) -> None:
     store = SQLiteWorkStore(Path(database_path))
-    snapshot = project_decision_snapshot(store.snapshot())
+    before = store.snapshot()
+    snapshot = project_decision_snapshot(before)
     actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
     actions = cast(tuple[Action, ...], available_actions(snapshot, actor))
     action = next(value for value in actions if value.kind == ActionKind.PAUSE)
     command = cast(TransitionCommand, bind_transition(action, ReasonInput("Concurrent pause.")))
     decision = cast(Decision, decide(snapshot, command, SQLITE_NOW))
+    mutation = project_transition_mutation(before, decision)
     barrier.wait()
     try:
         with store.write() as transaction:
-            transaction.commit(decision)
+            transaction.commit(mutation)
     except StorageError as error:
         results.put(error.code.value)
     else:
@@ -55,7 +59,8 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        state = complete_sqlite_state()
+        store.initialize_state(replace(state, resources=replace(state.resources, mutation_intents=())))
 
         context = multiprocessing.get_context("spawn")
         barrier = context.Barrier(2)

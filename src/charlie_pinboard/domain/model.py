@@ -295,6 +295,12 @@ class UseLeaseState(Enum):
     EXPIRED = "expired"
 
 
+class CoordinationLeaseStatus(Enum):
+    ACTIVE = "active"
+    RELEASED = "released"
+    REVOKED = "revoked"
+
+
 class UseLeaseGenerationKind(Enum):
     GRANT = "grant"
     FENCE = "fence"
@@ -304,6 +310,8 @@ class UseLeaseGenerationKind(Enum):
 class ResourceDefinition:
     resource_id: ResourceId
     kind: str
+    description: str = ""
+    subject_revision: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +384,18 @@ class CoordinationCommandAuthority:
     lease_id: LeaseId
     generation: int
     expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CoordinationLeaseAuthority:
+    host_epoch: int
+    task_id: TaskId
+    host_id: HostId
+    lease_id: LeaseId
+    generation: int
+    acquired_at: datetime
+    expires_at: datetime
+    state: CoordinationLeaseStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -557,6 +577,7 @@ class LedgerSnapshot:
     focus_item: ItemId | None = None
     focus_attempt: AttemptId | None = None
     can_transfer_coordinator: bool = False
+    coordination_lease: CoordinationLeaseAuthority | None = None
 
     def items_by_id(self) -> dict[ItemId, WorkItem]:
         return {item.item: item for item in self.items}

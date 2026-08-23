@@ -38,12 +38,15 @@ from charlie_pinboard.domain.identifiers import (
 from charlie_pinboard.domain.model import (
     ActivateInput,
     ArtifactRecord,
+    BlockInput,
     CanonicalJson,
     CommandAttemptAuthority,
     EmptyInput,
+    EvidenceInput,
     LedgerSnapshot,
     LegacyActivateInput,
     MutationIntentState,
+    ReasonInput,
     ReservationState,
     ResourceIntentCapability,
     SubmitReviewInput,
@@ -175,6 +178,7 @@ def _observation(snapshot: LedgerSnapshot, *, digest: str = SQLITE_DIGEST) -> Ob
 class TypedTransitionContractTest(unittest.TestCase):
     def test_submit_review_candidate_is_required_typed_and_preserved(self) -> None:
         state = complete_sqlite_state()
+        state = replace(state, resources=replace(state.resources, mutation_intents=()))
         snapshot = project_decision_snapshot(state)
         submit = _stored_action(snapshot)
 
@@ -370,6 +374,62 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             mutation_use_leases=(old_use, fence),
             resource_reservation_counters=(counter,),
         )
+
+    def test_planned_intent_blocks_every_attempt_lifecycle_boundary(self) -> None:
+        coordination = self.with_intent.coordination_authority
+        assert coordination is not None
+        coordinator = ActorAuthority(
+            Role.COORDINATOR,
+            AuthorizationKind.COORDINATION,
+            coordination.generation,
+            coordination.lease_id,
+        )
+        coordinator_actions = available_actions(self.with_intent, coordinator)
+        values: tuple[tuple[ActionKind, TransitionInput], ...] = (
+            (ActionKind.PAUSE, ReasonInput("Pause.")),
+            (ActionKind.BLOCK, BlockInput("Block.", ())),
+            (ActionKind.COMPLETE, EvidenceInput("Complete.")),
+        )
+        commands = [
+            bind_transition(next(action for action in coordinator_actions if action.kind == kind), value)
+            for kind, value in values
+        ]
+        commands.append(bind_transition(self.action, SubmitReviewInput(CandidateId("candidate"))))
+
+        for command in commands:
+            with self.subTest(command=type(command).__name__):
+                result = decision_outcome(self.with_intent, command, SQLITE_NOW + timedelta(seconds=1))
+                self.assertIsInstance(result, DecisionFailure)
+                self.assertEqual(DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED, result.code)
+
+    def test_attempt_lifecycle_boundaries_fence_every_current_task_use_grant(self) -> None:
+        coordination = self.snapshot.coordination_authority
+        assert coordination is not None
+        coordinator = ActorAuthority(
+            Role.COORDINATOR,
+            AuthorizationKind.COORDINATION,
+            coordination.generation,
+            coordination.lease_id,
+        )
+        coordinator_actions = available_actions(self.snapshot, coordinator)
+        commands = (
+            bind_transition(
+                next(action for action in coordinator_actions if action.kind == ActionKind.PAUSE),
+                ReasonInput("Pause."),
+            ),
+            bind_transition(
+                next(action for action in coordinator_actions if action.kind == ActionKind.BLOCK),
+                BlockInput("Block.", ()),
+            ),
+            bind_transition(self.action, SubmitReviewInput(CandidateId("candidate"))),
+        )
+
+        for command in commands:
+            with self.subTest(command=type(command).__name__):
+                result = decision_outcome(self.snapshot, command, SQLITE_NOW + timedelta(seconds=1))
+                self.assertNotIsInstance(result, DecisionFailure)
+                self.assertEqual(1, len(result.resource_use_lease_changes))
+                self.assertEqual(UseLeaseState.REVOKED, result.resource_use_lease_changes[0].after.state)
 
     def test_register_and_advance_require_exact_live_authority_and_evidence(self) -> None:
         self.assertIsNone(self.registration.intent_change.before)
@@ -762,7 +822,6 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             ResolveFencedIntentInput(
                 self.intent_capability,
                 coordination,
-                self.recovery_authority,
                 _observation(fenced),
                 2,
                 FencedIntentDisposition.UNCHANGED,
@@ -786,7 +845,6 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             ResolveFencedIntentInput(
                 self.intent_capability,
                 coordination,
-                self.recovery_authority,
                 _observation(fenced),
                 2,
                 FencedIntentDisposition.UNCHANGED,
@@ -819,7 +877,6 @@ class ResourceIntentDecisionTest(unittest.TestCase):
                 ResolveFencedIntentInput(
                     self.intent_capability,
                     coordination,
-                    self.recovery_authority,
                     changed,
                     2,
                     disposition,

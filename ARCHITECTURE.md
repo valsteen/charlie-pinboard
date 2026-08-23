@@ -45,7 +45,9 @@ Expected lifecycle, planning, resource, and history rejection over constructed d
 | `model.py` | Immutable ledger, lifecycle, resource, decoded transition-payload, and snapshot values |
 | `decisions.py` | Lifecycle and action-legality decisions |
 | `planning_decisions.py` | Pure planning-impact checks for item and attempt changes |
-| `resource_decisions.py` | Pure resource reservation and use-lease decisions |
+| `authority_decisions.py` | Pure coordination, attempt, and task-use authority lifecycle and fencing decisions |
+| `proposal_decisions.py`, `scope_decisions.py`, `resource_definition_decisions.py` | Pure proposal intake, item-scope replacement, and portable resource-definition decisions |
+| `resource_decisions.py` | Pure resource reservation, claim, use-lease, and mutation-intent decisions |
 | `history.py` | Declared canonical scope and history records, direct typed codecs, digests, and receipt relationships |
 
 ### Application
@@ -97,12 +99,12 @@ Interfaces may call application use cases, adapters, and the temporary legacy ru
 | `authority.py`, `migration.py`, `registration.py` | v1/v2 authority selection, the existing v1-to-v2 cutover, and filesystem ledger initialization |
 | `markdown.py`, `coordinator.py`, `diagnostics.py`, `validate.py` | Markdown parsing and rendering, legacy coordinator records, validation diagnostics, and whole-ledger validation |
 | `atomic.py`, `storage_layout.py`, `transaction_store.py` | Locking, confined legacy paths, change sets, commit journals, atomic writes, and recovery |
-| `leases.py`, `resources.py` | Attempt, coordination, and resource leases persisted in the current filesystem authority |
+| `leases.py`, `resources.py` | Attempt, coordination, and resource leases persisted in the current filesystem authority, plus temporary names for their independently callable store-backed application operations |
 | `actions.py`, `revisions.py` | Available-action projection and stale-subject or ledger revision calculation over current files |
-| `transition.py`, `transition_plan.py` | Filesystem-coupled mutation sequencing and translation of pure decisions into legacy file changes |
-| `proposals.py`, `overview.py`, `parallel.py`, `dispatch.py` | Filesystem-backed proposal intake, read models, concurrency previews, and worker-launch preparation, including reviewed-authority and immutable brief-review validation for cross-boundary checkpoints |
+| `transition.py`, `transition_plan.py` | Filesystem-coupled mutation sequencing and translation of pure decisions into legacy file changes; `transition.py` also exposes the temporary store-backed transition operation without changing CLI composition |
+| `proposals.py`, `overview.py`, `parallel.py`, `dispatch.py` | Filesystem-backed proposal intake, read models, concurrency previews, and worker-launch preparation, including reviewed-authority and immutable brief-review validation for cross-boundary checkpoints; `proposals.py` also exposes the temporary store-backed intake operation |
 
-The legacy package may use domain values and decisions. It does not define the future SQLite model and is not a source for new steady-state SQLite behavior.
+The four mutation-facing legacy modules expose temporary, domain-typed names for the corresponding application-service operations so callers can adopt `WorkStore` without duplicating policy. Those names are direct aliases: the legacy modules add no adapter logic, generation arithmetic, mutation construction, or error remapping. The installed CLI continues to call the existing Markdown functions. The legacy package does not define the future SQLite model and is not a source for new steady-state SQLite behavior.
 
 ## Representative flows
 
@@ -150,4 +152,4 @@ There is no `repo_work` source directory, import alias, package metadata target,
 
 ## Current and future structure
 
-This document maps implemented owners. Today the package includes the current SQLite schema, raw database boundary, relational store, durable single-file primitives, and the SQLite-backed application mutation service. It does not yet include the artifact service, query service, or interface composition for those owners. The Markdown-backed CLI remains authoritative while the application-service checkpoint completes its remaining mutation families. Later checkpoints add queries, artifact and view adapters, and interface composition under the same dependency direction. Future modules become part of this map only when implementation exists; empty directories and diagram-only packages are intentionally absent.
+This document maps implemented owners. Today the package includes the current SQLite schema, raw database boundary, relational store, durable single-file primitives, and the SQLite-backed application mutation service for lifecycle, proposal, scope, authority, planning, reservation, resource-definition, and mutation-intent operations. It does not yet include the artifact service, query service, or interface composition for those owners. The Markdown-backed CLI remains authoritative. Later checkpoints add queries, artifact and view adapters, and interface composition under the same dependency direction. Future modules become part of this map only when implementation exists; empty directories and diagram-only packages are intentionally absent.

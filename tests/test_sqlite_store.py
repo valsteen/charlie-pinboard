@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 import tempfile
 import unittest
@@ -26,7 +27,9 @@ from charlie_pinboard.adapters.sqlite.database import (
 )
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
+from charlie_pinboard.application.mutations import project_transition_mutation
 from charlie_pinboard.application.stored_state import (
+    AttemptLeaseState,
     ItemScopeRevision,
     MutationIntentState,
     PlanningObligationState,
@@ -96,13 +99,16 @@ def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) 
 
 
 class SQLiteStoreTest(unittest.TestCase):
-    def _store(self, *, populated: bool = True) -> tuple[Path, SQLiteWorkStore]:
+    def _store(self, *, populated: bool = True, with_intent: bool = True) -> tuple[Path, SQLiteWorkStore]:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
         if populated:
-            store.initialize_state(complete_sqlite_state())
+            state = complete_sqlite_state()
+            if not with_intent:
+                state = replace(state, resources=replace(state.resources, mutation_intents=()))
+            store.initialize_state(state)
         return roots.database_path, store
 
     def _assert_state_rejected(self, state_name: str, state: StoredWorkState) -> None:
@@ -114,8 +120,10 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(0, store.snapshot().lifecycle.project.revision)
 
     def test_schema_identity_initialization_backup_and_reopen_contract(self) -> None:
-        accepted = Path(".codex/topics/sqlite-storage/schema-v1.sql").read_bytes()
-        self.assertEqual(accepted, schema_bytes())
+        self.assertEqual(
+            "29dcd442025abaf83f4b0332eafa4b59723e5bb2a2512cc89e31d0efe65eb8c0",
+            hashlib.sha256(schema_bytes()).hexdigest(),
+        )
 
         path, store = self._store()
         self.assertEqual(complete_sqlite_state(), store.snapshot())
@@ -1007,8 +1015,8 @@ class SQLiteStoreTest(unittest.TestCase):
                 else:
                     self._assert_state_rejected(f"{item_state.value}/{candidate}", candidate_state)
 
-    def test_domain_decision_commit_staleness_and_failure_rollback(self) -> None:
-        _path, store = self._store()
+    def test_domain_decision_commit_staleness_and_failure_rollback(self) -> None:  # noqa: PLR0915
+        _path, store = self._store(with_intent=False)
         initial = store.snapshot()
         snapshot = project_decision_snapshot(initial)
         actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
@@ -1018,20 +1026,34 @@ class SQLiteStoreTest(unittest.TestCase):
             bind_transition(action, ReasonInput("Pause at the checkpoint boundary.")),
             SQLITE_NOW,
         )
+        mutation = project_transition_mutation(initial, decision)
 
         with store.write() as transaction:
             self.assertEqual(initial, transaction.snapshot())
-            receipt = transaction.commit(decision)
+            receipt = transaction.commit(mutation)
         committed = store.snapshot()
         self.assertEqual(ActionKind.PAUSE.value, receipt.outcome)
         self.assertEqual(13, committed.lifecycle.project.revision)
         self.assertEqual(StoredWorkItemState.PAUSED, committed.lifecycle.work_items[1].state)
         self.assertEqual(AttemptState.PAUSED, committed.lifecycle.attempts[0].state)
         self.assertEqual(TransitionHistoryActionKind.PAUSE, committed.history.receipts[-1].action_kind)
-        self.assertEqual(initial.resources, committed.resources)
+        self.assertEqual(initial.resources.reservations, committed.resources.reservations)
+        self.assertEqual(initial.resources.mutation_intents, committed.resources.mutation_intents)
+        self.assertEqual(
+            (3, "revoked"),
+            (committed.resources.use_leases[-2].generation, committed.resources.use_leases[-2].state.value),
+        )
+        self.assertEqual(
+            (4, "fence", "revoked"),
+            (
+                committed.resources.use_leases[-1].generation,
+                committed.resources.use_leases[-1].generation_kind.value,
+                committed.resources.use_leases[-1].state.value,
+            ),
+        )
 
         with self.assertRaises(StorageError) as stale, store.write() as transaction:
-            transaction.commit(decision)
+            transaction.commit(mutation)
         self.assertEqual(StorageErrorCode.STALE_WRITE, stale.exception.code)
         self.assertEqual(committed, store.snapshot())
 
@@ -1040,11 +1062,11 @@ class SQLiteStoreTest(unittest.TestCase):
             action=replace(decision.action, expected_revision="", subject_revision="stale-subject"),
         )
         with self.assertRaises(StorageError) as stale_subject, store.write() as transaction:
-            transaction.commit(stale_subject_decision)
+            transaction.commit(replace(mutation, decision=stale_subject_decision))
         self.assertEqual(StorageErrorCode.STALE_WRITE, stale_subject.exception.code)
         self.assertEqual(committed, store.snapshot())
 
-        failed_path, failed_store = self._store()
+        failed_path, failed_store = self._store(with_intent=False)
         failed_initial = failed_store.snapshot()
         failed_snapshot = project_decision_snapshot(failed_initial)
         failed_action = next(
@@ -1060,6 +1082,7 @@ class SQLiteStoreTest(unittest.TestCase):
             bind_transition(failed_action, ReasonInput("This write is interrupted.")),
             SQLITE_NOW,
         )
+        failed_mutation = project_transition_mutation(failed_initial, failed_decision)
         connection = open_database(failed_path, OpenMode.READ_WRITE)
         try:
             with write_transaction(connection):
@@ -1072,7 +1095,7 @@ class SQLiteStoreTest(unittest.TestCase):
         finally:
             connection.close()
         with self.assertRaises(StorageError), failed_store.write() as transaction:
-            transaction.commit(failed_decision)
+            transaction.commit(failed_mutation)
         cleanup = sqlite3.connect(failed_path)
         try:
             cleanup.execute("DROP TRIGGER reject_test_history")
@@ -1082,8 +1105,9 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(failed_initial, failed_store.snapshot())
 
     def test_direct_completion_commits_one_domain_decision_atomically(self) -> None:
-        _path, store = self._store()
-        snapshot = project_decision_snapshot(store.snapshot())
+        _path, store = self._store(with_intent=False)
+        before = store.snapshot()
+        snapshot = project_decision_snapshot(before)
         actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
         action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.COMPLETE)
         decision = decide(
@@ -1093,7 +1117,7 @@ class SQLiteStoreTest(unittest.TestCase):
         )
 
         with store.write() as transaction:
-            receipt = transaction.commit(decision)
+            receipt = transaction.commit(project_transition_mutation(before, decision))
 
         completed = store.snapshot()
         item = next(value for value in completed.lifecycle.work_items if value.item_id == ItemId("work-a"))
@@ -1110,13 +1134,15 @@ class SQLiteStoreTest(unittest.TestCase):
             ((1, "revoked"), (2, "revoked"), (3, "released")),
             tuple((value.generation, value.state.value) for value in use_leases),
         )
-        self.assertEqual(complete_sqlite_state().authority, completed.authority)
+        self.assertEqual(4, completed.authority.attempt_counters[0].generation_high_water)
+        self.assertEqual(AttemptLeaseState.REVOKED, completed.authority.attempt_leases[0].state)
         self.assertIsNone(completed.focus.item_id)
         self.assertIsNone(completed.focus.attempt_id)
 
     def test_review_submission_commits_exact_caller_supplied_candidate(self) -> None:
-        _path, store = self._store()
-        snapshot = project_decision_snapshot(store.snapshot())
+        _path, store = self._store(with_intent=False)
+        before = store.snapshot()
+        snapshot = project_decision_snapshot(before)
         actor = ActorAuthority(
             Role.WORKER,
             AuthorizationKind.ATTEMPT,
@@ -1134,7 +1160,7 @@ class SQLiteStoreTest(unittest.TestCase):
         )
 
         with store.write() as transaction:
-            transaction.commit(decision)
+            transaction.commit(project_transition_mutation(before, decision))
 
         committed = store.snapshot()
         attempt = committed.lifecycle.attempts[0]
@@ -1177,7 +1203,7 @@ class SQLiteStoreTest(unittest.TestCase):
         )
 
         with store.write() as transaction:
-            transaction.commit(decision)
+            transaction.commit(project_transition_mutation(review_state, decision))
 
         returned = store.snapshot()
         returned_attempt = returned.lifecycle.attempts[0]
@@ -1212,7 +1238,7 @@ class SQLiteStoreTest(unittest.TestCase):
             value for value in available_actions(revocation_snapshot, actor) if value.kind == ActionKind.PAUSE
         )
         base_decision = decide(
-            revocation_snapshot,
+            replace(revocation_snapshot, mutation_intents=()),
             bind_transition(action, ReasonInput("Persist the resource decision.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
@@ -1232,7 +1258,7 @@ class SQLiteStoreTest(unittest.TestCase):
             ),
         )
         with revocation_store.write() as transaction:
-            transaction.commit(revoke_decision)
+            transaction.commit(project_transition_mutation(transaction.snapshot(), revoke_decision))
         revoked_state = revocation_store.snapshot()
         self.assertEqual(2, revoked_state.resources.reservation_counters[1].generation_high_water)
         self.assertEqual("revoked-pending-recovery", revoked_state.resources.reservations[0].state.value)
@@ -1252,7 +1278,7 @@ class SQLiteStoreTest(unittest.TestCase):
             value for value in available_actions(reallocation_snapshot, actor) if value.kind == ActionKind.PAUSE
         )
         base_decision = decide(
-            reallocation_snapshot,
+            replace(reallocation_snapshot, mutation_intents=()),
             bind_transition(action, ReasonInput("Persist the resource reallocation.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
@@ -1278,7 +1304,7 @@ class SQLiteStoreTest(unittest.TestCase):
             ),
         )
         with reallocation_store.write() as transaction:
-            transaction.commit(reallocate_decision)
+            transaction.commit(project_transition_mutation(transaction.snapshot(), reallocate_decision))
         reallocated_state = reallocation_store.snapshot()
         self.assertEqual(
             (("reservation-a", "released"), ("reservation-b", "active")),

@@ -3,6 +3,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import assert_never
 
+from charlie_pinboard.application import service as _store_service
 from charlie_pinboard.domain.decisions import LegacyTransitionCommand
 from charlie_pinboard.legacy.actions import (
     Action,
@@ -26,6 +27,8 @@ from charlie_pinboard.legacy.transaction_store import (
     validate_change_set,
 )
 from charlie_pinboard.legacy.transition_plan import TransitionPlanError, plan_transition
+
+apply_store_transition = _store_service.execute
 
 
 class TransitionError(RuntimeError):

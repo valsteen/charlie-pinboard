@@ -4,11 +4,14 @@ from typing import Annotated
 
 import msgspec
 
+from charlie_pinboard.application import service as _store_service
 from charlie_pinboard.domain.model import SchemaV1
 from charlie_pinboard.legacy.atomic import atomic_create
 from charlie_pinboard.legacy.authority import AuthorityVersion, authority_transaction
 from charlie_pinboard.legacy.storage_layout import PathIdentityError, identity_child
 from charlie_pinboard.legacy.validate import validate_work_state
+
+create_store_proposal = _store_service.create_proposal
 
 type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
 type ProposalIdentity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]

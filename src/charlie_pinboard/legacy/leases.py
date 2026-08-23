@@ -4,6 +4,7 @@ from enum import Enum
 from pathlib import Path
 from uuid import uuid4
 
+from charlie_pinboard.application import service as _store_service
 from charlie_pinboard.domain.model import AttemptState
 from charlie_pinboard.legacy.atomic import atomic_write_text
 from charlie_pinboard.legacy.authority import Authority, AuthorityVersion, authority_transaction
@@ -17,6 +18,9 @@ from charlie_pinboard.legacy.markdown import (
     replace_v2_header_fields,
 )
 from charlie_pinboard.legacy.storage_layout import PathIdentityError, identity_child
+
+change_store_attempt_authority = _store_service.change_attempt_authority
+change_store_coordination_authority = _store_service.change_coordination_authority
 
 
 class LeaseError(RuntimeError):

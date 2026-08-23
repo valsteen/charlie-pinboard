@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Never, assert_never, overload
+from typing import assert_never, overload
 
 import msgspec
 
@@ -31,10 +31,11 @@ from charlie_pinboard.application.mutations import (
     PlanningResolutionMutation,
     ProposalCreationMutation,
     ReservationTaskUseMutation,
+    ResourceDefinitionEditMutation,
     ResourceIntentMutation,
     ResourceMutation,
     ResourceRequirementEditMutation,
-    StoredStateMutation,
+    TransitionMutation,
     TransitionReceiptMutation,
     expected_stored_state,
 )
@@ -89,13 +90,8 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryAuthorizationKind,
 )
 from charlie_pinboard.domain.decisions import (
-    ActionKind,
-    AuthorizationKind,
-    Decision,
-    ProposalDispositionKind,
     TransitionReceipt,
 )
-from charlie_pinboard.domain.history import encode_transition_receipt_outcome
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -121,7 +117,6 @@ from charlie_pinboard.domain.model import (
     Timing,
     UseLeaseGenerationKind,
     UseLeaseState,
-    WorkState,
 )
 
 
@@ -1380,574 +1375,20 @@ class _StoredStateWriter:
         )
 
 
-def _terminal_state(decision: Decision) -> StoredWorkItemState:
-    if decision.action.kind == ActionKind.COMPLETE:
-        return StoredWorkItemState.DONE
-    try:
-        state = StoredWorkItemState(decision.receipt.outcome)
-    except ValueError as error:
-        raise StorageError(
-            StorageErrorCode.INVARIANT_VIOLATION,
-            "A terminal decision did not name a terminal stored-work state.",
-        ) from error
-    if state not in {
-        StoredWorkItemState.DONE,
-        StoredWorkItemState.SUPERSEDED,
-        StoredWorkItemState.DROPPED,
-    }:
-        raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "The decision outcome is not terminal.")
-    return state
-
-
-def _live_stored_state(state: WorkState) -> StoredWorkItemState:
-    return StoredWorkItemState(state.value)
-
-
-def _next_focus_action(kind: ActionKind, terminal: bool) -> str:
-    if terminal:
-        return "select"
-    if kind in {ActionKind.PAUSE, ActionKind.BLOCK, ActionKind.BLOCK_ITEM}:
-        return "resume"
-    if kind == ActionKind.SUBMIT_REVIEW:
-        return "review"
-    if kind in {ActionKind.RETURN_FOR_CORRECTION, ActionKind.RESUME, ActionKind.REOPEN, ActionKind.MARK_READY}:
-        return "continue"
-    if kind == ActionKind.DEFER:
-        return "reopen"
-    return kind.value
-
-
-class _DecisionWriter:
+class _SQLiteWorkTransaction:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def commit(self, decision: Decision) -> TransitionReceipt:
-        state = _StoredStateReader(self._connection).read()
-        project_revision = state.lifecycle.project.revision
-        self._check_freshness(state, decision)
-        next_revision = project_revision + 1
-        self._apply_item(decision, next_revision)
-        self._apply_attempt(decision, next_revision)
-        self._apply_proposal(decision, next_revision)
-        self._apply_attempt_authority(state, decision)
-        self._apply_reservation_counters(decision)
-        self._apply_reservations(decision, next_revision)
-        self._apply_use_leases(decision)
-        self._apply_focus(decision, next_revision)
-        self._append_history(state, decision, next_revision)
-        updated = self._connection.execute(
-            "UPDATE project_meta SET revision = ?, updated_at = ? WHERE singleton = 1 AND revision = ?",
-            (next_revision, decision.receipt.decided_at.isoformat(), project_revision),
-        )
-        if updated.rowcount != 1:
-            self._stale()
-        _StoredStateReader(self._connection).read()
-        return decision.receipt
+    def snapshot(self) -> StoredWorkState:
+        return _StoredStateReader(self._connection).read()
 
-    def _stale(self) -> Never:
-        raise StorageError(
-            StorageErrorCode.STALE_WRITE,
-            "The stored work state changed; rediscover the action before retrying.",
-        )
+    @overload
+    def commit(self, mutation: TransitionMutation | TransitionReceiptMutation) -> TransitionReceipt: ...
 
-    def _check_freshness(self, state: StoredWorkState, decision: Decision) -> None:
-        expected = decision.action.expected_revision
-        if expected and expected != str(state.lifecycle.project.revision):
-            self._stale()
-        expected_subject = decision.action.subject_revision
-        if expected_subject is None:
-            return
-        subject = str(decision.action.subject)
-        revisions = {str(item.item_id): item.subject_revision for item in state.lifecycle.work_items}
-        revisions.update(
-            {str(proposal.proposal_id): proposal.subject_revision for proposal in state.proposals.proposals}
-        )
-        for attempt in state.lifecycle.attempts:
-            item_revision = revisions.get(str(attempt.item_id))
-            if item_revision is not None:
-                revisions[str(attempt.attempt_id)] = item_revision
-        current = revisions.get(subject)
-        if current is None or str(current) != expected_subject:
-            self._stale()
+    @overload
+    def commit(self, mutation: PlanningMutation) -> PlanningMutationReceipt: ...
 
-    def _apply_item(self, decision: Decision, revision: int) -> None:
-        change = decision.item_change
-        if change is None:
-            return
-        if change.before is None:
-            proposal_change = decision.proposal_change
-            accepted = None if proposal_change is None else proposal_change.accepted_item
-            if accepted is None or change.after != accepted.state:
-                raise StorageError(
-                    StorageErrorCode.INVARIANT_VIOLATION,
-                    "Item creation requires one complete accepted-proposal change.",
-                )
-            timestamp = decision.receipt.decided_at.isoformat()
-            self._connection.execute(
-                """
-                INSERT INTO work_items (
-                    item_id, origin_kind, user_label, state, timing, source, trigger, why_it_matters,
-                    effect, unlock, outcome_evidence, next_action, notes, scope_revision, scope_digest,
-                    subject_revision, origin_created_at, origin_updated_at, recorded_at, updated_at
-                ) VALUES (?, 'native', ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 1, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    accepted.item,
-                    accepted.user_label,
-                    accepted.state.value,
-                    None if accepted.timing is None else accepted.timing.value,
-                    accepted.source,
-                    accepted.trigger,
-                    accepted.why_it_matters,
-                    accepted.effect,
-                    accepted.unlock,
-                    accepted.next_action,
-                    accepted.notes,
-                    accepted.scope_digest,
-                    revision,
-                    timestamp,
-                    timestamp,
-                    timestamp,
-                    timestamp,
-                ),
-            )
-            self._connection.execute(
-                """
-                INSERT INTO item_scope_revisions (
-                    item_id, scope_revision, scope_digest, accepted_project_revision, accepted_at
-                ) VALUES (?, 1, ?, ?, ?)
-                """,
-                (accepted.item, accepted.scope_digest, revision, timestamp),
-            )
-            self._connection.executemany(
-                "INSERT INTO item_dependencies (item_id, dependency_id, position) VALUES (?, ?, ?)",
-                tuple(
-                    (accepted.item, dependency, position) for position, dependency in enumerate(accepted.dependencies)
-                ),
-            )
-            self._connection.executemany(
-                "INSERT INTO item_resources (item_id, resource_id, position) VALUES (?, ?, ?)",
-                tuple(
-                    (accepted.item, resource_id, position)
-                    for position, resource_id in enumerate(accepted.resource_requirements)
-                ),
-            )
-            return
-        terminal = change.after is None
-        if terminal:
-            state = _terminal_state(decision)
-        else:
-            assert change.after is not None
-            state = _live_stored_state(change.after)
-        outcome_evidence = change.outcome_evidence if terminal else None
-        updated = self._connection.execute(
-            """
-            UPDATE work_items
-            SET state = ?, outcome_evidence = ?, subject_revision = ?, updated_at = ?,
-                origin_updated_at = CASE WHEN origin_kind = 'native' THEN ? ELSE origin_updated_at END
-            WHERE item_id = ? AND state = ?
-            """,
-            (
-                state.value,
-                outcome_evidence,
-                revision,
-                decision.receipt.decided_at.isoformat(),
-                decision.receipt.decided_at.isoformat(),
-                change.item,
-                change.before.value if change.before is not None else state.value,
-            ),
-        )
-        if updated.rowcount != 1:
-            self._stale()
-
-    def _apply_attempt(self, decision: Decision, revision: int) -> None:
-        change = decision.attempt_change
-        if change is None:
-            return
-        if change.before is None:
-            if (
-                change.after != AttemptState.ACTIVE
-                or change.brief_artifact_ref_id is None
-                or change.branch is None
-                or change.base_revision is None
-                or change.owner is None
-                or decision.item_change is None
-            ):
-                raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "Attempt creation facts are incomplete.")
-            item = self._connection.execute(
-                "SELECT item_id, scope_revision, scope_digest FROM work_items WHERE item_id = ?",
-                (decision.item_change.item,),
-            ).fetchone()
-            if item is None:
-                self._stale()
-            timestamp = decision.receipt.decided_at.isoformat()
-            self._connection.execute(
-                """
-                INSERT INTO attempts (
-                    attempt_id, item_id, origin_kind, state, branch, base_revision, provenance,
-                    brief_artifact_ref_id, brief_artifact_kind, result_artifact_ref_id,
-                    result_artifact_kind, blocker_artifact_ref_id, blocker_artifact_kind,
-                    candidate_revision, candidate_recorded_at, accepted_scope_revision,
-                    accepted_scope_digest, subject_revision, origin_created_at, origin_updated_at,
-                    recorded_at, updated_at
-                ) VALUES (?, ?, 'native', 'active', ?, ?, ?, ?, 'brief', NULL, NULL, NULL, NULL,
-                    NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    change.attempt,
-                    item["item_id"],
-                    change.branch,
-                    change.base_revision,
-                    change.owner,
-                    change.brief_artifact_ref_id,
-                    item["scope_revision"],
-                    item["scope_digest"],
-                    revision,
-                    timestamp,
-                    timestamp,
-                    timestamp,
-                    timestamp,
-                ),
-            )
-            return
-        if change.after is None:
-            raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "Attempt changes require a resulting state.")
-        clears_candidate = change.after in {AttemptState.ACTIVE, AttemptState.PAUSED, AttemptState.BLOCKED}
-        records_candidate = change.after == AttemptState.REVIEW
-        if records_candidate and (change.protected_candidate_after is None or change.candidate_observed_at is None):
-            raise StorageError(
-                StorageErrorCode.INVARIANT_VIOLATION,
-                "Review submission requires exact protected candidate provenance.",
-            )
-        updated = self._connection.execute(
-            """
-            UPDATE attempts
-            SET state = ?, subject_revision = ?, updated_at = ?,
-                origin_updated_at = CASE WHEN origin_kind = 'native' THEN ? ELSE origin_updated_at END,
-                candidate_revision = CASE WHEN ? THEN NULL WHEN ? THEN ? ELSE candidate_revision END,
-                candidate_recorded_at = CASE WHEN ? THEN NULL WHEN ? THEN ? ELSE candidate_recorded_at END
-            WHERE attempt_id = ? AND state = ?
-            """,
-            (
-                change.after.value,
-                revision,
-                decision.receipt.decided_at.isoformat(),
-                decision.receipt.decided_at.isoformat(),
-                clears_candidate,
-                records_candidate,
-                change.protected_candidate_after,
-                clears_candidate,
-                records_candidate,
-                _timestamp(change.candidate_observed_at),
-                change.attempt,
-                change.before.value,
-            ),
-        )
-        if updated.rowcount != 1:
-            self._stale()
-
-    def _apply_proposal(self, decision: Decision, revision: int) -> None:
-        change = decision.proposal_change
-        if change is None:
-            return
-        match change.disposition:
-            case ProposalDispositionKind.ACCEPTED:
-                disposition = "accepted"
-            case ProposalDispositionKind.MERGED:
-                disposition = "merged"
-            case ProposalDispositionKind.RETURNED:
-                disposition = "returned"
-            case ProposalDispositionKind.REJECTED:
-                disposition = "rejected"
-            case _ as unreachable:
-                assert_never(unreachable)
-        updated = self._connection.execute(
-            """
-            UPDATE proposals
-            SET disposition = ?, disposition_target_item_id = ?, disposition_reason = ?,
-                subject_revision = ?, origin_disposed_at = ?, disposition_recorded_at = ?
-            WHERE proposal_id = ? AND disposition IS NULL
-            """,
-            (
-                disposition,
-                change.target_item,
-                change.reason,
-                revision,
-                change.disposed_at.isoformat(),
-                change.disposed_at.isoformat(),
-                change.proposal,
-            ),
-        )
-        if updated.rowcount != 1:
-            self._stale()
-
-    def _apply_attempt_authority(self, state: StoredWorkState, decision: Decision) -> None:
-        change = decision.attempt_authority_change
-        if change is None:
-            return
-        current = next(
-            (value for value in state.authority.attempt_leases if value.attempt_id == change.before.attempt),
-            None,
-        )
-        anchor = next(
-            (
-                value
-                for value in state.authority.attempt_generations
-                if value.attempt_id == change.before.attempt and value.generation == change.before.generation
-            ),
-            None,
-        )
-        if current is None or anchor is None or current.generation != change.before.generation:
-            self._stale()
-        if change.after.lease_id is not None or change.after.generation != change.before.generation + 1:
-            raise StorageError(
-                StorageErrorCode.INVARIANT_VIOLATION, "Attempt fencing must allocate one revoked anchor."
-            )
-        self._connection.execute(
-            """
-            UPDATE attempt_lease_counters SET generation_high_water = ?
-            WHERE attempt_id = ? AND generation_high_water = ?
-            """,
-            (change.after.generation, change.before.attempt, change.before.generation),
-        )
-        self._connection.execute(
-            """
-            INSERT INTO attempt_lease_generations (attempt_id, generation, lease_id, task_id, host_id)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (change.before.attempt, change.after.generation, anchor.lease_id, anchor.task_id, anchor.host_id),
-        )
-        self._connection.execute(
-            """
-            UPDATE attempt_leases SET generation = ?, expires_at = ?, status = 'revoked'
-            WHERE attempt_id = ? AND generation = ?
-            """,
-            (
-                change.after.generation,
-                decision.receipt.decided_at.isoformat(),
-                change.before.attempt,
-                change.before.generation,
-            ),
-        )
-
-    def _apply_reservation_counters(self, decision: Decision) -> None:
-        for change in decision.reservation_counter_changes:
-            updated = self._connection.execute(
-                """
-                UPDATE resource_reservation_counters SET generation_high_water = ?
-                WHERE instance_id = ? AND generation_high_water = ?
-                """,
-                (
-                    change.after.generation_high_water,
-                    change.after.instance_id,
-                    change.before.generation_high_water,
-                ),
-            )
-            if updated.rowcount != 1:
-                self._stale()
-
-    def _apply_reservations(self, decision: Decision, revision: int) -> None:
-        for change in decision.reservation_changes:
-            if change.before is None:
-                instance = self._connection.execute(
-                    "SELECT resource_id, host_id FROM resource_instances WHERE instance_id = ?",
-                    (change.after.instance_id,),
-                ).fetchone()
-                attempt = self._connection.execute(
-                    "SELECT item_id FROM attempts WHERE attempt_id = ?",
-                    (change.after.attempt,),
-                ).fetchone()
-                if (
-                    instance is None
-                    or attempt is None
-                    or instance["resource_id"] != change.after.resource_id
-                    or change.after.state != ReservationState.ACTIVE
-                ):
-                    raise StorageError(
-                        StorageErrorCode.INVARIANT_VIOLATION,
-                        "Reservation assignment does not match a current instance and attempt.",
-                    )
-                self._connection.execute(
-                    """
-                    INSERT INTO resource_reservations (
-                        reservation_id, instance_id, resource_id, host_id, generation, attempt_id,
-                        item_id, status, subject_revision, created_at, ended_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)
-                    """,
-                    (
-                        change.after.reservation_id,
-                        change.after.instance_id,
-                        change.after.resource_id,
-                        instance["host_id"],
-                        change.after.generation,
-                        change.after.attempt,
-                        attempt["item_id"],
-                        revision,
-                        decision.receipt.decided_at.isoformat(),
-                    ),
-                )
-                continue
-            if change.before.generation != change.after.generation:
-                raise StorageError(
-                    StorageErrorCode.INVARIANT_VIOLATION,
-                    "Reservation acquisition generation is immutable.",
-                )
-            ended_at = (
-                None
-                if change.after.state in {ReservationState.ACTIVE, ReservationState.REVOKED_PENDING_RECOVERY}
-                else decision.receipt.decided_at.isoformat()
-            )
-            updated = self._connection.execute(
-                """
-                UPDATE resource_reservations
-                SET status = ?, subject_revision = ?, ended_at = ?
-                WHERE reservation_id = ? AND generation = ? AND status = ?
-                """,
-                (
-                    change.after.state.value,
-                    revision,
-                    ended_at,
-                    change.before.reservation_id,
-                    change.before.generation,
-                    change.before.state.value,
-                ),
-            )
-            if updated.rowcount != 1:
-                self._stale()
-
-    def _apply_use_leases(self, decision: Decision) -> None:
-        for change in decision.resource_use_lease_changes:
-            if (
-                change.before.lease_id != change.after.lease_id
-                or change.before.reservation_id != change.after.reservation_id
-                or change.before.attempt_lease_id != change.after.attempt_lease_id
-                or change.before.attempt_generation != change.after.attempt_generation
-                or change.before.generation != change.after.generation
-                or change.before.generation_kind != change.after.generation_kind
-            ):
-                raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "Retained task-use identity is immutable.")
-            updated = self._connection.execute(
-                """
-                UPDATE resource_use_leases SET status = ?, expires_at = ?
-                WHERE reservation_id = ? AND generation = ? AND generation_kind = ? AND status = ?
-                """,
-                (
-                    change.after.state.value,
-                    decision.receipt.decided_at.isoformat(),
-                    change.before.reservation_id,
-                    change.before.generation,
-                    change.before.generation_kind.value,
-                    change.before.state.value,
-                ),
-            )
-            if updated.rowcount != 1:
-                self._stale()
-            if change.before.state == UseLeaseState.ACTIVE and change.after.state == UseLeaseState.REVOKED:
-                timestamp = decision.receipt.decided_at.isoformat()
-                fenced = self._connection.execute(
-                    """
-                    INSERT INTO resource_use_leases (
-                        reservation_id, instance_id, reservation_generation, attempt_id, host_id,
-                        instance_subject_revision, observation_generation, observation_digest, task_id,
-                        attempt_lease_id, attempt_lease_generation, lease_id, generation, generation_kind,
-                        host_epoch, acquired_at, expires_at, status
-                    )
-                    SELECT
-                        reservation_id, instance_id, reservation_generation, attempt_id, host_id,
-                        instance_subject_revision, observation_generation, observation_digest, task_id,
-                        attempt_lease_id, attempt_lease_generation, lease_id, generation + 1, 'fence',
-                        host_epoch, ?, ?, 'revoked'
-                    FROM resource_use_leases
-                    WHERE reservation_id = ? AND generation = ? AND generation_kind = 'grant' AND status = 'revoked'
-                    """,
-                    (timestamp, timestamp, change.before.reservation_id, change.before.generation),
-                )
-                if fenced.rowcount != 1:
-                    raise StorageError(
-                        StorageErrorCode.INVARIANT_VIOLATION,
-                        "Task-use revocation could not install its immediately following fence.",
-                    )
-
-    def _apply_focus(self, decision: Decision, revision: int) -> None:
-        if decision.item_change is None:
-            return
-        terminal = decision.item_change.after is None
-        item = None if terminal else decision.item_change.item
-        attempt = None if terminal else decision.item_change.attempt
-        next_action = _next_focus_action(decision.action.kind, terminal)
-        self._connection.execute(
-            """
-            INSERT INTO current_focus (singleton, item_id, attempt_id, next_action, subject_revision)
-            VALUES (1, ?, ?, ?, ?)
-            ON CONFLICT(singleton) DO UPDATE SET
-                item_id = excluded.item_id,
-                attempt_id = excluded.attempt_id,
-                next_action = excluded.next_action,
-                subject_revision = excluded.subject_revision
-            """,
-            (item, attempt, next_action, revision),
-        )
-
-    def _append_history(self, state: StoredWorkState, decision: Decision, revision: int) -> None:
-        actor_task: TaskId | None = None
-        actor_host: HostId | None = None
-        if decision.action.lease_id is not None:
-            anchor = next(
-                (
-                    value
-                    for value in state.authority.attempt_generations
-                    if value.lease_id == decision.action.lease_id
-                    and value.generation == decision.action.coordinator_generation
-                ),
-                None,
-            )
-            if anchor is not None:
-                actor_task, actor_host = anchor.task_id, anchor.host_id
-        if decision.action.authorization == AuthorizationKind.COORDINATION and state.authority.coordination is not None:
-            actor_task, actor_host = state.authority.coordination.task_id, state.authority.coordination.host_id
-        checkpoint: str | None = None
-        candidate: str | None = None
-        if decision.checkpoint_acceptance_change is not None:
-            checkpoint = str(decision.checkpoint_acceptance_change.checkpoint)
-            candidate = str(decision.checkpoint_acceptance_change.candidate)
-        if decision.attempt_change is not None and decision.attempt_change.protected_candidate_after is not None:
-            candidate = str(decision.attempt_change.protected_candidate_after)
-        outcome_json = encode_transition_receipt_outcome(
-            evidence=decision.receipt.evidence,
-            outcome=decision.receipt.outcome,
-            candidate=candidate,
-            checkpoint=checkpoint,
-        ).decode("utf-8")
-        history_id = 1 + max((int(value.history_id) for value in state.history.receipts), default=0)
-        self._connection.execute(
-            """
-            INSERT INTO transition_history (
-                history_id, project_revision, action_id, action_kind, subject_id, artifact_ref_id,
-                artifact_kind, authorization_kind, actor_task_id, actor_host_id, input_schema,
-                input_json, outcome_schema, outcome_json, committed_at
-            ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, 'decision/v1', '{}',
-                'transition-receipt/v1', ?, ?)
-            """,
-            (
-                history_id,
-                revision,
-                decision.action.action_id,
-                decision.action.kind.value,
-                str(decision.action.subject),
-                decision.action.authorization.value,
-                actor_task,
-                actor_host,
-                outcome_json,
-                decision.receipt.decided_at.isoformat(),
-            ),
-        )
-
-
-class _StoredMutationWriter:
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self._connection = connection
-
-    def commit(self, mutation: StoredStateMutation) -> CommitReceipt:
+    def commit(self, mutation: AcceptedMutation) -> CommitReceipt:
         current = _StoredStateReader(self._connection).read()
         if current != mutation.before:
             raise StorageError(
@@ -1970,9 +1411,11 @@ class _StoredMutationWriter:
             case PlanningImpactMutation() | PlanningResolutionMutation():
                 return mutation.receipt
             case (
-                ProposalCreationMutation()
+                TransitionMutation()
+                | ProposalCreationMutation()
                 | DependencyEditMutation()
                 | ResourceRequirementEditMutation()
+                | ResourceDefinitionEditMutation()
                 | CoordinationAuthorityMutation()
                 | AttemptAuthorityMutation()
                 | ReservationTaskUseMutation()
@@ -1980,47 +1423,6 @@ class _StoredMutationWriter:
                 | ResourceIntentMutation()
             ):
                 return mutation.receipt.transition
-            case _ as unreachable:
-                assert_never(unreachable)
-
-
-class _SQLiteWorkTransaction:
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self._connection = connection
-
-    def snapshot(self) -> StoredWorkState:
-        return _StoredStateReader(self._connection).read()
-
-    @overload
-    def commit(self, mutation: Decision | TransitionReceiptMutation) -> TransitionReceipt: ...
-
-    @overload
-    def commit(self, mutation: PlanningMutation) -> PlanningMutationReceipt: ...
-
-    def commit(self, mutation: AcceptedMutation) -> CommitReceipt:
-        match mutation:
-            case Decision():
-                return _DecisionWriter(self._connection).commit(mutation)
-            case ProposalCreationMutation():
-                return _StoredMutationWriter(self._connection).commit(mutation)
-            case DependencyEditMutation():
-                return _StoredMutationWriter(self._connection).commit(mutation)
-            case ResourceRequirementEditMutation():
-                return _StoredMutationWriter(self._connection).commit(mutation)
-            case CoordinationAuthorityMutation():
-                return _StoredMutationWriter(self._connection).commit(mutation)
-            case AttemptAuthorityMutation():
-                return _StoredMutationWriter(self._connection).commit(mutation)
-            case ReservationTaskUseMutation():
-                return _StoredMutationWriter(self._connection).commit(mutation)
-            case PlanningImpactMutation():
-                return _StoredMutationWriter(self._connection).commit(mutation)
-            case PlanningResolutionMutation():
-                return _StoredMutationWriter(self._connection).commit(mutation)
-            case ResourceMutation():
-                return _StoredMutationWriter(self._connection).commit(mutation)
-            case ResourceIntentMutation():
-                return _StoredMutationWriter(self._connection).commit(mutation)
             case _ as unreachable:
                 assert_never(unreachable)
 

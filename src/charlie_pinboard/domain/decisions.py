@@ -28,6 +28,8 @@ from charlie_pinboard.domain.model import (
     CloseInput,
     CloseOutcome,
     CommandAttemptAuthority,
+    CoordinationLeaseAuthority,
+    CoordinationLeaseStatus,
     DeferInput,
     EmptyInput,
     EvidenceInput,
@@ -35,6 +37,7 @@ from charlie_pinboard.domain.model import (
     LedgerSnapshot,
     LegacyActivateInput,
     MergeProposalInput,
+    MutationIntentState,
     ReasonInput,
     ReservationState,
     ResourceAuthority,
@@ -590,6 +593,12 @@ class AttemptAuthorityChange:
 
 
 @dataclass(frozen=True, slots=True)
+class CoordinatorAuthorityChange:
+    before: CoordinationLeaseAuthority
+    after: CoordinationLeaseAuthority
+
+
+@dataclass(frozen=True, slots=True)
 class CheckpointAcceptanceChange:
     checkpoint: CheckpointId
     attempt: AttemptId
@@ -619,6 +628,7 @@ class Decision:
     resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = ()
     checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None
     proposal_change: ProposalChange | None = None
+    coordinator_authority_change: CoordinatorAuthorityChange | None = None
 
 
 def _resource_token(value: ResourceAuthority) -> ResourceToken:
@@ -905,6 +915,7 @@ def _result(
     resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = (),
     checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None,
     proposal_change: ProposalChange | None = None,
+    coordinator_authority_change: CoordinatorAuthorityChange | None = None,
     outcome: str | None = None,
     evidence: str | None = None,
 ) -> Decision:
@@ -919,6 +930,7 @@ def _result(
         resource_use_lease_changes,
         checkpoint_acceptance_change,
         proposal_change,
+        coordinator_authority_change,
     )
 
 
@@ -978,12 +990,27 @@ def _pause_or_block(
         return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
     if item.state != WorkState.ACTIVE:
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "The named attempt is not active.")
+    use_lease_changes = _fence_attempt_task_uses(snapshot, attempt_id)
     return _result(
         action,
         now,
         item=item.item,
         item_change=ItemChange(item.item, item.state, target, item.attempt),
         attempt_change=AttemptChange(attempt_id, AttemptState.ACTIVE, AttemptState(target.value)),
+        resource_use_lease_changes=use_lease_changes,
+    )
+
+
+def _fence_attempt_task_uses(
+    snapshot: LedgerSnapshot,
+    attempt: AttemptId,
+) -> tuple[ResourceUseLeaseChange, ...]:
+    return tuple(
+        ResourceUseLeaseChange(use_lease, replace(use_lease, state=UseLeaseState.REVOKED))
+        for reservation in snapshot.resource_reservations
+        if reservation.attempt == attempt
+        if (use_lease := current_authorizing_grant(snapshot.resource_use_leases, reservation.reservation_id))
+        is not None
     )
 
 
@@ -1002,11 +1029,25 @@ def _release_attempt_resources(
     )
     use_lease_changes = tuple(
         ResourceUseLeaseChange(use_lease, replace(use_lease, state=UseLeaseState.RELEASED))
-        for reservation in reservations
+        for reservation in snapshot.resource_reservations
+        if reservation.attempt == attempt
         if (use_lease := current_authorizing_grant(snapshot.resource_use_leases, reservation.reservation_id))
         is not None
     )
     return reservation_changes, use_lease_changes
+
+
+def _fence_retained_attempt_authority(
+    snapshot: LedgerSnapshot,
+    attempt: AttemptId,
+) -> AttemptAuthorityChange | None:
+    authority = next((value for value in snapshot.attempt_authorities if value.attempt == attempt), None)
+    if authority is None:
+        return None
+    return AttemptAuthorityChange(
+        authority,
+        replace(authority, lease_id=None, generation=authority.generation + 1, resources=()),
+    )
 
 
 def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime) -> Decision | DecisionFailure:
@@ -1032,12 +1073,14 @@ def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime)
         return DecisionFailure(DecisionFailureCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     before = AttemptState.REVIEW if item.state == WorkState.REVIEW else AttemptState.ACTIVE
     reservation_changes, use_lease_changes = _release_attempt_resources(snapshot, attempt_id)
+    authority_change = _fence_retained_attempt_authority(snapshot, attempt_id)
     return _result(
         action,
         now,
         item=item.item,
         item_change=ItemChange(item.item, item.state, None, item.attempt, value.evidence),
         attempt_change=AttemptChange(attempt_id, before, AttemptState.DONE),
+        attempt_authority_change=authority_change,
         reservation_changes=reservation_changes,
         resource_use_lease_changes=use_lease_changes,
         evidence=value.evidence,
@@ -1066,12 +1109,14 @@ def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> De
         attempt = snapshot.attempts_by_id().get(item.attempt)
         attempt_change = AttemptChange(item.attempt, None if attempt is None else attempt.state, AttemptState.DONE)
         reservation_changes, use_lease_changes = _release_attempt_resources(snapshot, item.attempt)
+    authority_change = None if item.attempt is None else _fence_retained_attempt_authority(snapshot, item.attempt)
     return _result(
         action,
         now,
         item=item.item,
         item_change=ItemChange(item.item, item.state, None, item.attempt, value.reason),
         attempt_change=attempt_change,
+        attempt_authority_change=authority_change,
         reservation_changes=reservation_changes,
         resource_use_lease_changes=use_lease_changes,
         outcome=value.outcome.value,
@@ -1129,6 +1174,7 @@ def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: 
     attempt = snapshot.attempt(attempt_id)
     if attempt is None:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
+    use_lease_changes = _fence_attempt_task_uses(snapshot, attempt_id)
     return _result(
         action,
         now,
@@ -1142,6 +1188,7 @@ def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: 
             protected_candidate_after=value.candidate,
             candidate_observed_at=now,
         ),
+        resource_use_lease_changes=use_lease_changes,
     )
 
 
@@ -1431,7 +1478,46 @@ def _transfer(
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE, "This ledger does not use transferable coordinator ownership."
         )
-    return _result(action, now)
+    before = snapshot.coordination_lease
+    if before is None:
+        return _result(action, now)
+    if before.state != CoordinationLeaseStatus.ACTIVE or before.expires_at <= now:
+        return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "The coordination lease is not active.")
+    value = command.value
+    return _result(
+        action,
+        now,
+        coordinator_authority_change=CoordinatorAuthorityChange(
+            before,
+            replace(before, task_id=value.task_id, host_id=value.host_id, generation=before.generation + 1),
+        ),
+    )
+
+
+def _planned_intent_boundary(snapshot: LedgerSnapshot, command: TransitionCommand) -> DecisionFailure | None:
+    action = command_action(command)
+    attempt: AttemptId | None
+    if action.kind in {
+        ActionKind.PAUSE,
+        ActionKind.BLOCK,
+        ActionKind.COMPLETE,
+        ActionKind.SUBMIT_REVIEW,
+    }:
+        attempt = AttemptId(action.subject)
+    elif action.kind == ActionKind.CLOSE:
+        item = snapshot.item(ItemId(action.subject))
+        attempt = None if item is None else item.attempt
+    else:
+        return None
+    if attempt is None or not any(
+        intent.attempt_id == attempt and intent.state == MutationIntentState.PLANNED
+        for intent in snapshot.mutation_intents
+    ):
+        return None
+    return DecisionFailure(
+        DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED,
+        f"Attempt '{attempt}' must resolve its planned resource mutation intent first.",
+    )
 
 
 def decide(  # noqa: C901, PLR0912
@@ -1439,6 +1525,8 @@ def decide(  # noqa: C901, PLR0912
     command: TransitionCommand,
     now: datetime,
 ) -> Decision | DecisionFailure:
+    if (failure := _planned_intent_boundary(snapshot, command)) is not None:
+        return failure
     match command:
         case AcceptCheckpointCommand():
             return _accept_checkpoint(snapshot, command, now)

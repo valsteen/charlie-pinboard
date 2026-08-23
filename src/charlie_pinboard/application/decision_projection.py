@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import assert_never
 
 from charlie_pinboard.application.stored_state import (
@@ -15,6 +16,8 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
 )
+from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus, InactiveAttemptAuthority
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, ItemId
 from charlie_pinboard.domain.model import (
     ArtifactRecord,
@@ -22,6 +25,8 @@ from charlie_pinboard.domain.model import (
     AttemptRecord,
     CommandAttemptAuthority,
     CoordinationCommandAuthority,
+    CoordinationLeaseAuthority,
+    CoordinationLeaseStatus,
     ItemScope,
     LedgerSnapshot,
     MutationIntent,
@@ -47,6 +52,73 @@ from charlie_pinboard.domain.model import (
     WorkState,
 )
 from charlie_pinboard.domain.resource_decisions import current_authorizing_grant
+
+
+def project_inactive_attempt_authority(
+    state: StoredWorkState,
+    attempt_id: AttemptId,
+    now: datetime,
+) -> InactiveAttemptAuthority | DecisionFailure:
+    """Select exact retained inactive authority after ordinary interruption recovery."""
+
+    attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
+    lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
+    if attempt is None or lease is None:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "No retained attempt authority exists.")
+    anchor = next(
+        (
+            value
+            for value in state.authority.attempt_generations
+            if value.attempt_id == attempt_id and value.generation == lease.generation
+        ),
+        None,
+    )
+    if anchor is None:
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
+            "The retained attempt generation has no exact identity anchor.",
+        )
+    if lease.state == AttemptLeaseState.ACTIVE:
+        if lease.expires_at > now:
+            return DecisionFailure(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "Attempt authority remains live.")
+        status = AttemptLeaseStatus.EXPIRED
+    elif lease.state in {AttemptLeaseState.RELEASED, AttemptLeaseState.REVOKED}:
+        status = AttemptLeaseStatus(lease.state.value)
+    else:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "Attempt authority is not inactive.")
+    later_active_use = any(
+        value.attempt_id == attempt_id
+        and value.state.value == "active"
+        and value.generation_kind.value == "grant"
+        and not any(
+            later.reservation_id == value.reservation_id and later.generation > value.generation
+            for later in state.resources.use_leases
+        )
+        for value in state.resources.use_leases
+    )
+    planned_intent = any(
+        value.attempt_id == attempt_id and value.state.value == "planned" for value in state.resources.mutation_intents
+    )
+    recovery_pending = any(
+        value.attempt_id == attempt_id and value.state.value == "revoked-pending-recovery"
+        for value in state.resources.reservations
+    )
+    if later_active_use or planned_intent or recovery_pending:
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
+            "Inactive attempt proof requires completed authority and resource recovery.",
+        )
+    return InactiveAttemptAuthority(
+        state.lifecycle.project.host_epoch,
+        attempt_id,
+        attempt.item_id,
+        anchor.task_id,
+        anchor.host_id,
+        anchor.lease_id,
+        anchor.generation,
+        lease.expires_at,
+        status,
+    )
 
 
 def _dependency_position(value: ItemDependency) -> int:
@@ -393,7 +465,13 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         scopes=scopes,
         planning_impacts=planning_impacts,
         resource_definitions=tuple(
-            ResourceDefinition(definition.resource_id, definition.kind) for definition in state.resources.definitions
+            ResourceDefinition(
+                definition.resource_id,
+                definition.kind,
+                definition.description,
+                definition.subject_revision,
+            )
+            for definition in state.resources.definitions
         ),
         resource_instances=tuple(
             ResourceInstance(
@@ -507,5 +585,19 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         host_epoch=state.lifecycle.project.host_epoch,
         focus_item=state.focus.item_id,
         focus_attempt=state.focus.attempt_id,
-        can_transfer_coordinator=False,
+        can_transfer_coordinator=coordination_authority is not None,
+        coordination_lease=(
+            CoordinationLeaseAuthority(
+                state.lifecycle.project.host_epoch,
+                coordination.task_id,
+                coordination.host_id,
+                coordination.lease_id,
+                coordination.generation,
+                coordination.acquired_at,
+                coordination.expires_at,
+                CoordinationLeaseStatus(coordination.state.value),
+            )
+            if (coordination := state.authority.coordination) is not None
+            else None
+        ),
     )

@@ -5,11 +5,23 @@ from pathlib import Path
 from typing import assert_never
 from uuid import uuid4
 
+from charlie_pinboard.application import service as _store_service
 from charlie_pinboard.legacy.atomic import atomic_write_text
 from charlie_pinboard.legacy.authority import Authority, AuthorityVersion, authority_transaction
 from charlie_pinboard.legacy.leases import LeaseError, require_attempt, require_coordination
 from charlie_pinboard.legacy.markdown import ITEM_PATTERN, parse_header, render_v2_header
 from charlie_pinboard.legacy.storage_layout import PathIdentityError, identity_child
+
+abandon_store_mutation_intent = _store_service.abandon_mutation_intent
+advance_store_resource_observation = _store_service.advance_resource_observation
+change_store_reservation = _store_service.change_reservation
+change_store_task_use_authority = _store_service.change_task_use_authority
+claim_store_resource = _store_service.claim_resource
+edit_store_resource_definition = _store_service.edit_resource_definition
+preserve_store_resource_state = _store_service.preserve_resource_state
+reconcile_store_interrupted_observation = _store_service.reconcile_interrupted_observation
+register_store_mutation_intent = _store_service.register_mutation_intent
+resolve_store_fenced_resource_intent = _store_service.resolve_fenced_resource_intent
 
 
 class ResourceError(RuntimeError):
