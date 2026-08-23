@@ -256,6 +256,7 @@ class AuthorityDecisionTest(unittest.TestCase):
                 SQLITE_NOW + timedelta(minutes=2),
             ),
             snapshot.coordination_lease,
+            transferable_attempt=(command.attempt, command.item),
         )
         self.assertNotIsInstance(transfer, DecisionFailure)
         renewed = decide_attempt_authority(

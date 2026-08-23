@@ -997,6 +997,7 @@ class ServiceTest(unittest.TestCase):
             ReleaseReservationOperation(
                 authority,
                 reservation.reservation_id,
+                reservation.generation,
                 observation,
                 SQLITE_NOW + timedelta(seconds=1),
             ),
@@ -1029,6 +1030,7 @@ class ServiceTest(unittest.TestCase):
             ReleaseReservationOperation(
                 authority,
                 reservation.reservation_id,
+                reservation.generation,
                 observation,
                 SQLITE_NOW + timedelta(seconds=1),
             ),
@@ -1037,6 +1039,44 @@ class ServiceTest(unittest.TestCase):
         self.assertIsInstance(rejected, DecisionFailure)
         assert isinstance(rejected, DecisionFailure)
         self.assertEqual(DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED, rejected.code)
+        self.assertEqual(before, store.snapshot())
+
+    def test_reservation_release_rejects_cross_wired_locator_evidence(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(
+            state,
+            resources=replace(
+                state.resources,
+                instances=tuple(
+                    replace(value, state=ResourceInstanceState.ACTIVE) for value in state.resources.instances
+                ),
+                mutation_intents=(),
+            ),
+        )
+        store, _database_path = self._store_with_state(state)
+        before = store.snapshot()
+        snapshot = project_decision_snapshot(before)
+        authority = snapshot.coordination_authority
+        assert authority is not None
+        reservation = snapshot.resource_reservations[0]
+        wrong_observation = next(
+            value for value in snapshot.resource_observations if value.instance_id != reservation.instance_id
+        )
+
+        rejected = change_reservation(
+            store,
+            ReleaseReservationOperation(
+                authority,
+                reservation.reservation_id,
+                reservation.generation,
+                wrong_observation,
+                SQLITE_NOW + timedelta(seconds=1),
+            ),
+        )
+
+        self.assertIsInstance(rejected, DecisionFailure)
+        assert isinstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.RESOURCE_RESERVATION_STALE, rejected.code)
         self.assertEqual(before, store.snapshot())
 
     def test_proposal_relationships_reject_missing_identities_before_sqlite(self) -> None:
@@ -1163,6 +1203,22 @@ class ServiceTest(unittest.TestCase):
         first_observation = snapshot.resource_observation(first.instance_id)
         second_observation = snapshot.resource_observation(second.instance_id)
         assert first_observation is not None and second_observation is not None
+        unchanged = store.snapshot()
+        cross_wired_assignment = change_reservation(
+            store,
+            AssignReservationOperation(
+                authority,
+                ReservationId("cross-wired-assignment"),
+                first.resource_id,
+                first.instance_id,
+                authority.attempt,
+                1,
+                second_observation,
+                SQLITE_NOW + timedelta(seconds=1),
+            ),
+        )
+        self.assertIsInstance(cross_wired_assignment, DecisionFailure)
+        self.assertEqual(unchanged, store.snapshot())
         assigned = change_reservation(
             store,
             AssignReservationOperation(
@@ -1177,11 +1233,28 @@ class ServiceTest(unittest.TestCase):
             ),
         )
         self.assertNotIsInstance(assigned, DecisionFailure)
+        after_assignment = store.snapshot()
+        cross_wired_reallocation = change_reservation(
+            store,
+            ReallocateReservationOperation(
+                authority,
+                ReservationId("reservation-first"),
+                1,
+                ReservationId("cross-wired-reallocation"),
+                second.instance_id,
+                1,
+                first_observation,
+                SQLITE_NOW + timedelta(seconds=2),
+            ),
+        )
+        self.assertIsInstance(cross_wired_reallocation, DecisionFailure)
+        self.assertEqual(after_assignment, store.snapshot())
         reallocated = change_reservation(
             store,
             ReallocateReservationOperation(
                 authority,
                 ReservationId("reservation-first"),
+                1,
                 ReservationId("reservation-second"),
                 second.instance_id,
                 1,
@@ -1190,11 +1263,27 @@ class ServiceTest(unittest.TestCase):
             ),
         )
         self.assertNotIsInstance(reallocated, DecisionFailure)
+        after_reallocation = store.snapshot()
+        cross_wired_revocation = change_reservation(
+            store,
+            RevokeReservationOperation(
+                coordination,
+                ReservationId("reservation-second"),
+                1,
+                1,
+                first_observation,
+                SQLITE_NOW + timedelta(seconds=3),
+            ),
+        )
+        self.assertIsInstance(cross_wired_revocation, DecisionFailure)
+        self.assertEqual(after_reallocation, store.snapshot())
         revoked = change_reservation(
             store,
             RevokeReservationOperation(
                 coordination,
                 ReservationId("reservation-second"),
+                1,
+                1,
                 second_observation,
                 SQLITE_NOW + timedelta(seconds=3),
             ),
@@ -1205,6 +1294,118 @@ class ServiceTest(unittest.TestCase):
             ("released", "revoked"),
             tuple(value.state.value for value in final.resource_reservations),
         )
+
+    def test_assignment_and_atomic_claim_require_the_attempt_item_resource_requirement(self) -> None:
+        state = complete_sqlite_state()
+        template = project_decision_snapshot(state).mutation_use_leases[-1]
+        state = replace(
+            state,
+            resources=replace(
+                state.resources,
+                requirements=(),
+                instances=tuple(
+                    replace(value, state=ResourceInstanceState.ACTIVE) for value in state.resources.instances
+                ),
+                reservation_counters=tuple(
+                    replace(value, generation_high_water=0) for value in state.resources.reservation_counters
+                ),
+                reservations=(),
+                use_leases=(),
+                mutation_intents=(),
+            ),
+        )
+        store, _database_path = self._store_with_state(state)
+        before = store.snapshot()
+        snapshot = project_decision_snapshot(before)
+        authority = snapshot.command_attempt_authorities[0]
+        definition = snapshot.resource_definitions[0]
+        instance = next(value for value in snapshot.resource_instances if value.resource_id == definition.resource_id)
+        observation = snapshot.resource_observation(instance.instance_id)
+        assert observation is not None
+
+        assignment = change_reservation(
+            store,
+            AssignReservationOperation(
+                authority,
+                ReservationId("unrequired-assignment"),
+                definition.resource_id,
+                instance.instance_id,
+                authority.attempt,
+                1,
+                observation,
+                SQLITE_NOW + timedelta(seconds=1),
+            ),
+        )
+        self.assertIsInstance(assignment, DecisionFailure)
+        assert isinstance(assignment, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.RESOURCE_REQUIREMENT_INVALID, assignment.code)
+        self.assertEqual(before, store.snapshot())
+
+        requested = replace(
+            template,
+            reservation_id=ReservationId("unrequired-claim"),
+            instance_id=instance.instance_id,
+            reservation_generation=1,
+            instance_subject_revision=instance.subject_revision,
+            observation_generation=observation.generation,
+            observation_digest=observation.digest,
+            lease_id=LeaseId("unrequired-use"),
+            generation=1,
+            expires_at=SQLITE_NOW + timedelta(minutes=4),
+            state=UseLeaseState.ACTIVE,
+        )
+        claimed = claim_resource(
+            store,
+            ClaimResourceOperation(
+                definition,
+                instance,
+                observation,
+                authority,
+                requested,
+                SQLITE_NOW + timedelta(seconds=1),
+            ),
+        )
+        self.assertIsInstance(claimed, DecisionFailure)
+        assert isinstance(claimed, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.RESOURCE_REQUIREMENT_INVALID, claimed.code)
+        self.assertEqual(before, store.snapshot())
+
+    def test_attempt_transfer_rejects_terminal_work_without_mutation(self) -> None:
+        store = self._store()
+        complete_action = self._coordinator_action(store, ActionKind.COMPLETE)
+        complete_command = bind_transition(complete_action, EvidenceInput("Terminal transfer must stay fenced."))
+        assert not isinstance(complete_command, DecisionFailure)
+        completed = execute(store, complete_command, SQLITE_NOW + timedelta(seconds=1))
+        self.assertNotIsInstance(completed, DecisionFailure)
+        terminal = store.snapshot()
+        snapshot = project_decision_snapshot(terminal)
+        proof = project_inactive_attempt_authority(
+            terminal,
+            AttemptId("work-a-1"),
+            SQLITE_NOW + timedelta(seconds=2),
+        )
+        self.assertNotIsInstance(proof, DecisionFailure)
+        assert not isinstance(proof, DecisionFailure)
+        coordination = snapshot.coordination_authority
+        assert coordination is not None
+
+        rejected = change_attempt_authority(
+            store,
+            TransferAttemptAuthority(
+                proof,
+                coordination,
+                TaskId("terminal-worker"),
+                HostId("host-a"),
+                LeaseId("terminal-attempt"),
+                SQLITE_NOW + timedelta(seconds=3),
+                SQLITE_NOW + timedelta(minutes=2),
+            ),
+        )
+
+        self.assertIsInstance(rejected, DecisionFailure)
+        assert isinstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, rejected.code)
+        self.assertEqual(terminal, store.snapshot())
 
     def test_resolve_planning_obligation_reselects_target_and_commits_canonical_history(self) -> None:
         store = self._store()

@@ -336,6 +336,7 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
     planned_intent_attempts: tuple[AttemptId, ...] = (),
     *,
     live_attempt: tuple[AttemptId, ItemId] | None = None,
+    transferable_attempt: tuple[AttemptId, ItemId] | None = None,
     project_host_epoch: int | None = None,
     recovery_pending_attempts: tuple[AttemptId, ...] = (),
 ) -> AttemptAuthorityDecision | DecisionFailure:
@@ -388,6 +389,11 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
             acquired_at=acquired_at,
             expires_at=expires_at,
         ):
+            if retained is None or transferable_attempt != (retained.attempt, retained.item):
+                return DecisionFailure(
+                    DecisionFailureCode.ATTEMPT_LEASE_REQUIRED,
+                    "Attempt transfer requires the exact retained nonterminal attempt.",
+                )
             if (failure := _validate_attempt_transfer(retained, current, acquired_at)) is not None:
                 return failure
             if retained is not None and retained.attempt in planned_intent_attempts:

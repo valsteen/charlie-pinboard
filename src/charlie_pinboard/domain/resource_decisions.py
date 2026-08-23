@@ -253,6 +253,7 @@ class AssignReservationOperation:
 class ReleaseReservationOperation:
     authority: CommandAttemptAuthority | CoordinationCommandAuthority
     reservation_id: ReservationId
+    reservation_generation: int
     observation: ResourceObservation
     changed_at: datetime
 
@@ -261,6 +262,7 @@ class ReleaseReservationOperation:
 class ReallocateReservationOperation:
     authority: CommandAttemptAuthority
     reservation_id: ReservationId
+    reservation_generation: int
     replacement_id: ReservationId
     instance_id: ResourceInstanceId
     generation: int
@@ -272,6 +274,8 @@ class ReallocateReservationOperation:
 class RevokeReservationOperation:
     authority: CoordinationCommandAuthority
     reservation_id: ReservationId
+    reservation_generation: int
+    counter_generation: int
     observation: ResourceObservation
     changed_at: datetime
 
@@ -431,6 +435,15 @@ def assign_resource(
             DecisionFailureCode.RESOURCE_INSTANCE_RESERVED,
             "The attempt already has this resource requirement assigned.",
         )
+    item = snapshot.item_for_attempt(attempt)
+    scope = None if item is None else next((value for value in snapshot.scopes if value.item == item.item), None)
+    if scope is None or all(
+        requirement.resource_id != resource_id for requirement in scope.scope.resource_requirements
+    ):
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_REQUIREMENT_INVALID,
+            "Assignment requires an unmet resource requirement owned by the attempt item.",
+        )
     counter = snapshot.resource_reservation_counter(instance_id)
     if counter is None:
         return DecisionFailure(
@@ -583,6 +596,11 @@ def decide_reservation_operation(  # noqa: C901, PLR0912
                     DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
                     "Reservation assignment requires exact live attempt authority.",
                 )
+            if operation.observation.instance_id != operation.instance_id:
+                return DecisionFailure(
+                    DecisionFailureCode.RESOURCE_INSTANCE_REQUIRED,
+                    "Reservation assignment locator facts are cross-wired.",
+                )
             return assign_resource(
                 snapshot,
                 reservation_id=operation.reservation_id,
@@ -593,6 +611,15 @@ def decide_reservation_operation(  # noqa: C901, PLR0912
             )
         case ReleaseReservationOperation(authority=authority):
             reservation = snapshot.resource_reservation(operation.reservation_id)
+            if (
+                reservation is None
+                or reservation.generation != operation.reservation_generation
+                or operation.observation.instance_id != reservation.instance_id
+            ):
+                return DecisionFailure(
+                    DecisionFailureCode.RESOURCE_RESERVATION_STALE,
+                    "Reservation release facts are stale or cross-wired.",
+                )
             if isinstance(authority, CommandAttemptAuthority):
                 authorized = (
                     authority in snapshot.command_attempt_authorities
@@ -630,6 +657,14 @@ def decide_reservation_operation(  # noqa: C901, PLR0912
                     DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
                     "Reservation reallocation requires exact live attempt authority.",
                 )
+            if (
+                reservation.generation != operation.reservation_generation
+                or operation.observation.instance_id != operation.instance_id
+            ):
+                return DecisionFailure(
+                    DecisionFailureCode.RESOURCE_RESERVATION_STALE,
+                    "Reservation reallocation facts are stale or cross-wired.",
+                )
             if any(
                 value.reservation_id == operation.reservation_id and value.state == MutationIntentState.PLANNED
                 for value in snapshot.mutation_intents
@@ -650,6 +685,19 @@ def decide_reservation_operation(  # noqa: C901, PLR0912
                 return DecisionFailure(
                     DecisionFailureCode.ACTION_NOT_AVAILABLE,
                     "Reservation revocation requires exact live coordination authority.",
+                )
+            reservation = snapshot.resource_reservation(operation.reservation_id)
+            counter = None if reservation is None else snapshot.resource_reservation_counter(reservation.instance_id)
+            if (
+                reservation is None
+                or reservation.generation != operation.reservation_generation
+                or operation.observation.instance_id != reservation.instance_id
+                or counter is None
+                or counter.generation_high_water != operation.counter_generation
+            ):
+                return DecisionFailure(
+                    DecisionFailureCode.RESOURCE_RESERVATION_STALE,
+                    "Reservation revocation facts are stale or cross-wired.",
                 )
             unresolved = any(
                 value.reservation_id == operation.reservation_id and value.state == MutationIntentState.PLANNED

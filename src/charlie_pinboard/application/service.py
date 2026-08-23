@@ -349,6 +349,12 @@ def change_attempt_authority(
                 if (attempt := snapshot.attempt(attempt_id)) is not None and attempt.state == AttemptState.ACTIVE
                 else None
             ),
+            transferable_attempt=(
+                (attempt_id, attempt.item)
+                if (attempt := snapshot.attempt(attempt_id)) is not None
+                and attempt.state not in {AttemptState.DONE, AttemptState.CLOSED}
+                else None
+            ),
             project_host_epoch=snapshot.host_epoch,
             recovery_pending_attempts=tuple(
                 value.attempt_id

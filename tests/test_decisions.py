@@ -1491,7 +1491,35 @@ class ResourceAuthorityTest(unittest.TestCase):
         snapshot = LedgerSnapshot(
             "revision",
             1,
-            (),
+            (
+                WorkItem(
+                    ItemId("item-1"),
+                    WorkState.ACTIVE,
+                    None,
+                    (),
+                    AttemptId("attempt-1"),
+                    "source",
+                    "next",
+                    "notes",
+                ),
+            ),
+            attempts=(AttemptRecord("attempt-1", "item-1", AttemptState.ACTIVE),),
+            scopes=(
+                ScopeAnchor(
+                    "item-1",
+                    1,
+                    DIGEST_A,
+                    make_item_scope(
+                        "item-1",
+                        "Item 1",
+                        None,
+                        None,
+                        None,
+                        None,
+                        resource_requirements=(ResourceRequirement(0, "workspace"),),
+                    ),
+                ),
+            ),
             resource_definitions=(ResourceDefinition("workspace", "opaque-workspace"),),
             resource_instances=(
                 ResourceInstance("instance-a", "workspace", "host-a", 1),
@@ -1586,7 +1614,35 @@ class ResourceAuthorityTest(unittest.TestCase):
         snapshot = LedgerSnapshot(
             "revision",
             1,
-            (),
+            (
+                WorkItem(
+                    ItemId("item-1"),
+                    WorkState.ACTIVE,
+                    None,
+                    (),
+                    AttemptId("attempt-1"),
+                    "source",
+                    "next",
+                    "notes",
+                ),
+            ),
+            attempts=(AttemptRecord("attempt-1", "item-1", AttemptState.ACTIVE),),
+            scopes=(
+                ScopeAnchor(
+                    "item-1",
+                    1,
+                    DIGEST_A,
+                    make_item_scope(
+                        "item-1",
+                        "Item 1",
+                        None,
+                        None,
+                        None,
+                        None,
+                        resource_requirements=(ResourceRequirement(0, "checkout"),),
+                    ),
+                ),
+            ),
             attempt_authorities=(authority,),
             resource_definitions=(ResourceDefinition("checkout", "git-checkout"),),
             resource_instances=(ResourceInstance("instance-1", "checkout", "host-a", 4),),
