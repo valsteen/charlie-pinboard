@@ -50,7 +50,8 @@ def _validate_component(component: str) -> None:
 
 
 def resolve_durable_roots(project_root: Path, external_work_root: Path | None = None) -> DurableRoots:
-    if external_work_root is None:
+    local_work_root = project_root.absolute() / ".codex" / "work"
+    if external_work_root is None or external_work_root.absolute() == local_work_root:
         anchor = _verified_directory(project_root, label="Project root")
         return DurableRoots(anchor, (".codex", "work"))
 
@@ -86,6 +87,24 @@ def ensure_directory_chain(roots: DurableRoots) -> None:
             raise FileIOError(f"Durable-root component is not a real directory: {child}")
         _sync_directory(current)
         current = child
+
+
+def ensure_child_directory(parent: Path, component: str) -> Path:
+    """Create or re-observe one real child directory and durably record its entry."""
+
+    _validate_component(component)
+    verified_parent = _verified_directory(parent, label="Durable parent")
+    child = verified_parent / component
+    try:
+        child.mkdir()
+    except FileExistsError:
+        pass
+    except OSError as error:
+        raise FileIOError(f"Durable directory could not be created: {child}") from error
+    if child.is_symlink() or not child.is_dir():
+        raise FileIOError(f"Durable directory is not a real directory: {child}")
+    _sync_directory(verified_parent)
+    return child
 
 
 def _write_and_sync(path: Path, content: bytes) -> DurableFile:

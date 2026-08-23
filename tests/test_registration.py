@@ -3,12 +3,51 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from charlie_pinboard.application.registration import InitializationError
 from charlie_pinboard.legacy.actions import actions_for
-from charlie_pinboard.legacy.registration import RegistrationError, initialize_work_state, transfer_coordinator
+from charlie_pinboard.legacy.registration import (
+    RegistrationError,
+    initialize_sqlite_work_state,
+    initialize_work_state,
+    transfer_coordinator,
+)
 from charlie_pinboard.legacy.validate import validate_work_state
 
 
 class RegistrationTest(unittest.TestCase):
+    def test_initializes_current_sqlite_state_locally_and_at_an_external_root(self) -> None:
+        for external in (False, True):
+            project = Path(tempfile.mkdtemp()).resolve()
+            work = project.parent / f"{project.name}-work" if external else None
+
+            receipt = initialize_sqlite_work_state(project, work)
+            resumed = initialize_sqlite_work_state(project, work)
+
+            self.assertEqual(0, receipt.project_revision)
+            self.assertFalse(receipt.resumed)
+            self.assertTrue(resumed.resumed)
+            self.assertTrue(receipt.database_path.is_file())
+            self.assertTrue((receipt.work_root / "artifacts").is_dir())
+            self.assertTrue((receipt.work_root / "views" / "queue.md").is_file())
+            self.assertFalse((receipt.work_root / "authority.json").exists())
+            self.assertFalse((receipt.work_root / "queue.md").exists())
+
+    def test_current_initialization_rejects_legacy_state_and_unverified_external_parent(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        work = project / ".codex" / "work"
+        work.mkdir(parents=True)
+        (work / "queue.md").write_text("legacy", encoding="utf-8")
+
+        with self.assertRaises(InitializationError) as legacy:
+            initialize_sqlite_work_state(project)
+        self.assertEqual("MIGRATION_REQUIRED", legacy.exception.code)
+
+        other = Path(tempfile.mkdtemp()).resolve()
+        missing_parent = other / "missing" / "work"
+        with self.assertRaises(InitializationError) as invalid_root:
+            initialize_sqlite_work_state(project, missing_parent)
+        self.assertEqual("STORAGE_IO_ERROR", invalid_root.exception.code)
+
     def test_initializes_empty_valid_ledger_with_exact_coordinator(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
 

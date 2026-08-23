@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import assert_never
 
+from charlie_pinboard.adapters.files.artifacts import ArtifactError, verify_reference
+from charlie_pinboard.adapters.sqlite.database import StorageError
+from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.domain.model import SCHEMA_V1, SCHEMA_V2, WorkState
 from charlie_pinboard.legacy.authority import AuthorityVersion, resolve_authority
 from charlie_pinboard.legacy.coordinator import CoordinatorError, read_coordinator
@@ -367,6 +370,36 @@ def _validate_work_state(
 def validate_work_state(work_root: Path, project_root: Path) -> ValidationReport:
     authority = resolve_authority(work_root)
     return _validate_work_state(authority.work_root, project_root, authority.version, check_pending=True)
+
+
+def validate_sqlite_work_state(work_root: Path) -> ValidationReport:
+    """Validate current SQLite authority and immutable artifacts without consulting generated views."""
+
+    database = work_root / "state.sqlite3"
+    try:
+        state = SQLiteWorkStore(database).snapshot()
+    except StorageError as error:
+        return ValidationReport((_error(error.code.value, database, str(error)),))
+    diagnostics: list[Diagnostic] = []
+    for reference in state.artifacts.references:
+        try:
+            verify_reference(work_root, reference)
+        except ArtifactError as error:
+            diagnostics.append(_error(error.code, work_root / reference.selector, str(error)))
+    view_root = work_root / "views"
+    for selector in ("queue.md", "current.md", "history.md"):
+        path = view_root / selector
+        if not path.is_file():
+            diagnostics.append(
+                Diagnostic(
+                    "VIEW_REFRESH_REQUIRED",
+                    Severity.WARNING,
+                    path,
+                    "Generated view is absent; SQLite remains authoritative.",
+                    "Run 'pinboard views rebuild'.",
+                )
+            )
+    return ValidationReport(tuple(diagnostics))
 
 
 def validate_live_work_state(work_root: Path, project_root: Path) -> ValidationReport:

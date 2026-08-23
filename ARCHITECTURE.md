@@ -2,7 +2,7 @@
 
 ## System overview
 
-Charlie Pinboard is a local coordination system for one repository-owned work ledger. The installed `pinboard` command finds the repository, reads and validates its work state, computes legal lifecycle and resource decisions, and applies serialized changes atomically. The current production runtime still uses the Markdown ledger and filesystem transaction engine that preceded the planned SQLite authority.
+Charlie Pinboard is a local coordination system for one repository-owned work ledger. The installed `pinboard` command finds the repository, reads and validates its work state, computes legal lifecycle and resource decisions, and applies serialized changes atomically. Fresh projects use one SQLite database as authority, with immutable long-form artifacts beside it and repairable Markdown views derived from it. The two known pre-cutover projects still use the temporary Markdown runtime until their explicit migration.
 
 The Python package is `charlie_pinboard`. Its physical layout makes the current dependency strata visible: pure rules live in `domain`, use-case contracts live in `application`, concrete environment integration lives in `adapters`, user-facing decoding and presentation live in `interfaces`, and the temporary Markdown runtime lives in `legacy`.
 
@@ -20,7 +20,7 @@ interfaces ────────> application ────────> domai
 
 `domain` imports the Python standard library plus `msgspec` for exact declared canonical records. `application` depends on domain values and decisions, not on concrete storage. Adapters may satisfy application needs and translate environment facts, while interfaces compose those pieces and turn command-line or JSON values into typed values.
 
-The downward call from `interfaces` to `legacy` is the one deliberate transitional path. The CLI still invokes the Markdown authority, filesystem locks, and custom file transaction machinery. External transition input is decoded by an interface-owned decoder injected into that legacy transaction, so the legacy package does not import the interface package and domain signatures never receive JSON representations.
+The downward call from `interfaces` to `legacy` is the one deliberate transitional path for unmigrated projects and accepted dispatch-brief parsing. Current SQLite projects compose application use cases with file and SQLite adapters directly. External transition input is decoded by the interface before either route enters typed domain decisions, so domain signatures never receive JSON representations.
 
 ## Current package map
 
@@ -61,8 +61,13 @@ The application layer is the home for top-level use-case sequencing below user-f
 | `decision_projection.py` | Pure projection from complete stored state into the narrower `LedgerSnapshot` consumed by domain decisions |
 | `ports.py` | `WorkStore` and `WorkTransaction` protocols over complete `StoredWorkState` reads and one closed accepted-mutation commit boundary |
 | `service.py` | Locked application orchestration that reselects typed authority, invokes the focused lifecycle, planning, or resource-intent decision owner, and commits one accepted mutation through `WorkStore` |
+| `actions.py` | Current observer, coordinator, and worker action discovery over one `WorkStore` snapshot |
+| `artifacts.py` | Immutable artifact publication values and the accepted-reference storage capability |
+| `queries.py` | SQLite-independent overview, parallel-preview, plan-snapshot comparison, and resource-conflict read models over `WorkStore` |
+| `dispatch.py` | Current-action reselection, resource-free dispatch eligibility, immutable review-evidence sequencing, and canonical prompt preparation through injected artifact and brief-parser capabilities |
+| `registration.py` | Stable initialization result and error values used by outer composition |
 
-A port is an application-owned description of a capability the use case needs; a concrete file or SQLite store implements that capability from outside the application layer. `StoredWorkState` contains no SQL rows, filesystem paths, adapter exceptions, or active-record behavior. `LedgerSnapshot` remains domain-owned and storage-independent rather than becoming a lossy persistence contract. The current production CLI does not yet run through these ports because the Markdown implementation remains inside the temporary legacy path.
+A port is an application-owned description of a capability the use case needs; a concrete file or SQLite store implements that capability from outside the application layer. `StoredWorkState` contains no SQL rows, adapter exceptions, or active-record behavior. `LedgerSnapshot` remains domain-owned and storage-independent rather than becoming a lossy persistence contract. Current SQLite CLI operations run through these ports; the temporary Markdown route remains isolated for unmigrated state.
 
 ### Adapters
 
@@ -72,11 +77,14 @@ Adapters own concrete filesystem and database mechanics without deciding lifecyc
 | --- | --- |
 | `files/root.py` | Git-backed project-root discovery and the conventional `.codex/work` location |
 | `files/file_io.py` | Verified durable-root creation, immutable single-file publication, and same-directory atomic replacement |
+| `files/artifacts.py` | Exact plural artifact selectors, immutable revision publication, digest and size verification, and concrete artifact-repository composition |
+| `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections whose repair failures never change SQLite authority |
 | `sqlite/schema.sql` | The exact current `charlie-pinboard` / `sqlite-v1` relational schema |
 | `sqlite/database.py` | Raw SQLite connection configuration, exact current-schema verification, transactions, backup, synchronization, and stable storage errors |
 | `sqlite/store.py` | Relational `WorkStore` persistence for complete `StoredWorkState` reads and exhaustive accepted-mutation commits with one revision and history receipt |
+| `sqlite/registration.py` | Fresh local or external SQLite initialization, resumable reopen, legacy-state refusal, and initial generated-view composition |
 
-These SQLite owners are independently buildable primitives. The current production CLI does not compose them yet and continues to use the Markdown authority through `legacy`.
+These owners provide the current runtime for fresh projects. SQLite is the sole authority once `state.sqlite3` exists; artifact files contain accepted long-form bytes, while generated views remain disposable projections.
 
 Pure lifecycle, planning, and resource modules continue to decide legality. The application mutation contract derives the exact relational delta for their accepted outputs, while proposal creation, dependency and requirement edits, authority changes, and reservation or task-use changes use typed before/after values bounded to their named record families. Every stored-state mutation carries the complete accepted history-receipt identity. Carrier-only variants add no policy; application orchestration constructs them only after current action and operation legality accepts the exact records. SQLite applies the closed union without importing raw input, Markdown, paths, or application orchestration.
 
@@ -84,7 +92,7 @@ Pure lifecycle, planning, and resource modules continue to decide legality. The 
 
 | Module | Current ownership |
 | --- | --- |
-| `cli.py` | Command definitions, argument decoding, diagnostics and JSON presentation, and composition of current operations |
+| `cli.py` | Command definitions, argument decoding, exact current-action reselection, diagnostics and JSON presentation, and composition of SQLite or temporary legacy operations from the project’s present authority |
 | `transition_input.py` | Strict external transition-payload schemas and conversion into typed payload values |
 | `transitions.py` | The external mutation boundary that binds an advertised action and decoded payload into one closed command variant before entering the current legacy transaction |
 
@@ -104,25 +112,25 @@ Interfaces may call application use cases, adapters, and the temporary legacy ru
 | `transition.py`, `transition_plan.py` | Filesystem-coupled mutation sequencing and translation of pure decisions into legacy file changes; `transition.py` also exposes the temporary store-backed transition operation without changing CLI composition |
 | `proposals.py`, `overview.py`, `parallel.py`, `dispatch.py` | Filesystem-backed proposal intake, read models, concurrency previews, and worker-launch preparation, including reviewed-authority and immutable brief-review validation for cross-boundary checkpoints; `proposals.py` also exposes the temporary store-backed intake operation |
 
-The four mutation-facing legacy modules expose temporary, domain-typed names for the corresponding application-service operations so callers can adopt `WorkStore` without duplicating policy. Those names are direct aliases: the legacy modules add no adapter logic, generation arithmetic, mutation construction, or error remapping. The installed CLI continues to call the existing Markdown functions. The legacy package does not define the future SQLite model and is not a source for new steady-state SQLite behavior.
+The four mutation-facing legacy modules expose temporary, domain-typed names for the corresponding application-service operations so callers can adopt `WorkStore` without duplicating policy. Those names are direct aliases: the legacy modules add no adapter logic, generation arithmetic, mutation construction, or error remapping. The installed CLI calls these Markdown functions only for unmigrated projects. The accepted brief semantic parser in `legacy.dispatch` is also injected into current SQLite dispatch until the planned legacy deletion moves or removes that remaining parser. The legacy package does not define the SQLite model and is not a source for new steady-state behavior.
 
 ## Representative flows
 
 ### Mutation
 
-The installed `pinboard transition` command enters `interfaces.cli`, which resolves the project through `adapters.files.root` and loads an advertised action from the legacy view. `interfaces.transitions` decodes the strict JSON payload and binds it to that action as one closed dataclass command variant. While holding the current authority transaction, the legacy mutation verifies lease, resource, and stale-revision tokens before accepting the bound command. Pure lifecycle decisions and `legacy.transition_plan` exhaustively match that command union, so an action discriminator and an incompatible payload cannot circulate as separate internal values. `legacy.transaction_store` validates and commits the resulting file change set atomically, then the interface renders the new revision or a typed failure.
+The installed `pinboard transition` command enters `interfaces.cli`, which resolves the project and work root through the file adapter. For current SQLite state, the interface reselects the exact advertised action from `application.actions`, compares the caller-supplied revision and authority tokens, decodes the strict JSON payload, and binds that exact action and input as one closed command variant. `application.service` reselects authority inside the store transaction, invokes the pure decision owner, and commits the resulting closed mutation through `SQLiteWorkStore`. A successful commit advances SQLite before the interface attempts a generated-view refresh; refresh failure is reported as a repair warning and cannot roll back accepted state.
 
-This route proves behavior through the production command while keeping weak JSON values out of the domain. It remains transitional because the transaction and use-case sequencing still belong to the legacy filesystem implementation rather than an application service over a store port.
+For an unmigrated project, the same interface decoder feeds the temporary legacy transaction. The legacy mutation verifies lease, resource, and stale-revision tokens before `legacy.transition_plan` exhaustively matches the same typed command contract and `legacy.transaction_store` commits the file change set. Both routes keep an action discriminator and incompatible input from circulating as separate internal values.
 
 ### Read or query
 
-An installed status, overview, actions, or validation command enters `interfaces.cli` and resolves the project root through the file adapter. The relevant legacy reader resolves the active authority, parses the Markdown files, validates their agreement, and constructs typed domain records or a read model. The CLI converts that result into human-readable text or stable JSON. Reads do not acquire permanent coordination ownership and do not make a derived view authoritative.
+An installed status, overview, actions, parallel preview, or validation command enters `interfaces.cli` and resolves the project root through the file adapter. Current projects read one `StoredWorkState` snapshot from SQLite and build application-owned read models directly; they do not parse generated Markdown. Unmigrated projects temporarily use the corresponding legacy reader. The CLI converts either typed result into human-readable text or stable JSON. Reads do not acquire coordination ownership, and `pinboard views rebuild` can recreate every generated Markdown view without changing SQLite.
 
 ### Worker dispatch
 
-The installed `pinboard dispatch` command enters `interfaces.cli` with one current dispatch action, an exact checkpoint heading, and a typed execution environment. `legacy.dispatch` revalidates that action and the active attempt under the existing authority transaction. Local checkpoints continue directly to canonical prompt rendering.
+The installed `pinboard dispatch` command enters `interfaces.cli` with one current dispatch action, an exact checkpoint heading, and a typed execution environment. For SQLite state, the interface and application dispatch seam reselect the action, active attempt, and accepted brief artifact from current storage. The file artifact repository verifies the brief bytes before the injected semantic parser validates the checkpoint and renders the canonical prompt. Local checkpoints continue without independent review evidence. Resource-free repository-write dispatch and read-only dispatch are supported; any repository-write dispatch for an item with resource requirements returns the recorded unsupported-feature error before resource authority changes.
 
-For a cross-boundary checkpoint, `legacy.dispatch` parses the Contract, reviewed-authority, authoritative-coverage, and lifecycle records into concrete values. It resolves each selected authority against the canonical project, verifies its selected-byte digest, and binds the exact checkpoint and reviewed-authority-table bytes to immutable ready evidence under `attempts/<attempt>/brief-reviews/`. Optional `--brief-review` and `--review-id` inputs let the same command validate candidate evidence before creating that digest-named path under the existing dispatch lock. Exact bytes reuse the existing file; a differing collision preserves the later evidence under `brief-reviews/rejected/` without overwriting either artifact, then rejects. That evidence is an independent planning-review dependency, not a new lifecycle state. Missing, stale, incomplete, non-ready, noncanonical-task, or same-owner evidence rejects before prompt rendering. Local dispatch does not accept publication inputs. The resulting launch prompt remains only a pointer to the canonical brief and execution environment; it does not duplicate those semantics.
+For a cross-boundary checkpoint, the injected parser reads the Contract, reviewed-authority, authoritative-coverage, and lifecycle records into concrete values. It resolves each selected authority against the canonical project and verifies its selected-byte digest. Ready review evidence is published through the immutable artifact repository, then accepted by SQLite with its selector, size, digest, and optional item relationship. Exact bytes reuse the existing accepted revision; a differing collision is preserved under a distinct rejected-evidence key and then rejected without overwriting either artifact. Missing, stale, incomplete, non-ready, noncanonical-task, or same-owner evidence rejects before prompt rendering. The resulting launch prompt remains only a pointer to the canonical brief and execution environment; it does not duplicate those semantics.
 
 ### Nonterminal checkpoint acceptance
 
@@ -152,4 +160,4 @@ There is no `repo_work` source directory, import alias, package metadata target,
 
 ## Current and future structure
 
-This document maps implemented owners. Today the package includes the current SQLite schema, raw database boundary, relational store, durable single-file primitives, and the SQLite-backed application mutation service for lifecycle, proposal, scope, authority, planning, reservation, resource-definition, and mutation-intent operations. It does not yet include the artifact service, query service, or interface composition for those owners. The Markdown-backed CLI remains authoritative. Later checkpoints add queries, artifact and view adapters, and interface composition under the same dependency direction. Future modules become part of this map only when implementation exists; empty directories and diagram-only packages are intentionally absent.
+This document maps implemented owners. Today the package includes the current SQLite schema, raw database boundary, relational store, durable artifact and generated-view adapters, application mutation and query services, current dispatch composition, and fresh SQLite initialization. The temporary Markdown runtime and importer remain because the two known projects have not yet crossed the explicit migration boundary. Portable migration, known-ledger cutover, legacy deletion, final workflow-vocabulary decisions, README reconciliation, persistence consolidation, and deferred production-hardening review are not described as implemented here. Future modules become part of this map only when implementation exists; empty directories and diagram-only packages are intentionally absent.

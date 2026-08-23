@@ -3,7 +3,8 @@ import contextlib
 import sys
 from collections import Counter
 from collections.abc import Generator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import assert_never
@@ -12,7 +13,56 @@ from uuid import uuid4
 import msgspec
 
 from charlie_pinboard import __version__
+from charlie_pinboard.adapters.files.artifacts import ArtifactRepository
+from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.files.root import RootError, resolve_project_root
+from charlie_pinboard.adapters.files.views import AffectedViews
+from charlie_pinboard.adapters.files.views import rebuild as rebuild_views
+from charlie_pinboard.adapters.files.views import refresh as refresh_views
+from charlie_pinboard.adapters.sqlite.database import StorageError
+from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
+from charlie_pinboard.application.actions import ActionQueryError, discover_actions
+from charlie_pinboard.application.decision_projection import project_decision_snapshot
+from charlie_pinboard.application.dispatch import prepare_sqlite_dispatch
+from charlie_pinboard.application.queries import (
+    OverviewItem as SQLiteOverviewItem,
+)
+from charlie_pinboard.application.queries import (
+    ParallelItem as SQLiteParallelItem,
+)
+from charlie_pinboard.application.queries import (
+    ParallelPreview as SQLiteParallelPreview,
+)
+from charlie_pinboard.application.queries import (
+    WorkOverview as SQLiteWorkOverview,
+)
+from charlie_pinboard.application.queries import (
+    preview_parallel as preview_sqlite_parallel,
+)
+from charlie_pinboard.application.queries import (
+    read_overview as read_sqlite_overview,
+)
+from charlie_pinboard.application.registration import InitializationError
+from charlie_pinboard.application.service import (
+    change_attempt_authority,
+    change_coordination_authority,
+)
+from charlie_pinboard.application.service import (
+    execute as execute_sqlite_transition,
+)
+from charlie_pinboard.application.stored_state import ResourceInstanceState
+from charlie_pinboard.domain.authority_decisions import (
+    AcquireCoordinationAuthority,
+    AcquireInitialAttemptAuthority,
+    ReleaseAttemptAuthority,
+    ReleaseCoordinationAuthority,
+    RenewAttemptAuthority,
+    RenewCoordinationAuthority,
+    RevokeAttemptAuthority,
+    RevokeCoordinationAuthority,
+)
+from charlie_pinboard.domain.decisions import bind_transition
+from charlie_pinboard.domain.errors import DecisionFailure
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     AttemptId,
@@ -23,7 +73,9 @@ from charlie_pinboard.domain.identifiers import (
     ProposalId,
     ResourceId,
     SubjectId,
+    TaskId,
 )
+from charlie_pinboard.domain.model import CoordinationCommandAuthority
 from charlie_pinboard.domain.resource_decisions import ResourceToken
 from charlie_pinboard.identity import PROGRAM_NAME
 from charlie_pinboard.interfaces.transition_input import (
@@ -31,7 +83,9 @@ from charlie_pinboard.interfaces.transition_input import (
     CloseOutcome,
     TransitionInputError,
     encoded_legacy_transition_input_schema,
+    encoded_transition_input_schema,
     parse_legacy_transition_input,
+    parse_transition_input,
 )
 from charlie_pinboard.interfaces.transitions import TransitionError, apply_action
 from charlie_pinboard.legacy.actions import (
@@ -45,7 +99,12 @@ from charlie_pinboard.legacy.actions import (
 )
 from charlie_pinboard.legacy.authority import AuthorityVersion, authority_transaction, resolve_authority
 from charlie_pinboard.legacy.coordinator import read_coordinator
-from charlie_pinboard.legacy.dispatch import DispatchError, prepare_dispatch, read_dispatch_environment
+from charlie_pinboard.legacy.dispatch import (
+    DispatchError,
+    prepare_dispatch,
+    prepare_dispatch_from_artifact,
+    read_dispatch_environment,
+)
 from charlie_pinboard.legacy.leases import (
     LeaseError,
     LeaseRecord,
@@ -65,7 +124,11 @@ from charlie_pinboard.legacy.migration import MigrationError, migrate_to_v2
 from charlie_pinboard.legacy.overview import OverviewError, OverviewItem, WorkOverview, read_overview
 from charlie_pinboard.legacy.parallel import ParallelError, ParallelItem, ParallelPreview, preview_parallel
 from charlie_pinboard.legacy.proposals import ProposalError, create_proposal
-from charlie_pinboard.legacy.registration import RegistrationError, initialize_work_state, initialize_work_state_v2
+from charlie_pinboard.legacy.registration import (
+    RegistrationError,
+    initialize_sqlite_work_state,
+    initialize_work_state,
+)
 from charlie_pinboard.legacy.resources import (
     ResourceClaim,
     ResourceDeclaration,
@@ -80,7 +143,7 @@ from charlie_pinboard.legacy.resources import (
     revoke_resource,
 )
 from charlie_pinboard.legacy.transaction_store import AtomicCommitError, recover_pending_commit
-from charlie_pinboard.legacy.validate import ValidationReport, validate_work_state
+from charlie_pinboard.legacy.validate import ValidationReport, validate_sqlite_work_state, validate_work_state
 
 
 class CommandName(Enum):
@@ -101,6 +164,7 @@ class CommandName(Enum):
     ATTEMPT = "attempt"
     RESOURCE = "resource"
     PARALLEL = "parallel"
+    VIEWS = "views"
 
 
 class CoordinationOperation(Enum):
@@ -131,6 +195,10 @@ class ResourceOperation(Enum):
 
 class ParallelOperation(Enum):
     PREVIEW = "preview"
+
+
+class ViewsOperation(Enum):
+    REBUILD = "rebuild"
 
 
 class CliArguments(argparse.Namespace):
@@ -234,7 +302,7 @@ class OverviewItemView(msgspec.Struct, frozen=True):
     notes: str
 
     @classmethod
-    def from_item(cls, item: OverviewItem) -> OverviewItemView:
+    def from_item(cls, item: OverviewItem | SQLiteOverviewItem) -> OverviewItemView:
         return cls(
             item.item_id,
             item.label,
@@ -259,7 +327,7 @@ class OverviewView(msgspec.Struct, frozen=True):
     immediate_options: tuple[str, ...]
 
     @classmethod
-    def from_overview(cls, overview: WorkOverview) -> OverviewView:
+    def from_overview(cls, overview: WorkOverview | SQLiteWorkOverview) -> OverviewView:
         return cls(
             overview.schema,
             overview.authority,
@@ -285,8 +353,9 @@ class InputContractView(msgspec.Struct, frozen=True):
     payload_schema: msgspec.Raw
 
     @classmethod
-    def from_kind(cls, kind: str) -> InputContractView:
-        return cls(kind, msgspec.Raw(encoded_legacy_transition_input_schema(kind)))
+    def from_kind(cls, kind: str, *, legacy: bool = True) -> InputContractView:
+        encoded = encoded_legacy_transition_input_schema(kind) if legacy else encoded_transition_input_schema(kind)
+        return cls(kind, msgspec.Raw(encoded))
 
 
 class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
@@ -303,11 +372,17 @@ class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
     input_contract: InputContractView | None = None
 
     @classmethod
-    def from_action(cls, action: Action, *, include_input_contract: bool = False) -> ActionView:
+    def from_action(
+        cls,
+        action: Action,
+        *,
+        include_input_contract: bool = False,
+        legacy: bool = True,
+    ) -> ActionView:
         input_contract: InputContractView | None = None
         if include_input_contract:
             try:
-                input_contract = InputContractView.from_kind(action.kind.value)
+                input_contract = InputContractView.from_kind(action.kind.value, legacy=legacy)
             except TransitionInputError as error:
                 if error.code != "ACTION_NOT_MUTATING":
                     raise
@@ -355,7 +430,7 @@ class ParallelItemView(msgspec.Struct, frozen=True):
     reasons: tuple[ParallelReasonView, ...]
 
     @classmethod
-    def from_item(cls, item: ParallelItem) -> ParallelItemView:
+    def from_item(cls, item: ParallelItem | SQLiteParallelItem) -> ParallelItemView:
         return cls(
             item.item_id,
             item.label,
@@ -378,7 +453,7 @@ class ParallelPreviewView(msgspec.Struct, frozen=True):
     excluded: tuple[ParallelItemView, ...]
 
     @classmethod
-    def from_preview(cls, preview: ParallelPreview) -> ParallelPreviewView:
+    def from_preview(cls, preview: ParallelPreview | SQLiteParallelPreview) -> ParallelPreviewView:
         return cls(
             preview.schema,
             preview.revision,
@@ -540,7 +615,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--work-root", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     _add_inspection_parsers(commands)
-    initialize = commands.add_parser("init", help="Create an empty schema-v2 ledger.")
+    initialize = commands.add_parser("init", help="Create an empty current SQLite work state.")
     initialize.add_argument("--coordinator-task-id")
     initialize.add_argument("--host-id")
     proposal = commands.add_parser("proposal", help="Create one immutable inbox proposal.")
@@ -597,6 +672,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_attempt_parser(commands)
     _add_resource_parser(commands)
     _add_parallel_parser(commands)
+    views = commands.add_parser("views", help="Repair generated human-readable views.")
+    views.add_subparsers(dest="operation", required=True).add_parser("rebuild")
     return parser
 
 
@@ -606,6 +683,16 @@ def _roots(arguments: CliArguments) -> tuple[Path, Path]:
     work_argument = arguments.work_root
     work = work_argument.resolve() if work_argument is not None else project / ".codex" / "work"
     return project, work
+
+
+def _uses_sqlite(work_root: Path) -> bool:
+    return (work_root / "state.sqlite3").is_file()
+
+
+def _stable_identifier(value: str, *, label: str) -> str:
+    if not value or value in {".", ".."} or "/" in value or "\x00" in value:
+        raise LeaseError("IDENTITY_INVALID", f"{label} must be one stable opaque identity.")
+    return value
 
 
 def _diagnostic_view(report: ValidationReport) -> ValidationView:
@@ -625,6 +712,35 @@ def _diagnostic_view(report: ValidationReport) -> ValidationView:
 
 
 def _status_value(work: Path, project: Path) -> StatusView:
+    if _uses_sqlite(work):
+        state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        overview = read_sqlite_overview(SQLiteWorkStore(work / "state.sqlite3"))
+        coordinator = state.authority.coordination
+        return StatusView(
+            valid=True,
+            project_root=str(project),
+            work_root=str(work),
+            revision=str(state.lifecycle.project.revision),
+            focus_item=overview.focus_item,
+            focus_attempt=overview.focus_attempt,
+            active_attempts=overview.active_attempts,
+            next_action=state.focus.next_action,
+            counts=dict(Counter(item.state.value for item in state.lifecycle.work_items)),
+            inbox_count=len(overview.inbox),
+            coordinator=(
+                CoordinatorView(
+                    str(coordinator.task_id),
+                    str(coordinator.host_id),
+                    coordinator.generation,
+                    str(coordinator.lease_id),
+                    coordinator.expires_at.isoformat(),
+                    coordinator.state.value,
+                )
+                if coordinator is not None
+                else None
+            ),
+            authority="sqlite-v1",
+        )
     report = validate_work_state(work, project)
     if not report.valid:
         raise ActionError("WORK_STATE_INVALID", report.render())
@@ -739,13 +855,57 @@ def _action_from_values(
     )
 
 
+def _reselect_sqlite_action(context: CommandContext, supplied: Action, role: Role) -> Action:
+    try:
+        available = discover_actions(
+            SQLiteWorkStore(context.work / "state.sqlite3"),
+            role,
+            lease_id=supplied.lease_id,
+            generation=supplied.coordinator_generation,
+        )
+    except ActionQueryError as error:
+        raise ActionError(error.code, str(error).partition(": ")[2]) from error
+    current = next((value for value in available if value.action_id == supplied.action_id), None)
+    if current is None:
+        raise ActionError("ACTION_NOT_AVAILABLE", f"Action '{supplied.action_id}' is not currently legal.")
+    if current.expected_revision != supplied.expected_revision:
+        raise ActionError("STALE_ACTION", "The work ledger changed after this action was selected.")
+    supplied_capability = (
+        supplied.kind,
+        supplied.subject,
+        supplied.coordinator_generation,
+        supplied.subject_revision,
+        supplied.authorization,
+        supplied.lease_id,
+        supplied.resource_claims,
+    )
+    current_capability = (
+        current.kind,
+        current.subject,
+        current.coordinator_generation,
+        current.subject_revision,
+        current.authorization,
+        current.lease_id,
+        current.resource_claims,
+    )
+    if current_capability != supplied_capability:
+        raise ActionError(
+            "ACTION_NOT_AVAILABLE", f"Action '{supplied.action_id}' no longer has exact current authority."
+        )
+    return current
+
+
 def _root(context: CommandContext) -> int:
     _write_json(RootView(str(context.project), str(context.work)))
     return 0
 
 
 def _validate(context: CommandContext) -> int:
-    report = validate_work_state(context.work, context.project)
+    report = (
+        validate_sqlite_work_state(context.work)
+        if _uses_sqlite(context.work)
+        else validate_work_state(context.work, context.project)
+    )
     if context.arguments.json:
         _write_json(_diagnostic_view(report))
     else:
@@ -765,7 +925,11 @@ def _status(context: CommandContext) -> int:
 
 
 def _overview(context: CommandContext) -> int:
-    overview = read_overview(context.work, context.project)
+    overview: WorkOverview | SQLiteWorkOverview = (
+        read_sqlite_overview(SQLiteWorkStore(context.work / "state.sqlite3"))
+        if _uses_sqlite(context.work)
+        else read_overview(context.work, context.project)
+    )
     if context.arguments.json:
         _write_json(OverviewView.from_overview(overview))
         return 0
@@ -868,12 +1032,22 @@ def _close(context: CommandContext) -> int:
 
 
 def _actions(context: CommandContext) -> int:
-    available = actions_for(
-        context.work,
-        context.project,
-        Role(context.arguments.role),
-        lease_id=context.arguments.lease_id,
-        generation=context.arguments.generation,
+    sqlite = _uses_sqlite(context.work)
+    available = (
+        discover_actions(
+            SQLiteWorkStore(context.work / "state.sqlite3"),
+            Role(context.arguments.role),
+            lease_id=LeaseId(context.arguments.lease_id) if context.arguments.lease_id is not None else None,
+            generation=context.arguments.generation,
+        )
+        if sqlite
+        else actions_for(
+            context.work,
+            context.project,
+            Role(context.arguments.role),
+            lease_id=context.arguments.lease_id,
+            generation=context.arguments.generation,
+        )
     )
     exact_action_id = context.arguments.action_id
     if exact_action_id is not None:
@@ -886,7 +1060,11 @@ def _actions(context: CommandContext) -> int:
         _write_json(
             ActionsView(
                 tuple(
-                    ActionView.from_action(action, include_input_contract=exact_action_id is not None)
+                    ActionView.from_action(
+                        action,
+                        include_input_contract=exact_action_id is not None,
+                        legacy=not sqlite,
+                    )
                     for action in available
                 )
             )
@@ -900,7 +1078,7 @@ def _actions(context: CommandContext) -> int:
 
 
 def _input_contract(context: CommandContext) -> int:
-    value = InputContractView.from_kind(context.arguments.action_kind)
+    value = InputContractView.from_kind(context.arguments.action_kind, legacy=not _uses_sqlite(context.work))
     if context.arguments.json:
         _write_json(value)
     else:
@@ -927,7 +1105,9 @@ def _initialize(context: CommandContext) -> int:
     task_id = context.arguments.coordinator_task_id
     host_id = context.arguments.host_id
     if task_id is None and host_id is None:
-        initialized = initialize_work_state_v2(context.project, context.work)
+        selected_work = context.work if context.arguments.work_root is not None else None
+        receipt = initialize_sqlite_work_state(context.project, selected_work)
+        initialized = receipt.work_root
     elif task_id is not None and host_id is not None:
         initialized = initialize_work_state(context.project, task_id, host_id, context.work)
     else:
@@ -964,7 +1144,33 @@ def _transition(context: CommandContext) -> int:
         payload = payload_path.read_bytes()
     except OSError as error:
         raise TransitionError("TRANSITION_INPUT_INVALID", f"Cannot read transition payload: {error}") from error
-    revision = apply_action(context.work, context.project, action, payload)
+    if _uses_sqlite(context.work):
+        role = Role.WORKER if action.authorization == AuthorizationKind.ATTEMPT else Role.COORDINATOR
+        action = _reselect_sqlite_action(context, action, role)
+        parsed = parse_transition_input(action.kind.value, payload)
+        command = bind_transition(action, parsed)
+        if isinstance(command, DecisionFailure):
+            raise TransitionError(command.code.value, command.message)
+        store = SQLiteWorkStore(context.work / "state.sqlite3")
+        result = execute_sqlite_transition(store, command, datetime.now(UTC))
+        if isinstance(result, DecisionFailure):
+            raise TransitionError(result.code.value, result.message)
+        state = store.snapshot()
+        affected = AffectedViews(
+            queue=True,
+            current_focus=True,
+            history=True,
+            items=(result.item,) if result.item is not None else (),
+            attempts=(AttemptId(action.subject),)
+            if any(attempt.attempt_id == action.subject for attempt in state.lifecycle.attempts)
+            else (),
+        )
+        view_result = refresh_views(store, context.work, affected)
+        if view_result.warning is not None:
+            print(view_result.warning.message, file=sys.stderr)
+        revision = str(state.lifecycle.project.revision)
+    else:
+        revision = apply_action(context.work, context.project, action, payload)
     print(f"OK TRANSITION_APPLIED {action.action_id} revision={revision}")
     return 0
 
@@ -989,22 +1195,40 @@ def _prepare_dispatch(context: CommandContext) -> int:
                 "DISPATCH_BRIEF_REVIEW_INVALID",
                 f"Cannot read '{context.arguments.brief_review}': {error}",
             ) from error
-    prompt = prepare_dispatch(
-        context.work,
-        context.project,
-        _action_from_values(
-            context.arguments.action_id,
-            context.arguments.expected_revision,
-            context.arguments.generation,
-            None,
-            "coordination" if context.arguments.lease_id is not None else "coordinator",
-            context.arguments.lease_id,
-        ),
-        context.arguments.checkpoint,
-        environment,
-        supplied_prompt,
-        brief_review,
-        context.arguments.review_id,
+    action = _action_from_values(
+        context.arguments.action_id,
+        context.arguments.expected_revision,
+        context.arguments.generation,
+        None,
+        "coordination" if context.arguments.lease_id is not None else "coordinator",
+        context.arguments.lease_id,
+    )
+    if _uses_sqlite(context.work):
+        action = _reselect_sqlite_action(context, action, Role.COORDINATOR)
+    prompt = (
+        prepare_sqlite_dispatch(
+            SQLiteWorkStore(context.work / "state.sqlite3"),
+            ArtifactRepository(resolve_durable_roots(context.project, context.work)),
+            prepare_dispatch_from_artifact,
+            context.project,
+            action,
+            context.arguments.checkpoint,
+            environment,
+            supplied_prompt,
+            brief_review,
+            context.arguments.review_id,
+        )
+        if _uses_sqlite(context.work)
+        else prepare_dispatch(
+            context.work,
+            context.project,
+            action,
+            context.arguments.checkpoint,
+            environment,
+            supplied_prompt,
+            brief_review,
+            context.arguments.review_id,
+        )
     )
     if supplied_prompt is None:
         sys.stdout.write(prompt)
@@ -1116,7 +1340,9 @@ def _coordinated_transition(context: CommandContext) -> CoordinatedTransitionVie
     return CoordinatedTransitionView(context.arguments.action_id, revision)
 
 
-def _coordination(context: CommandContext) -> int:
+def _coordination(context: CommandContext) -> int:  # noqa: PLR0912 - exhaustive legacy/current composition
+    if _uses_sqlite(context.work):
+        return _sqlite_coordination(context)
     root = _lease_command_root(context.work)
     operation = CoordinationOperation(context.arguments.operation)
     match operation:
@@ -1156,7 +1382,176 @@ def _coordination(context: CommandContext) -> int:
     return _emit_operation(value, context.arguments.json)
 
 
+def _sqlite_coordination_values(context: CommandContext) -> dict[str, str | int] | None:
+    state = SQLiteWorkStore(context.work / "state.sqlite3").snapshot()
+    value = state.authority.coordination
+    if value is None:
+        return None
+    return {
+        "task_id": str(value.task_id),
+        "host_id": str(value.host_id),
+        "lease_id": str(value.lease_id),
+        "generation": value.generation,
+        "acquired_at": value.acquired_at.isoformat(),
+        "expires_at": value.expires_at.isoformat(),
+        "status": value.state.value,
+    }
+
+
+def _emit_sqlite_coordination(context: CommandContext) -> int:
+    values = _sqlite_coordination_values(context)
+    if context.arguments.json:
+        _write_json({"lease": None} if values is None else values)
+    elif values is None:
+        print("OK COORDINATION_AVAILABLE")
+    else:
+        print("OK " + " ".join(f"{key}={value}" for key, value in values.items()))
+    return 0
+
+
+def _current_coordination_token(
+    context: CommandContext,
+    *,
+    supplied_identity: bool = False,
+) -> CoordinationCommandAuthority:
+    state = SQLiteWorkStore(context.work / "state.sqlite3").snapshot()
+    current = state.authority.coordination
+    if current is None:
+        raise LeaseError("COORDINATION_LEASE_REQUIRED", "Coordination authority does not exist.")
+    return CoordinationCommandAuthority(
+        state.lifecycle.project.host_epoch,
+        current.task_id,
+        current.host_id,
+        LeaseId(context.arguments.lease_id or "") if supplied_identity else current.lease_id,
+        context.arguments.generation if supplied_identity else current.generation,
+        current.expires_at,
+    )
+
+
+def _sqlite_coordination(context: CommandContext) -> int:
+    operation = CoordinationOperation(context.arguments.operation)
+    if operation == CoordinationOperation.STATUS:
+        return _emit_sqlite_coordination(context)
+    if operation == CoordinationOperation.APPLY:
+        return _sqlite_coordinated_transition(context)
+    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    state = store.snapshot()
+    now = datetime.now(UTC)
+    match operation:
+        case CoordinationOperation.ACQUIRE:
+            authority_operation = AcquireCoordinationAuthority(
+                state.lifecycle.project.host_epoch,
+                TaskId(_stable_identifier(context.arguments.task_id, label="Task identity")),
+                HostId(_stable_identifier(context.arguments.host_id, label="Host identity")),
+                LeaseId(uuid4().hex),
+                now,
+                now + timedelta(seconds=context.arguments.ttl_seconds),
+            )
+        case CoordinationOperation.RENEW:
+            authority_operation = RenewCoordinationAuthority(
+                _current_coordination_token(context, supplied_identity=True),
+                now,
+                now + timedelta(seconds=context.arguments.ttl_seconds),
+            )
+        case CoordinationOperation.RELEASE:
+            authority_operation = ReleaseCoordinationAuthority(
+                _current_coordination_token(context, supplied_identity=True), now
+            )
+        case CoordinationOperation.REVOKE:
+            current = _current_coordination_token(context)
+            authority_operation = RevokeCoordinationAuthority(current.lease_id, current.generation, now)
+        case _ as unreachable:
+            assert_never(unreachable)
+    result = change_coordination_authority(store, authority_operation)
+    if isinstance(result, DecisionFailure):
+        raise LeaseError(result.code.value, result.message)
+    view_result = refresh_views(store, context.work, AffectedViews(queue=True, current_focus=True, history=True))
+    if view_result.warning is not None:
+        print(view_result.warning.message, file=sys.stderr)
+    return _emit_sqlite_coordination(context)
+
+
+def _sqlite_coordinated_transition(context: CommandContext) -> int:
+    payload_path = context.arguments.payload
+    try:
+        payload = payload_path.read_bytes()
+    except OSError as error:
+        raise TransitionError("TRANSITION_INPUT_INVALID", f"Cannot read transition payload: {error}") from error
+    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    now = datetime.now(UTC)
+    state = store.snapshot()
+    acquire = AcquireCoordinationAuthority(
+        state.lifecycle.project.host_epoch,
+        TaskId(_stable_identifier(context.arguments.task_id, label="Task identity")),
+        HostId(_stable_identifier(context.arguments.host_id, label="Host identity")),
+        LeaseId(uuid4().hex),
+        now,
+        now + timedelta(seconds=context.arguments.ttl_seconds),
+    )
+    acquired = change_coordination_authority(store, acquire)
+    if isinstance(acquired, DecisionFailure):
+        raise LeaseError(acquired.code.value, acquired.message)
+    transition_revision: str | None = None
+    try:
+        current_state = store.snapshot()
+        coordination = current_state.authority.coordination
+        assert coordination is not None
+        available = discover_actions(
+            store,
+            Role.COORDINATOR,
+            lease_id=coordination.lease_id,
+            generation=coordination.generation,
+        )
+        action = next(
+            (candidate for candidate in available if candidate.action_id == context.arguments.action_id),
+            None,
+        )
+        if action is None:
+            raise TransitionError(
+                "ACTION_NOT_AVAILABLE", f"Action '{context.arguments.action_id}' is not currently legal."
+            )
+        parsed = parse_transition_input(action.kind.value, payload)
+        command = bind_transition(action, parsed)
+        if isinstance(command, DecisionFailure):
+            raise TransitionError(command.code.value, command.message)
+        result = execute_sqlite_transition(store, command, datetime.now(UTC))
+        if isinstance(result, DecisionFailure):
+            raise TransitionError(result.code.value, result.message)
+        transition_revision = str(store.snapshot().lifecycle.project.revision)
+    finally:
+        current = store.snapshot().authority.coordination
+        if current is not None and current.lease_id == acquire.lease_id:
+            released = change_coordination_authority(
+                store,
+                ReleaseCoordinationAuthority(
+                    CoordinationCommandAuthority(
+                        store.snapshot().lifecycle.project.host_epoch,
+                        current.task_id,
+                        current.host_id,
+                        current.lease_id,
+                        current.generation,
+                        current.expires_at,
+                    ),
+                    datetime.now(UTC),
+                ),
+            )
+            if isinstance(released, DecisionFailure) and transition_revision is None:
+                raise LeaseError(released.code.value, released.message)
+    view_result = rebuild_views(store, context.work)
+    if view_result.warning is not None:
+        print(view_result.warning.message, file=sys.stderr)
+    assert transition_revision is not None
+    value = CoordinatedTransitionView(context.arguments.action_id, transition_revision)
+    if context.arguments.json:
+        _write_json(value)
+    else:
+        print(f"OK COORDINATED_TRANSITION action={value.action_id} revision={value.revision}")
+    return 0
+
+
 def _attempt(context: CommandContext) -> int:
+    if _uses_sqlite(context.work):
+        return _sqlite_attempt(context)
     root = _lease_command_root(context.work)
     operation = AttemptOperation(context.arguments.operation)
     match operation:
@@ -1197,7 +1592,113 @@ def _attempt(context: CommandContext) -> int:
     return _emit_operation(value, context.arguments.json)
 
 
+def _sqlite_attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912 - exhaustive authority lifecycle
+    attempt_id = AttemptId(_stable_identifier(context.arguments.attempt_id, label="Attempt identity"))
+    operation = AttemptOperation(context.arguments.operation)
+    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    state = store.snapshot()
+    if operation != AttemptOperation.STATUS:
+        now = datetime.now(UTC)
+        snapshot = project_decision_snapshot(state)
+        attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
+        if attempt is None:
+            raise LeaseError("ATTEMPT_LEASE_REQUIRED", f"Attempt '{attempt_id}' is not current.")
+        retained = next((value for value in snapshot.command_attempt_authorities if value.attempt == attempt_id), None)
+        match operation:
+            case AttemptOperation.ACQUIRE:
+                authority_operation = AcquireInitialAttemptAuthority(
+                    state.lifecycle.project.host_epoch,
+                    attempt_id,
+                    attempt.item_id,
+                    TaskId(_stable_identifier(context.arguments.task_id, label="Task identity")),
+                    HostId(_stable_identifier(context.arguments.host_id, label="Host identity")),
+                    LeaseId(uuid4().hex),
+                    now,
+                    now + timedelta(seconds=context.arguments.ttl_seconds),
+                )
+            case AttemptOperation.RENEW:
+                if retained is None:
+                    raise LeaseError("ATTEMPT_LEASE_REQUIRED", "Attempt authority is not active.")
+                authority_operation = RenewAttemptAuthority(
+                    replace(
+                        retained,
+                        lease_id=LeaseId(context.arguments.lease_id or ""),
+                        generation=context.arguments.generation,
+                    ),
+                    now,
+                    now + timedelta(seconds=context.arguments.ttl_seconds),
+                )
+            case AttemptOperation.RELEASE:
+                if retained is None:
+                    raise LeaseError("ATTEMPT_LEASE_REQUIRED", "Attempt authority is not active.")
+                authority_operation = ReleaseAttemptAuthority(
+                    replace(
+                        retained,
+                        lease_id=LeaseId(context.arguments.lease_id or ""),
+                        generation=context.arguments.generation,
+                    ),
+                    now,
+                )
+            case AttemptOperation.REVOKE:
+                coordination = state.authority.coordination
+                if coordination is None:
+                    raise LeaseError("COORDINATION_LEASE_REQUIRED", "Coordination authority is absent.")
+                authority_operation = RevokeAttemptAuthority(
+                    attempt_id,
+                    LeaseId(context.arguments.lease_id or ""),
+                    context.arguments.generation,
+                    CoordinationCommandAuthority(
+                        state.lifecycle.project.host_epoch,
+                        coordination.task_id,
+                        coordination.host_id,
+                        LeaseId(context.arguments.coordination_lease_id),
+                        context.arguments.coordination_generation,
+                        coordination.expires_at,
+                    ),
+                    now,
+                )
+            case _ as unreachable:
+                assert_never(unreachable)
+        result = change_attempt_authority(store, authority_operation)
+        if isinstance(result, DecisionFailure):
+            raise LeaseError(result.code.value, result.message)
+        refresh_result = refresh_views(store, context.work, AffectedViews(queue=True, current_focus=True, history=True))
+        if refresh_result.warning is not None:
+            print(refresh_result.warning.message, file=sys.stderr)
+        state = store.snapshot()
+    lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
+    if lease is None:
+        raise LeaseError("ATTEMPT_LEASE_REQUIRED", f"Attempt '{attempt_id}' has no retained authority.")
+    anchor = next(
+        (
+            value
+            for value in state.authority.attempt_generations
+            if value.attempt_id == attempt_id and value.generation == lease.generation
+        ),
+        None,
+    )
+    if anchor is None:
+        raise LeaseError("WORK_STATE_INVALID", "Attempt authority has no exact identity anchor.")
+    values: dict[str, str | int] = {
+        "attempt_id": str(attempt_id),
+        "task_id": str(anchor.task_id),
+        "host_id": str(anchor.host_id),
+        "lease_id": str(anchor.lease_id),
+        "generation": lease.generation,
+        "acquired_at": lease.acquired_at.isoformat(),
+        "expires_at": lease.expires_at.isoformat(),
+        "status": lease.state.value,
+    }
+    if context.arguments.json:
+        _write_json(values)
+    else:
+        print("OK " + " ".join(f"{key}={value}" for key, value in values.items()))
+    return 0
+
+
 def _resource(context: CommandContext) -> int:
+    if _uses_sqlite(context.work):
+        return _sqlite_resource(context)
     root = _lease_command_root(context.work)
     operation = ResourceOperation(context.arguments.operation)
     match operation:
@@ -1257,7 +1758,46 @@ def _resource(context: CommandContext) -> int:
     return _emit_operation(value, context.arguments.json)
 
 
-def _print_parallel_group(title: str, items: tuple[ParallelItem, ...]) -> None:
+def _sqlite_resource(context: CommandContext) -> int:
+    resource_id = ResourceId(_stable_identifier(context.arguments.resource_id, label="Resource identity"))
+    if context.arguments.host_id is not None:
+        _stable_identifier(context.arguments.host_id, label="Host identity")
+    operation = ResourceOperation(context.arguments.operation)
+    if operation != ResourceOperation.STATUS:
+        raise ResourceError("ACTION_NOT_AVAILABLE", "SQLite resource changes require a current typed operation.")
+    state = SQLiteWorkStore(context.work / "state.sqlite3").snapshot()
+    definition = next((value for value in state.resources.definitions if value.resource_id == resource_id), None)
+    if definition is None:
+        raise ResourceError("RESOURCE_INSTANCE_REQUIRED", f"Resource '{resource_id}' is not defined.")
+    values: dict[str, str | int] = {
+        "resource_id": str(resource_id),
+        "label": definition.description,
+        "scope": "host-local",
+    }
+    if context.arguments.host_id is not None:
+        instance = next(
+            (
+                value
+                for value in state.resources.instances
+                if value.resource_id == resource_id
+                and value.host_id == context.arguments.host_id
+                and value.state == ResourceInstanceState.ACTIVE
+            ),
+            None,
+        )
+        if instance is None:
+            raise ResourceError("RESOURCE_INSTANCE_REQUIRED", f"Resource '{resource_id}' has no instance on this host.")
+        values["host_id"] = str(instance.host_id)
+        values["instance_id"] = str(instance.instance_id)
+        values["status"] = instance.state.value
+    if context.arguments.json:
+        _write_json(values)
+    else:
+        print("OK " + " ".join(f"{key}={value}" for key, value in values.items()))
+    return 0
+
+
+def _print_parallel_group(title: str, items: tuple[ParallelItem | SQLiteParallelItem, ...]) -> None:
     print(f"{title}:")
     if not items:
         print("- none")
@@ -1273,11 +1813,19 @@ def _parallel(context: CommandContext) -> int:
     operation = ParallelOperation(context.arguments.operation)
     match operation:
         case ParallelOperation.PREVIEW:
-            preview = preview_parallel(
-                context.work,
-                context.project,
-                context.arguments.host_id,
-                selected=tuple(context.arguments.item),
+            preview: ParallelPreview | SQLiteParallelPreview = (
+                preview_sqlite_parallel(
+                    SQLiteWorkStore(context.work / "state.sqlite3"),
+                    context.arguments.host_id,
+                    selected=tuple(context.arguments.item),
+                )
+                if _uses_sqlite(context.work)
+                else preview_parallel(
+                    context.work,
+                    context.project,
+                    context.arguments.host_id,
+                    selected=tuple(context.arguments.item),
+                )
             )
         case _ as unreachable:
             assert_never(unreachable)
@@ -1291,6 +1839,19 @@ def _parallel(context: CommandContext) -> int:
         _print_parallel_group("Ready to launch together", preview.launchable)
         _print_parallel_group("Needs explicit selection", preview.requires_selection)
         _print_parallel_group("Not launchable", preview.excluded)
+    return 0
+
+
+def _views(context: CommandContext) -> int:
+    if not _uses_sqlite(context.work):
+        raise RegistrationError("MIGRATION_REQUIRED", "Generated-view repair requires current SQLite authority.")
+    operation = ViewsOperation(context.arguments.operation)
+    match operation:
+        case ViewsOperation.REBUILD:
+            result = rebuild_views(SQLiteWorkStore(context.work / "state.sqlite3"), context.work)
+    if result.warning is not None:
+        raise RegistrationError(result.warning.code, result.warning.message)
+    print(f"OK VIEWS_REBUILT revision={result.database_revision}")
     return 0
 
 
@@ -1332,6 +1893,8 @@ def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhausti
             return _resource(context)
         case CommandName.PARALLEL:
             return _parallel(context)
+        case CommandName.VIEWS:
+            return _views(context)
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -1353,10 +1916,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ParallelError,
         OverviewError,
         AtomicCommitError,
+        ActionQueryError,
     ) as error:
         print(str(error), file=sys.stderr)
         return 11
-    except RegistrationError as error:
+    except (RegistrationError, InitializationError, StorageError) as error:
         print(str(error), file=sys.stderr)
         return 12
     except ProposalError as error:

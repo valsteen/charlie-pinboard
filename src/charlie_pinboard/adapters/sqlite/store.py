@@ -1,6 +1,7 @@
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import assert_never, overload
 
 import msgspec
 
+from charlie_pinboard.adapters.files.artifacts import verify_reference
 from charlie_pinboard.adapters.sqlite.database import (
     APPLICATION,
     SCHEMA_VERSION,
@@ -18,6 +20,7 @@ from charlie_pinboard.adapters.sqlite.database import (
     read_operation,
     write_transaction,
 )
+from charlie_pinboard.application.artifacts import ArtifactRef
 from charlie_pinboard.application.mutations import (
     AcceptedMutation,
     AttemptAuthorityMutation,
@@ -1453,5 +1456,111 @@ class SQLiteWorkStore:
         try:
             with write_transaction(connection):
                 _StoredStateWriter(connection).insert_initial(state)
+        finally:
+            connection.close()
+
+    def accept_artifact_reference(
+        self,
+        work_root: Path,
+        published: ArtifactRef,
+        accepted_at: datetime,
+        *,
+        item_id: ItemId | None = None,
+        role: ArtifactRole | None = None,
+    ) -> ArtifactReference:
+        connection = open_database(self._path, OpenMode.READ_WRITE)
+        try:
+            with write_transaction(connection):
+                before = _StoredStateReader(connection).read()
+                verify_reference(work_root, published)
+                existing = next(
+                    (
+                        value
+                        for value in before.artifacts.references
+                        if (value.kind, value.key, value.revision)
+                        == (published.kind, published.key, published.revision)
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    if (
+                        existing.selector,
+                        existing.content_sha256,
+                        existing.size_bytes,
+                    ) != (published.selector, published.content_sha256, published.size_bytes):
+                        raise StorageError(
+                            StorageErrorCode.INVARIANT_VIOLATION,
+                            "An accepted artifact identity already names different bytes.",
+                        )
+                    return existing
+                if (item_id is None) != (role is None):
+                    raise StorageError(
+                        StorageErrorCode.INVARIANT_VIOLATION,
+                        "An artifact relationship requires both an item and role.",
+                    )
+                revision = before.lifecycle.project.revision + 1
+                reference = ArtifactReference(
+                    ArtifactRefId(
+                        1 + max((int(value.artifact_ref_id) for value in before.artifacts.references), default=0)
+                    ),
+                    published.key,
+                    published.revision,
+                    published.kind,
+                    published.selector,
+                    published.content_sha256,
+                    published.size_bytes,
+                    revision,
+                    accepted_at,
+                )
+                lifecycle = before.lifecycle
+                if item_id is not None and role is not None:
+                    item_index = next(
+                        (index for index, value in enumerate(lifecycle.work_items) if value.item_id == item_id),
+                        None,
+                    )
+                    if item_index is None or published.kind.value != role.value:
+                        raise StorageError(
+                            StorageErrorCode.INVARIANT_VIOLATION,
+                            "Artifact relationship does not match a current item and compatible role.",
+                        )
+                    items = list(lifecycle.work_items)
+                    items[item_index] = replace(
+                        items[item_index],
+                        subject_revision=revision,
+                        updated_at=accepted_at,
+                    )
+                    position = sum(
+                        1 for value in lifecycle.item_artifacts if value.item_id == item_id and value.role == role
+                    )
+                    lifecycle = replace(
+                        lifecycle,
+                        work_items=tuple(items),
+                        item_artifacts=(
+                            *lifecycle.item_artifacts,
+                            ItemArtifactLink(item_id, reference.artifact_ref_id, role, position),
+                        ),
+                    )
+                after = replace(
+                    before,
+                    lifecycle=replace(
+                        lifecycle,
+                        project=replace(
+                            lifecycle.project,
+                            revision=revision,
+                            updated_at=accepted_at,
+                        ),
+                    ),
+                    artifacts=replace(
+                        before.artifacts,
+                        references=(*before.artifacts.references, reference),
+                    ),
+                )
+                _StoredStateWriter(connection).replace_current(after)
+                if _StoredStateReader(connection).read() != after:
+                    raise StorageError(
+                        StorageErrorCode.INVARIANT_VIOLATION,
+                        "The accepted artifact did not round-trip exactly.",
+                    )
+                return reference
         finally:
             connection.close()

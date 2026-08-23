@@ -5,10 +5,15 @@ import runpy
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.files.root import RootError
+from charlie_pinboard.adapters.sqlite.database import initialize_database
+from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.domain.model import AttemptState, WorkState
 from charlie_pinboard.interfaces.cli import main
 from charlie_pinboard.interfaces.transitions import apply_action as apply_transition
@@ -22,7 +27,7 @@ from charlie_pinboard.legacy.migration import migrate_to_v2
 from charlie_pinboard.legacy.transaction_store import journal_path_for
 from charlie_pinboard.legacy.validate import validate_work_state
 
-from .support import JsonObject, JsonValue, create_state
+from .support import SQLITE_NOW, JsonObject, JsonValue, complete_sqlite_state, create_state
 
 
 class CliTest(unittest.TestCase):
@@ -789,6 +794,7 @@ class CliTest(unittest.TestCase):
         common = ("--project-root", str(project), "--work-root", str(work))
 
         init_result, _, init_stderr = self.run_cli(*common, "init")
+        available_result, available_stdout, available_stderr = self.run_cli(*common, "coordination", "status")
         status_result, status_stdout, status_stderr = self.run_cli(*common, "status", "--json")
         acquire_result, acquire_stdout, acquire_stderr = self.run_cli(
             *common,
@@ -804,11 +810,283 @@ class CliTest(unittest.TestCase):
         )
 
         self.assertEqual(0, init_result, init_stderr)
+        self.assertEqual(0, available_result, available_stderr)
+        self.assertIn("COORDINATION_AVAILABLE", available_stdout)
         self.assertEqual(0, status_result, status_stderr)
-        self.assertEqual("v2", json.loads(status_stdout)["authority"])
+        self.assertEqual("sqlite-v1", json.loads(status_stdout)["authority"])
         self.assertIsNone(json.loads(status_stdout)["coordinator"])
         self.assertEqual(0, acquire_result, acquire_stderr)
         self.assertEqual("chat-a", json.loads(acquire_stdout)["task_id"])
+
+        views = work / "views"
+        for path in sorted(views.rglob("*"), reverse=True):
+            path.unlink() if path.is_file() else path.rmdir()
+        views.rmdir()
+        for command in (
+            ("validate", "--json"),
+            ("overview", "--json"),
+            ("actions", "--role", "observer", "--json"),
+            ("parallel", "preview", "--host-id", "studio", "--json"),
+        ):
+            result, _, stderr = self.run_cli(*common, *command)
+            self.assertEqual(0, result, stderr)
+        rebuild_result, rebuild_stdout, rebuild_stderr = self.run_cli(*common, "views", "rebuild")
+        self.assertEqual(0, rebuild_result, rebuild_stderr)
+        self.assertIn("VIEWS_REBUILT", rebuild_stdout)
+
+        acquired = json.loads(acquire_stdout)
+        renew_result, renew_stdout, renew_stderr = self.run_cli(
+            *common,
+            "coordination",
+            "renew",
+            "--lease-id",
+            acquired["lease_id"],
+            "--generation",
+            str(acquired["generation"]),
+            "--ttl-seconds",
+            "120",
+            "--json",
+        )
+        self.assertEqual(0, renew_result, renew_stderr)
+        renewed = json.loads(renew_stdout)
+        release_result, _, release_stderr = self.run_cli(
+            *common,
+            "coordination",
+            "release",
+            "--lease-id",
+            renewed["lease_id"],
+            "--generation",
+            str(renewed["generation"]),
+            "--json",
+        )
+        self.assertEqual(0, release_result, release_stderr)
+        second = self.run_json_cli(
+            *common,
+            "coordination",
+            "acquire",
+            "--task-id",
+            "chat-b",
+            "--host-id",
+            "studio",
+            "--ttl-seconds",
+            "60",
+        )
+        revoke_result, revoke_stdout, revoke_stderr = self.run_cli(*common, "coordination", "revoke", "--json")
+        self.assertEqual(0, revoke_result, revoke_stderr)
+        self.assertGreater(json.loads(revoke_stdout)["generation"], second["generation"])
+
+    def test_current_sqlite_cli_reads_complete_state_without_generated_views(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        assert state.authority.coordination is not None
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                coordination=replace(state.authority.coordination, expires_at=now + timedelta(minutes=5)),
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        SQLiteWorkStore(roots.database_path).initialize_state(state)
+        common = ("--project-root", str(project), "--work-root", str(roots.work_root))
+
+        status = self.run_json_cli(*common, "status")
+        self.assertEqual("sqlite-v1", status["authority"])
+        overview = self.run_json_cli(*common, "overview")
+        self.assertEqual("12", overview["revision"])
+        actions = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "coordinator",
+                "--lease-id",
+                "coordination-a",
+                "--generation",
+                "9",
+            )["actions"]
+        )
+        self.assertTrue(actions)
+        self.assertEqual(
+            "active",
+            self.run_json_cli(*common, "attempt", "status", "--attempt-id", "work-a-1")["status"],
+        )
+        resource = self.run_json_cli(*common, "resource", "status", "--resource-id", "workspace")
+        self.assertEqual("workspace", resource["resource_id"])
+        instance = self.run_json_cli(
+            *common,
+            "resource",
+            "status",
+            "--resource-id",
+            "workspace",
+            "--host-id",
+            "host-a",
+        )
+        self.assertEqual("workspace-on-host", instance["instance_id"])
+        preview = self.run_json_cli(*common, "parallel", "preview", "--host-id", "host-a")
+        self.assertEqual("sqlite-v1", overview["authority"])
+        self.assertEqual("repo-work-parallel-preview/v1", preview["schema"])
+        human_commands = (
+            ("status",),
+            ("overview",),
+            (
+                "actions",
+                "--role",
+                "coordinator",
+                "--lease-id",
+                "coordination-a",
+                "--generation",
+                "9",
+            ),
+            ("input-contract", "activate"),
+            ("attempt", "status", "--attempt-id", "work-a-1"),
+            ("resource", "status", "--resource-id", "workspace"),
+            (
+                "resource",
+                "status",
+                "--resource-id",
+                "workspace",
+                "--host-id",
+                "host-a",
+            ),
+            ("parallel", "preview", "--host-id", "host-a"),
+        )
+        for command in human_commands:
+            with self.subTest(command=command):
+                result, stdout, stderr = self.run_cli(*common, *command)
+                self.assertEqual(0, result, stderr or stdout)
+                self.assertTrue(stdout)
+
+    def test_current_sqlite_cli_applies_transition_and_manages_attempt_authority(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        state = complete_sqlite_state()
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                coordination=None,
+                attempt_counters=(),
+                attempt_generations=(),
+                attempt_leases=(),
+            ),
+            resources=replace(state.resources, reservations=(), use_leases=(), mutation_intents=()),
+        )
+        SQLiteWorkStore(roots.database_path).initialize_state(state)
+        common = ("--project-root", str(project), "--work-root", str(roots.work_root))
+        payload = project / "activate.json"
+        payload.write_text(
+            json.dumps(
+                {
+                    "attempt": "work-c-1",
+                    "branch": "codex/work-c",
+                    "base_revision": "candidate-base",
+                    "owner": "worker-task",
+                    "brief_artifact_ref_id": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        applied = self.run_json_cli(
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--action-id",
+            "activate:work-c",
+            "--payload",
+            str(payload),
+        )
+        self.assertEqual("activate:work-c", applied["action_id"])
+        self.assertEqual("released", self.run_json_cli(*common, "coordination", "status")["status"])
+
+        acquired = self.run_json_cli(
+            *common,
+            "attempt",
+            "acquire",
+            "--attempt-id",
+            "work-c-1",
+            "--task-id",
+            "worker-task",
+            "--host-id",
+            "studio",
+            "--ttl-seconds",
+            "60",
+        )
+        renewed = self.run_json_cli(
+            *common,
+            "attempt",
+            "renew",
+            "--attempt-id",
+            "work-c-1",
+            "--lease-id",
+            str(acquired["lease_id"]),
+            "--generation",
+            str(acquired["generation"]),
+            "--ttl-seconds",
+            "120",
+        )
+        released = self.run_json_cli(
+            *common,
+            "attempt",
+            "release",
+            "--attempt-id",
+            "work-c-1",
+            "--lease-id",
+            str(renewed["lease_id"]),
+            "--generation",
+            str(renewed["generation"]),
+        )
+        self.assertEqual("released", released["status"])
+        status_result, status_stdout, status_stderr = self.run_cli(
+            *common, "attempt", "status", "--attempt-id", "work-c-1"
+        )
+        self.assertEqual(0, status_result, status_stderr)
+        self.assertIn("status=released", status_stdout)
+
+        coordination = self.run_json_cli(
+            *common,
+            "coordination",
+            "acquire",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--ttl-seconds",
+            "60",
+        )
+        coordinator_actions = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "coordinator",
+                "--lease-id",
+                str(coordination["lease_id"]),
+                "--generation",
+                str(coordination["generation"]),
+            )["actions"]
+        )
+        pause = next(
+            self.json_object(value)
+            for value in coordinator_actions
+            if self.json_object(value)["action_id"] == "pause:work-c-1"
+        )
+        pause_payload = project / "pause.json"
+        pause_payload.write_text('{"reason":"Pause after the functional check."}\n', encoding="utf-8")
+        transition_result, transition_stdout, transition_stderr = self.run_json_transition(common, pause, pause_payload)
+        self.assertEqual(0, transition_result, transition_stderr)
+        self.assertIn("TRANSITION_APPLIED", transition_stdout)
 
     def test_v1_lease_and_resource_commands_require_explicit_migration(self) -> None:
         project, work = create_state([])

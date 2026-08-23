@@ -1,0 +1,980 @@
+import hashlib
+from datetime import UTC, datetime
+from enum import Enum
+
+import msgspec
+
+from charlie_pinboard.application.decision_projection import project_decision_snapshot
+from charlie_pinboard.application.ports import WorkStore
+from charlie_pinboard.application.stored_state import (
+    AttemptLeaseState,
+    ItemDependency,
+    ItemResourceRequirement,
+    PlanningObligationState,
+    ProposalEvidence,
+    ProposalFreshness,
+    ReservationState,
+    StoredAttempt,
+    StoredPlanningImpact,
+    StoredPlanningObligation,
+    StoredPlanningReplacement,
+    StoredProposal,
+    StoredWorkItem,
+    StoredWorkItemState,
+    StoredWorkState,
+)
+from charlie_pinboard.domain.errors import DecisionFailure
+from charlie_pinboard.domain.history import item_scope_bytes
+from charlie_pinboard.domain.identifiers import ItemId, ResourceInstanceId
+from charlie_pinboard.domain.model import AttemptState, WorkState
+
+
+class QueryError(RuntimeError):
+    code: str
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(f"{code}: {message}")
+
+
+class PlanQueryError(QueryError):
+    pass
+
+
+class DetailLevel(Enum):
+    COMPACT = "compact"
+    DETAILED = "detailed"
+
+
+class ParallelOutcome(Enum):
+    LAUNCHABLE = "launchable"
+    REQUIRES_SELECTION = "requires-selection"
+    EXCLUDED = "excluded"
+
+
+class ParallelSelection(Enum):
+    ALL_SAFE = "all-safe"
+    SELECTED = "selected"
+
+
+class ParallelReasonCode(Enum):
+    ATTEMPT_OWNED = "attempt-owned"
+    DEPENDENCY_LIVE = "dependency-live"
+    RESOURCE_BUSY = "resource-busy"
+    RESOURCE_CONFLICT = "resource-conflict"
+    RESOURCE_SELECTION_REQUIRED = "resource-selection-required"
+    STATE_NOT_LAUNCHABLE = "state-not-launchable"
+
+
+class OverviewItem(msgspec.Struct, frozen=True):
+    item_id: str
+    label: str
+    state: WorkState
+    timing: str | None
+    depends_on: tuple[str, ...]
+    attempt_id: str | None
+    next_action: str | None
+    notes: str
+
+
+class WorkOverview(msgspec.Struct, frozen=True):
+    schema: str
+    authority: str
+    revision: str
+    focus_item: str | None
+    focus_attempt: str | None
+    active_attempts: tuple[str, ...]
+    items: tuple[OverviewItem, ...]
+    inbox: tuple[str, ...]
+    immediate_options: tuple[str, ...]
+
+
+class ParallelReason(msgspec.Struct, frozen=True):
+    code: ParallelReasonCode
+    message: str
+
+
+class ParallelItem(msgspec.Struct, frozen=True):
+    item_id: str
+    label: str
+    state: WorkState
+    attempt_id: str | None
+    resources: tuple[str, ...]
+    outcome: ParallelOutcome
+    reasons: tuple[ParallelReason, ...] = ()
+
+
+class ParallelPreview(msgspec.Struct, frozen=True):
+    schema: str
+    revision: str
+    host_id: str
+    selection: ParallelSelection
+    safe: bool
+    launchable: tuple[ParallelItem, ...]
+    requires_selection: tuple[ParallelItem, ...]
+    excluded: tuple[ParallelItem, ...]
+
+
+class ScopeAnchorView(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    scope_digest: str
+    scope_revision: int
+
+
+class PlanItem(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    item_id: str
+    scope_revision: int
+    scope_digest: str
+    semantic: msgspec.Raw
+    lifecycle_state: str
+    outcome_evidence: str | None
+
+
+class UnresolvedObligation(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    impact_id: str
+    source_item_id: str
+    source_attempt_id: str | None
+    source_scope: ScopeAnchorView
+    target_item_id: str
+    target_position: int
+    target_scope: ScopeAnchorView
+    summary: str
+    evidence: str
+    recorded_project_revision: int
+
+
+class ReplacementRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    position: int
+    item_id: str
+
+
+class ResolvedObligation(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    impact_id: str
+    source_item_id: str
+    source_attempt_id: str | None
+    source_scope: ScopeAnchorView
+    target_item_id: str
+    target_position: int
+    target_scope: ScopeAnchorView
+    summary: str
+    evidence: str
+    recorded_project_revision: int
+    evaluated_scope: ScopeAnchorView
+    resulting_scope: ScopeAnchorView | None
+    disposition: str
+    reason: str
+    outcome_evidence: str | None
+    replacements: tuple[ReplacementRecord, ...]
+    resolved_project_revision: int
+
+
+class ProposalRelationRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    kind: str
+    item_id: str | None
+
+
+class ProposalEvidenceRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    position: int
+    selector: str
+
+
+class ProposalFreshnessRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    position: int
+    assumption: str
+
+
+class UndecidedProposal(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    proposal_id: str
+    source_task_id: str
+    user_label: str
+    trigger: str
+    why_it_matters: str
+    relation: ProposalRelationRecord
+    effect: str
+    unlock: str
+    urgency_evidence: str
+    evidence: tuple[ProposalEvidenceRecord, ...]
+    freshness_assumptions: tuple[ProposalFreshnessRecord, ...]
+    proposal_sha256: str
+
+
+class _UndecidedProposalPreimage(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    proposal_id: str
+    source_task_id: str
+    user_label: str
+    trigger: str
+    why_it_matters: str
+    relation: ProposalRelationRecord
+    effect: str
+    unlock: str
+    urgency_evidence: str
+    evidence: tuple[ProposalEvidenceRecord, ...]
+    freshness_assumptions: tuple[ProposalFreshnessRecord, ...]
+
+
+class PlanSnapshot(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: str
+    application: str
+    database_schema_version: int
+    project_revision: int
+    requested_roots: tuple[str, ...]
+    include_undecided: bool
+    status: str
+    items: tuple[PlanItem, ...]
+    unresolved_obligations: tuple[UnresolvedObligation, ...]
+    resolved_obligations: tuple[ResolvedObligation, ...]
+    undecided: tuple[UndecidedProposal, ...]
+    manifest_sha256: str
+
+
+class _PlanSnapshotPreimage(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: str
+    application: str
+    database_schema_version: int
+    project_revision: int
+    requested_roots: tuple[str, ...]
+    include_undecided: bool
+    status: str
+    items: tuple[PlanItem, ...]
+    unresolved_obligations: tuple[UnresolvedObligation, ...]
+    resolved_obligations: tuple[ResolvedObligation, ...]
+    undecided: tuple[UndecidedProposal, ...]
+
+
+class ItemAnchorChange(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    item_id: str
+    before: ScopeAnchorView
+    after: ScopeAnchorView
+
+
+class ItemPresenceChange(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    item_id: str
+    scope: ScopeAnchorView
+
+
+class ItemLifecycleChange(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    item_id: str
+    before: str
+    after: str
+
+
+class NamedChange(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    identity: str
+
+
+class PlanChanges(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    added: tuple[ItemPresenceChange, ...]
+    removed: tuple[ItemPresenceChange, ...]
+    scope_changed: tuple[ItemAnchorChange, ...]
+    dependencies_changed: tuple[ItemAnchorChange, ...]
+    resources_changed: tuple[ItemAnchorChange, ...]
+    artifacts_changed: tuple[ItemAnchorChange, ...]
+    lifecycle_only: tuple[ItemLifecycleChange, ...]
+    replacements: tuple[NamedChange, ...]
+    obligations_entered_scope: tuple[NamedChange, ...]
+    obligations_left_scope: tuple[NamedChange, ...]
+    obligations_opened: tuple[NamedChange, ...]
+    obligations_resolved: tuple[NamedChange, ...]
+    undecided_changed: tuple[NamedChange, ...]
+
+
+class PlanChangeSet(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: str
+    before_manifest_sha256: str
+    after_manifest_sha256: str
+    requested_roots: tuple[str, ...]
+    include_undecided: bool
+    changes: PlanChanges
+    change_set_sha256: str
+
+
+class _PlanChangeSetPreimage(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: str
+    before_manifest_sha256: str
+    after_manifest_sha256: str
+    requested_roots: tuple[str, ...]
+    include_undecided: bool
+    changes: PlanChanges
+
+
+class ResourceConflictView(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: str
+    detail: str
+    instance_id: str
+    resource_id: str
+    state: str
+    consequence: str
+    locator: msgspec.Raw | None
+    reservation_id: str | None
+    attempt_id: str | None
+    legal_actions: tuple[str, ...]
+
+
+def _dependency_key(value: ItemDependency) -> tuple[int, str]:
+    return value.position, str(value.dependency_id)
+
+
+def _dependency_position(value: ItemDependency) -> int:
+    return value.position
+
+
+def _item_key(value: StoredWorkItem) -> str:
+    return str(value.item_id)
+
+
+def _attempt_key(value: StoredAttempt) -> str:
+    return str(value.attempt_id)
+
+
+def _proposal_key(value: StoredProposal) -> str:
+    return str(value.proposal_id)
+
+
+def _requirement_position(value: ItemResourceRequirement) -> int:
+    return value.position
+
+
+def _parallel_item_key(value: ParallelItem) -> str:
+    return value.item_id
+
+
+def _obligation_key(value: StoredPlanningObligation) -> tuple[str, str]:
+    return str(value.impact_id), str(value.target_item_id)
+
+
+def _replacement_position(value: StoredPlanningReplacement) -> int:
+    return value.position
+
+
+def _proposal_evidence_position(value: ProposalEvidence) -> int:
+    return value.position
+
+
+def _proposal_freshness_position(value: ProposalFreshness) -> int:
+    return value.position
+
+
+_TERMINAL_ITEM_STATES = {
+    StoredWorkItemState.DONE,
+    StoredWorkItemState.SUPERSEDED,
+    StoredWorkItemState.DROPPED,
+}
+
+
+def _canonical_bytes(value: msgspec.Struct) -> bytes:
+    return msgspec.json.encode(value, order="sorted") + b"\n"
+
+
+def _work_state(value: StoredWorkItemState) -> WorkState:
+    try:
+        return WorkState(value.value)
+    except ValueError as error:
+        raise QueryError("WORK_STATE_INVALID", f"Item state {value.value!r} is not live.") from error
+
+
+def read_overview(store: WorkStore) -> WorkOverview:
+    state = store.snapshot()
+    attempts = {
+        attempt.item_id: attempt.attempt_id
+        for attempt in state.lifecycle.attempts
+        if attempt.state not in {AttemptState.DONE, AttemptState.CLOSED}
+    }
+    dependencies = {
+        item.item_id: tuple(
+            str(link.dependency_id)
+            for link in sorted(
+                (candidate for candidate in state.lifecycle.dependencies if candidate.item_id == item.item_id),
+                key=_dependency_key,
+            )
+        )
+        for item in state.lifecycle.work_items
+    }
+    items = tuple(
+        OverviewItem(
+            str(item.item_id),
+            item.user_label,
+            _work_state(item.state),
+            item.timing.value if item.timing is not None else None,
+            dependencies[item.item_id],
+            str(attempts[item.item_id]) if item.item_id in attempts else None,
+            item.next_action,
+            item.notes or "",
+        )
+        for item in sorted(state.lifecycle.work_items, key=_item_key)
+        if item.state not in _TERMINAL_ITEM_STATES
+    )
+    live_ids = frozenset(item.item_id for item in items)
+    immediate = tuple(
+        item.item_id
+        for item in items
+        if item.state in {WorkState.INTAKE, WorkState.READY, WorkState.DEFERRED}
+        or (
+            item.state in {WorkState.PAUSED, WorkState.BLOCKED}
+            and not any(dependency in live_ids for dependency in item.depends_on)
+        )
+    )
+    inbox = tuple(
+        str(proposal.proposal_id)
+        for proposal in sorted(state.proposals.proposals, key=_proposal_key)
+        if proposal.disposition is None
+    )
+    return WorkOverview(
+        "repo-work-overview/v1",
+        "sqlite-v1",
+        str(state.lifecycle.project.revision),
+        str(state.focus.item_id) if state.focus.item_id is not None else None,
+        str(state.focus.attempt_id) if state.focus.attempt_id is not None else None,
+        tuple(
+            str(attempt.attempt_id)
+            for attempt in sorted(state.lifecycle.attempts, key=_attempt_key)
+            if attempt.state == AttemptState.ACTIVE
+        ),
+        items,
+        inbox,
+        immediate,
+    )
+
+
+def _preview_time(value: datetime | None) -> datetime:
+    current = value or datetime.now(UTC)
+    if current.tzinfo is None:
+        raise QueryError("PARALLEL_TIME_INVALID", "Preview time must be timezone-aware.")
+    return current.astimezone(UTC)
+
+
+def _parallel_reasons(
+    state: StoredWorkState,
+    item_id: ItemId,
+    live_items: frozenset[str],
+    host_id: str,
+    current: datetime,
+) -> tuple[ParallelReason, ...]:
+    item = next(value for value in state.lifecycle.work_items if value.item_id == item_id)
+    if item.state not in {StoredWorkItemState.READY, StoredWorkItemState.ACTIVE}:
+        return (
+            ParallelReason(
+                ParallelReasonCode.STATE_NOT_LAUNCHABLE,
+                f"Item '{item_id}' is {item.state.value}; only ready items and unowned active attempts can launch.",
+            ),
+        )
+    live_dependencies = tuple(
+        str(link.dependency_id)
+        for link in sorted(state.lifecycle.dependencies, key=_dependency_position)
+        if link.item_id == item_id and str(link.dependency_id) in live_items
+    )
+    if live_dependencies:
+        return (
+            ParallelReason(
+                ParallelReasonCode.DEPENDENCY_LIVE,
+                f"Item '{item_id}' still depends on live work: {', '.join(live_dependencies)}.",
+            ),
+        )
+    attempt = next(
+        (
+            candidate
+            for candidate in state.lifecycle.attempts
+            if candidate.item_id == item_id and candidate.state == AttemptState.ACTIVE
+        ),
+        None,
+    )
+    if attempt is not None:
+        lease = next(
+            (candidate for candidate in state.authority.attempt_leases if candidate.attempt_id == attempt.attempt_id),
+            None,
+        )
+        if lease is not None and lease.state == AttemptLeaseState.ACTIVE and current < lease.expires_at:
+            return (
+                ParallelReason(
+                    ParallelReasonCode.ATTEMPT_OWNED,
+                    f"Active attempt '{attempt.attempt_id}' is owned until {lease.expires_at.isoformat()}.",
+                ),
+            )
+    required = {
+        requirement.resource_id for requirement in state.resources.requirements if requirement.item_id == item_id
+    }
+    busy = tuple(
+        reservation
+        for reservation in state.resources.reservations
+        if reservation.resource_id in required
+        and reservation.host_id == host_id
+        and reservation.state in {ReservationState.ACTIVE, ReservationState.REVOKED_PENDING_RECOVERY}
+        and reservation.item_id != item_id
+    )
+    return tuple(
+        ParallelReason(
+            ParallelReasonCode.RESOURCE_BUSY,
+            f"Resource '{reservation.resource_id}' on '{host_id}' is retained by attempt '{reservation.attempt_id}'.",
+        )
+        for reservation in busy
+    )
+
+
+def preview_parallel(
+    store: WorkStore,
+    host_id: str,
+    *,
+    selected: tuple[str, ...] = (),
+    now: datetime | None = None,
+) -> ParallelPreview:
+    if not host_id:
+        raise QueryError("PARALLEL_HOST_INVALID", "A host identity is required.")
+    state = store.snapshot()
+    current = _preview_time(now)
+    live = tuple(item for item in state.lifecycle.work_items if item.state not in _TERMINAL_ITEM_STATES)
+    by_id = {str(item.item_id): item for item in live}
+    if len(selected) != len(set(selected)) or any(item_id not in by_id for item_id in selected):
+        raise QueryError("PARALLEL_SELECTION_INVALID", "Selected item identities must be unique current items.")
+    candidates = tuple(by_id[item_id] for item_id in selected) if selected else tuple(sorted(live, key=_item_key))
+    live_ids = frozenset(by_id)
+    launchable: list[ParallelItem] = []
+    excluded: list[ParallelItem] = []
+    for item in candidates:
+        resources = tuple(
+            str(value.resource_id)
+            for value in sorted(state.resources.requirements, key=_requirement_position)
+            if value.item_id == item.item_id
+        )
+        reasons = _parallel_reasons(state, item.item_id, live_ids, host_id, current)
+        value = ParallelItem(
+            str(item.item_id),
+            item.user_label,
+            _work_state(item.state),
+            str(next((a.attempt_id for a in state.lifecycle.attempts if a.item_id == item.item_id), "")) or None,
+            resources,
+            ParallelOutcome.EXCLUDED if reasons else ParallelOutcome.LAUNCHABLE,
+            reasons,
+        )
+        (excluded if reasons else launchable).append(value)
+    by_resource: dict[str, list[str]] = {}
+    for item in launchable:
+        for resource in item.resources:
+            by_resource.setdefault(resource, []).append(item.item_id)
+    conflicts = {resource: ids for resource, ids in by_resource.items() if len(ids) > 1}
+    requires_selection: list[ParallelItem] = []
+    if conflicts:
+        retained: list[ParallelItem] = []
+        for item in launchable:
+            shared = tuple(resource for resource in item.resources if resource in conflicts)
+            if not shared:
+                retained.append(item)
+                continue
+            reason = ParallelReason(
+                ParallelReasonCode.RESOURCE_CONFLICT if selected else ParallelReasonCode.RESOURCE_SELECTION_REQUIRED,
+                f"Selected items share host-local resources: {', '.join(shared)}."
+                if selected
+                else f"Multiple candidates need host-local resources: {', '.join(shared)}; select one explicitly.",
+            )
+            revised = msgspec.structs.replace(
+                item,
+                outcome=ParallelOutcome.EXCLUDED if selected else ParallelOutcome.REQUIRES_SELECTION,
+                reasons=(reason,),
+            )
+            (excluded if selected else requires_selection).append(revised)
+        launchable = retained
+    return ParallelPreview(
+        "repo-work-parallel-preview/v1",
+        str(state.lifecycle.project.revision),
+        host_id,
+        ParallelSelection.SELECTED if selected else ParallelSelection.ALL_SAFE,
+        not selected or not excluded,
+        tuple(sorted(launchable, key=_parallel_item_key)),
+        tuple(sorted(requires_selection, key=_parallel_item_key)),
+        tuple(sorted(excluded, key=_parallel_item_key)),
+    )
+
+
+def _closure(state: StoredWorkState, roots: tuple[str, ...]) -> tuple[str, ...]:
+    admitted = {str(item.item_id) for item in state.lifecycle.work_items}
+    if not roots or len(roots) != len(set(roots)) or any(root not in admitted for root in roots):
+        raise PlanQueryError("PLAN_SELECTION_INVALID", "Plan roots must be unique admitted item identities.")
+    dependencies = {
+        str(item.item_id): tuple(
+            str(link.dependency_id)
+            for link in sorted(state.lifecycle.dependencies, key=_dependency_position)
+            if link.item_id == item.item_id
+        )
+        for item in state.lifecycle.work_items
+    }
+    selected = set(roots)
+    pending = list(roots)
+    while pending:
+        for dependency in dependencies[pending.pop()]:
+            if dependency not in admitted:
+                raise PlanQueryError("WORK_STATE_INVALID", "A selected dependency is not admitted.")
+            if dependency not in selected:
+                selected.add(dependency)
+                pending.append(dependency)
+    return tuple(sorted(selected))
+
+
+def _scope_items(state: StoredWorkState, closure: tuple[str, ...]) -> tuple[PlanItem, ...]:
+    snapshot = project_decision_snapshot(state)
+    scopes = {str(scope.item): scope for scope in snapshot.scopes}
+    items = {str(item.item_id): item for item in state.lifecycle.work_items}
+    result: list[PlanItem] = []
+    for item_id in closure:
+        item = items[item_id]
+        scope = scopes.get(item_id)
+        if scope is None:
+            raise PlanQueryError("WORK_STATE_INVALID", f"Selected item '{item_id}' has no current semantic scope.")
+        encoded = item_scope_bytes(scope.scope)
+        if isinstance(encoded, DecisionFailure):
+            raise PlanQueryError(encoded.code.value, encoded.message)
+        if hashlib.sha256(encoded).hexdigest() != item.scope_digest:
+            raise PlanQueryError("WORK_STATE_INVALID", f"Selected item '{item_id}' has a mismatched scope digest.")
+        result.append(
+            PlanItem(
+                item_id,
+                item.scope_revision,
+                item.scope_digest,
+                msgspec.Raw(encoded.rstrip(b"\n")),
+                item.state.value,
+                item.outcome_evidence,
+            )
+        )
+    return tuple(result)
+
+
+def _impact_by_id(state: StoredWorkState) -> dict[str, StoredPlanningImpact]:
+    return {str(impact.impact_id): impact for impact in state.planning.impacts}
+
+
+def _obligation_base(
+    impact: StoredPlanningImpact, obligation: StoredPlanningObligation
+) -> tuple[str, str, str | None, ScopeAnchorView, str, int, ScopeAnchorView, str, str, int]:
+    return (
+        str(impact.impact_id),
+        str(impact.source_item_id),
+        str(impact.source_attempt_id) if impact.source_attempt_id is not None else None,
+        ScopeAnchorView(impact.source_scope_digest, impact.source_scope_revision),
+        str(obligation.target_item_id),
+        obligation.position,
+        ScopeAnchorView(obligation.observed_scope_digest, obligation.observed_scope_revision),
+        impact.summary,
+        impact.evidence,
+        impact.recorded_project_revision,
+    )
+
+
+def _plan_obligations(
+    state: StoredWorkState, closure: tuple[str, ...]
+) -> tuple[tuple[UnresolvedObligation, ...], tuple[ResolvedObligation, ...]]:
+    selected = set(closure)
+    impacts = _impact_by_id(state)
+    unresolved: list[UnresolvedObligation] = []
+    resolved: list[ResolvedObligation] = []
+    for obligation in sorted(state.planning.obligations, key=_obligation_key):
+        impact = impacts[str(obligation.impact_id)]
+        replacements = tuple(
+            ReplacementRecord(value.position, str(value.replacement_item_id))
+            for value in sorted(state.planning.replacements, key=_replacement_position)
+            if value.impact_id == obligation.impact_id and value.target_item_id == obligation.target_item_id
+        )
+        relevant = (
+            str(impact.source_item_id) in selected
+            or str(obligation.target_item_id) in selected
+            or any(replacement.item_id in selected for replacement in replacements)
+        )
+        if not relevant:
+            continue
+        base = _obligation_base(impact, obligation)
+        if obligation.state == PlanningObligationState.UNRESOLVED:
+            unresolved.append(UnresolvedObligation(*base))
+            continue
+        if (
+            obligation.disposition is None
+            or obligation.evaluated_scope_revision is None
+            or obligation.evaluated_scope_digest is None
+            or obligation.reason is None
+            or obligation.resolved_project_revision is None
+        ):
+            raise PlanQueryError("WORK_STATE_INVALID", "A resolved planning obligation is incomplete.")
+        resulting = (
+            ScopeAnchorView(obligation.resulting_scope_digest, obligation.resulting_scope_revision)
+            if obligation.resulting_scope_digest is not None and obligation.resulting_scope_revision is not None
+            else None
+        )
+        resolved.append(
+            ResolvedObligation(
+                *base,
+                ScopeAnchorView(obligation.evaluated_scope_digest, obligation.evaluated_scope_revision),
+                resulting,
+                obligation.disposition.value,
+                obligation.reason,
+                obligation.outcome_evidence,
+                replacements,
+                obligation.resolved_project_revision,
+            )
+        )
+    return tuple(unresolved), tuple(resolved)
+
+
+def _proposal(state: StoredWorkState, proposal: StoredProposal) -> UndecidedProposal:
+    evidence = tuple(
+        ProposalEvidenceRecord(value.position, value.selector)
+        for value in sorted(state.proposals.evidence, key=_proposal_evidence_position)
+        if value.proposal_id == proposal.proposal_id
+    )
+    freshness = tuple(
+        ProposalFreshnessRecord(value.position, value.assumption)
+        for value in sorted(state.proposals.freshness, key=_proposal_freshness_position)
+        if value.proposal_id == proposal.proposal_id
+    )
+    preimage = _UndecidedProposalPreimage(
+        str(proposal.proposal_id),
+        str(proposal.source_task_id),
+        proposal.user_label,
+        proposal.trigger,
+        proposal.why_it_matters,
+        ProposalRelationRecord(
+            proposal.relation.value,
+            str(proposal.relation_item_id) if proposal.relation_item_id is not None else None,
+        ),
+        proposal.effect,
+        proposal.unlock,
+        proposal.urgency_evidence,
+        evidence,
+        freshness,
+    )
+    return UndecidedProposal(
+        preimage.proposal_id,
+        preimage.source_task_id,
+        preimage.user_label,
+        preimage.trigger,
+        preimage.why_it_matters,
+        preimage.relation,
+        preimage.effect,
+        preimage.unlock,
+        preimage.urgency_evidence,
+        preimage.evidence,
+        preimage.freshness_assumptions,
+        hashlib.sha256(_canonical_bytes(preimage)).hexdigest(),
+    )
+
+
+def _snapshot_preimage(value: PlanSnapshot) -> _PlanSnapshotPreimage:
+    return _PlanSnapshotPreimage(
+        value.schema,
+        value.application,
+        value.database_schema_version,
+        value.project_revision,
+        value.requested_roots,
+        value.include_undecided,
+        value.status,
+        value.items,
+        value.unresolved_obligations,
+        value.resolved_obligations,
+        value.undecided,
+    )
+
+
+def read_plan_snapshot(
+    store: WorkStore,
+    roots: tuple[ItemId, ...],
+    include_undecided: bool = False,
+    *,
+    require_reconciled: bool = False,
+) -> PlanSnapshot:
+    state = store.snapshot()
+    requested = tuple(sorted(str(root) for root in roots))
+    closure = _closure(state, requested)
+    items = _scope_items(state, closure)
+    unresolved, resolved = _plan_obligations(state, closure)
+    status = "unreconciled" if unresolved else "reconciled"
+    if require_reconciled and unresolved:
+        raise PlanQueryError("PLAN_UNRECONCILED", "The selected plan still has unresolved obligations.")
+    undecided = (
+        tuple(
+            _proposal(state, proposal)
+            for proposal in sorted(state.proposals.proposals, key=_proposal_key)
+            if proposal.disposition is None
+        )
+        if include_undecided
+        else ()
+    )
+    draft = PlanSnapshot(
+        "plan-snapshot/v1",
+        state.lifecycle.project.application,
+        state.lifecycle.project.schema_version,
+        state.lifecycle.project.revision,
+        requested,
+        include_undecided,
+        status,
+        items,
+        unresolved,
+        resolved,
+        undecided,
+        "",
+    )
+    return msgspec.structs.replace(
+        draft,
+        manifest_sha256=hashlib.sha256(_canonical_bytes(_snapshot_preimage(draft))).hexdigest(),
+    )
+
+
+def _validate_snapshot(value: PlanSnapshot) -> None:
+    expected = hashlib.sha256(_canonical_bytes(_snapshot_preimage(value))).hexdigest()
+    if value.schema != "plan-snapshot/v1" or value.manifest_sha256 != expected:
+        raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "Plan snapshot identity does not match its manifest.")
+    if value.requested_roots != tuple(sorted(set(value.requested_roots))):
+        raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "Plan roots are not canonical.")
+    expected_status = "unreconciled" if value.unresolved_obligations else "reconciled"
+    if value.status != expected_status:
+        raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "Plan reconciliation status contradicts its obligations.")
+
+
+def _anchor(item: PlanItem) -> ScopeAnchorView:
+    return ScopeAnchorView(item.scope_digest, item.scope_revision)
+
+
+def _raw_member(value: PlanItem, member: str) -> bytes:
+    decoded = msgspec.json.decode(bytes(value.semantic), type=dict[str, msgspec.Raw])
+    selected = decoded.get(member)
+    if selected is None:
+        raise PlanQueryError("PLAN_SNAPSHOT_INVALID", f"Plan item semantic value lacks {member!r}.")
+    return bytes(selected)
+
+
+def _obligation_identity(value: UnresolvedObligation | ResolvedObligation) -> str:
+    return f"{value.impact_id}:{value.target_item_id}"
+
+
+def _change_set_preimage(value: PlanChangeSet) -> _PlanChangeSetPreimage:
+    return _PlanChangeSetPreimage(
+        value.schema,
+        value.before_manifest_sha256,
+        value.after_manifest_sha256,
+        value.requested_roots,
+        value.include_undecided,
+        value.changes,
+    )
+
+
+def compare_plan_snapshots(before: PlanSnapshot, after: PlanSnapshot) -> PlanChangeSet:
+    _validate_snapshot(before)
+    _validate_snapshot(after)
+    if before.requested_roots != after.requested_roots or before.include_undecided != after.include_undecided:
+        raise PlanQueryError("PLAN_SELECTION_MISMATCH", "Plan snapshots use different roots or undecided options.")
+    if before.project_revision > after.project_revision:
+        raise PlanQueryError("PLAN_COMPARISON_DIRECTION_INVALID", "Plan snapshots are ordered from newer to older.")
+    if before.project_revision == after.project_revision and before.manifest_sha256 != after.manifest_sha256:
+        raise PlanQueryError("PLAN_SNAPSHOT_CONTRADICTION", "Equal revisions carry different plan manifests.")
+    before_items = {item.item_id: item for item in before.items}
+    after_items = {item.item_id: item for item in after.items}
+    added_ids = sorted(set(after_items) - set(before_items))
+    removed_ids = sorted(set(before_items) - set(after_items))
+    common_ids = sorted(set(before_items) & set(after_items))
+    scope_changed = tuple(
+        ItemAnchorChange(item_id, _anchor(before_items[item_id]), _anchor(after_items[item_id]))
+        for item_id in common_ids
+        if _anchor(before_items[item_id]) != _anchor(after_items[item_id])
+    )
+
+    def member_changes(member: str) -> tuple[ItemAnchorChange, ...]:
+        return tuple(
+            ItemAnchorChange(item_id, _anchor(before_items[item_id]), _anchor(after_items[item_id]))
+            for item_id in common_ids
+            if _raw_member(before_items[item_id], member) != _raw_member(after_items[item_id], member)
+        )
+
+    lifecycle = tuple(
+        ItemLifecycleChange(item_id, before_items[item_id].lifecycle_state, after_items[item_id].lifecycle_state)
+        for item_id in common_ids
+        if before_items[item_id].lifecycle_state != after_items[item_id].lifecycle_state
+        and before_items[item_id].scope_digest == after_items[item_id].scope_digest
+    )
+    before_unresolved = {_obligation_identity(value) for value in before.unresolved_obligations}
+    after_unresolved = {_obligation_identity(value) for value in after.unresolved_obligations}
+    before_resolved = {_obligation_identity(value) for value in before.resolved_obligations}
+    after_resolved = {_obligation_identity(value) for value in after.resolved_obligations}
+    before_all = before_unresolved | before_resolved
+    after_all = after_unresolved | after_resolved
+    before_replacements = {
+        f"{value.impact_id}:{value.target_item_id}:{replacement.position}:{replacement.item_id}"
+        for value in before.resolved_obligations
+        for replacement in value.replacements
+    }
+    after_replacements = {
+        f"{value.impact_id}:{value.target_item_id}:{replacement.position}:{replacement.item_id}"
+        for value in after.resolved_obligations
+        for replacement in value.replacements
+    }
+    before_undecided = {value.proposal_id: value.proposal_sha256 for value in before.undecided}
+    after_undecided = {value.proposal_id: value.proposal_sha256 for value in after.undecided}
+    changes = PlanChanges(
+        tuple(ItemPresenceChange(item_id, _anchor(after_items[item_id])) for item_id in added_ids),
+        tuple(ItemPresenceChange(item_id, _anchor(before_items[item_id])) for item_id in removed_ids),
+        scope_changed,
+        member_changes("dependencies"),
+        member_changes("resource_requirements"),
+        member_changes("artifacts"),
+        lifecycle,
+        tuple(NamedChange(value) for value in sorted(before_replacements ^ after_replacements)),
+        tuple(NamedChange(value) for value in sorted(after_all - before_all)),
+        tuple(NamedChange(value) for value in sorted(before_all - after_all)),
+        tuple(NamedChange(value) for value in sorted(after_unresolved - before_unresolved)),
+        tuple(NamedChange(value) for value in sorted(after_resolved - before_resolved)),
+        tuple(
+            NamedChange(value)
+            for value in sorted(
+                proposal_id
+                for proposal_id in set(before_undecided) | set(after_undecided)
+                if before_undecided.get(proposal_id) != after_undecided.get(proposal_id)
+            )
+        ),
+    )
+    draft = PlanChangeSet(
+        "plan-change-set/v1",
+        before.manifest_sha256,
+        after.manifest_sha256,
+        before.requested_roots,
+        before.include_undecided,
+        changes,
+        "",
+    )
+    return msgspec.structs.replace(
+        draft,
+        change_set_sha256=hashlib.sha256(_canonical_bytes(_change_set_preimage(draft))).hexdigest(),
+    )
+
+
+def read_resource_conflict(
+    store: WorkStore,
+    instance: ResourceInstanceId,
+    detail: DetailLevel = DetailLevel.COMPACT,
+) -> ResourceConflictView:
+    state = store.snapshot()
+    selected = next((value for value in state.resources.instances if value.instance_id == instance), None)
+    if selected is None:
+        raise QueryError("RESOURCE_INSTANCE_REQUIRED", f"Resource instance '{instance}' is not retained.")
+    reservation = next(
+        (
+            value
+            for value in state.resources.reservations
+            if value.instance_id == instance
+            and value.state in {ReservationState.ACTIVE, ReservationState.REVOKED_PENDING_RECOVERY}
+        ),
+        None,
+    )
+    locator = next((value for value in state.resources.locators if value.instance_id == instance), None)
+    consequence = (
+        f"Resource '{selected.resource_id}' is retained by attempt '{reservation.attempt_id}'."
+        if reservation is not None
+        else f"Resource '{selected.resource_id}' is available for explicit assignment."
+    )
+    legal = (
+        ("inspect", "preserve", "release-reservation", "revoke-reservation")
+        if reservation is not None
+        else ("inspect", "assign")
+    )
+    return ResourceConflictView(
+        "resource-conflict/v1",
+        detail.value,
+        str(instance),
+        str(selected.resource_id),
+        selected.state.value,
+        consequence,
+        msgspec.Raw(bytes(locator.locator)) if detail == DetailLevel.DETAILED and locator is not None else None,
+        str(reservation.reservation_id) if detail == DetailLevel.DETAILED and reservation is not None else None,
+        str(reservation.attempt_id) if detail == DetailLevel.DETAILED and reservation is not None else None,
+        legal,
+    )

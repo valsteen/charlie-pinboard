@@ -5,15 +5,36 @@ import json
 import multiprocessing
 import tempfile
 import unittest
+from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from multiprocessing.synchronize import Event as EventType
 from pathlib import Path
 
+import msgspec
+
+from charlie_pinboard.adapters.files.artifacts import ArtifactRepository, NewArtifact, write_revision
+from charlie_pinboard.adapters.files.file_io import DurableRoots, resolve_durable_roots
+from charlie_pinboard.adapters.sqlite.database import initialize_database
+from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
+from charlie_pinboard.application.actions import discover_actions
+from charlie_pinboard.application.dispatch import prepare_sqlite_dispatch
+from charlie_pinboard.application.stored_state import ArtifactKind
+from charlie_pinboard.domain.decisions import ActionKind, Role
+from charlie_pinboard.domain.identifiers import LeaseId
 from charlie_pinboard.interfaces.cli import main
 from charlie_pinboard.legacy.actions import Action, actions_for
 from charlie_pinboard.legacy.atomic import transition_lock
-from charlie_pinboard.legacy.dispatch import DispatchError, prepare_dispatch, read_dispatch_environment
+from charlie_pinboard.legacy.dispatch import (
+    DispatchEnvironment,
+    DispatchError,
+    DispatchPermission,
+    prepare_dispatch,
+    prepare_dispatch_from_artifact,
+    read_dispatch_environment,
+)
 
-from .support import create_state
+from .support import SQLITE_NOW, complete_sqlite_state, create_state
 
 CHECKPOINT = "Sequence 2 — Complete the shared protocol cutover"
 CONTRACT_INVARIANT = "Kotlin and Rust use protocol v13 together."
@@ -114,6 +135,53 @@ def _prepare_waiting_dispatch(
 
 
 class DispatchTest(unittest.TestCase):
+    def _assert_resource_backed_review_validation(
+        self,
+        store: SQLiteWorkStore,
+        roots: DurableRoots,
+        project: Path,
+        dispatch_action: Callable[[], Action],
+        environment: DispatchEnvironment,
+        candidate: bytes,
+    ) -> None:
+        before_unsupported = store.snapshot()
+        mutating_environment = msgspec.structs.replace(
+            environment,
+            permissions=(DispatchPermission.REPOSITORY_READ, DispatchPermission.REPOSITORY_WRITE),
+        )
+        for candidate_value, review_id_value, code in (
+            (None, None, "DISPATCH_BRIEF_REVIEW_MISSING"),
+            (candidate, "Invalid Review", "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID"),
+        ):
+            with self.subTest(resource_backed_validation=code), self.assertRaises(DispatchError) as rejected:
+                prepare_sqlite_dispatch(
+                    store,
+                    ArtifactRepository(roots),
+                    prepare_dispatch_from_artifact,
+                    project,
+                    dispatch_action(),
+                    CHECKPOINT,
+                    mutating_environment,
+                    brief_review=candidate_value,
+                    review_id=review_id_value,
+                )
+            self.assertEqual(code, rejected.exception.code)
+            self.assertEqual(before_unsupported, store.snapshot())
+        with self.assertRaises(DispatchError) as unsupported:
+            prepare_sqlite_dispatch(
+                store,
+                ArtifactRepository(roots),
+                prepare_dispatch_from_artifact,
+                project,
+                dispatch_action(),
+                CHECKPOINT,
+                mutating_environment,
+                brief_review=candidate,
+                review_id="validated-but-unpublished",
+            )
+        self.assertEqual("RESOURCE_BACKED_MUTATING_DISPATCH_UNSUPPORTED", unsupported.exception.code)
+        self.assertEqual(before_unsupported, store.snapshot())
+
     def run_cli(self, *arguments: str) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -682,6 +750,274 @@ Lifecycle partition: required
 
         self.assertEqual(0, process.exitcode)
         self.assertEqual("STALE_ACTION", result_path.read_text(encoding="utf-8"))
+
+    def test_sqlite_dispatch_reads_accepted_brief_and_preserves_resource_feature_limit(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        brief_bytes = b"""---
+kind: work-attempt
+schema: repo-work/v2
+attempt: work-a-1
+item: work-a
+state: active
+branch: codex/work-a
+base_revision: base-revision
+owner_task_id: worker
+updated: \"2026-08-23\"
+---
+
+# Attempt
+
+## Local implementation
+
+Checkpoint boundary: local
+Checkpoint outcome: independently-buildable
+"""
+        published = write_revision(
+            roots,
+            NewArtifact(ArtifactKind.BRIEF, "work-a", 1, ".md", brief_bytes),
+        )
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        brief = replace(
+            state.artifacts.references[0],
+            key=published.key,
+            revision=published.revision,
+            selector=published.selector,
+            content_sha256=published.content_sha256,
+            size_bytes=published.size_bytes,
+        )
+        self.assertIsNotNone(state.authority.coordination)
+        assert state.authority.coordination is not None
+        coordination = replace(state.authority.coordination, expires_at=now + timedelta(minutes=5))
+        attempt_leases = tuple(
+            replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+        )
+        state = replace(
+            state,
+            artifacts=replace(state.artifacts, references=(brief, *state.artifacts.references[1:])),
+            authority=replace(state.authority, coordination=coordination, attempt_leases=attempt_leases),
+        )
+        store = SQLiteWorkStore(roots.database_path)
+        store.initialize_state(state)
+        action = next(
+            value
+            for value in discover_actions(
+                store,
+                Role.COORDINATOR,
+                lease_id=coordination.lease_id,
+                generation=coordination.generation,
+            )
+            if value.kind == ActionKind.DISPATCH
+        )
+        read_only = DispatchEnvironment(
+            "repo-work-dispatch/v1",
+            str(project),
+            "codex/work-a",
+            "base-revision",
+            (DispatchPermission.REPOSITORY_READ,),
+        )
+
+        prompt = prepare_sqlite_dispatch(
+            store,
+            ArtifactRepository(roots),
+            prepare_dispatch_from_artifact,
+            project,
+            action,
+            "Local implementation",
+            read_only,
+        )
+
+        self.assertIn(f"Canonical brief: {roots.work_root / published.selector}", prompt)
+        for changed, code in (
+            (replace(action, expected_revision="stale"), "STALE_ACTION"),
+            (replace(action, label="changed"), "DISPATCH_ACTION_INVALID"),
+            (replace(action, kind=ActionKind.INSPECT), "DISPATCH_ACTION_UNAVAILABLE"),
+            (replace(action, lease_id=LeaseId("wrong")), "COORDINATION_LEASE_REQUIRED"),
+        ):
+            with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
+                prepare_sqlite_dispatch(
+                    store,
+                    ArtifactRepository(roots),
+                    prepare_dispatch_from_artifact,
+                    project,
+                    changed,
+                    "Local implementation",
+                    read_only,
+                )
+            self.assertEqual(code, rejected.exception.code)
+        before = store.snapshot()
+        mutating = msgspec.structs.replace(
+            read_only,
+            permissions=(DispatchPermission.REPOSITORY_READ, DispatchPermission.REPOSITORY_WRITE),
+        )
+        with self.assertRaises(DispatchError) as unsupported:
+            prepare_sqlite_dispatch(
+                store,
+                ArtifactRepository(roots),
+                prepare_dispatch_from_artifact,
+                project,
+                action,
+                "Local implementation",
+                mutating,
+            )
+        self.assertEqual("RESOURCE_BACKED_MUTATING_DISPATCH_UNSUPPORTED", unsupported.exception.code)
+        self.assertEqual(before, store.snapshot())
+
+    def test_sqlite_cross_boundary_review_is_immutable_reusable_and_collision_preserving(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        reviewed = self._reviewed_attempt(project)
+        review_work = Path(tempfile.mkdtemp())
+        review_attempt = review_work / "attempts" / "universal-reveal-core-1"
+        review_attempt.mkdir(parents=True)
+        (review_attempt / "attempt.md").write_text(reviewed, encoding="utf-8")
+        candidate = self._write_review(review_work).read_bytes().replace(b"universal-reveal-core-1", b"work-a-1")
+        brief_bytes = (
+            reviewed.replace("universal-reveal-core-1", "work-a-1")
+            .replace("universal-reveal-core", "work-a")
+            .replace("codex/work-a", "codex/work-a")
+            .encode()
+        )
+        published = write_revision(
+            roots,
+            NewArtifact(ArtifactKind.BRIEF, "work-a", 1, ".md", brief_bytes),
+        )
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        assert state.authority.coordination is not None
+        coordination = replace(state.authority.coordination, expires_at=now + timedelta(minutes=5))
+        brief = replace(
+            state.artifacts.references[0],
+            key=published.key,
+            selector=published.selector,
+            content_sha256=published.content_sha256,
+            size_bytes=published.size_bytes,
+        )
+        state = replace(
+            state,
+            artifacts=replace(state.artifacts, references=(brief, *state.artifacts.references[1:])),
+            authority=replace(state.authority, coordination=coordination),
+        )
+        store = SQLiteWorkStore(roots.database_path)
+        store.initialize_state(state)
+        environment = DispatchEnvironment(
+            "repo-work-dispatch/v1",
+            str(project),
+            "codex/work-a",
+            "base-revision",
+            (DispatchPermission.REPOSITORY_READ,),
+        )
+
+        def dispatch_action() -> Action:
+            return next(
+                value
+                for value in discover_actions(
+                    store,
+                    Role.COORDINATOR,
+                    lease_id=coordination.lease_id,
+                    generation=coordination.generation,
+                )
+                if value.kind == ActionKind.DISPATCH
+            )
+
+        self._assert_resource_backed_review_validation(store, roots, project, dispatch_action, environment, candidate)
+
+        with self.assertRaises(DispatchError) as missing_review:
+            prepare_sqlite_dispatch(
+                store,
+                ArtifactRepository(roots),
+                prepare_dispatch_from_artifact,
+                project,
+                dispatch_action(),
+                CHECKPOINT,
+                environment,
+            )
+        self.assertEqual("DISPATCH_BRIEF_REVIEW_MISSING", missing_review.exception.code)
+        with self.assertRaises(DispatchError) as orphaned_review_id:
+            prepare_sqlite_dispatch(
+                store,
+                ArtifactRepository(roots),
+                prepare_dispatch_from_artifact,
+                project,
+                dispatch_action(),
+                CHECKPOINT,
+                environment,
+                review_id="orphaned-review",
+            )
+        self.assertEqual("DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID", orphaned_review_id.exception.code)
+        with self.assertRaises(DispatchError) as invalid_review_id:
+            prepare_sqlite_dispatch(
+                store,
+                ArtifactRepository(roots),
+                prepare_dispatch_from_artifact,
+                project,
+                dispatch_action(),
+                CHECKPOINT,
+                environment,
+                brief_review=candidate,
+                review_id="Invalid Review",
+            )
+        self.assertEqual("DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID", invalid_review_id.exception.code)
+
+        prompt = prepare_sqlite_dispatch(
+            store,
+            ArtifactRepository(roots),
+            prepare_dispatch_from_artifact,
+            project,
+            dispatch_action(),
+            CHECKPOINT,
+            environment,
+            brief_review=candidate,
+            review_id="sqlite-review",
+        )
+        revision_after_publish = store.snapshot().lifecycle.project.revision
+        self.assertIn(CHECKPOINT, prompt)
+        self.assertEqual(13, revision_after_publish)
+
+        current_action = dispatch_action()
+        self.assertEqual(
+            prompt,
+            prepare_sqlite_dispatch(
+                store,
+                ArtifactRepository(roots),
+                prepare_dispatch_from_artifact,
+                project,
+                current_action,
+                CHECKPOINT,
+                environment,
+            ),
+        )
+        self.assertEqual(
+            prompt,
+            prepare_sqlite_dispatch(
+                store,
+                ArtifactRepository(roots),
+                prepare_dispatch_from_artifact,
+                project,
+                current_action,
+                CHECKPOINT,
+                environment,
+                brief_review=candidate,
+                review_id="sqlite-review",
+            ),
+        )
+        with self.assertRaises(DispatchError) as collision:
+            prepare_sqlite_dispatch(
+                store,
+                ArtifactRepository(roots),
+                prepare_dispatch_from_artifact,
+                project,
+                current_action,
+                CHECKPOINT,
+                environment,
+                brief_review=candidate + b"\nAdditional reviewer note.\n",
+                review_id="later-review",
+            )
+        self.assertEqual("DISPATCH_BRIEF_REVIEW_COLLISION", collision.exception.code)
+        self.assertTrue(any("rejected-later-review" in value.key for value in store.snapshot().artifacts.references))
 
 
 if __name__ == "__main__":

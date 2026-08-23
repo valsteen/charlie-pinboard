@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+from charlie_pinboard.adapters.sqlite.registration import initialize_work_state as initialize_sqlite_state
+from charlie_pinboard.application.registration import InitReceipt
 from charlie_pinboard.domain.model import SCHEMA_V1, SCHEMA_V2
 from charlie_pinboard.legacy.atomic import atomic_write, atomic_write_text, transition_lock
 from charlie_pinboard.legacy.authority import AuthorityVersion, resolve_authority, write_authority_selector
@@ -22,6 +24,12 @@ class RegistrationError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         self.code = code
         super().__init__(f"{code}: {message}")
+
+
+def initialize_sqlite_work_state(project_root: Path, work_root: Path | None = None) -> InitReceipt:
+    """Compose fresh current initialization while legacy initialization remains migration-only."""
+
+    return initialize_sqlite_state(project_root, work_root)
 
 
 def _registration(project_root: Path, task_id: str, host_id: str, generation: int) -> CoordinatorRegistration:

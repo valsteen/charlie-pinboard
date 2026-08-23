@@ -3,10 +3,16 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Final, Literal, NewType, assert_never
+from typing import Final, NewType, assert_never
 
 import msgspec
 
+from charlie_pinboard.application.dispatch import (
+    BriefReviewPublisher,
+    DispatchEnvironment,
+    DispatchError,
+)
+from charlie_pinboard.application.dispatch import DispatchPermission as DispatchPermission
 from charlie_pinboard.domain.identifiers import TaskId
 from charlie_pinboard.domain.model import AttemptState
 from charlie_pinboard.legacy.actions import Action, ActionKind, actions_for, coordinator_generation
@@ -14,9 +20,6 @@ from charlie_pinboard.legacy.atomic import PlatformNotSupportedError, atomic_cre
 from charlie_pinboard.legacy.authority import AuthorityVersion, authority_transaction, resolve_authority
 from charlie_pinboard.legacy.leases import LeaseError, require_coordination
 from charlie_pinboard.legacy.markdown import Header, ParseError, parse_attempt, parse_header, parse_header_text
-
-type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
-type DispatchSchema = Literal["repo-work-dispatch/v1"]
 
 HEADING: Final = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 CONTRACT_COLUMNS: Final = (
@@ -155,33 +158,9 @@ class BriefReviewMetadata:
     verdict: str
 
 
-class DispatchError(RuntimeError):
-    code: str
-
-    def __init__(self, code: str, message: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {message}")
-
-
-class DispatchPermission(Enum):
-    REPOSITORY_READ = "repository-read"
-    REPOSITORY_WRITE = "repository-write"
-    NETWORK = "network"
-    EXTERNAL_WRITE = "external-write"
-    LIVE_APPLICATION = "live-application"
-
-
 class CheckpointBoundary(Enum):
     LOCAL = "local"
     CROSS_BOUNDARY = "cross-boundary"
-
-
-class DispatchEnvironment(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    schema: DispatchSchema
-    checkout: NonEmptyLine
-    branch: NonEmptyLine
-    starting_revision: NonEmptyLine
-    permissions: tuple[DispatchPermission, ...]
 
 
 def read_dispatch_environment(path: Path) -> DispatchEnvironment:
@@ -779,6 +758,7 @@ def _validate_semantic_preservation(
     contracts: tuple[ContractRecord, ...],
     brief_review: bytes | None,
     review_id: str | None,
+    review_publisher: BriefReviewPublisher | None = None,
 ) -> None:
     authorities, authority_table = _reviewed_authorities(section)
     coverage = _coverage_records(section, authorities, contracts)
@@ -796,7 +776,11 @@ def _validate_semantic_preservation(
             authority_table,
             coverage,
         )
-    review_bytes, source = _publish_or_read_brief_review(attempt_path, checkpoint_sha256, brief_review, review_id)
+    review_bytes, source = (
+        review_publisher(checkpoint_sha256, brief_review, review_id)
+        if review_publisher is not None
+        else _publish_or_read_brief_review(attempt_path, checkpoint_sha256, brief_review, review_id)
+    )
     _validate_brief_review_bytes(
         review_bytes,
         source,
@@ -881,6 +865,61 @@ def _canonical_prompt(attempt_path: Path, attempt_id: str, checkpoint: str, envi
         f"- Starting revision: {environment.starting_revision}\n"
         f"- Permissions: {permissions}\n"
     )
+
+
+def prepare_dispatch_from_artifact(
+    attempt_path: Path,
+    attempt_id: str,
+    attempt_branch: str,
+    project_root: Path,
+    checkpoint: str,
+    environment: DispatchEnvironment,
+    supplied_prompt: bytes | None = None,
+    brief_review: bytes | None = None,
+    review_id: str | None = None,
+    review_publisher: BriefReviewPublisher | None = None,
+) -> str:
+    """Preserve the accepted brief contract after current authority was selected from SQLite."""
+
+    if environment.branch != attempt_branch:
+        raise DispatchError(
+            "DISPATCH_BRANCH_MISMATCH",
+            f"Environment branch '{environment.branch}' does not match attempt branch '{attempt_branch}'.",
+        )
+    checkout = Path(environment.checkout)
+    if not checkout.is_dir():
+        raise DispatchError("DISPATCH_CHECKOUT_MISSING", f"Checkout '{checkout}' is not a directory.")
+    section = _checkpoint_section(attempt_path, checkpoint)
+    boundary = _checkpoint_boundary(section)
+    match boundary:
+        case CheckpointBoundary.LOCAL:
+            if brief_review is not None or review_id is not None:
+                raise DispatchError(
+                    "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
+                    "Local checkpoints do not publish cross-boundary brief reviews.",
+                )
+        case CheckpointBoundary.CROSS_BOUNDARY:
+            contracts = _validate_cross_boundary_checkpoint(section)
+            _validate_semantic_preservation(
+                attempt_path,
+                attempt_id,
+                checkpoint,
+                section,
+                project_root,
+                contracts,
+                brief_review,
+                review_id,
+                review_publisher,
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+    prompt = _canonical_prompt(attempt_path, attempt_id, checkpoint, environment)
+    if supplied_prompt is not None and supplied_prompt != prompt.encode():
+        raise DispatchError(
+            "DISPATCH_PROMPT_NOT_CANONICAL",
+            "The launch adds or changes instructions outside the canonical attempt brief; render and use the exact prompt.",
+        )
+    return prompt
 
 
 def prepare_dispatch(
