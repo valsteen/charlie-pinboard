@@ -100,6 +100,7 @@ def _review_publisher(
     artifacts: DispatchArtifactPort,
     attempt_id: AttemptId,
     item_id: ItemId,
+    publication_revisions: list[int],
 ) -> BriefReviewPublisher:
     def publish(checkpoint_sha256: str, candidate: bytes | None, review_id: str | None) -> tuple[bytes, str]:
         key = f"{attempt_id}-brief-review-{checkpoint_sha256}"
@@ -164,6 +165,7 @@ def _review_publisher(
             item_id=item_id,
             role=ArtifactRole.EVIDENCE,
         )
+        publication_revisions.append(accepted.accepted_revision)
         return candidate, str(artifacts.work_root / accepted.selector)
 
     return publish
@@ -202,7 +204,14 @@ def prepare_sqlite_dispatch(
         raise DispatchError("DISPATCH_BRIEF_MISSING", "The attempt has no accepted brief artifact.")
     artifacts.verify(reference)
     attempt_path = artifacts.path(reference)
-    publisher = _review_publisher(store, artifacts, attempt.attempt_id, attempt.item_id)
+    publication_revisions: list[int] = []
+    publisher = _review_publisher(
+        store,
+        artifacts,
+        attempt.attempt_id,
+        attempt.item_id,
+        publication_revisions,
+    )
 
     def validate_without_publication(
         checkpoint_sha256: str,
@@ -252,6 +261,12 @@ def prepare_sqlite_dispatch(
         ),
         None,
     )
-    if current is None or replace(current, expected_revision=action.expected_revision) != action:
+    current_matches = current == action
+    if current is not None and publication_revisions:
+        current_matches = (
+            current.expected_revision == str(publication_revisions[-1])
+            and replace(current, expected_revision=action.expected_revision) == action
+        )
+    if not current_matches:
         raise DispatchError("DISPATCH_ACTION_UNAVAILABLE", "Dispatch authority changed during prompt preparation.")
     return prompt

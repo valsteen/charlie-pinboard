@@ -18,6 +18,7 @@ from charlie_pinboard.adapters.files.file_io import DurableRoots, resolve_durabl
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.actions import discover_actions
+from charlie_pinboard.application.artifacts import accept_reference
 from charlie_pinboard.application.dispatch import prepare_sqlite_dispatch
 from charlie_pinboard.application.stored_state import ArtifactKind
 from charlie_pinboard.domain.decisions import ActionKind, Role
@@ -26,6 +27,7 @@ from charlie_pinboard.interfaces.cli import main
 from charlie_pinboard.legacy.actions import Action, actions_for
 from charlie_pinboard.legacy.atomic import transition_lock
 from charlie_pinboard.legacy.dispatch import (
+    BriefReviewPublisher,
     DispatchEnvironment,
     DispatchError,
     DispatchPermission,
@@ -830,6 +832,55 @@ Checkpoint outcome: independently-buildable
         )
 
         self.assertIn(f"Canonical brief: {roots.work_root / published.selector}", prompt)
+        drift = write_revision(roots, NewArtifact(ArtifactKind.EVIDENCE, "dispatch-drift", 1, ".md", b"drift\n"))
+
+        def mutate_while_preparing(
+            attempt_path: Path,
+            attempt_id: str,
+            attempt_branch: str,
+            project_root: Path,
+            checkpoint: str,
+            environment: DispatchEnvironment,
+            supplied_prompt: bytes | None = None,
+            brief_review: bytes | None = None,
+            review_id: str | None = None,
+            review_publisher: BriefReviewPublisher | None = None,
+        ) -> str:
+            accept_reference(store, roots.work_root, drift, datetime.now(UTC))
+            return prepare_dispatch_from_artifact(
+                attempt_path,
+                attempt_id,
+                attempt_branch,
+                project_root,
+                checkpoint,
+                environment,
+                supplied_prompt,
+                brief_review,
+                review_id,
+                review_publisher,
+            )
+
+        with self.assertRaises(DispatchError) as changed_during_preparation:
+            prepare_sqlite_dispatch(
+                store,
+                ArtifactRepository(roots),
+                mutate_while_preparing,
+                project,
+                action,
+                "Local implementation",
+                read_only,
+            )
+        self.assertEqual("DISPATCH_ACTION_UNAVAILABLE", changed_during_preparation.exception.code)
+        action = next(
+            value
+            for value in discover_actions(
+                store,
+                Role.COORDINATOR,
+                lease_id=coordination.lease_id,
+                generation=coordination.generation,
+            )
+            if value.kind == ActionKind.DISPATCH
+        )
         for changed, code in (
             (replace(action, expected_revision="stale"), "STALE_ACTION"),
             (replace(action, label="changed"), "DISPATCH_ACTION_INVALID"),

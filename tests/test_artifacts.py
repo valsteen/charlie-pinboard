@@ -148,6 +148,34 @@ class ArtifactPersistenceTest(unittest.TestCase):
         )
         self.assertEqual(accepted, accept_reference(store, roots.work_root, published, SQLITE_NOW))
 
+        later_link = write_revision(
+            roots,
+            NewArtifact(ArtifactKind.EVIDENCE, "review-linked-later", 1, ".md", b"ready\n"),
+        )
+        initially_unlinked = accept_reference(store, roots.work_root, later_link, SQLITE_NOW)
+        before_link = store.snapshot()
+        linked = accept_reference(
+            store,
+            roots.work_root,
+            later_link,
+            SQLITE_NOW,
+            item_id=ItemId("work-a"),
+            role=ArtifactRole.EVIDENCE,
+        )
+        after_link = store.snapshot()
+        self.assertEqual(initially_unlinked, linked)
+        self.assertEqual(before_link.lifecycle.project.revision + 1, after_link.lifecycle.project.revision)
+        self.assertTrue(
+            any(
+                value.item_id == ItemId("work-a")
+                and value.artifact_ref_id == linked.artifact_ref_id
+                and value.role == ArtifactRole.EVIDENCE
+                for value in after_link.lifecycle.item_artifacts
+            )
+        )
+        with self.assertRaises(StorageError):
+            accept_reference(store, roots.work_root, later_link, SQLITE_NOW, item_id=ItemId("work-a"))
+
         for item_id, role in (
             (ItemId("work-a"), None),
             (ItemId("missing"), ArtifactRole.EVIDENCE),

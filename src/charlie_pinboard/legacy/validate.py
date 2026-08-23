@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import assert_never
 
 from charlie_pinboard.adapters.files.artifacts import ArtifactError, verify_reference
+from charlie_pinboard.adapters.files.views import expected_view_bytes
 from charlie_pinboard.adapters.sqlite.database import StorageError
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.domain.model import SCHEMA_V1, SCHEMA_V2, WorkState
@@ -387,15 +388,19 @@ def validate_sqlite_work_state(work_root: Path) -> ValidationReport:
         except ArtifactError as error:
             diagnostics.append(_error(error.code, work_root / reference.selector, str(error)))
     view_root = work_root / "views"
-    for selector in ("queue.md", "current.md", "history.md"):
+    for selector, expected in expected_view_bytes(state).items():
         path = view_root / selector
-        if not path.is_file():
+        try:
+            current = path.read_bytes()
+        except OSError:
+            current = None
+        if current != expected:
             diagnostics.append(
                 Diagnostic(
                     "VIEW_REFRESH_REQUIRED",
                     Severity.WARNING,
                     path,
-                    "Generated view is absent; SQLite remains authoritative.",
+                    "Generated view is absent or stale; SQLite remains authoritative.",
                     "Run 'pinboard views rebuild'.",
                 )
             )

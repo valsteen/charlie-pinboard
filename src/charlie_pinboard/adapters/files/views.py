@@ -177,6 +177,21 @@ def refresh(store: WorkStore, work_root: Path, affected: AffectedViews) -> ViewR
     return ViewRefreshResult(state.lifecycle.project.revision)
 
 
+def expected_view_bytes(state: StoredWorkState) -> dict[str, bytes]:
+    """Return every generated selector and its canonical bytes for one SQLite snapshot."""
+
+    result = {
+        "queue.md": _queue(state),
+        "current.md": _current(state),
+        "history.md": _history(state),
+    }
+    result.update((f"items/{item.item_id}.md", _item(state, item)) for item in state.lifecycle.work_items)
+    result.update(
+        (f"attempts/{attempt.attempt_id}.md", _attempt(state, attempt)) for attempt in state.lifecycle.attempts
+    )
+    return result
+
+
 def rebuild(store: WorkStore, work_root: Path) -> ViewRefreshResult:
     state = store.snapshot()
     try:

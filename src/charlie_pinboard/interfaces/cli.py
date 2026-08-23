@@ -13,8 +13,8 @@ from uuid import uuid4
 import msgspec
 
 from charlie_pinboard import __version__
-from charlie_pinboard.adapters.files.artifacts import ArtifactRepository
-from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
+from charlie_pinboard.adapters.files.artifacts import ArtifactError, ArtifactRepository
+from charlie_pinboard.adapters.files.file_io import FileIOError, resolve_durable_roots
 from charlie_pinboard.adapters.files.root import RootError, resolve_project_root
 from charlie_pinboard.adapters.files.views import AffectedViews
 from charlie_pinboard.adapters.files.views import rebuild as rebuild_views
@@ -22,7 +22,10 @@ from charlie_pinboard.adapters.files.views import refresh as refresh_views
 from charlie_pinboard.adapters.sqlite.database import StorageError
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.actions import ActionQueryError, discover_actions
-from charlie_pinboard.application.decision_projection import project_decision_snapshot
+from charlie_pinboard.application.decision_projection import (
+    project_decision_snapshot,
+    project_inactive_attempt_authority,
+)
 from charlie_pinboard.application.dispatch import prepare_sqlite_dispatch
 from charlie_pinboard.application.queries import (
     OverviewItem as SQLiteOverviewItem,
@@ -32,6 +35,10 @@ from charlie_pinboard.application.queries import (
 )
 from charlie_pinboard.application.queries import (
     ParallelPreview as SQLiteParallelPreview,
+)
+from charlie_pinboard.application.queries import (
+    QueryError,
+    overview_from_state,
 )
 from charlie_pinboard.application.queries import (
     WorkOverview as SQLiteWorkOverview,
@@ -60,6 +67,7 @@ from charlie_pinboard.domain.authority_decisions import (
     RenewCoordinationAuthority,
     RevokeAttemptAuthority,
     RevokeCoordinationAuthority,
+    TransferAttemptAuthority,
 )
 from charlie_pinboard.domain.decisions import bind_transition
 from charlie_pinboard.domain.errors import DecisionFailure
@@ -124,11 +132,7 @@ from charlie_pinboard.legacy.migration import MigrationError, migrate_to_v2
 from charlie_pinboard.legacy.overview import OverviewError, OverviewItem, WorkOverview, read_overview
 from charlie_pinboard.legacy.parallel import ParallelError, ParallelItem, ParallelPreview, preview_parallel
 from charlie_pinboard.legacy.proposals import ProposalError, create_proposal
-from charlie_pinboard.legacy.registration import (
-    RegistrationError,
-    initialize_sqlite_work_state,
-    initialize_work_state,
-)
+from charlie_pinboard.legacy.registration import RegistrationError, initialize_sqlite_work_state
 from charlie_pinboard.legacy.resources import (
     ResourceClaim,
     ResourceDeclaration,
@@ -504,6 +508,8 @@ def _add_attempt_parser(commands: argparse._SubParsersAction[argparse.ArgumentPa
     acquire.add_argument("--attempt-id", required=True)
     acquire.add_argument("--task-id", required=True)
     acquire.add_argument("--host-id", required=True)
+    acquire.add_argument("--coordination-lease-id")
+    acquire.add_argument("--coordination-generation", type=int)
     acquire.add_argument("--ttl-seconds", required=True, type=int)
     acquire.add_argument("--json", action="store_true")
     for operation in ("renew", "release"):
@@ -714,7 +720,7 @@ def _diagnostic_view(report: ValidationReport) -> ValidationView:
 def _status_value(work: Path, project: Path) -> StatusView:
     if _uses_sqlite(work):
         state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
-        overview = read_sqlite_overview(SQLiteWorkStore(work / "state.sqlite3"))
+        overview = overview_from_state(state)
         coordinator = state.authority.coordination
         return StatusView(
             valid=True,
@@ -1104,16 +1110,14 @@ def _recover(context: CommandContext) -> int:
 def _initialize(context: CommandContext) -> int:
     task_id = context.arguments.coordinator_task_id
     host_id = context.arguments.host_id
-    if task_id is None and host_id is None:
-        selected_work = context.work if context.arguments.work_root is not None else None
-        receipt = initialize_sqlite_work_state(context.project, selected_work)
-        initialized = receipt.work_root
-    elif task_id is not None and host_id is not None:
-        initialized = initialize_work_state(context.project, task_id, host_id, context.work)
-    else:
+    if task_id is not None or host_id is not None:
         raise RegistrationError(
-            "COORDINATOR_IDENTITY_INVALID", "Legacy v1 initialization requires both coordinator task and host."
+            "MIGRATION_REQUIRED",
+            "Legacy coordinator initialization is no longer available; initialize SQLite, then acquire coordination.",
         )
+    selected_work = context.work if context.arguments.work_root is not None else None
+    receipt = initialize_sqlite_work_state(context.project, selected_work)
+    initialized = receipt.work_root
     print(f"OK WORK_STATE_INITIALIZED {initialized}")
     return 0
 
@@ -1592,7 +1596,7 @@ def _attempt(context: CommandContext) -> int:
     return _emit_operation(value, context.arguments.json)
 
 
-def _sqlite_attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912 - exhaustive authority lifecycle
+def _sqlite_attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR0915 - closed authority lifecycle
     attempt_id = AttemptId(_stable_identifier(context.arguments.attempt_id, label="Attempt identity"))
     operation = AttemptOperation(context.arguments.operation)
     store = SQLiteWorkStore(context.work / "state.sqlite3")
@@ -1604,18 +1608,57 @@ def _sqlite_attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912 - ex
         if attempt is None:
             raise LeaseError("ATTEMPT_LEASE_REQUIRED", f"Attempt '{attempt_id}' is not current.")
         retained = next((value for value in snapshot.command_attempt_authorities if value.attempt == attempt_id), None)
+        retained_record = next(
+            (value for value in state.authority.attempt_leases if value.attempt_id == attempt_id),
+            None,
+        )
         match operation:
             case AttemptOperation.ACQUIRE:
-                authority_operation = AcquireInitialAttemptAuthority(
-                    state.lifecycle.project.host_epoch,
-                    attempt_id,
-                    attempt.item_id,
-                    TaskId(_stable_identifier(context.arguments.task_id, label="Task identity")),
-                    HostId(_stable_identifier(context.arguments.host_id, label="Host identity")),
-                    LeaseId(uuid4().hex),
-                    now,
-                    now + timedelta(seconds=context.arguments.ttl_seconds),
-                )
+                task_id = TaskId(_stable_identifier(context.arguments.task_id, label="Task identity"))
+                host_id = HostId(_stable_identifier(context.arguments.host_id, label="Host identity"))
+                lease_id = LeaseId(uuid4().hex)
+                if retained_record is None:
+                    authority_operation = AcquireInitialAttemptAuthority(
+                        state.lifecycle.project.host_epoch,
+                        attempt_id,
+                        attempt.item_id,
+                        task_id,
+                        host_id,
+                        lease_id,
+                        now,
+                        now + timedelta(seconds=context.arguments.ttl_seconds),
+                    )
+                else:
+                    inactive = project_inactive_attempt_authority(state, attempt_id, now)
+                    if isinstance(inactive, DecisionFailure):
+                        raise LeaseError(inactive.code.value, inactive.message)
+                    coordination = state.authority.coordination
+                    if coordination is None:
+                        raise LeaseError("COORDINATION_LEASE_REQUIRED", "Attempt reacquisition requires coordination.")
+                    if (
+                        context.arguments.coordination_lease_id is None
+                        or context.arguments.coordination_generation is None
+                    ):
+                        raise LeaseError(
+                            "COORDINATION_LEASE_REQUIRED",
+                            "Attempt reacquisition requires the exact coordination lease and generation.",
+                        )
+                    authority_operation = TransferAttemptAuthority(
+                        inactive,
+                        CoordinationCommandAuthority(
+                            state.lifecycle.project.host_epoch,
+                            coordination.task_id,
+                            coordination.host_id,
+                            LeaseId(context.arguments.coordination_lease_id),
+                            context.arguments.coordination_generation,
+                            coordination.expires_at,
+                        ),
+                        task_id,
+                        host_id,
+                        lease_id,
+                        now,
+                        now + timedelta(seconds=context.arguments.ttl_seconds),
+                    )
             case AttemptOperation.RENEW:
                 if retained is None:
                     raise LeaseError("ATTEMPT_LEASE_REQUIRED", "Attempt authority is not active.")
@@ -1917,10 +1960,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         OverviewError,
         AtomicCommitError,
         ActionQueryError,
+        QueryError,
     ) as error:
         print(str(error), file=sys.stderr)
         return 11
-    except (RegistrationError, InitializationError, StorageError) as error:
+    except (RegistrationError, InitializationError, StorageError, ArtifactError, FileIOError) as error:
         print(str(error), file=sys.stderr)
         return 12
     except ProposalError as error:

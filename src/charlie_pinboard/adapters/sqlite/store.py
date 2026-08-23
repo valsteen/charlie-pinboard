@@ -1473,6 +1473,11 @@ class SQLiteWorkStore:
             with write_transaction(connection):
                 before = _StoredStateReader(connection).read()
                 verify_reference(work_root, published)
+                if (item_id is None) != (role is None):
+                    raise StorageError(
+                        StorageErrorCode.INVARIANT_VIOLATION,
+                        "An artifact relationship requires both an item and role.",
+                    )
                 existing = next(
                     (
                         value
@@ -1492,26 +1497,30 @@ class SQLiteWorkStore:
                             StorageErrorCode.INVARIANT_VIOLATION,
                             "An accepted artifact identity already names different bytes.",
                         )
-                    return existing
-                if (item_id is None) != (role is None):
-                    raise StorageError(
-                        StorageErrorCode.INVARIANT_VIOLATION,
-                        "An artifact relationship requires both an item and role.",
+                    reference = existing
+                else:
+                    reference = ArtifactReference(
+                        ArtifactRefId(
+                            1 + max((int(value.artifact_ref_id) for value in before.artifacts.references), default=0)
+                        ),
+                        published.key,
+                        published.revision,
+                        published.kind,
+                        published.selector,
+                        published.content_sha256,
+                        published.size_bytes,
+                        before.lifecycle.project.revision + 1,
+                        accepted_at,
                     )
-                revision = before.lifecycle.project.revision + 1
-                reference = ArtifactReference(
-                    ArtifactRefId(
-                        1 + max((int(value.artifact_ref_id) for value in before.artifacts.references), default=0)
-                    ),
-                    published.key,
-                    published.revision,
-                    published.kind,
-                    published.selector,
-                    published.content_sha256,
-                    published.size_bytes,
-                    revision,
-                    accepted_at,
+                relationship_exists = item_id is not None and any(
+                    value.item_id == item_id
+                    and value.artifact_ref_id == reference.artifact_ref_id
+                    and value.role == role
+                    for value in before.lifecycle.item_artifacts
                 )
+                if existing is not None and (item_id is None or relationship_exists):
+                    return existing
+                revision = before.lifecycle.project.revision + 1
                 lifecycle = before.lifecycle
                 if item_id is not None and role is not None:
                     item_index = next(
@@ -1552,7 +1561,11 @@ class SQLiteWorkStore:
                     ),
                     artifacts=replace(
                         before.artifacts,
-                        references=(*before.artifacts.references, reference),
+                        references=(
+                            before.artifacts.references
+                            if existing is not None
+                            else (*before.artifacts.references, reference)
+                        ),
                     ),
                 )
                 _StoredStateWriter(connection).replace_current(after)
