@@ -28,6 +28,12 @@ from charlie_pinboard.application.decision_projection import (
 )
 from charlie_pinboard.application.dispatch import prepare_sqlite_dispatch
 from charlie_pinboard.application.queries import (
+    DetailLevel,
+    QueryError,
+    overview_from_state,
+    read_resource_conflict,
+)
+from charlie_pinboard.application.queries import (
     OverviewItem as SQLiteOverviewItem,
 )
 from charlie_pinboard.application.queries import (
@@ -35,10 +41,6 @@ from charlie_pinboard.application.queries import (
 )
 from charlie_pinboard.application.queries import (
     ParallelPreview as SQLiteParallelPreview,
-)
-from charlie_pinboard.application.queries import (
-    QueryError,
-    overview_from_state,
 )
 from charlie_pinboard.application.queries import (
     WorkOverview as SQLiteWorkOverview,
@@ -244,6 +246,7 @@ class CliArguments(argparse.Namespace):
     item_id: str
     outcome: str
     reason: str
+    detail: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -567,6 +570,9 @@ def _add_resource_parser(commands: argparse._SubParsersAction[argparse.ArgumentP
     status = operations.add_parser("status")
     status.add_argument("--resource-id", required=True)
     status.add_argument("--host-id")
+    status.add_argument(
+        "--detail", choices=tuple(value.value for value in DetailLevel), default=DetailLevel.COMPACT.value
+    )
     status.add_argument("--json", action="store_true")
 
 
@@ -1808,7 +1814,8 @@ def _sqlite_resource(context: CommandContext) -> int:
     operation = ResourceOperation(context.arguments.operation)
     if operation != ResourceOperation.STATUS:
         raise ResourceError("ACTION_NOT_AVAILABLE", "SQLite resource changes require a current typed operation.")
-    state = SQLiteWorkStore(context.work / "state.sqlite3").snapshot()
+    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    state = store.snapshot()
     definition = next((value for value in state.resources.definitions if value.resource_id == resource_id), None)
     if definition is None:
         raise ResourceError("RESOURCE_INSTANCE_REQUIRED", f"Resource '{resource_id}' is not defined.")
@@ -1830,9 +1837,23 @@ def _sqlite_resource(context: CommandContext) -> int:
         )
         if instance is None:
             raise ResourceError("RESOURCE_INSTANCE_REQUIRED", f"Resource '{resource_id}' has no instance on this host.")
-        values["host_id"] = str(instance.host_id)
-        values["instance_id"] = str(instance.instance_id)
-        values["status"] = instance.state.value
+        conflict = read_resource_conflict(
+            store,
+            instance.instance_id,
+            DetailLevel(context.arguments.detail),
+        )
+        if context.arguments.json:
+            _write_json(conflict)
+        else:
+            print(
+                f"OK RESOURCE_CONFLICT detail={conflict.detail} instance_id={conflict.instance_id} "
+                f"consequence={conflict.consequence}"
+            )
+        return 0
+    if context.arguments.detail == DetailLevel.DETAILED.value:
+        raise ResourceError(
+            "RESOURCE_INSTANCE_REQUIRED", "Detailed resource status requires an explicit host instance."
+        )
     if context.arguments.json:
         _write_json(values)
     else:

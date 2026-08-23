@@ -31,7 +31,15 @@ from charlie_pinboard.application.stored_state import (
 )
 from charlie_pinboard.domain.decisions import ActionKind, Role
 from charlie_pinboard.domain.history import ItemScopeRecord, item_scope_digest
-from charlie_pinboard.domain.identifiers import ItemId, LeaseId, ResourceInstanceId
+from charlie_pinboard.domain.identifiers import (
+    ActionId,
+    HistoryId,
+    HistorySubjectId,
+    ItemId,
+    LeaseId,
+    PlanningImpactId,
+    ResourceInstanceId,
+)
 from charlie_pinboard.domain.model import AttemptState
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
@@ -187,7 +195,17 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertEqual("PLAN_SELECTION_MISMATCH", mismatch.exception.code)
 
     def test_resource_conflict_is_compact_by_default_and_detailed_on_request(self) -> None:
-        store = self._store()
+        state = complete_sqlite_state()
+        intent_receipt = replace(
+            state.history.receipts[0],
+            history_id=HistoryId(2),
+            project_revision=12,
+            action_id=ActionId("inspect:register-mutation:intent-a"),
+            subject_id=HistorySubjectId("intent-a"),
+        )
+        store = self._store(
+            replace(state, history=replace(state.history, receipts=(*state.history.receipts, intent_receipt)))
+        )
         compact = read_resource_conflict(store, ResourceInstanceId("workspace-on-host"), DetailLevel.COMPACT)
         detailed = read_resource_conflict(store, ResourceInstanceId("workspace-on-host"), DetailLevel.DETAILED)
 
@@ -203,6 +221,7 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertTrue(detailed.mutation_intents)
         self.assertIsNotNone(detailed.attempt_authority)
         self.assertTrue(detailed.history)
+        self.assertIn("intent-a", tuple(value.subject_id for value in detailed.history))
 
     def test_action_and_query_failure_matrix_is_stable_and_read_only(self) -> None:
         state = self._valid_scope_digests(complete_sqlite_state())
@@ -406,6 +425,53 @@ class SQLiteQueriesTest(unittest.TestCase):
                 malformed = self._rehash_snapshot(snapshot)
                 compare_plan_snapshots(malformed, malformed)
             self.assertEqual("PLAN_SNAPSHOT_INVALID", rejected.exception.code)
+
+    def test_plan_obligation_phases_validate_separately_and_cannot_be_backdated(self) -> None:
+        state = self._valid_scope_digests(complete_sqlite_state())
+        resolved = state.planning.obligations[0]
+        unresolved = replace(
+            resolved,
+            state=PlanningObligationState.UNRESOLVED,
+            disposition=None,
+            evaluated_scope_revision=None,
+            evaluated_scope_digest=None,
+            resulting_scope_revision=None,
+            resulting_scope_digest=None,
+            primary_replacement_item_id=None,
+            outcome_evidence=None,
+            reason=None,
+            resolved_project_revision=None,
+            resolved_at=None,
+        )
+        later_impact_id = PlanningImpactId("z-impact")
+        mixed_state = replace(
+            state,
+            planning=replace(
+                state.planning,
+                impacts=(*state.planning.impacts, replace(state.planning.impacts[0], impact_id=later_impact_id)),
+                obligations=(resolved, replace(unresolved, impact_id=later_impact_id)),
+            ),
+        )
+        mixed = read_plan_snapshot(self._store(mixed_state), (ItemId("work-a"),))
+        self.assertEqual("z-impact", mixed.unresolved_obligations[0].impact_id)
+        self.assertEqual("impact-a", mixed.resolved_obligations[0].impact_id)
+        self.assertEqual((), compare_plan_snapshots(mixed, mixed).changes.obligations_resolved)
+
+        before_state = replace(
+            state,
+            lifecycle=replace(state.lifecycle, project=replace(state.lifecycle.project, revision=7)),
+            planning=replace(state.planning, obligations=(unresolved,), replacements=()),
+        )
+        after_state = replace(
+            state,
+            lifecycle=replace(state.lifecycle, project=replace(state.lifecycle.project, revision=8)),
+        )
+        with self.assertRaises(PlanQueryError) as backdated:
+            compare_plan_snapshots(
+                read_plan_snapshot(self._store(before_state), (ItemId("work-a"),)),
+                read_plan_snapshot(self._store(after_state), (ItemId("work-a"),)),
+            )
+        self.assertEqual("PLAN_SNAPSHOT_CONTRADICTION", backdated.exception.code)
 
     def test_plan_change_set_carries_exact_components_lifecycle_and_obligation_records(self) -> None:
         state = self._valid_scope_digests(complete_sqlite_state())

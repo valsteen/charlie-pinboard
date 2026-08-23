@@ -1071,9 +1071,13 @@ def _validate_resolved_obligation(value: ResolvedObligation, project_revision: i
 
 def _validate_snapshot_obligations(value: PlanSnapshot, selected: frozenset[str]) -> None:
     obligations: tuple[PlanObligation, ...] = (*value.unresolved_obligations, *value.resolved_obligations)
-    if tuple(_obligation_identity(item) for item in obligations) != tuple(
-        sorted(_obligation_identity(item) for item in obligations)
-    ) or len(obligations) != len({_obligation_identity(item) for item in obligations}):
+    unresolved_identities = tuple(_obligation_identity(item) for item in value.unresolved_obligations)
+    resolved_identities = tuple(_obligation_identity(item) for item in value.resolved_obligations)
+    if (
+        unresolved_identities != tuple(sorted(set(unresolved_identities)))
+        or resolved_identities != tuple(sorted(set(resolved_identities)))
+        or set(unresolved_identities).intersection(resolved_identities)
+    ):
         raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "Planning obligations are not canonical and unique.")
     for obligation in obligations:
         if (
@@ -1353,6 +1357,11 @@ def _compare_obligation_pair(
             )
         return _ObligationChangeGroups(left=(ObligationLeftScope(previous),))
     if isinstance(previous, UnresolvedObligation) and isinstance(current, ResolvedObligation):
+        if current.resolved_project_revision <= before.project_revision:
+            raise PlanQueryError(
+                "PLAN_SNAPSHOT_CONTRADICTION",
+                "A planning obligation resolution is backdated into the earlier unresolved manifest.",
+            )
         if _common_obligation_facts(previous) != _common_obligation_facts(current):
             raise PlanQueryError(
                 "PLAN_SNAPSHOT_CONTRADICTION",
@@ -1600,6 +1609,7 @@ def read_resource_conflict(
         str(selected.resource_id),
         str(instance),
     }
+    subjects.update(value.intent_id for value in intents)
     if reservation is not None:
         subjects.update((str(reservation.reservation_id), str(reservation.attempt_id)))
     history = tuple(

@@ -913,8 +913,14 @@ class CliTest(unittest.TestCase):
             "workspace",
             "--host-id",
             "host-a",
+            "--detail",
+            "detailed",
         )
         self.assertEqual("workspace-on-host", instance["instance_id"])
+        self.assertEqual("detailed", instance["detail"])
+        self.assertTrue(self.json_list(instance["task_uses"]))
+        self.assertTrue(self.json_list(instance["mutation_intents"]))
+        self.assertTrue(self.json_list(instance["history"]))
         preview = self.run_json_cli(*common, "parallel", "preview", "--host-id", "host-a")
         self.assertEqual("sqlite-v1", overview["authority"])
         self.assertEqual("repo-work-parallel-preview/v1", preview["schema"])
@@ -940,6 +946,8 @@ class CliTest(unittest.TestCase):
                 "workspace",
                 "--host-id",
                 "host-a",
+                "--detail",
+                "detailed",
             ),
             ("parallel", "preview", "--host-id", "host-a"),
         )
