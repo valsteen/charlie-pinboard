@@ -36,7 +36,7 @@ from charlie_pinboard.domain.history import (
     item_scope_bytes,
 )
 from charlie_pinboard.domain.identifiers import ItemId, ResourceInstanceId
-from charlie_pinboard.domain.model import AttemptState, WorkState
+from charlie_pinboard.domain.model import AttemptState, MutationIntentState, PlanningDisposition, WorkState
 
 
 class QueryError(RuntimeError):
@@ -1061,12 +1061,31 @@ def _validate_resolved_obligation(value: ResolvedObligation, project_revision: i
         or value.resolved_project_revision > project_revision
         or positions != tuple(range(len(positions)))
         or len(identities) != len(set(identities))
+        or any(not identity for identity in identities)
+        or value.disposition not in {disposition.value for disposition in PlanningDisposition}
         or (value.disposition == "superseded") != bool(value.replacements)
-        or (value.disposition in {"dropped", "superseded"}) != (value.outcome_evidence is not None)
+        or (value.disposition in {"dropped", "superseded"})
+        != (value.outcome_evidence is not None and bool(value.outcome_evidence))
         or (value.disposition == "revised") != (value.resulting_scope is not None)
+        or not value.reason
+        or (
+            value.resulting_scope is not None
+            and (
+                value.resulting_scope.scope_revision != value.evaluated_scope.scope_revision + 1
+                or value.resulting_scope.scope_digest == value.evaluated_scope.scope_digest
+            )
+        )
     ):
         raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "A resolved obligation contradicts its resolution facts.")
     return identities
+
+
+def _valid_scope_anchor(value: ScopeAnchorView) -> bool:
+    return (
+        value.scope_revision >= 1
+        and len(value.scope_digest) == 64
+        and all(character in "0123456789abcdef" for character in value.scope_digest)
+    )
 
 
 def _validate_snapshot_obligations(value: PlanSnapshot, selected: frozenset[str]) -> None:
@@ -1083,17 +1102,25 @@ def _validate_snapshot_obligations(value: PlanSnapshot, selected: frozenset[str]
         if (
             not obligation.impact_id
             or not obligation.source_item_id
+            or obligation.source_attempt_id == ""
             or not obligation.target_item_id
+            or not obligation.summary
+            or not obligation.evidence
             or obligation.target_position < 0
+            or obligation.recorded_project_revision < 0
             or obligation.recorded_project_revision > value.project_revision
-            or obligation.source_scope.scope_revision < 1
-            or obligation.target_scope.scope_revision < 1
+            or not _valid_scope_anchor(obligation.source_scope)
+            or not _valid_scope_anchor(obligation.target_scope)
         ):
             raise PlanQueryError(
                 "PLAN_SNAPSHOT_INVALID", "A planning obligation carries invalid identity or revision facts."
             )
         endpoints = {obligation.source_item_id, obligation.target_item_id}
         if isinstance(obligation, ResolvedObligation):
+            if not _valid_scope_anchor(obligation.evaluated_scope) or (
+                obligation.resulting_scope is not None and not _valid_scope_anchor(obligation.resulting_scope)
+            ):
+                raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "A resolved obligation carries an invalid scope anchor.")
             endpoints.update(_validate_resolved_obligation(obligation, value.project_revision))
         if not endpoints.intersection(selected):
             raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "An obligation is unrelated to the selected plan.")
@@ -1121,6 +1148,8 @@ def _proposal_preimage(value: UndecidedProposal) -> _UndecidedProposalPreimage:
 def _validate_undecided_proposal(proposal: UndecidedProposal) -> None:
     evidence_positions = tuple(record.position for record in proposal.evidence)
     freshness_positions = tuple(record.position for record in proposal.freshness_assumptions)
+    evidence_values = tuple(record.selector for record in proposal.evidence)
+    freshness_values = tuple(record.assumption for record in proposal.freshness_assumptions)
     scalars = (
         proposal.proposal_id,
         proposal.source_task_id,
@@ -1134,8 +1163,11 @@ def _validate_undecided_proposal(proposal: UndecidedProposal) -> None:
     if (
         any(not scalar for scalar in scalars)
         or proposal.relation.kind not in {"independent", "prerequisite", "follow-up", "duplicate", "contradiction"}
+        or proposal.relation.item_id == ""
         or evidence_positions != tuple(range(len(evidence_positions)))
         or freshness_positions != tuple(range(len(freshness_positions)))
+        or len(evidence_values) != len(set(evidence_values))
+        or len(freshness_values) != len(set(freshness_values))
         or any(not record.selector for record in proposal.evidence)
         or any(not record.assumption for record in proposal.freshness_assumptions)
         or hashlib.sha256(_canonical_bytes(_proposal_preimage(proposal))).hexdigest() != proposal.proposal_sha256
@@ -1157,7 +1189,10 @@ def _validate_snapshot_undecided(value: PlanSnapshot) -> None:
 def _validate_snapshot(value: PlanSnapshot) -> None:
     _validate_snapshot_identity(value)
     scopes = _validated_snapshot_scopes(value)
-    _validate_snapshot_obligations(value, frozenset(scopes))
+    _validate_snapshot_obligations(
+        value,
+        frozenset(scopes),
+    )
     _validate_snapshot_undecided(value)
 
 
@@ -1492,8 +1527,14 @@ def read_resource_conflict(
         if reservation is not None
         else f"Resource '{selected.resource_id}' is available for explicit assignment."
     )
+    planned_intent = reservation is not None and any(
+        value.reservation_id == reservation.reservation_id and value.state == MutationIntentState.PLANNED
+        for value in state.resources.mutation_intents
+    )
     legal = (
-        ("inspect", "preserve", "release-reservation", "revoke-reservation")
+        ("inspect", "preserve", "revoke-reservation")
+        if planned_intent
+        else ("inspect", "preserve", "release-reservation", "revoke-reservation")
         if reservation is not None
         else ("inspect", "assign")
     )

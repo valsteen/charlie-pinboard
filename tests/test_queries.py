@@ -16,6 +16,7 @@ from charlie_pinboard.application.queries import (
     PlanQueryError,
     PlanSnapshot,
     QueryError,
+    UndecidedProposal,
     compare_plan_snapshots,
     preview_parallel,
     read_overview,
@@ -52,6 +53,14 @@ class SQLiteQueriesTest(unittest.TestCase):
         payload.pop("manifest_sha256")
         digest = hashlib.sha256(msgspec.json.encode(payload, order="sorted") + b"\n").hexdigest()
         return msgspec.structs.replace(snapshot, manifest_sha256=digest)
+
+    def _rehash_proposal(self, proposal: UndecidedProposal) -> UndecidedProposal:
+        payload = msgspec.json.decode(msgspec.json.encode(proposal))
+        if not isinstance(payload, dict):
+            self.fail("Undecided proposal must encode as an object")
+        payload.pop("proposal_sha256")
+        digest = hashlib.sha256(msgspec.json.encode(payload, order="sorted") + b"\n").hexdigest()
+        return msgspec.structs.replace(proposal, proposal_sha256=digest)
 
     def _valid_scope_digests(self, state: StoredWorkState) -> StoredWorkState:
         digests: dict[ItemId, str] = {}
@@ -222,6 +231,8 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertIsNotNone(detailed.attempt_authority)
         self.assertTrue(detailed.history)
         self.assertIn("intent-a", tuple(value.subject_id for value in detailed.history))
+        self.assertNotIn("release-reservation", detailed.legal_actions)
+        self.assertIn("revoke-reservation", detailed.legal_actions)
 
     def test_action_and_query_failure_matrix_is_stable_and_read_only(self) -> None:
         state = self._valid_scope_digests(complete_sqlite_state())
@@ -363,6 +374,30 @@ class SQLiteQueriesTest(unittest.TestCase):
         first_item = valid.items[0]
         resolved = valid.resolved_obligations[0]
         proposal = valid.undecided[0]
+        empty_relation_proposal = self._rehash_proposal(
+            msgspec.structs.replace(
+                proposal,
+                relation=msgspec.structs.replace(proposal.relation, item_id=""),
+            )
+        )
+        duplicate_evidence_proposal = self._rehash_proposal(
+            msgspec.structs.replace(
+                proposal,
+                evidence=(
+                    proposal.evidence[0],
+                    msgspec.structs.replace(proposal.evidence[0], position=1),
+                ),
+            )
+        )
+        duplicate_freshness_proposal = self._rehash_proposal(
+            msgspec.structs.replace(
+                proposal,
+                freshness_assumptions=(
+                    proposal.freshness_assumptions[0],
+                    msgspec.structs.replace(proposal.freshness_assumptions[0], position=1),
+                ),
+            )
+        )
 
         semantic = msgspec.json.decode(bytes(first_item.semantic), type=ItemScopeRecord)
         without_dependency = msgspec.structs.replace(semantic, dependencies=())
@@ -400,6 +435,63 @@ class SQLiteQueriesTest(unittest.TestCase):
                 valid,
                 resolved_obligations=(msgspec.structs.replace(resolved, replacements=()),),
             ),
+            "resolution-disposition": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(
+                    msgspec.structs.replace(
+                        resolved,
+                        disposition="invented",
+                        outcome_evidence=None,
+                        replacements=(),
+                    ),
+                ),
+            ),
+            "resolution-reason": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(msgspec.structs.replace(resolved, reason=""),),
+            ),
+            "resolution-outcome": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(msgspec.structs.replace(resolved, outcome_evidence=""),),
+            ),
+            "resolution-replacement": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(
+                    msgspec.structs.replace(
+                        resolved,
+                        replacements=(msgspec.structs.replace(resolved.replacements[0], item_id=""),),
+                    ),
+                ),
+            ),
+            "resolution-resulting-anchor": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(
+                    msgspec.structs.replace(
+                        resolved,
+                        disposition="revised",
+                        outcome_evidence=None,
+                        replacements=(),
+                        resulting_scope=resolved.evaluated_scope,
+                    ),
+                ),
+            ),
+            "obligation-scalar": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(msgspec.structs.replace(resolved, summary=""),),
+            ),
+            "obligation-attempt": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(msgspec.structs.replace(resolved, source_attempt_id=""),),
+            ),
+            "obligation-anchor-shape": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(
+                    msgspec.structs.replace(
+                        resolved,
+                        target_scope=msgspec.structs.replace(resolved.target_scope, scope_digest="not-a-sha"),
+                    ),
+                ),
+            ),
             "obligation-relevance": msgspec.structs.replace(
                 valid,
                 resolved_obligations=(
@@ -419,12 +511,16 @@ class SQLiteQueriesTest(unittest.TestCase):
                 valid,
                 undecided=(msgspec.structs.replace(proposal, user_label=""),),
             ),
+            "undecided-relation": msgspec.structs.replace(valid, undecided=(empty_relation_proposal,)),
+            "undecided-evidence": msgspec.structs.replace(valid, undecided=(duplicate_evidence_proposal,)),
+            "undecided-freshness": msgspec.structs.replace(valid, undecided=(duplicate_freshness_proposal,)),
         }
         for inventory, snapshot in invalid_snapshots.items():
-            with self.subTest(inventory=inventory), self.assertRaises(PlanQueryError) as rejected:
-                malformed = self._rehash_snapshot(snapshot)
-                compare_plan_snapshots(malformed, malformed)
-            self.assertEqual("PLAN_SNAPSHOT_INVALID", rejected.exception.code)
+            with self.subTest(inventory=inventory):
+                with self.assertRaises(PlanQueryError) as rejected:
+                    malformed = self._rehash_snapshot(snapshot)
+                    compare_plan_snapshots(malformed, malformed)
+                self.assertEqual("PLAN_SNAPSHOT_INVALID", rejected.exception.code)
 
     def test_plan_obligation_phases_validate_separately_and_cannot_be_backdated(self) -> None:
         state = self._valid_scope_digests(complete_sqlite_state())
