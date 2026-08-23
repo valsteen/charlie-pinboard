@@ -16,6 +16,7 @@ from charlie_pinboard.domain.decisions import (
     AuthorizationKind,
     Role,
     available_actions,
+    bind_transition,
     decide,
 )
 from charlie_pinboard.domain.errors import DecisionError
@@ -32,7 +33,7 @@ def _commit_same_pause(
     snapshot = project_decision_snapshot(store.snapshot())
     actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
     action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.PAUSE)
-    decision = decide(snapshot, action, ReasonInput("Concurrent pause."), SQLITE_NOW)
+    decision = decide(snapshot, bind_transition(action, ReasonInput("Concurrent pause.")), SQLITE_NOW)
     barrier.wait()
     try:
         with store.write() as transaction:

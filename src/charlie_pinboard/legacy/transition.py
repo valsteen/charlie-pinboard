@@ -3,7 +3,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import assert_never
 
-from charlie_pinboard.domain.model import TransitionInput
+from charlie_pinboard.domain.decisions import LegacyTransitionCommand
 from charlie_pinboard.legacy.actions import (
     Action,
     AuthorizationKind,
@@ -175,7 +175,7 @@ def apply_transition(
     project_root: Path,
     action: Action,
     payload: bytes | str,
-    decode_input: Callable[[str, bytes | str], TransitionInput],
+    decode_command: Callable[[Action, bytes | str], LegacyTransitionCommand],
     *,
     failpoint: CommitFailpoint | None = None,
 ) -> str:
@@ -185,8 +185,8 @@ def apply_transition(
             recover_pending_commit(active_root)
             _verify_action_tokens(work_root, active_root, authority.version, action)
             _verify_action_available(work_root, project_root, action)
-            value = decode_input(action.kind.value, payload)
-            changes = plan_transition(active_root, project_root, action, value)
+            command = decode_command(action, payload)
+            changes = plan_transition(active_root, project_root, command)
             validate_change_set(active_root, project_root, changes, authority.version)
             commit_change_set(active_root, project_root, changes, authority.version, failpoint=failpoint)
             return state_revision(work_root)

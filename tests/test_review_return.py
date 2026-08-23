@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from charlie_pinboard.domain.decisions import ActionKind, AuthorizationKind, decide
+from charlie_pinboard.domain.decisions import ActionKind, AuthorizationKind, bind_transition, decide
 from charlie_pinboard.domain.errors import DecisionError
 from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, CheckpointId, ItemId
 from charlie_pinboard.domain.model import (
@@ -324,11 +324,13 @@ class ReviewReturnTest(unittest.TestCase):
 
         decision = decide(
             snapshot,
-            action,
-            AcceptCheckpointInput(
-                CheckpointId("design-accepted"),
-                CandidateId("sha256:candidate"),
-                "review.md accepted this exact candidate",
+            bind_transition(
+                action,
+                AcceptCheckpointInput(
+                    CheckpointId("design-accepted"),
+                    CandidateId("sha256:candidate"),
+                    "review.md accepted this exact candidate",
+                ),
             ),
             accepted_at,
         )
@@ -452,7 +454,9 @@ class ReviewReturnTest(unittest.TestCase):
         )
 
         decision = decide(
-            snapshot, action, ReasonInput("review.md: authority mismatch"), datetime(2026, 8, 22, tzinfo=UTC)
+            snapshot,
+            bind_transition(action, ReasonInput("review.md: authority mismatch")),
+            datetime(2026, 8, 22, tzinfo=UTC),
         )
 
         self.assertIsNotNone(decision.attempt_authority_change)
@@ -472,8 +476,7 @@ class ReviewReturnTest(unittest.TestCase):
         with self.assertRaisesRegex(DecisionError, "ATTEMPT_AUTHORITY_REQUIRED"):
             decide(
                 replace(snapshot, attempt_authorities=()),
-                action,
-                ReasonInput("review.md: authority mismatch"),
+                bind_transition(action, ReasonInput("review.md: authority mismatch")),
                 datetime(2026, 8, 22, tzinfo=UTC),
             )
 

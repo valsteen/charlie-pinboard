@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
@@ -34,6 +33,7 @@ from charlie_pinboard.domain.model import (
     EvidenceInput,
     ItemScope,
     LedgerSnapshot,
+    LegacyActivateInput,
     MergeProposalInput,
     ProposalRecord,
     ReasonInput,
@@ -112,6 +112,373 @@ class Action:
     resource_claims: tuple[ResourceToken, ...] = ()
     command_authority: CommandAttemptAuthority | None = None
     resource_capabilities: tuple[ResourceMutationCapability, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ActionCapability:
+    subject: SubjectId
+    label: str
+    expected_revision: str
+    coordinator_generation: int
+    subject_revision: str | None
+    authorization: AuthorizationKind
+    lease_id: LeaseId | None
+    resource_claims: tuple[ResourceToken, ...]
+    command_authority: CommandAttemptAuthority | None
+    resource_capabilities: tuple[ResourceMutationCapability, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptCheckpointCommand:
+    capability: ActionCapability
+    value: AcceptCheckpointInput
+
+
+@dataclass(frozen=True, slots=True)
+class ActivateCommand:
+    capability: ActionCapability
+    value: ActivateInput
+
+
+@dataclass(frozen=True, slots=True)
+class PauseCommand:
+    capability: ActionCapability
+    value: ReasonInput
+
+
+@dataclass(frozen=True, slots=True)
+class BlockCommand:
+    capability: ActionCapability
+    value: BlockInput
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteCommand:
+    capability: ActionCapability
+    value: EvidenceInput
+
+
+@dataclass(frozen=True, slots=True)
+class CloseCommand:
+    capability: ActionCapability
+    value: CloseInput
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeCommand:
+    capability: ActionCapability
+    value: EmptyInput
+
+
+@dataclass(frozen=True, slots=True)
+class SubmitReviewCommand:
+    capability: ActionCapability
+    value: SubmitReviewInput
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnForCorrectionCommand:
+    capability: ActionCapability
+    value: ReasonInput
+
+
+@dataclass(frozen=True, slots=True)
+class ReopenCommand:
+    capability: ActionCapability
+    value: EvidenceInput
+
+
+@dataclass(frozen=True, slots=True)
+class MarkReadyCommand:
+    capability: ActionCapability
+    value: ReasonInput
+
+
+@dataclass(frozen=True, slots=True)
+class BlockItemCommand:
+    capability: ActionCapability
+    value: BlockInput
+
+
+@dataclass(frozen=True, slots=True)
+class DeferCommand:
+    capability: ActionCapability
+    value: DeferInput
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptProposalCommand:
+    capability: ActionCapability
+    value: AcceptProposalInput
+
+
+@dataclass(frozen=True, slots=True)
+class MergeProposalCommand:
+    capability: ActionCapability
+    value: MergeProposalInput
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnProposalCommand:
+    capability: ActionCapability
+    value: ReasonInput
+
+
+@dataclass(frozen=True, slots=True)
+class RejectProposalCommand:
+    capability: ActionCapability
+    value: ReasonInput
+
+
+@dataclass(frozen=True, slots=True)
+class TransferCoordinatorCommand:
+    capability: ActionCapability
+    value: TransferCoordinatorInput
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyActivateCommand:
+    capability: ActionCapability
+    value: LegacyActivateInput
+
+
+@dataclass(frozen=True, slots=True)
+class LegacySubmitReviewCommand:
+    capability: ActionCapability
+    value: EmptyInput
+
+
+type TransitionCommand = (
+    AcceptCheckpointCommand
+    | ActivateCommand
+    | PauseCommand
+    | BlockCommand
+    | CompleteCommand
+    | CloseCommand
+    | ResumeCommand
+    | SubmitReviewCommand
+    | ReturnForCorrectionCommand
+    | ReopenCommand
+    | MarkReadyCommand
+    | BlockItemCommand
+    | DeferCommand
+    | AcceptProposalCommand
+    | MergeProposalCommand
+    | ReturnProposalCommand
+    | RejectProposalCommand
+    | TransferCoordinatorCommand
+)
+
+type LegacyTransitionCommand = (
+    AcceptCheckpointCommand
+    | AcceptProposalCommand
+    | BlockCommand
+    | BlockItemCommand
+    | CloseCommand
+    | CompleteCommand
+    | DeferCommand
+    | LegacyActivateCommand
+    | LegacySubmitReviewCommand
+    | MarkReadyCommand
+    | MergeProposalCommand
+    | PauseCommand
+    | RejectProposalCommand
+    | ReopenCommand
+    | ResumeCommand
+    | ReturnForCorrectionCommand
+    | ReturnProposalCommand
+    | TransferCoordinatorCommand
+)
+
+
+def _action_capability(action: Action) -> ActionCapability:
+    return ActionCapability(
+        action.subject,
+        action.label,
+        action.expected_revision,
+        action.coordinator_generation,
+        action.subject_revision,
+        action.authorization,
+        action.lease_id,
+        action.resource_claims,
+        action.command_authority,
+        action.resource_capabilities,
+    )
+
+
+def command_action(command: TransitionCommand | LegacyTransitionCommand) -> Action:  # noqa: C901, PLR0912
+    """Reconstruct the advertised action whose kind is fixed by the closed command variant."""
+
+    match command:
+        case AcceptCheckpointCommand(capability=capability):
+            kind = ActionKind.ACCEPT_CHECKPOINT
+        case AcceptProposalCommand(capability=capability):
+            kind = ActionKind.ACCEPT_PROPOSAL
+        case ActivateCommand(capability=capability) | LegacyActivateCommand(capability=capability):
+            kind = ActionKind.ACTIVATE
+        case BlockCommand(capability=capability):
+            kind = ActionKind.BLOCK
+        case BlockItemCommand(capability=capability):
+            kind = ActionKind.BLOCK_ITEM
+        case CloseCommand(capability=capability):
+            kind = ActionKind.CLOSE
+        case CompleteCommand(capability=capability):
+            kind = ActionKind.COMPLETE
+        case DeferCommand(capability=capability):
+            kind = ActionKind.DEFER
+        case MarkReadyCommand(capability=capability):
+            kind = ActionKind.MARK_READY
+        case MergeProposalCommand(capability=capability):
+            kind = ActionKind.MERGE_PROPOSAL
+        case PauseCommand(capability=capability):
+            kind = ActionKind.PAUSE
+        case RejectProposalCommand(capability=capability):
+            kind = ActionKind.REJECT_PROPOSAL
+        case ReopenCommand(capability=capability):
+            kind = ActionKind.REOPEN
+        case ResumeCommand(capability=capability):
+            kind = ActionKind.RESUME
+        case ReturnForCorrectionCommand(capability=capability):
+            kind = ActionKind.RETURN_FOR_CORRECTION
+        case ReturnProposalCommand(capability=capability):
+            kind = ActionKind.RETURN_PROPOSAL
+        case SubmitReviewCommand(capability=capability) | LegacySubmitReviewCommand(capability=capability):
+            kind = ActionKind.SUBMIT_REVIEW
+        case TransferCoordinatorCommand(capability=capability):
+            kind = ActionKind.TRANSFER_COORDINATOR
+        case _ as unreachable:
+            assert_never(unreachable)
+    return Action(
+        ActionId(f"{kind.value}:{capability.subject}"),
+        kind,
+        capability.subject,
+        capability.label,
+        capability.expected_revision,
+        capability.coordinator_generation,
+        capability.subject_revision,
+        capability.authorization,
+        capability.lease_id,
+        capability.resource_claims,
+        capability.command_authority,
+        capability.resource_capabilities,
+    )
+
+
+def _invalid_transition_input(action: Action) -> DecisionError:
+    return DecisionError(
+        DecisionErrorCode.TRANSITION_INPUT_INVALID,
+        f"Input for '{action.kind.value}' does not match its canonical command variant.",
+    )
+
+
+def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand:  # noqa: C901, PLR0912
+    """Bind an external action discriminator and decoded payload into one closed command variant."""
+
+    capability = _action_capability(action)
+    match action.kind, value:
+        case ActionKind.ACCEPT_CHECKPOINT, AcceptCheckpointInput():
+            return AcceptCheckpointCommand(capability, value)
+        case ActionKind.ACTIVATE, ActivateInput():
+            return ActivateCommand(capability, value)
+        case ActionKind.PAUSE, ReasonInput():
+            return PauseCommand(capability, value)
+        case ActionKind.BLOCK, BlockInput():
+            return BlockCommand(capability, value)
+        case ActionKind.COMPLETE, EvidenceInput():
+            return CompleteCommand(capability, value)
+        case ActionKind.CLOSE, CloseInput():
+            return CloseCommand(capability, value)
+        case ActionKind.RESUME, EmptyInput():
+            return ResumeCommand(capability, value)
+        case ActionKind.SUBMIT_REVIEW, SubmitReviewInput():
+            return SubmitReviewCommand(capability, value)
+        case ActionKind.RETURN_FOR_CORRECTION, ReasonInput():
+            return ReturnForCorrectionCommand(capability, value)
+        case ActionKind.REOPEN, EvidenceInput():
+            return ReopenCommand(capability, value)
+        case ActionKind.MARK_READY, ReasonInput():
+            return MarkReadyCommand(capability, value)
+        case ActionKind.BLOCK_ITEM, BlockInput():
+            return BlockItemCommand(capability, value)
+        case ActionKind.DEFER, DeferInput():
+            return DeferCommand(capability, value)
+        case ActionKind.ACCEPT_PROPOSAL, AcceptProposalInput():
+            return AcceptProposalCommand(capability, value)
+        case ActionKind.MERGE_PROPOSAL, MergeProposalInput():
+            return MergeProposalCommand(capability, value)
+        case ActionKind.RETURN_PROPOSAL, ReasonInput():
+            return ReturnProposalCommand(capability, value)
+        case ActionKind.REJECT_PROPOSAL, ReasonInput():
+            return RejectProposalCommand(capability, value)
+        case ActionKind.TRANSFER_COORDINATOR, TransferCoordinatorInput():
+            return TransferCoordinatorCommand(capability, value)
+
+    match action.kind:
+        case ActionKind.CONTINUE | ActionKind.DISPATCH | ActionKind.INSPECT | ActionKind.REPORT_BLOCKER:
+            raise DecisionError(
+                DecisionErrorCode.ACTION_NOT_MUTATING,
+                f"Action '{action.kind.value}' is not a canonical transition.",
+            )
+        case (
+            ActionKind.ACCEPT_CHECKPOINT
+            | ActionKind.ACCEPT_PROPOSAL
+            | ActionKind.ACTIVATE
+            | ActionKind.BLOCK
+            | ActionKind.BLOCK_ITEM
+            | ActionKind.COMPLETE
+            | ActionKind.CLOSE
+            | ActionKind.DEFER
+            | ActionKind.MARK_READY
+            | ActionKind.MERGE_PROPOSAL
+            | ActionKind.PAUSE
+            | ActionKind.REJECT_PROPOSAL
+            | ActionKind.REOPEN
+            | ActionKind.RESUME
+            | ActionKind.RETURN_FOR_CORRECTION
+            | ActionKind.RETURN_PROPOSAL
+            | ActionKind.SUBMIT_REVIEW
+            | ActionKind.TRANSFER_COORDINATOR
+        ):
+            raise _invalid_transition_input(action)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def bind_legacy_transition(action: Action, value: TransitionInput) -> LegacyTransitionCommand:
+    """Bind the two temporary Markdown payload differences before canonical decision-making."""
+
+    capability = _action_capability(action)
+    match action.kind, value:
+        case ActionKind.ACTIVATE, LegacyActivateInput():
+            return LegacyActivateCommand(capability, value)
+        case ActionKind.SUBMIT_REVIEW, EmptyInput():
+            return LegacySubmitReviewCommand(capability, value)
+        case _:
+            command = bind_transition(action, value)
+            match command:
+                case ActivateCommand() | SubmitReviewCommand():
+                    raise _invalid_transition_input(action)
+                case (
+                    AcceptCheckpointCommand()
+                    | AcceptProposalCommand()
+                    | BlockCommand()
+                    | BlockItemCommand()
+                    | CloseCommand()
+                    | CompleteCommand()
+                    | DeferCommand()
+                    | MarkReadyCommand()
+                    | MergeProposalCommand()
+                    | PauseCommand()
+                    | RejectProposalCommand()
+                    | ReopenCommand()
+                    | ResumeCommand()
+                    | ReturnForCorrectionCommand()
+                    | ReturnProposalCommand()
+                    | TransferCoordinatorCommand()
+                ):
+                    return command
+                case _ as unreachable:
+                    assert_never(unreachable)
 
 
 @dataclass(frozen=True, slots=True)
@@ -535,9 +902,6 @@ def _receipt(
     return TransitionReceipt(action.action_id, item, outcome, evidence, now)
 
 
-type DecisionHandler = Callable[[LedgerSnapshot, Action, TransitionInput, datetime], Decision]
-
-
 def _result(
     action: Action,
     now: datetime,
@@ -568,12 +932,12 @@ def _result(
     )
 
 
-def _activate(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _activate(snapshot: LedgerSnapshot, command: ActivateCommand, now: datetime) -> Decision:
+    action = command_action(command)
+    value = command.value
     item = _item(snapshot, ItemId(action.subject))
     if item.state != WorkState.READY or _unresolved_target(snapshot, item.item):
         raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not ready for activation.")
-    if not isinstance(value, ActivateInput):
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Activate requires activation input.")
     artifact = next(
         (candidate for candidate in snapshot.artifacts if candidate.artifact_ref_id == value.brief_artifact_ref_id),
         None,
@@ -600,16 +964,19 @@ def _activate(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, 
     )
 
 
-def _pause_or_block(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _pause_or_block(snapshot: LedgerSnapshot, command: PauseCommand | BlockCommand, now: datetime) -> Decision:
+    action = command_action(command)
+    match command:
+        case PauseCommand():
+            target = WorkState.PAUSED
+        case BlockCommand():
+            target = WorkState.BLOCKED
+        case _ as unreachable:
+            assert_never(unreachable)
     attempt_id = AttemptId(action.subject)
     item = _attempt_item(snapshot, attempt_id)
     if item.state != WorkState.ACTIVE:
         raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "The named attempt is not active.")
-    if action.kind == ActionKind.PAUSE and not isinstance(value, ReasonInput):
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Pause requires a reason.")
-    if action.kind == ActionKind.BLOCK and not isinstance(value, BlockInput):
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Block requires a reason and dependencies.")
-    target = WorkState.PAUSED if action.kind == ActionKind.PAUSE else WorkState.BLOCKED
     return _result(
         action,
         now,
@@ -641,7 +1008,9 @@ def _release_attempt_resources(
     return reservation_changes, use_lease_changes
 
 
-def _complete(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime) -> Decision:
+    action = command_action(command)
+    value = command.value
     attempt_id = AttemptId(action.subject)
     item = _attempt_item(snapshot, attempt_id)
     if item.state not in {WorkState.ACTIVE, WorkState.REVIEW}:
@@ -652,8 +1021,6 @@ def _complete(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, 
         raise DecisionError(
             DecisionErrorCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
         )
-    if not isinstance(value, EvidenceInput) or not value.evidence.strip():
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Completion requires outcome evidence.")
     if item.item in snapshot.history_items:
         raise DecisionError(DecisionErrorCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     before = AttemptState.REVIEW if item.state == WorkState.REVIEW else AttemptState.ACTIVE
@@ -670,14 +1037,14 @@ def _complete(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, 
     )
 
 
-def _close(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> Decision:
+    action = command_action(command)
+    value = command.value
     item = _item(snapshot, ItemId(action.subject))
     if item.state in {WorkState.ACTIVE, WorkState.REVIEW}:
         raise DecisionError(
             DecisionErrorCode.ACTION_NOT_AVAILABLE, "Active or review work requires the acceptance path."
         )
-    if not isinstance(value, CloseInput):
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Close requires terminal outcome input.")
     if value.outcome == CloseOutcome.DROPPED and any(item.item in candidate.depends_on for candidate in snapshot.items):
         raise DecisionError(DecisionErrorCode.LIVE_DEPENDENTS, f"Item '{item.item}' still has live dependents.")
     if item.item in snapshot.history_items:
@@ -702,7 +1069,8 @@ def _close(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now
     )
 
 
-def _resume(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> Decision:
+    action = command_action(command)
     item = _item(snapshot, ItemId(action.subject))
     if item.state not in {WorkState.PAUSED, WorkState.BLOCKED}:
         raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not paused or blocked.")
@@ -710,8 +1078,6 @@ def _resume(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, no
         raise DecisionError(
             DecisionErrorCode.DEPENDENCY_NOT_SATISFIED, f"Item '{item.item}' still has a live dependency."
         )
-    if not isinstance(value, EmptyInput):
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Resume does not accept transition data.")
     target = WorkState.ACTIVE if item.attempt is not None else WorkState.READY
     attempt_change = None
     if item.attempt is not None:
@@ -726,7 +1092,9 @@ def _resume(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, no
     )
 
 
-def _submit_review(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: datetime) -> Decision:
+    action = command_action(command)
+    value = command.value
     attempt_id = AttemptId(action.subject)
     item = _attempt_item(snapshot, attempt_id)
     if item.state != WorkState.ACTIVE:
@@ -740,11 +1108,6 @@ def _submit_review(snapshot: LedgerSnapshot, action: Action, value: TransitionIn
     if _scope_stale(snapshot, item):
         raise DecisionError(
             DecisionErrorCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
-        )
-    if not isinstance(value, SubmitReviewInput) or not value.candidate.strip():
-        raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID,
-            "Submit review requires the protected candidate revision.",
         )
     attempt = snapshot.attempts_by_id().get(attempt_id)
     if attempt is None:
@@ -767,19 +1130,16 @@ def _submit_review(snapshot: LedgerSnapshot, action: Action, value: TransitionIn
 
 def _return_for_correction(
     snapshot: LedgerSnapshot,
-    action: Action,
-    value: TransitionInput,
+    command: ReturnForCorrectionCommand,
     now: datetime,
 ) -> Decision:
+    action = command_action(command)
+    value = command.value
     attempt_id = AttemptId(action.subject)
     item = _attempt_item(snapshot, attempt_id)
     if item.state != WorkState.REVIEW:
         raise DecisionError(
             DecisionErrorCode.ACTION_NOT_AVAILABLE, "Only an attempt in review can be returned for correction."
-        )
-    if not isinstance(value, ReasonInput) or not value.reason.strip():
-        raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID, "Returning a review requires a correction reason."
         )
     authorities = tuple(candidate for candidate in snapshot.attempt_authorities if candidate.attempt == attempt_id)
     if len(authorities) != 1:
@@ -824,21 +1184,17 @@ def _return_for_correction(
 
 def _accept_checkpoint(
     snapshot: LedgerSnapshot,
-    action: Action,
-    value: TransitionInput,
+    command: AcceptCheckpointCommand,
     now: datetime,
 ) -> Decision:
+    action = command_action(command)
+    value = command.value
     attempt_id = AttemptId(action.subject)
     item = _attempt_item(snapshot, attempt_id)
     if item.state != WorkState.REVIEW:
         raise DecisionError(
             DecisionErrorCode.ACTION_NOT_AVAILABLE,
             "Only an attempt in review can have a checkpoint accepted.",
-        )
-    if not isinstance(value, AcceptCheckpointInput) or not value.evidence.strip() or not value.candidate.strip():
-        raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID,
-            "Checkpoint acceptance requires a checkpoint, candidate, and acceptance evidence.",
         )
     authorities = tuple(candidate for candidate in snapshot.attempt_authorities if candidate.attempt == attempt_id)
     if len(authorities) != 1:
@@ -885,41 +1241,42 @@ def _accept_checkpoint(
 
 def _simple_item_transition(
     snapshot: LedgerSnapshot,
-    action: Action,
-    value: TransitionInput,
+    command: ReopenCommand | MarkReadyCommand | BlockItemCommand,
     now: datetime,
 ) -> Decision:
+    action = command_action(command)
+    match command:
+        case ReopenCommand():
+            expected = (WorkState.DEFERRED,)
+            target = WorkState.INTAKE
+        case MarkReadyCommand():
+            expected = (WorkState.INTAKE,)
+            target = WorkState.READY
+        case BlockItemCommand():
+            expected = (WorkState.INTAKE, WorkState.READY)
+            target = WorkState.BLOCKED
+        case _ as unreachable:
+            assert_never(unreachable)
     item = _item(snapshot, ItemId(action.subject))
-    if action.kind == ActionKind.REOPEN:
-        expected, target, valid = WorkState.DEFERRED, WorkState.INTAKE, isinstance(value, EvidenceInput)
-    elif action.kind == ActionKind.MARK_READY:
-        expected, target, valid = WorkState.INTAKE, WorkState.READY, isinstance(value, ReasonInput)
-    else:
-        expected, target, valid = item.state, WorkState.BLOCKED, isinstance(value, BlockInput)
-        if item.state not in {WorkState.INTAKE, WorkState.READY}:
-            raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot be blocked now.")
-    if item.state != expected:
+    if item.state not in expected:
         raise DecisionError(
             DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot perform '{action.kind.value}' now."
         )
-    if not valid:
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, f"Input for '{action.kind.value}' is invalid.")
     return _result(action, now, item=item.item, item_change=ItemChange(item.item, item.state, target))
 
 
-def _defer(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _defer(snapshot: LedgerSnapshot, command: DeferCommand, now: datetime) -> Decision:
+    action = command_action(command)
     item = _item(snapshot, ItemId(action.subject))
     if item.state not in {WorkState.INTAKE, WorkState.READY, WorkState.BLOCKED} or item.attempt is not None:
         raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot be deferred now.")
-    if not isinstance(value, DeferInput):
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Defer requires a reopen condition.")
     return _result(action, now, item=item.item, item_change=ItemChange(item.item, item.state, WorkState.DEFERRED))
 
 
-def _accept_proposal(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _accept_proposal(snapshot: LedgerSnapshot, command: AcceptProposalCommand, now: datetime) -> Decision:
+    action = command_action(command)
+    value = command.value
     proposal = _require_proposal(snapshot, ProposalId(action.subject))
-    if not isinstance(value, AcceptProposalInput):
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Accept proposal requires item input.")
     if value.item in snapshot.items_by_id() or value.item in snapshot.history_items:
         raise DecisionError(DecisionErrorCode.ITEM_ALREADY_EXISTS, f"Item '{value.item}' already exists.")
     change = ItemChange(value.item, None, WorkState(value.state.value))
@@ -984,10 +1341,10 @@ def _require_proposal(snapshot: LedgerSnapshot, proposal: ProposalId) -> Proposa
     return record
 
 
-def _merge_proposal(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _merge_proposal(snapshot: LedgerSnapshot, command: MergeProposalCommand, now: datetime) -> Decision:
+    action = command_action(command)
+    value = command.value
     proposal = _require_proposal(snapshot, ProposalId(action.subject))
-    if not isinstance(value, MergeProposalInput):
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Merge proposal requires a target item.")
     return _result(
         action,
         now,
@@ -1001,15 +1358,20 @@ def _merge_proposal(snapshot: LedgerSnapshot, action: Action, value: TransitionI
     )
 
 
-def _dispose_proposal(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _dispose_proposal(
+    snapshot: LedgerSnapshot,
+    command: ReturnProposalCommand | RejectProposalCommand,
+    now: datetime,
+) -> Decision:
+    action = command_action(command)
+    match command:
+        case ReturnProposalCommand(value=value):
+            disposition = ProposalDispositionKind.RETURNED
+        case RejectProposalCommand(value=value):
+            disposition = ProposalDispositionKind.REJECTED
+        case _ as unreachable:
+            assert_never(unreachable)
     proposal = _require_proposal(snapshot, ProposalId(action.subject))
-    if not isinstance(value, ReasonInput):
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Proposal disposition requires a reason.")
-    disposition = (
-        ProposalDispositionKind.RETURNED
-        if action.kind == ActionKind.RETURN_PROPOSAL
-        else ProposalDispositionKind.REJECTED
-    )
     return _result(
         action,
         now,
@@ -1018,44 +1380,44 @@ def _dispose_proposal(snapshot: LedgerSnapshot, action: Action, value: Transitio
     )
 
 
-def _transfer(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
+def _transfer(snapshot: LedgerSnapshot, command: TransferCoordinatorCommand, now: datetime) -> Decision:
+    action = command_action(command)
     if not snapshot.can_transfer_coordinator:
         raise DecisionError(
             DecisionErrorCode.ACTION_NOT_AVAILABLE, "This ledger does not use transferable coordinator ownership."
         )
-    if not isinstance(value, TransferCoordinatorInput):
-        raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID, "Coordinator transfer requires a task and host."
-        )
     return _result(action, now)
 
 
-DECISION_HANDLERS: dict[ActionKind, DecisionHandler] = {
-    ActionKind.ACCEPT_CHECKPOINT: _accept_checkpoint,
-    ActionKind.ACTIVATE: _activate,
-    ActionKind.PAUSE: _pause_or_block,
-    ActionKind.BLOCK: _pause_or_block,
-    ActionKind.COMPLETE: _complete,
-    ActionKind.CLOSE: _close,
-    ActionKind.RESUME: _resume,
-    ActionKind.SUBMIT_REVIEW: _submit_review,
-    ActionKind.RETURN_FOR_CORRECTION: _return_for_correction,
-    ActionKind.REOPEN: _simple_item_transition,
-    ActionKind.MARK_READY: _simple_item_transition,
-    ActionKind.BLOCK_ITEM: _simple_item_transition,
-    ActionKind.DEFER: _defer,
-    ActionKind.ACCEPT_PROPOSAL: _accept_proposal,
-    ActionKind.MERGE_PROPOSAL: _merge_proposal,
-    ActionKind.RETURN_PROPOSAL: _dispose_proposal,
-    ActionKind.REJECT_PROPOSAL: _dispose_proposal,
-    ActionKind.TRANSFER_COORDINATOR: _transfer,
-}
-
-
-def decide(snapshot: LedgerSnapshot, action: Action, value: TransitionInput, now: datetime) -> Decision:
-    handler = DECISION_HANDLERS.get(action.kind)
-    if handler is None:
-        raise DecisionError(
-            DecisionErrorCode.ACTION_NOT_MUTATING, f"Action '{action.kind.value}' is not a canonical transition."
-        )
-    return handler(snapshot, action, value, now)
+def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:  # noqa: C901, PLR0912
+    match command:
+        case AcceptCheckpointCommand():
+            return _accept_checkpoint(snapshot, command, now)
+        case ActivateCommand():
+            return _activate(snapshot, command, now)
+        case PauseCommand() | BlockCommand():
+            return _pause_or_block(snapshot, command, now)
+        case CompleteCommand():
+            return _complete(snapshot, command, now)
+        case CloseCommand():
+            return _close(snapshot, command, now)
+        case ResumeCommand():
+            return _resume(snapshot, command, now)
+        case SubmitReviewCommand():
+            return _submit_review(snapshot, command, now)
+        case ReturnForCorrectionCommand():
+            return _return_for_correction(snapshot, command, now)
+        case ReopenCommand() | MarkReadyCommand() | BlockItemCommand():
+            return _simple_item_transition(snapshot, command, now)
+        case DeferCommand():
+            return _defer(snapshot, command, now)
+        case AcceptProposalCommand():
+            return _accept_proposal(snapshot, command, now)
+        case MergeProposalCommand():
+            return _merge_proposal(snapshot, command, now)
+        case ReturnProposalCommand() | RejectProposalCommand():
+            return _dispose_proposal(snapshot, command, now)
+        case TransferCoordinatorCommand():
+            return _transfer(snapshot, command, now)
+        case _ as unreachable:
+            assert_never(unreachable)

@@ -45,7 +45,7 @@ class MutationContractError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ProposalCreationMutation:
-    """Carrier constructed by Task 3 after proposal intake legality accepts exact records."""
+    """Persists an authorized proposal intake without deciding its legality."""
 
     before: StoredWorkState
     after: StoredWorkState
@@ -55,7 +55,7 @@ class ProposalCreationMutation:
 
 @dataclass(frozen=True, slots=True)
 class DependencyEditMutation:
-    """Carrier constructed by Task 3 after dependency-edit legality accepts exact records."""
+    """Persists an authorized dependency edit without deciding its legality."""
 
     before: StoredWorkState
     after: StoredWorkState
@@ -65,7 +65,7 @@ class DependencyEditMutation:
 
 @dataclass(frozen=True, slots=True)
 class ResourceRequirementEditMutation:
-    """Carrier constructed by Task 3 after requirement-edit legality accepts exact records."""
+    """Persists an authorized resource-requirement edit without deciding its legality."""
 
     before: StoredWorkState
     after: StoredWorkState
@@ -75,7 +75,7 @@ class ResourceRequirementEditMutation:
 
 @dataclass(frozen=True, slots=True)
 class CoordinationAuthorityMutation:
-    """Carrier constructed by Task 3 after coordination authority legality accepts exact records."""
+    """Persists an authorized coordination change without deciding its legality."""
 
     before: StoredWorkState
     after: StoredWorkState
@@ -85,7 +85,7 @@ class CoordinationAuthorityMutation:
 
 @dataclass(frozen=True, slots=True)
 class AttemptAuthorityMutation:
-    """Carrier constructed by Task 3 after attempt authority legality accepts exact records."""
+    """Persists an authorized attempt-authority change without deciding its legality."""
 
     before: StoredWorkState
     after: StoredWorkState
@@ -95,7 +95,7 @@ class AttemptAuthorityMutation:
 
 @dataclass(frozen=True, slots=True)
 class ReservationTaskUseMutation:
-    """Carrier constructed by Task 3 after reservation or task-use legality accepts exact records."""
+    """Persists an authorized reservation or task-use change without deciding its legality."""
 
     before: StoredWorkState
     after: StoredWorkState

@@ -2,7 +2,7 @@ import argparse
 import contextlib
 import sys
 from collections import Counter
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Generator, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -179,9 +179,6 @@ class CommandContext:
     arguments: CliArguments
     project: Path
     work: Path
-
-
-type CommandHandler = Callable[[CommandContext], int]
 
 
 class RootView(msgspec.Struct, frozen=True):
@@ -1020,25 +1017,38 @@ type OperationRecord = LeaseRecord | ResourceClaim | ResourceDeclaration
 
 
 def _lease_value(record: OperationRecord) -> dict[str, str | int]:
-    if isinstance(record, ResourceDeclaration):
-        return {"resource_id": record.resource_id, "label": record.label, "scope": record.scope.value}
-    values: dict[str, str | int] = {
-        "task_id": record.task_id,
-        "host_id": record.host_id,
-        "lease_id": record.lease_id,
-        "generation": record.generation,
-        "acquired_at": record.acquired_at.isoformat(),
-        "expires_at": record.expires_at.isoformat(),
-        "status": record.status.value,
-    }
-    if isinstance(record, ResourceClaim):
-        values["resource_id"] = record.resource_id
-        values["attempt_id"] = record.attempt_id
-        values["attempt_lease_id"] = record.attempt_lease_id
-        values["attempt_lease_generation"] = record.attempt_lease_generation
-    elif record.attempt_id is not None:
-        values["attempt_id"] = record.attempt_id
-    return values
+    match record:
+        case ResourceDeclaration():
+            return {"resource_id": record.resource_id, "label": record.label, "scope": record.scope.value}
+        case ResourceClaim():
+            return {
+                "task_id": record.task_id,
+                "host_id": record.host_id,
+                "lease_id": record.lease_id,
+                "generation": record.generation,
+                "acquired_at": record.acquired_at.isoformat(),
+                "expires_at": record.expires_at.isoformat(),
+                "status": record.status.value,
+                "resource_id": record.resource_id,
+                "attempt_id": record.attempt_id,
+                "attempt_lease_id": record.attempt_lease_id,
+                "attempt_lease_generation": record.attempt_lease_generation,
+            }
+        case LeaseRecord():
+            values: dict[str, str | int] = {
+                "task_id": record.task_id,
+                "host_id": record.host_id,
+                "lease_id": record.lease_id,
+                "generation": record.generation,
+                "acquired_at": record.acquired_at.isoformat(),
+                "expires_at": record.expires_at.isoformat(),
+                "status": record.status.value,
+            }
+            if record.attempt_id is not None:
+                values["attempt_id"] = record.attempt_id
+            return values
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _emit_operation(value: OperationRecord, as_json: bool) -> int:
@@ -1284,30 +1294,46 @@ def _parallel(context: CommandContext) -> int:
     return 0
 
 
-COMMANDS: dict[CommandName, CommandHandler] = {
-    CommandName.ROOT: _root,
-    CommandName.VALIDATE: _validate,
-    CommandName.STATUS: _status,
-    CommandName.OVERVIEW: _overview,
-    CommandName.CLOSE: _close,
-    CommandName.ACTIONS: _actions,
-    CommandName.INPUT_CONTRACT: _input_contract,
-    CommandName.RECOVER: _recover,
-    CommandName.INIT: _initialize,
-    CommandName.PROPOSAL: _proposal,
-    CommandName.TRANSITION: _transition,
-    CommandName.DISPATCH: _prepare_dispatch,
-    CommandName.MIGRATE: _migrate,
-    CommandName.COORDINATION: _coordination,
-    CommandName.ATTEMPT: _attempt,
-    CommandName.RESOURCE: _resource,
-    CommandName.PARALLEL: _parallel,
-}
-
-
-def _dispatch(arguments: CliArguments) -> int:
+def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhaustive closed command dispatch
     project, work = _roots(arguments)
-    return COMMANDS[CommandName(arguments.command)](CommandContext(arguments, project, work))
+    context = CommandContext(arguments, project, work)
+    match CommandName(arguments.command):
+        case CommandName.ROOT:
+            return _root(context)
+        case CommandName.VALIDATE:
+            return _validate(context)
+        case CommandName.STATUS:
+            return _status(context)
+        case CommandName.OVERVIEW:
+            return _overview(context)
+        case CommandName.CLOSE:
+            return _close(context)
+        case CommandName.ACTIONS:
+            return _actions(context)
+        case CommandName.INPUT_CONTRACT:
+            return _input_contract(context)
+        case CommandName.RECOVER:
+            return _recover(context)
+        case CommandName.INIT:
+            return _initialize(context)
+        case CommandName.PROPOSAL:
+            return _proposal(context)
+        case CommandName.TRANSITION:
+            return _transition(context)
+        case CommandName.DISPATCH:
+            return _prepare_dispatch(context)
+        case CommandName.MIGRATE:
+            return _migrate(context)
+        case CommandName.COORDINATION:
+            return _coordination(context)
+        case CommandName.ATTEMPT:
+            return _attempt(context)
+        case CommandName.RESOURCE:
+            return _resource(context)
+        case CommandName.PARALLEL:
+            return _parallel(context)
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

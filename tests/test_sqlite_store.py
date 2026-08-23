@@ -42,6 +42,7 @@ from charlie_pinboard.domain.decisions import (
     AuthorizationKind,
     Role,
     available_actions,
+    bind_transition,
     decide,
 )
 from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
@@ -978,7 +979,11 @@ class SQLiteStoreTest(unittest.TestCase):
         snapshot = project_decision_snapshot(initial)
         actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
         action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.PAUSE)
-        decision = decide(snapshot, action, ReasonInput("Pause at the checkpoint boundary."), SQLITE_NOW)
+        decision = decide(
+            snapshot,
+            bind_transition(action, ReasonInput("Pause at the checkpoint boundary.")),
+            SQLITE_NOW,
+        )
 
         with store.write() as transaction:
             self.assertEqual(initial, transaction.snapshot())
@@ -1016,7 +1021,11 @@ class SQLiteStoreTest(unittest.TestCase):
             )
             if value.kind == ActionKind.PAUSE
         )
-        failed_decision = decide(failed_snapshot, failed_action, ReasonInput("This write is interrupted."), SQLITE_NOW)
+        failed_decision = decide(
+            failed_snapshot,
+            bind_transition(failed_action, ReasonInput("This write is interrupted.")),
+            SQLITE_NOW,
+        )
         connection = open_database(failed_path, OpenMode.READ_WRITE)
         try:
             with write_transaction(connection):
@@ -1044,7 +1053,9 @@ class SQLiteStoreTest(unittest.TestCase):
         actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
         action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.COMPLETE)
         decision = decide(
-            snapshot, action, EvidenceInput("accepted direct completion"), SQLITE_NOW + timedelta(seconds=1)
+            snapshot,
+            bind_transition(action, EvidenceInput("accepted direct completion")),
+            SQLITE_NOW + timedelta(seconds=1),
         )
 
         with store.write() as transaction:
@@ -1082,7 +1093,11 @@ class SQLiteStoreTest(unittest.TestCase):
         )
         action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.SUBMIT_REVIEW)
         candidate = CandidateId("candidate-from-caller")
-        decision = decide(snapshot, action, SubmitReviewInput(candidate), SQLITE_NOW + timedelta(seconds=1))
+        decision = decide(
+            snapshot,
+            bind_transition(action, SubmitReviewInput(candidate)),
+            SQLITE_NOW + timedelta(seconds=1),
+        )
 
         with store.write() as transaction:
             transaction.commit(decision)
@@ -1122,7 +1137,9 @@ class SQLiteStoreTest(unittest.TestCase):
             value for value in available_actions(snapshot, actor) if value.kind == ActionKind.RETURN_FOR_CORRECTION
         )
         decision = decide(
-            snapshot, action, ReasonInput("Address the review findings."), SQLITE_NOW + timedelta(seconds=1)
+            snapshot,
+            bind_transition(action, ReasonInput("Address the review findings.")),
+            SQLITE_NOW + timedelta(seconds=1),
         )
 
         with store.write() as transaction:
@@ -1162,8 +1179,7 @@ class SQLiteStoreTest(unittest.TestCase):
         )
         base_decision = decide(
             revocation_snapshot,
-            action,
-            ReasonInput("Persist the resource decision."),
+            bind_transition(action, ReasonInput("Persist the resource decision.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
         revoked = revoke_resource(revocation_snapshot, ReservationId("reservation-a"), unresolved_intent=True)
@@ -1200,8 +1216,7 @@ class SQLiteStoreTest(unittest.TestCase):
         )
         base_decision = decide(
             reallocation_snapshot,
-            action,
-            ReasonInput("Persist the resource reallocation."),
+            bind_transition(action, ReasonInput("Persist the resource reallocation.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
         reallocated = reallocate_resource(

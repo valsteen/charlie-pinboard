@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
+from typing import assert_never
 from uuid import uuid4
 
 from charlie_pinboard.legacy.atomic import atomic_write_text
@@ -129,7 +130,13 @@ def declare_resource(
     if ITEM_PATTERN.fullmatch(resource_id) is None or not label:
         raise ResourceError("RESOURCE_DECLARATION_INVALID", "Resource identity and label are required.")
     try:
-        selected_scope = scope if isinstance(scope, ResourceScope) else ResourceScope(scope)
+        match scope:
+            case ResourceScope():
+                selected_scope = scope
+            case str():
+                selected_scope = ResourceScope(scope)
+            case _ as unreachable:
+                assert_never(unreachable)
     except ValueError as error:
         raise ResourceError("RESOURCE_SCOPE_INVALID", "Only host-local resources are currently supported.") from error
     declaration = ResourceDeclaration(resource_id, label, selected_scope)

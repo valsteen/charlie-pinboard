@@ -211,6 +211,19 @@ def _attempt_state(state: WorkState) -> AttemptState:
             assert_never(unreachable)
 
 
+def _role(value: str | Role) -> Role:
+    try:
+        match value:
+            case Role():
+                return value
+            case str():
+                return Role(value)
+            case _ as unreachable:
+                assert_never(unreachable)
+    except ValueError as error:
+        raise ActionError("ROLE_INVALID", f"Unsupported role '{value}'.") from error
+
+
 def _snapshot(
     base_work_root: Path,
     work_root: Path,
@@ -279,10 +292,7 @@ def actions_for(
     report = validate_work_state(work_root, project_root)
     if not report.valid:
         raise ActionError("WORK_STATE_INVALID", report.render())
-    try:
-        selected_role = role if isinstance(role, Role) else Role(role)
-    except ValueError as error:
-        raise ActionError("ROLE_INVALID", f"Unsupported role '{role}'.") from error
+    selected_role = _role(role)
     authority = resolve_authority(work_root)
     root = authority.work_root
     match authority.version:

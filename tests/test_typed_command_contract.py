@@ -11,6 +11,7 @@ from charlie_pinboard.domain.decisions import (
     AuthorizationKind,
     Role,
     available_actions,
+    bind_transition,
     decide,
     rediscover_action,
 )
@@ -111,13 +112,13 @@ class TypedTransitionContractTest(unittest.TestCase):
         submit = _stored_action(snapshot)
 
         with self.assertRaises(DecisionError) as missing:
-            decide(snapshot, submit, EmptyInput(), SQLITE_NOW)
+            bind_transition(submit, EmptyInput())
         self.assertEqual(DecisionErrorCode.TRANSITION_INPUT_INVALID, missing.exception.code)
 
         candidate = CandidateId("candidate-that-is-not-a-subject-revision")
         parsed = parse_transition_input("submit-review", b'{"candidate":"candidate-that-is-not-a-subject-revision"}')
         self.assertEqual(SubmitReviewInput(candidate), parsed)
-        decision = decide(snapshot, submit, parsed, SQLITE_NOW)
+        decision = decide(snapshot, bind_transition(submit, parsed), SQLITE_NOW)
         assert decision.attempt_change is not None
         self.assertEqual(candidate, decision.attempt_change.protected_candidate_after)
         self.assertEqual(SQLITE_NOW, decision.attempt_change.candidate_observed_at)
@@ -134,20 +135,25 @@ class TypedTransitionContractTest(unittest.TestCase):
             ),
         )
         activation = action(ActionKind.ACTIVATE, "ready-item")
+        with self.assertRaises(DecisionError) as mismatched:
+            bind_transition(activation, EmptyInput())
+        self.assertEqual(DecisionErrorCode.TRANSITION_INPUT_INVALID, mismatched.exception.code)
+
         variants = (
-            EmptyInput(),
             ActivateInput(AttemptId("ready-item-1"), "branch", "base", "task", ArtifactRefId(99)),
             ActivateInput(AttemptId("ready-item-1"), "branch", "base", "task", ArtifactRefId(2)),
         )
         for value in variants:
             with self.subTest(value=value), self.assertRaises(DecisionError) as rejected:
-                decide(snapshot, activation, value, SQLITE_NOW)
+                decide(snapshot, bind_transition(activation, value), SQLITE_NOW)
             self.assertEqual(DecisionErrorCode.TRANSITION_INPUT_INVALID, rejected.exception.code)
 
         accepted = decide(
             snapshot,
-            activation,
-            ActivateInput(AttemptId("ready-item-1"), "branch", "base", "task", ArtifactRefId(1)),
+            bind_transition(
+                activation,
+                ActivateInput(AttemptId("ready-item-1"), "branch", "base", "task", ArtifactRefId(1)),
+            ),
             SQLITE_NOW,
         )
         assert accepted.attempt_change is not None

@@ -53,6 +53,7 @@ from charlie_pinboard.domain.decisions import (
     Role,
     TransitionReceipt,
     available_actions,
+    bind_transition,
     decide,
 )
 from charlie_pinboard.domain.errors import DecisionError
@@ -184,13 +185,15 @@ class MutationPersistenceTest(unittest.TestCase):
         decided_at = SQLITE_NOW + timedelta(seconds=1)
         decision = decide(
             snapshot,
-            action,
-            ActivateInput(
-                AttemptId("work-c-1"),
-                "codex/work-c",
-                "base-c",
-                "worker-c",
-                ArtifactRefId(1),
+            bind_transition(
+                action,
+                ActivateInput(
+                    AttemptId("work-c-1"),
+                    "codex/work-c",
+                    "base-c",
+                    "worker-c",
+                    ArtifactRefId(1),
+                ),
             ),
             decided_at,
         )
@@ -224,14 +227,16 @@ class MutationPersistenceTest(unittest.TestCase):
         action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.ACCEPT_PROPOSAL)
         decision = decide(
             snapshot,
-            action,
-            AcceptProposalInput(
-                ItemId("accepted-proposal"),
-                AcceptedProposalState.READY,
-                "activate",
-                timing=None,
-                depends_on=(ItemId("work-c"), ItemId("legacy-work")),
-                resource_requirements=(ResourceId("workspace"),),
+            bind_transition(
+                action,
+                AcceptProposalInput(
+                    ItemId("accepted-proposal"),
+                    AcceptedProposalState.READY,
+                    "activate",
+                    timing=None,
+                    depends_on=(ItemId("work-c"), ItemId("legacy-work")),
+                    resource_requirements=(ResourceId("workspace"),),
+                ),
             ),
             SQLITE_NOW + timedelta(seconds=1),
         )
@@ -849,7 +854,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 snapshot = project_decision_snapshot(store.snapshot())
                 actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
                 action = next(value for value in available_actions(snapshot, actor) if value.kind == kind)
-                decision = decide(snapshot, action, payload, SQLITE_NOW + timedelta(seconds=1))
+                decision = decide(snapshot, bind_transition(action, payload), SQLITE_NOW + timedelta(seconds=1))
                 with store.write() as transaction:
                     transaction.commit(decision)
                 proposal = store.snapshot().proposals.proposals[0]
@@ -871,8 +876,10 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         close = decide(
             snapshot,
-            close_action,
-            CloseInput(CloseOutcome.DROPPED, "The legacy intake is no longer needed."),
+            bind_transition(
+                close_action,
+                CloseInput(CloseOutcome.DROPPED, "The legacy intake is no longer needed."),
+            ),
             SQLITE_NOW + timedelta(seconds=1),
         )
         with store.write() as transaction:
@@ -891,8 +898,10 @@ class MutationPersistenceTest(unittest.TestCase):
             )
             close = decide(
                 snapshot,
-                close_action,
-                CloseInput(CloseOutcome.DROPPED, "The legacy intake is no longer needed."),
+                bind_transition(
+                    close_action,
+                    CloseInput(CloseOutcome.DROPPED, "The legacy intake is no longer needed."),
+                ),
                 SQLITE_NOW + timedelta(seconds=1),
             )
             invalid = replace(close, receipt=replace(close.receipt, outcome=outcome))
@@ -909,8 +918,10 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         activation = decide(
             snapshot,
-            activation_action,
-            ActivateInput(AttemptId("work-c-1"), "branch", "base", "owner", ArtifactRefId(1)),
+            bind_transition(
+                activation_action,
+                ActivateInput(AttemptId("work-c-1"), "branch", "base", "owner", ArtifactRefId(1)),
+            ),
             SQLITE_NOW + timedelta(seconds=1),
         )
         assert activation.attempt_change is not None
@@ -922,8 +933,7 @@ class MutationPersistenceTest(unittest.TestCase):
         pause_action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.PAUSE)
         pause = decide(
             snapshot,
-            pause_action,
-            ReasonInput("Pause for an invalid-attempt-shape probe."),
+            bind_transition(pause_action, ReasonInput("Pause for an invalid-attempt-shape probe.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
         assert pause.attempt_change is not None
@@ -945,8 +955,7 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         review = decide(
             snapshot,
-            review_action,
-            SubmitReviewInput(CandidateId("candidate")),
+            bind_transition(review_action, SubmitReviewInput(CandidateId("candidate"))),
             SQLITE_NOW + timedelta(seconds=1),
         )
         assert review.attempt_change is not None
@@ -982,8 +991,10 @@ class MutationPersistenceTest(unittest.TestCase):
         action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.ACCEPT_PROPOSAL)
         accepted = decide(
             snapshot,
-            action,
-            AcceptProposalInput(ItemId("incomplete-item"), AcceptedProposalState.READY, "activate"),
+            bind_transition(
+                action,
+                AcceptProposalInput(ItemId("incomplete-item"), AcceptedProposalState.READY, "activate"),
+            ),
             SQLITE_NOW + timedelta(seconds=1),
         )
         assert accepted.proposal_change is not None
@@ -1006,8 +1017,7 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         decision = decide(
             snapshot,
-            action,
-            DeferInput(Timing.SAFE_TO_DEFER, "Reopen when the prerequisite is accepted."),
+            bind_transition(action, DeferInput(Timing.SAFE_TO_DEFER, "Reopen when the prerequisite is accepted.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
         with store.write() as transaction:
@@ -1026,7 +1036,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 snapshot = project_decision_snapshot(store.snapshot())
                 actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
                 action = next(value for value in available_actions(snapshot, actor) if value.kind == kind)
-                decision = decide(snapshot, action, payload, SQLITE_NOW + timedelta(seconds=1))
+                decision = decide(snapshot, bind_transition(action, payload), SQLITE_NOW + timedelta(seconds=1))
                 with store.write() as transaction:
                     transaction.commit(decision)
                 committed = store.snapshot()

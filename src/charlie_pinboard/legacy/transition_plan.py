@@ -1,18 +1,37 @@
 import hashlib
-from collections.abc import Callable
 from copy import replace
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Literal, assert_never, cast
+from typing import assert_never, cast
 
 from charlie_pinboard.domain.decisions import (
+    AcceptCheckpointCommand,
+    AcceptProposalCommand,
     AttemptAuthorityChange,
     AttemptChange,
+    BlockCommand,
+    BlockItemCommand,
     CheckpointAcceptanceChange,
+    CloseCommand,
+    CompleteCommand,
     Decision,
+    DeferCommand,
     ItemChange,
+    LegacyActivateCommand,
+    LegacySubmitReviewCommand,
+    LegacyTransitionCommand,
+    MarkReadyCommand,
+    MergeProposalCommand,
+    PauseCommand,
+    RejectProposalCommand,
+    ReopenCommand,
+    ResumeCommand,
+    ReturnForCorrectionCommand,
+    ReturnProposalCommand,
+    TransferCoordinatorCommand,
     TransitionReceipt,
+    command_action,
     decide,
 )
 from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
@@ -38,7 +57,6 @@ from charlie_pinboard.domain.model import (
     CloseInput,
     CloseOutcome,
     DeferInput,
-    EmptyInput,
     EvidenceInput,
     LedgerSnapshot,
     LegacyActivateInput,
@@ -51,12 +69,11 @@ from charlie_pinboard.domain.model import (
     ResourceReservationCounter,
     ResourceUseLease,
     TransferCoordinatorInput,
-    TransitionInput,
     UseLeaseState,
     WorkItem,
     WorkState,
 )
-from charlie_pinboard.legacy.actions import Action, ActionKind
+from charlie_pinboard.legacy.actions import Action
 from charlie_pinboard.legacy.coordinator import CoordinatorRegistration
 from charlie_pinboard.legacy.leases import read_attempt_lease
 from charlie_pinboard.legacy.markdown import (
@@ -108,31 +125,6 @@ class PlanContext:
     @property
     def items(self) -> list[QueueItem]:
         return list(self.queue.items)
-
-
-type PlanHandler = Callable[[PlanContext, Action, TransitionInput], ChangeSet]
-type PauseActionKind = Literal[ActionKind.PAUSE, ActionKind.BLOCK]
-type DispositionActionKind = Literal[ActionKind.RETURN_PROPOSAL, ActionKind.REJECT_PROPOSAL]
-
-
-def _pause_target(kind: PauseActionKind) -> WorkState:
-    match kind:
-        case ActionKind.PAUSE:
-            return WorkState.PAUSED
-        case ActionKind.BLOCK:
-            return WorkState.BLOCKED
-        case _ as unreachable:
-            assert_never(unreachable)
-
-
-def _proposal_disposition(kind: DispositionActionKind) -> ProposalDispositionKind:
-    match kind:
-        case ActionKind.RETURN_PROPOSAL:
-            return ProposalDispositionKind.RETURNED
-        case ActionKind.REJECT_PROPOSAL:
-            return ProposalDispositionKind.REJECTED
-        case _ as unreachable:
-            assert_never(unreachable)
 
 
 def _queue_change(context: PlanContext, items: list[QueueItem]) -> FileChange:
@@ -202,8 +194,7 @@ def _attempt_text(context: PlanContext, item: str, value: LegacyActivateInput) -
     )
 
 
-def _activate(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(LegacyActivateInput, value)
+def _activate(context: PlanContext, action: Action, value: LegacyActivateInput) -> ChangeSet:
     items = context.items
     index = _item_index(items, action.subject)
     if items[index].state != WorkState.READY:
@@ -219,16 +210,24 @@ def _activate(context: PlanContext, action: Action, value: TransitionInput) -> C
     )
 
 
-def _pause_or_block(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(ReasonInput | BlockInput, value)
+def _pause_or_block(
+    context: PlanContext,
+    action: Action,
+    value: ReasonInput | BlockInput,
+    target: WorkState,
+) -> ChangeSet:
     items = context.items
     index = _attempt_index(items, action.subject)
     if items[index].state != WorkState.ACTIVE:
         raise TransitionPlanError("ACTION_NOT_AVAILABLE", "The named attempt is not active.")
-    target = _pause_target(cast(PauseActionKind, action.kind))
     dependencies = items[index].depends_on
-    if isinstance(value, BlockInput):
-        dependencies = tuple(dict.fromkeys((*dependencies, *value.depends_on)))
+    match value:
+        case BlockInput(depends_on=additional_dependencies):
+            dependencies = tuple(dict.fromkeys((*dependencies, *additional_dependencies)))
+        case ReasonInput():
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
     items[index] = replace(
         items[index],
         state=target,
@@ -252,8 +251,7 @@ def _pause_or_block(context: PlanContext, action: Action, value: TransitionInput
     return ChangeSet(tuple(changes))
 
 
-def _complete(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(EvidenceInput, value)
+def _complete(context: PlanContext, action: Action, value: EvidenceInput) -> ChangeSet:
     items = context.items
     index = _attempt_index(items, action.subject)
     item = items[index]
@@ -393,8 +391,7 @@ def _terminal_resource_changes(context: PlanContext, decision: Decision) -> list
     return changes
 
 
-def _close(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(CloseInput, value)
+def _close(context: PlanContext, action: Action, value: CloseInput) -> ChangeSet:
     items = context.items
     index = _item_index(items, action.subject)
     item = items[index]
@@ -422,7 +419,7 @@ def _close(context: PlanContext, action: Action, value: TransitionInput) -> Chan
     return ChangeSet(tuple(changes))
 
 
-def _resume(context: PlanContext, action: Action, _value: TransitionInput) -> ChangeSet:
+def _resume(context: PlanContext, action: Action) -> ChangeSet:
     items = context.items
     index = _item_index(items, action.subject)
     item = items[index]
@@ -452,7 +449,7 @@ def _resume(context: PlanContext, action: Action, _value: TransitionInput) -> Ch
     )
 
 
-def _submit_review(context: PlanContext, action: Action, _value: TransitionInput) -> ChangeSet:
+def _submit_review(context: PlanContext, action: Action) -> ChangeSet:
     items = context.items
     index = _attempt_index(items, action.subject)
     item = items[index]
@@ -493,9 +490,8 @@ def _return_resource_changes(context: PlanContext, decision: Decision, timestamp
 def _return_for_correction(
     context: PlanContext,
     action: Action,
-    value: TransitionInput,
+    value: ReasonInput,
 ) -> ChangeSet:
-    value = cast(ReasonInput, value)
     decision = cast(Decision, context.decision)
     items = context.items
     index = _attempt_index(items, action.subject)
@@ -575,9 +571,8 @@ def _checkpoint_resource_changes(context: PlanContext, decision: Decision) -> li
 def _accept_checkpoint(
     context: PlanContext,
     action: Action,
-    value: TransitionInput,
+    value: AcceptCheckpointInput,
 ) -> ChangeSet:
-    value = cast(AcceptCheckpointInput, value)
     decision = cast(Decision, context.decision)
     acceptance = cast(CheckpointAcceptanceChange, decision.checkpoint_acceptance_change)
     items = context.items
@@ -644,8 +639,7 @@ def _accept_checkpoint(
     return ChangeSet(tuple(changes))
 
 
-def _reopen(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(EvidenceInput, value)
+def _reopen(context: PlanContext, action: Action, value: EvidenceInput) -> ChangeSet:
     items = context.items
     index = _item_index(items, action.subject)
     if items[index].state != WorkState.DEFERRED:
@@ -660,8 +654,7 @@ def _reopen(context: PlanContext, action: Action, value: TransitionInput) -> Cha
     return ChangeSet.of(_queue_change(context, items))
 
 
-def _mark_ready(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(ReasonInput, value)
+def _mark_ready(context: PlanContext, action: Action, value: ReasonInput) -> ChangeSet:
     items = context.items
     index = _item_index(items, action.subject)
     if items[index].state != WorkState.INTAKE:
@@ -670,8 +663,7 @@ def _mark_ready(context: PlanContext, action: Action, value: TransitionInput) ->
     return ChangeSet.of(_queue_change(context, items))
 
 
-def _block_item(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(BlockInput, value)
+def _block_item(context: PlanContext, action: Action, value: BlockInput) -> ChangeSet:
     items = context.items
     index = _item_index(items, action.subject)
     if items[index].state not in {WorkState.INTAKE, WorkState.READY}:
@@ -682,8 +674,7 @@ def _block_item(context: PlanContext, action: Action, value: TransitionInput) ->
     return ChangeSet.of(_queue_change(context, items))
 
 
-def _defer(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(DeferInput, value)
+def _defer(context: PlanContext, action: Action, value: DeferInput) -> ChangeSet:
     items = context.items
     index = _item_index(items, action.subject)
     item = items[index]
@@ -721,8 +712,7 @@ def _proposal_paths(context: PlanContext, action: Action) -> tuple[str, str, Pro
     return inbox, history, read_proposal(context.work_root / inbox)
 
 
-def _accept_proposal(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(AcceptProposalInput, value)
+def _accept_proposal(context: PlanContext, action: Action, value: AcceptProposalInput) -> ChangeSet:
     items = context.items
     if any(item.item == value.item for item in items) or (context.work_root / "items" / f"{value.item}.md").exists():
         raise TransitionPlanError("ITEM_ALREADY_EXISTS", f"Item '{value.item}' already exists.")
@@ -774,8 +764,7 @@ def _accept_proposal(context: PlanContext, action: Action, value: TransitionInpu
     )
 
 
-def _merge_proposal(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(MergeProposalInput, value)
+def _merge_proposal(context: PlanContext, action: Action, value: MergeProposalInput) -> ChangeSet:
     item_path = f"items/{value.target}.md"
     if (
         not any(item.item == value.target for item in context.queue.items)
@@ -792,18 +781,20 @@ def _merge_proposal(context: PlanContext, action: Action, value: TransitionInput
     )
 
 
-def _dispose_proposal(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(ReasonInput, value)
+def _dispose_proposal(
+    context: PlanContext,
+    action: Action,
+    value: ReasonInput,
+    disposition: ProposalDispositionKind,
+) -> ChangeSet:
     inbox, history, proposal = _proposal_paths(context, action)
-    disposition = _proposal_disposition(cast(DispositionActionKind, action.kind))
     return ChangeSet.of(
         write_bytes_change(history, _proposal_history(proposal, disposition, None, value.reason)),
         delete_change(inbox),
     )
 
 
-def _transfer_coordinator(context: PlanContext, action: Action, value: TransitionInput) -> ChangeSet:
-    value = cast(TransferCoordinatorInput, value)
+def _transfer_coordinator(context: PlanContext, action: Action, value: TransferCoordinatorInput) -> ChangeSet:
     replacement = CoordinatorRegistration(
         schema=SCHEMA_V1,
         project_root=str(context.project_root.resolve()),
@@ -813,28 +804,6 @@ def _transfer_coordinator(context: PlanContext, action: Action, value: Transitio
         registered_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     )
     return ChangeSet.of(write_bytes_change("coordinator.json", replacement.render()))
-
-
-HANDLERS: dict[ActionKind, PlanHandler] = {
-    ActionKind.ACCEPT_CHECKPOINT: _accept_checkpoint,
-    ActionKind.ACTIVATE: _activate,
-    ActionKind.PAUSE: _pause_or_block,
-    ActionKind.BLOCK: _pause_or_block,
-    ActionKind.COMPLETE: _complete,
-    ActionKind.CLOSE: _close,
-    ActionKind.RESUME: _resume,
-    ActionKind.SUBMIT_REVIEW: _submit_review,
-    ActionKind.RETURN_FOR_CORRECTION: _return_for_correction,
-    ActionKind.REOPEN: _reopen,
-    ActionKind.MARK_READY: _mark_ready,
-    ActionKind.BLOCK_ITEM: _block_item,
-    ActionKind.DEFER: _defer,
-    ActionKind.ACCEPT_PROPOSAL: _accept_proposal,
-    ActionKind.MERGE_PROPOSAL: _merge_proposal,
-    ActionKind.RETURN_PROPOSAL: _dispose_proposal,
-    ActionKind.REJECT_PROPOSAL: _dispose_proposal,
-    ActionKind.TRANSFER_COORDINATOR: _transfer_coordinator,
-}
 
 
 def _attempt_authority_records(
@@ -925,103 +894,181 @@ def _attempt_authority_records(
 
 def _decision_authority_records(
     context: PlanContext,
-    action: Action,
+    command: LegacyTransitionCommand,
 ) -> tuple[
     tuple[AttemptAuthority, ...],
     tuple[ResourceReservationCounter, ...],
     tuple[ResourceReservation, ...],
     tuple[ResourceUseLease, ...],
 ]:
-    if action.kind in {ActionKind.ACCEPT_CHECKPOINT, ActionKind.RETURN_FOR_CORRECTION}:
-        item = context.items[_attempt_index(context.items, action.subject)]
-        authority, counters, reservations, use_leases = _attempt_authority_records(
-            context,
-            action.subject,
-            item.item,
-        )
-        return (authority,), counters, reservations, use_leases
-    if action.kind == ActionKind.COMPLETE and context.queue.header.get("schema") == SCHEMA_V2:
-        item = context.items[_attempt_index(context.items, action.subject)]
-        authority, counters, reservations, use_leases = _attempt_authority_records(
-            context,
-            action.subject,
-            item.item,
-        )
-        return (authority,), counters, reservations, use_leases
-    if action.kind == ActionKind.CLOSE and context.queue.header.get("schema") == SCHEMA_V2:
-        item = context.items[_item_index(context.items, action.subject)]
-        if item.attempt is not None:
+    action = command_action(command)
+    match command:
+        case AcceptCheckpointCommand() | ReturnForCorrectionCommand():
+            item = context.items[_attempt_index(context.items, action.subject)]
             authority, counters, reservations, use_leases = _attempt_authority_records(
                 context,
-                item.attempt,
+                action.subject,
                 item.item,
             )
             return (authority,), counters, reservations, use_leases
-    return (), (), (), ()
+        case CompleteCommand() if context.queue.header.get("schema") == SCHEMA_V2:
+            item = context.items[_attempt_index(context.items, action.subject)]
+            authority, counters, reservations, use_leases = _attempt_authority_records(
+                context,
+                action.subject,
+                item.item,
+            )
+            return (authority,), counters, reservations, use_leases
+        case CloseCommand() if context.queue.header.get("schema") == SCHEMA_V2:
+            item = context.items[_item_index(context.items, action.subject)]
+            if item.attempt is not None:
+                authority, counters, reservations, use_leases = _attempt_authority_records(
+                    context,
+                    item.attempt,
+                    item.item,
+                )
+                return (authority,), counters, reservations, use_leases
+            return (), (), (), ()
+        case (
+            AcceptProposalCommand()
+            | BlockCommand()
+            | BlockItemCommand()
+            | DeferCommand()
+            | LegacyActivateCommand()
+            | LegacySubmitReviewCommand()
+            | MarkReadyCommand()
+            | MergeProposalCommand()
+            | PauseCommand()
+            | RejectProposalCommand()
+            | ReopenCommand()
+            | ResumeCommand()
+            | ReturnProposalCommand()
+            | TransferCoordinatorCommand()
+            | CompleteCommand()
+            | CloseCommand()
+        ):
+            return (), (), (), ()
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _decide_legacy_transition(
     snapshot: LedgerSnapshot,
-    action: Action,
-    value: TransitionInput,
+    command: LegacyTransitionCommand,
     now: datetime,
 ) -> Decision:
     """Keep the temporary Markdown command shape separate from the richer SQLite contract."""
 
-    if action.kind == ActionKind.ACTIVATE:
-        item = snapshot.items_by_id().get(ItemId(action.subject))
-        if item is None:
-            raise DecisionError(DecisionErrorCode.ITEM_NOT_FOUND, f"Item '{action.subject}' does not exist.")
-        if item.state != WorkState.READY:
-            raise DecisionError(
-                DecisionErrorCode.ACTION_NOT_AVAILABLE,
-                f"Item '{item.item}' is not ready for activation.",
+    action = command_action(command)
+    match command:
+        case LegacyActivateCommand(value=value):
+            item = snapshot.items_by_id().get(ItemId(action.subject))
+            if item is None:
+                raise DecisionError(DecisionErrorCode.ITEM_NOT_FOUND, f"Item '{action.subject}' does not exist.")
+            if item.state != WorkState.READY:
+                raise DecisionError(
+                    DecisionErrorCode.ACTION_NOT_AVAILABLE,
+                    f"Item '{item.item}' is not ready for activation.",
+                )
+            return Decision(
+                action,
+                ItemChange(item.item, item.state, WorkState.ACTIVE, value.attempt),
+                AttemptChange(value.attempt, None, AttemptState.ACTIVE),
+                TransitionReceipt(action.action_id, item.item, action.kind.value, None, now),
             )
-        if not isinstance(value, LegacyActivateInput):
-            raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Activate requires activation input.")
-        return Decision(
-            action,
-            ItemChange(item.item, item.state, WorkState.ACTIVE, value.attempt),
-            AttemptChange(value.attempt, None, AttemptState.ACTIVE),
-            TransitionReceipt(action.action_id, item.item, action.kind.value, None, now),
-        )
-    if action.kind == ActionKind.SUBMIT_REVIEW:
-        if not isinstance(value, EmptyInput):
-            raise DecisionError(
-                DecisionErrorCode.TRANSITION_INPUT_INVALID,
-                "The temporary Markdown submit-review route accepts no transition data.",
+        case LegacySubmitReviewCommand():
+            item = next((candidate for candidate in snapshot.items if candidate.attempt == action.subject), None)
+            if item is None:
+                raise DecisionError(
+                    DecisionErrorCode.ATTEMPT_NOT_FOUND,
+                    f"Attempt '{action.subject}' does not name a live item.",
+                )
+            if item.state != WorkState.ACTIVE:
+                raise DecisionError(
+                    DecisionErrorCode.ACTION_NOT_AVAILABLE,
+                    "Only an active attempt can be submitted for review.",
+                )
+            attempt_id = AttemptId(action.subject)
+            return Decision(
+                action,
+                ItemChange(item.item, item.state, WorkState.REVIEW, item.attempt),
+                AttemptChange(attempt_id, AttemptState.ACTIVE, AttemptState.REVIEW),
+                TransitionReceipt(action.action_id, item.item, action.kind.value, None, now),
             )
-        item = next((candidate for candidate in snapshot.items if candidate.attempt == action.subject), None)
-        if item is None:
-            raise DecisionError(
-                DecisionErrorCode.ATTEMPT_NOT_FOUND,
-                f"Attempt '{action.subject}' does not name a live item.",
-            )
-        if item.state != WorkState.ACTIVE:
-            raise DecisionError(
-                DecisionErrorCode.ACTION_NOT_AVAILABLE,
-                "Only an active attempt can be submitted for review.",
-            )
-        attempt_id = AttemptId(action.subject)
-        return Decision(
-            action,
-            ItemChange(item.item, item.state, WorkState.REVIEW, item.attempt),
-            AttemptChange(attempt_id, AttemptState.ACTIVE, AttemptState.REVIEW),
-            TransitionReceipt(action.action_id, item.item, action.kind.value, None, now),
-        )
-    return decide(snapshot, action, value, now)
+        case (
+            AcceptCheckpointCommand()
+            | AcceptProposalCommand()
+            | BlockCommand()
+            | BlockItemCommand()
+            | CloseCommand()
+            | CompleteCommand()
+            | DeferCommand()
+            | MarkReadyCommand()
+            | MergeProposalCommand()
+            | PauseCommand()
+            | RejectProposalCommand()
+            | ReopenCommand()
+            | ResumeCommand()
+            | ReturnForCorrectionCommand()
+            | ReturnProposalCommand()
+            | TransferCoordinatorCommand()
+        ):
+            return decide(snapshot, command, now)
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
-def plan_transition(work_root: Path, project_root: Path, action: Action, value: TransitionInput) -> ChangeSet:
+def _plan_command(context: PlanContext, command: LegacyTransitionCommand) -> ChangeSet:  # noqa: C901, PLR0912
+    action = command_action(command)
+    match command:
+        case AcceptCheckpointCommand(value=value):
+            return _accept_checkpoint(context, action, value)
+        case AcceptProposalCommand(value=value):
+            return _accept_proposal(context, action, value)
+        case BlockCommand(value=value):
+            return _pause_or_block(context, action, value, WorkState.BLOCKED)
+        case BlockItemCommand(value=value):
+            return _block_item(context, action, value)
+        case CloseCommand(value=value):
+            return _close(context, action, value)
+        case CompleteCommand(value=value):
+            return _complete(context, action, value)
+        case DeferCommand(value=value):
+            return _defer(context, action, value)
+        case LegacyActivateCommand(value=value):
+            return _activate(context, action, value)
+        case LegacySubmitReviewCommand():
+            return _submit_review(context, action)
+        case MarkReadyCommand(value=value):
+            return _mark_ready(context, action, value)
+        case MergeProposalCommand(value=value):
+            return _merge_proposal(context, action, value)
+        case PauseCommand(value=value):
+            return _pause_or_block(context, action, value, WorkState.PAUSED)
+        case RejectProposalCommand(value=value):
+            return _dispose_proposal(context, action, value, ProposalDispositionKind.REJECTED)
+        case ReopenCommand(value=value):
+            return _reopen(context, action, value)
+        case ResumeCommand():
+            return _resume(context, action)
+        case ReturnForCorrectionCommand(value=value):
+            return _return_for_correction(context, action, value)
+        case ReturnProposalCommand(value=value):
+            return _dispose_proposal(context, action, value, ProposalDispositionKind.RETURNED)
+        case TransferCoordinatorCommand(value=value):
+            return _transfer_coordinator(context, action, value)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def plan_transition(work_root: Path, project_root: Path, command: LegacyTransitionCommand) -> ChangeSet:
+    action = command_action(command)
     context = PlanContext(
         work_root,
         project_root,
         parse_queue(work_root / "queue.md"),
         parse_current(work_root / "current.md"),
     )
-    handler = HANDLERS.get(action.kind)
-    if handler is None:
-        raise TransitionPlanError("ACTION_NOT_MUTATING", f"Action '{action.kind.value}' is not a canonical transition.")
     attempts = tuple(
         AttemptRecord(AttemptId(attempt.attempt), ItemId(attempt.item), attempt.state)
         for item in context.queue.items
@@ -1042,7 +1089,7 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
         resource_reservation_counters,
         resource_reservations,
         resource_use_leases,
-    ) = _decision_authority_records(context, action)
+    ) = _decision_authority_records(context, command)
     history = work_root / "history" / "items"
     snapshot_items = tuple(
         WorkItem(
@@ -1072,11 +1119,11 @@ def plan_transition(work_root: Path, project_root: Path, action: Action, value: 
         can_transfer_coordinator=(work_root / "coordinator.json").is_file(),
     )
     try:
-        decision = _decide_legacy_transition(snapshot, action, value, datetime.now(UTC))
+        decision = _decide_legacy_transition(snapshot, command, datetime.now(UTC))
     except DecisionError as error:
         raise TransitionPlanError(error.code.value, str(error).partition(": ")[2]) from error
     context = replace(context, decision=decision)
-    changes = handler(context, action, value)
+    changes = _plan_command(context, command)
     if context.queue.header.get("schema") != SCHEMA_V2:
         return changes
     queue_change = next((change for change in changes.changes if str(change.path) == "queue.md"), None)

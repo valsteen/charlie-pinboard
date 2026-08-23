@@ -11,6 +11,7 @@ from charlie_pinboard.domain.decisions import (
     AuthorizationKind,
     Role,
     available_actions,
+    bind_transition,
     decide,
 )
 from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
@@ -21,9 +22,10 @@ from charlie_pinboard.domain.history import (
     planning_impact_outcome,
     validate_history_outcome,
 )
-from charlie_pinboard.domain.identifiers import AttemptId, ItemId
+from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId, CandidateId, ItemId
 from charlie_pinboard.domain.model import (
     AcceptedProposalState,
+    ActivateInput,
     ArtifactRole,
     AttemptState,
     BlockInput,
@@ -37,6 +39,7 @@ from charlie_pinboard.domain.model import (
     ReasonInput,
     ReservationState,
     ScopeArtifact,
+    SubmitReviewInput,
     UseLeaseGenerationKind,
     UseLeaseState,
     WorkItem,
@@ -300,7 +303,8 @@ class LifecycleDecisionTest(unittest.TestCase):
             resource_use_leases=(historical_grant, historical_fence, current_grant, fenced_grant, later_fence),
         )
 
-        completed = decide(snapshot, action(ActionKind.COMPLETE, "target-1"), EvidenceInput("review accepted"), NOW)
+        completed_action = action(ActionKind.COMPLETE, "target-1")
+        completed = decide(snapshot, bind_transition(completed_action, EvidenceInput("review accepted")), NOW)
         self.assertEqual("review accepted", completed.receipt.evidence)
         self.assertEqual("review accepted", completed.item_change.outcome_evidence if completed.item_change else None)
         self.assertEqual(
@@ -316,13 +320,15 @@ class LifecycleDecisionTest(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(DecisionError, "TRANSITION_INPUT_INVALID"):
-            decide(snapshot, action(ActionKind.COMPLETE, "target-1"), EmptyInput(), NOW)
+            bind_transition(action(ActionKind.COMPLETE, "target-1"), EmptyInput())
 
         intake = LedgerSnapshot("revision", 1, (item("obsolete", WorkState.INTAKE),))
         closed = decide(
             intake,
-            action(ActionKind.CLOSE, "obsolete"),
-            CloseInput(CloseOutcome.DROPPED, "no longer needed"),
+            bind_transition(
+                action(ActionKind.CLOSE, "obsolete"),
+                CloseInput(CloseOutcome.DROPPED, "no longer needed"),
+            ),
             NOW,
         )
         self.assertEqual(("dropped", "no longer needed"), (closed.receipt.outcome, closed.receipt.evidence))
@@ -350,7 +356,8 @@ class LifecycleDecisionTest(unittest.TestCase):
         self.assertNotIn("dispatch:build-map-1", action_ids)
         self.assertNotIn("complete:build-map-1", action_ids)
         with self.assertRaisesRegex(DecisionError, "ITEM_SCOPE_STALE"):
-            decide(snapshot, action(ActionKind.SUBMIT_REVIEW, "build-map-1"), EmptyInput(), NOW)
+            submit = action(ActionKind.SUBMIT_REVIEW, "build-map-1")
+            decide(snapshot, bind_transition(submit, SubmitReviewInput(CandidateId("candidate"))), NOW)
 
     def test_transition_rejections_preserve_the_domain_boundary(self) -> None:
         ready = item("target", WorkState.READY)
@@ -371,13 +378,19 @@ class LifecycleDecisionTest(unittest.TestCase):
         )
         stale_scope = ScopeAnchor("target", 2, DIGEST_B, replace(native_scope(), item_id="target"))
         cases = (
-            (LedgerSnapshot("r", 1, ()), ActionKind.ACTIVATE, "missing", EmptyInput(), "ITEM_NOT_FOUND"),
+            (
+                LedgerSnapshot("r", 1, ()),
+                ActionKind.ACTIVATE,
+                "missing",
+                ActivateInput(AttemptId("missing-1"), "branch", "base", "owner", ArtifactRefId(1)),
+                "ITEM_NOT_FOUND",
+            ),
             (LedgerSnapshot("r", 1, (ready,)), ActionKind.ACTIVATE, "target", EmptyInput(), "TRANSITION_INPUT_INVALID"),
             (
                 LedgerSnapshot("r", 1, (item("target", WorkState.INTAKE),)),
                 ActionKind.ACTIVATE,
                 "target",
-                EmptyInput(),
+                ActivateInput(AttemptId("target-1"), "branch", "base", "owner", ArtifactRefId(1)),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
@@ -398,14 +411,14 @@ class LifecycleDecisionTest(unittest.TestCase):
                 LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
                 ActionKind.PAUSE,
                 "target-1",
-                EmptyInput(),
+                SubmitReviewInput(CandidateId("candidate")),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
                 ActionKind.BLOCK,
                 "target-1",
-                EmptyInput(),
+                SubmitReviewInput(CandidateId("candidate")),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
@@ -489,7 +502,7 @@ class LifecycleDecisionTest(unittest.TestCase):
                 LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,)),
                 ActionKind.SUBMIT_REVIEW,
                 "target-1",
-                EmptyInput(),
+                SubmitReviewInput(CandidateId("candidate")),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
@@ -502,7 +515,7 @@ class LifecycleDecisionTest(unittest.TestCase):
                 ),
                 ActionKind.SUBMIT_REVIEW,
                 "target-1",
-                EmptyInput(),
+                SubmitReviewInput(CandidateId("candidate")),
                 "PLANNING_IMPACT_UNRESOLVED",
             ),
             (
@@ -515,7 +528,7 @@ class LifecycleDecisionTest(unittest.TestCase):
                 ),
                 ActionKind.SUBMIT_REVIEW,
                 "target-1",
-                EmptyInput(),
+                SubmitReviewInput(CandidateId("candidate")),
                 "ITEM_SCOPE_STALE",
             ),
             (
@@ -554,7 +567,13 @@ class LifecycleDecisionTest(unittest.TestCase):
                 "ACTION_NOT_AVAILABLE",
             ),
             (LedgerSnapshot("r", 1, (ready,)), ActionKind.DEFER, "target", EmptyInput(), "TRANSITION_INPUT_INVALID"),
-            (LedgerSnapshot("r", 1, ()), ActionKind.ACCEPT_PROPOSAL, "proposal", EmptyInput(), "PROPOSAL_NOT_FOUND"),
+            (
+                LedgerSnapshot("r", 1, ()),
+                ActionKind.ACCEPT_PROPOSAL,
+                "proposal",
+                AcceptProposalInput(item="new-item", state=AcceptedProposalState.READY, next_action="start"),
+                "PROPOSAL_NOT_FOUND",
+            ),
             (
                 LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)),
                 ActionKind.ACCEPT_PROPOSAL,
@@ -601,7 +620,8 @@ class LifecycleDecisionTest(unittest.TestCase):
         )
         for snapshot, kind, subject, value, code in cases:
             with self.subTest(kind=kind.value, code=code), self.assertRaises(DecisionError) as raised:
-                decide(snapshot, action(kind, subject), value, NOW)
+                command = bind_transition(action(kind, subject), value)
+                decide(snapshot, command, NOW)
             self.assertEqual(DecisionErrorCode(code), raised.exception.code)
 
 

@@ -40,7 +40,7 @@ Only identity and composition entry files sit at the package root.
 | --- | --- |
 | `identifiers.py` | Distinct opaque identifier types |
 | `errors.py` | Typed decision failures and their closed error codes |
-| `model.py` | Immutable ledger, lifecycle, resource, transition-input, and snapshot values |
+| `model.py` | Immutable ledger, lifecycle, resource, decoded transition-payload, and snapshot values |
 | `decisions.py` | Lifecycle and action-legality decisions |
 | `planning_decisions.py` | Pure planning-impact checks for item and attempt changes |
 | `resource_decisions.py` | Pure resource reservation and use-lease decisions |
@@ -53,7 +53,7 @@ The application layer is the home for top-level use-case sequencing below user-f
 | Module | Current ownership |
 | --- | --- |
 | `stored_state.py` | Complete immutable persistence aggregate, organized into lifecycle, proposal, planning, artifact, authority, resource, history, and focus records |
-| `mutations.py` | Closed typed persistence contract over lifecycle decisions, pure planning and resource decisions, and exact before/after carriers for mutation families whose orchestration remains in the later application service |
+| `mutations.py` | Closed typed persistence contract over lifecycle decisions, pure planning and resource decisions, and exact before/after carriers accepted by existing legality owners |
 | `decision_projection.py` | Pure projection from complete stored state into the narrower `LedgerSnapshot` consumed by domain decisions |
 | `ports.py` | `WorkStore` and `WorkTransaction` protocols over complete `StoredWorkState` reads and one closed accepted-mutation commit boundary |
 
@@ -73,15 +73,15 @@ Adapters own concrete filesystem and database mechanics without deciding lifecyc
 
 These SQLite owners are independently buildable primitives. The current production CLI does not compose them yet and continues to use the Markdown authority through `legacy`.
 
-Pure lifecycle, planning, and resource modules continue to decide legality. The application mutation contract derives the exact relational delta for their accepted outputs, while proposal creation, dependency and requirement edits, authority changes, and reservation or task-use changes use typed before/after values bounded to their named record families. Every stored-state mutation carries the complete accepted history-receipt identity. Those carrier-only variants add no policy and identify the later `application/service.py` as their producer after current action and operation legality accepts the mutation. SQLite applies the closed union without importing raw input, Markdown, paths, or application orchestration.
+Pure lifecycle, planning, and resource modules continue to decide legality. The application mutation contract derives the exact relational delta for their accepted outputs, while proposal creation, dependency and requirement edits, authority changes, and reservation or task-use changes use typed before/after values bounded to their named record families. Every stored-state mutation carries the complete accepted history-receipt identity. Carrier-only variants add no policy; application orchestration constructs them only after current action and operation legality accepts the exact records. SQLite applies the closed union without importing raw input, Markdown, paths, or application orchestration.
 
 ### Interfaces
 
 | Module | Current ownership |
 | --- | --- |
 | `cli.py` | Command definitions, argument decoding, diagnostics and JSON presentation, and composition of current operations |
-| `transition_input.py` | Strict external transition-payload schemas and conversion into typed domain input values |
-| `transitions.py` | The external mutation boundary that injects input decoding into the current legacy transaction without reversing package dependencies |
+| `transition_input.py` | Strict external transition-payload schemas and conversion into typed payload values |
+| `transitions.py` | The external mutation boundary that binds an advertised action and decoded payload into one closed command variant before entering the current legacy transaction |
 
 Interfaces may call application use cases, adapters, and the temporary legacy runtime. They do not add domain legality or expose raw external representations in domain signatures.
 
@@ -105,7 +105,7 @@ The legacy package may use domain values and decisions. It does not define the f
 
 ### Mutation
 
-The installed `pinboard transition` command enters `interfaces.cli`, which resolves the project through `adapters.files.root` and loads an action from the legacy view. `interfaces.transitions` supplies the strict JSON decoder to `legacy.transition`. While holding the current authority transaction, the legacy mutation verifies lease, resource, and stale-revision tokens before asking the decoder for a typed domain input. `legacy.transition_plan` combines that input with current Markdown facts and pure domain decisions to produce a file change set. `legacy.transaction_store` validates and commits the change set atomically, then the interface renders the new revision or a typed failure.
+The installed `pinboard transition` command enters `interfaces.cli`, which resolves the project through `adapters.files.root` and loads an advertised action from the legacy view. `interfaces.transitions` decodes the strict JSON payload and binds it to that action as one closed dataclass command variant. While holding the current authority transaction, the legacy mutation verifies lease, resource, and stale-revision tokens before accepting the bound command. Pure lifecycle decisions and `legacy.transition_plan` exhaustively match that command union, so an action discriminator and an incompatible payload cannot circulate as separate internal values. `legacy.transaction_store` validates and commits the resulting file change set atomically, then the interface renders the new revision or a typed failure.
 
 This route proves behavior through the production command while keeping weak JSON values out of the domain. It remains transitional because the transaction and use-case sequencing still belong to the legacy filesystem implementation rather than an application service over a store port.
 
