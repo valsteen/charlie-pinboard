@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Never, assert_never
+from typing import Never, assert_never, overload
 
 import msgspec
 
@@ -21,10 +21,13 @@ from charlie_pinboard.adapters.sqlite.database import (
 from charlie_pinboard.application.mutations import (
     AcceptedMutation,
     AttemptAuthorityMutation,
+    CommitReceipt,
     CoordinationAuthorityMutation,
     DependencyEditMutation,
     MutationContractError,
     PlanningImpactMutation,
+    PlanningMutation,
+    PlanningMutationReceipt,
     PlanningResolutionMutation,
     ProposalCreationMutation,
     ReservationTaskUseMutation,
@@ -32,6 +35,7 @@ from charlie_pinboard.application.mutations import (
     ResourceMutation,
     ResourceRequirementEditMutation,
     StoredStateMutation,
+    TransitionReceiptMutation,
     expected_stored_state,
 )
 from charlie_pinboard.application.stored_state import (
@@ -180,7 +184,12 @@ def _canonical_json(row: sqlite3.Row, key: str) -> CanonicalJson:
 def _stored_json(row: sqlite3.Row, key: str) -> CanonicalJson:
     """Return JSON bytes whose canonical whitespace is owned by the stored history schema."""
 
-    return CanonicalJson(_text(row, key).encode("utf-8"))
+    encoded = _text(row, key).encode("utf-8")
+    try:
+        msgspec.json.decode(encoded, type=msgspec.Raw)
+    except msgspec.DecodeError as error:
+        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has invalid JSON.") from error
+    return CanonicalJson(encoded)
 
 
 def _optional_canonical_json(row: sqlite3.Row, key: str) -> CanonicalJson | None:
@@ -1938,7 +1947,7 @@ class _StoredMutationWriter:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def commit(self, mutation: StoredStateMutation) -> TransitionReceipt:
+    def commit(self, mutation: StoredStateMutation) -> CommitReceipt:
         current = _StoredStateReader(self._connection).read()
         if current != mutation.before:
             raise StorageError(
@@ -1957,7 +1966,22 @@ class _StoredMutationWriter:
         _StoredStateWriter(self._connection).replace_current(expected)
         if _StoredStateReader(self._connection).read() != expected:
             raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "The stored mutation did not round-trip exactly.")
-        return mutation.receipt.transition
+        match mutation:
+            case PlanningImpactMutation() | PlanningResolutionMutation():
+                return mutation.receipt
+            case (
+                ProposalCreationMutation()
+                | DependencyEditMutation()
+                | ResourceRequirementEditMutation()
+                | CoordinationAuthorityMutation()
+                | AttemptAuthorityMutation()
+                | ReservationTaskUseMutation()
+                | ResourceMutation()
+                | ResourceIntentMutation()
+            ):
+                return mutation.receipt.transition
+            case _ as unreachable:
+                assert_never(unreachable)
 
 
 class _SQLiteWorkTransaction:
@@ -1967,7 +1991,13 @@ class _SQLiteWorkTransaction:
     def snapshot(self) -> StoredWorkState:
         return _StoredStateReader(self._connection).read()
 
-    def commit(self, mutation: AcceptedMutation) -> TransitionReceipt:
+    @overload
+    def commit(self, mutation: Decision | TransitionReceiptMutation) -> TransitionReceipt: ...
+
+    @overload
+    def commit(self, mutation: PlanningMutation) -> PlanningMutationReceipt: ...
+
+    def commit(self, mutation: AcceptedMutation) -> CommitReceipt:
         match mutation:
             case Decision():
                 return _DecisionWriter(self._connection).commit(mutation)

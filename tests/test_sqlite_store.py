@@ -449,6 +449,16 @@ class SQLiteStoreTest(unittest.TestCase):
                 False,
             ),
             (
+                "stored history input JSON",
+                "UPDATE transition_history SET input_json = '{' WHERE history_id = 1",
+                False,
+            ),
+            (
+                "stored history outcome JSON",
+                "UPDATE transition_history SET outcome_json = '{' WHERE history_id = 1",
+                False,
+            ),
+            (
                 "closed vocabulary",
                 "UPDATE resource_instances SET status = 'unknown' WHERE instance_id = 'workspace-on-host'",
                 True,

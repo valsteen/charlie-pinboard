@@ -31,6 +31,7 @@ from charlie_pinboard.domain.history import (
     planning_resolution_outcome,
 )
 from charlie_pinboard.domain.identifiers import (
+    ActionId,
     ArtifactRefId,
     HistoryId,
     HistorySubjectId,
@@ -60,7 +61,7 @@ class MutationContractError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class MutationReceipt:
-    """Complete stored-history identity before its operation-owned outcome is encoded."""
+    """Stored-history identity for an ordinary transition receipt."""
 
     transition: TransitionReceipt
     history_id: HistoryId
@@ -73,6 +74,27 @@ class MutationReceipt:
     actor_host_id: HostId | None
     input_schema: str
     input_payload: CanonicalJson
+
+
+@dataclass(frozen=True, slots=True)
+class PlanningMutationReceipt:
+    """Stored-history identity without an independently claimable generic outcome."""
+
+    action_id: ActionId
+    decided_at: datetime
+    history_id: HistoryId
+    project_revision: int
+    action_kind: TransitionHistoryActionKind
+    subject_id: HistorySubjectId
+    artifact_ref_id: ArtifactRefId | None
+    authorization: TransitionHistoryAuthorizationKind
+    actor_task_id: TaskId | None
+    actor_host_id: HostId | None
+    input_schema: str
+    input_payload: CanonicalJson
+
+
+type CommitReceipt = TransitionReceipt | PlanningMutationReceipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,7 +156,7 @@ class PlanningImpactMutation:
     impact: PlanningImpact
     before: StoredWorkState
     after: StoredWorkState
-    receipt: MutationReceipt
+    receipt: PlanningMutationReceipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,7 +165,7 @@ class PlanningResolutionMutation:
     target: ItemId
     before: StoredWorkState
     after: StoredWorkState
-    receipt: MutationReceipt
+    receipt: PlanningMutationReceipt
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,33 +184,23 @@ class ResourceIntentMutation:
     receipt: MutationReceipt
 
 
-type AcceptedMutation = (
-    Decision
-    | ProposalCreationMutation
-    | DependencyEditMutation
-    | ResourceRequirementEditMutation
-    | CoordinationAuthorityMutation
-    | AttemptAuthorityMutation
-    | ReservationTaskUseMutation
-    | PlanningImpactMutation
-    | PlanningResolutionMutation
-    | ResourceMutation
-    | ResourceIntentMutation
-)
-
-
-type StoredStateMutation = (
+type TransitionReceiptMutation = (
     ProposalCreationMutation
     | DependencyEditMutation
     | ResourceRequirementEditMutation
     | CoordinationAuthorityMutation
     | AttemptAuthorityMutation
     | ReservationTaskUseMutation
-    | PlanningImpactMutation
-    | PlanningResolutionMutation
     | ResourceMutation
     | ResourceIntentMutation
 )
+
+type PlanningMutation = PlanningImpactMutation | PlanningResolutionMutation
+
+type AcceptedMutation = Decision | TransitionReceiptMutation | PlanningMutation
+
+
+type StoredStateMutation = TransitionReceiptMutation | PlanningMutation
 
 
 def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
@@ -222,13 +234,29 @@ def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
 
 
 def _stored_receipt(mutation: StoredStateMutation) -> StoredTransitionReceipt:
-    receipt = mutation.receipt
-    transition = receipt.transition
     outcome = _history_outcome(mutation)
+    match mutation:
+        case PlanningImpactMutation(receipt=receipt) | PlanningResolutionMutation(receipt=receipt):
+            action_id = receipt.action_id
+            decided_at = receipt.decided_at
+        case (
+            ProposalCreationMutation(receipt=receipt)
+            | DependencyEditMutation(receipt=receipt)
+            | ResourceRequirementEditMutation(receipt=receipt)
+            | CoordinationAuthorityMutation(receipt=receipt)
+            | AttemptAuthorityMutation(receipt=receipt)
+            | ReservationTaskUseMutation(receipt=receipt)
+            | ResourceMutation(receipt=receipt)
+            | ResourceIntentMutation(receipt=receipt)
+        ):
+            action_id = receipt.transition.action_id
+            decided_at = receipt.transition.decided_at
+        case _ as unreachable:
+            assert_never(unreachable)
     return StoredTransitionReceipt(
         receipt.history_id,
         receipt.project_revision,
-        transition.action_id,
+        action_id,
         receipt.action_kind,
         receipt.subject_id,
         receipt.artifact_ref_id,
@@ -239,7 +267,7 @@ def _stored_receipt(mutation: StoredStateMutation) -> StoredTransitionReceipt:
         receipt.input_payload,
         outcome.outcome_schema,
         CanonicalJson(outcome.payload),
-        transition.decided_at,
+        decided_at,
     )
 
 
@@ -247,7 +275,6 @@ def _common_after(mutation: StoredStateMutation) -> StoredWorkState:
     before = mutation.before
     project = before.lifecycle.project
     receipt = mutation.receipt
-    transition = receipt.transition
     next_history_id = 1 + max((int(value.history_id) for value in before.history.receipts), default=0)
     if int(receipt.history_id) != next_history_id or receipt.project_revision != project.revision + 1:
         raise MutationContractError("The accepted stored receipt does not identify the mutation exactly.")
@@ -256,7 +283,7 @@ def _common_after(mutation: StoredStateMutation) -> StoredWorkState:
         before,
         lifecycle=replace(
             before.lifecycle,
-            project=replace(project, revision=project.revision + 1, updated_at=transition.decided_at),
+            project=replace(project, revision=project.revision + 1, updated_at=stored_receipt.committed_at),
         ),
         history=HistoryRecords((*before.history.receipts, stored_receipt)),
     )
@@ -434,7 +461,7 @@ def _planning_impact_after(mutation: PlanningImpactMutation, common: StoredWorkS
         impact.summary,
         impact.evidence,
         common.lifecycle.project.revision,
-        mutation.receipt.transition.decided_at,
+        mutation.receipt.decided_at,
     )
     obligations = tuple(
         StoredPlanningObligation(
@@ -453,7 +480,7 @@ def _planning_impact_after(mutation: PlanningImpactMutation, common: StoredWorkS
             None,
             None,
             None,
-            mutation.receipt.transition.decided_at,
+            mutation.receipt.decided_at,
             None,
         )
         for obligation in impact.obligations
@@ -493,8 +520,8 @@ def _planning_lifecycle_after(
             state=state,
             outcome_evidence=change.outcome_evidence,
             subject_revision=common.lifecycle.project.revision,
-            origin_updated_at=mutation.receipt.transition.decided_at,
-            updated_at=mutation.receipt.transition.decided_at,
+            origin_updated_at=mutation.receipt.decided_at,
+            updated_at=mutation.receipt.decided_at,
         )
         lifecycle = replace(lifecycle, work_items=tuple(items))
     if decision.attempt_change is not None:
@@ -507,8 +534,8 @@ def _planning_lifecycle_after(
             attempts[index],
             state=change.after,
             subject_revision=common.lifecycle.project.revision,
-            origin_updated_at=mutation.receipt.transition.decided_at,
-            updated_at=mutation.receipt.transition.decided_at,
+            origin_updated_at=mutation.receipt.decided_at,
+            updated_at=mutation.receipt.decided_at,
         )
         lifecycle = replace(lifecycle, attempts=tuple(attempts))
     return lifecycle
@@ -568,7 +595,7 @@ def _planning_resolution_after(mutation: PlanningResolutionMutation, common: Sto
         resolved_at = before.resolved_at
         resolved_revision = before.resolved_project_revision
         if obligation.disposition is not None and before.state == PlanningObligationState.UNRESOLVED:
-            resolved_at = mutation.receipt.transition.decided_at
+            resolved_at = mutation.receipt.decided_at
             resolved_revision = common.lifecycle.project.revision
         primary = obligation.replacements[0] if obligation.replacements else None
         resolved.append(

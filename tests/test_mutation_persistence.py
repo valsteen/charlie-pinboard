@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import assert_type, cast
 
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import StorageError, initialize_database
@@ -17,6 +17,7 @@ from charlie_pinboard.application.mutations import (
     MutationContractError,
     MutationReceipt,
     PlanningImpactMutation,
+    PlanningMutationReceipt,
     PlanningResolutionMutation,
     ProposalCreationMutation,
     ReservationTaskUseMutation,
@@ -206,6 +207,27 @@ class MutationPersistenceTest(unittest.TestCase):
         stored = self._stored_receipt(after)
         return MutationReceipt(
             receipt,
+            stored.history_id,
+            stored.project_revision,
+            stored.action_kind,
+            stored.subject_id,
+            stored.artifact_ref_id,
+            stored.authorization,
+            stored.actor_task_id,
+            stored.actor_host_id,
+            stored.input_schema,
+            stored.input_payload,
+        )
+
+    def _planning_mutation_receipt(
+        self,
+        receipt: TransitionReceipt,
+        after: StoredWorkState,
+    ) -> PlanningMutationReceipt:
+        stored = self._stored_receipt(after)
+        return PlanningMutationReceipt(
+            receipt.action_id,
+            receipt.decided_at,
             stored.history_id,
             stored.project_revision,
             stored.action_kind,
@@ -628,9 +650,11 @@ class MutationPersistenceTest(unittest.TestCase):
             ),
         )
         after = self._history_outcome(after, cast(HistoryOutcome, planning_impact_outcome(impact)))
-        mutation = PlanningImpactMutation(impact, before, after, self._mutation_receipt(receipt, after))
+        mutation = PlanningImpactMutation(impact, before, after, self._planning_mutation_receipt(receipt, after))
+        assert_type(mutation.receipt, PlanningMutationReceipt)
         with store.write() as transaction:
-            transaction.commit(mutation)
+            committed = transaction.commit(mutation)
+        self.assertIsInstance(committed, PlanningMutationReceipt)
         with self.assertRaises(StorageError), store.write() as transaction:
             transaction.commit(mutation)
         self.assertEqual(after, store.snapshot())
@@ -661,7 +685,7 @@ class MutationPersistenceTest(unittest.TestCase):
             target.item_id,
             before,
             common_after,
-            self._mutation_receipt(receipt, common_after),
+            self._planning_mutation_receipt(receipt, common_after),
         )
         resolved_after = expected_stored_state(draft)
         mutation = replace(draft, after=resolved_after)
@@ -785,7 +809,7 @@ class MutationPersistenceTest(unittest.TestCase):
             ItemId("work-b"),
             before,
             after,
-            self._mutation_receipt(receipt, after),
+            self._planning_mutation_receipt(receipt, after),
         )
         with self.assertRaises(StorageError), store.write() as transaction:
             transaction.commit(mutation)
@@ -1228,6 +1252,7 @@ class MutationPersistenceTest(unittest.TestCase):
 
         snapshot = project_decision_snapshot(before)
         existing_impact = snapshot.planning_impacts[0]
+        planning_mutation_receipt = self._planning_mutation_receipt(receipt, common_after)
         empty_impact = PlanningImpact(
             PlanningImpactId("impact-empty"),
             ItemId("work-a"),
@@ -1239,14 +1264,14 @@ class MutationPersistenceTest(unittest.TestCase):
             (),
         )
         pure_noops = (
-            PlanningImpactMutation(existing_impact, before, common_after, mutation_receipt),
-            PlanningImpactMutation(empty_impact, before, common_after, mutation_receipt),
+            PlanningImpactMutation(existing_impact, before, common_after, planning_mutation_receipt),
+            PlanningImpactMutation(empty_impact, before, common_after, planning_mutation_receipt),
             PlanningResolutionMutation(
                 PlanningResolutionDecision(existing_impact, None, None),
                 existing_impact.obligations[0].target,
                 before,
                 common_after,
-                mutation_receipt,
+                planning_mutation_receipt,
             ),
             ResourceMutation(
                 ResourceDecision(ResourceDecisionKind.RELEASE, ()),
