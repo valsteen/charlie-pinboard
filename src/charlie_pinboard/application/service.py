@@ -1,6 +1,8 @@
 from dataclasses import replace
 from datetime import datetime
-from typing import assert_never
+from typing import Annotated, assert_never
+
+import msgspec
 
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.application.mutations import (
@@ -36,8 +38,10 @@ from charlie_pinboard.domain.identifiers import (
     AttemptId,
     HistoryId,
     HistorySubjectId,
+    HostId,
     ItemId,
     PlanningImpactId,
+    TaskId,
 )
 from charlie_pinboard.domain.model import (
     CanonicalJson,
@@ -49,9 +53,14 @@ from charlie_pinboard.domain.model import (
 )
 from charlie_pinboard.domain.planning_decisions import decide_planning_resolution, validate_planning_impact
 from charlie_pinboard.domain.resource_decisions import (
+    AbandonmentForm,
+    AbandonMutationIntentInput,
     AdvanceResourceObservationInput,
     RegisterMutationIntentInput,
     ResourceIntentDecision,
+)
+from charlie_pinboard.domain.resource_decisions import (
+    abandon_mutation_intent as decide_abandonment,
 )
 from charlie_pinboard.domain.resource_decisions import (
     advance_resource_observation as decide_resource_observation,
@@ -59,6 +68,38 @@ from charlie_pinboard.domain.resource_decisions import (
 from charlie_pinboard.domain.resource_decisions import (
     register_mutation_intent as decide_mutation_intent,
 )
+
+type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
+type NonNegativeInteger = Annotated[int, msgspec.Meta(ge=0)]
+type PositiveInteger = Annotated[int, msgspec.Meta(ge=1)]
+type Sha256 = Annotated[str, msgspec.Meta(pattern=r"^[0-9a-f]{64}$")]
+
+ABANDON_MUTATION_INTENT_INPUT_SCHEMA = "abandon-mutation-intent/v1"
+
+
+class AbandonMutationIntentHistoryInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    accepted_observation_digest: Sha256
+    accepted_observation_generation: PositiveInteger
+    deciding_task_id: NonEmptyString
+    discovery_fingerprint: NonEmptyString
+    form: AbandonmentForm
+    intent_id: NonEmptyString
+    locator: msgspec.Raw
+    locator_schema: NonEmptyString
+    observation_digest: Sha256
+    observation_host_id: NonEmptyString
+    observed_at: datetime
+    prior_attempt_lease_generation: PositiveInteger
+    prior_attempt_lease_id: NonEmptyString
+    prior_task_id: NonEmptyString
+    prior_task_use_generation: PositiveInteger
+    prior_task_use_lease_id: NonEmptyString
+    reason: NonEmptyString
+    resource_instance_id: NonEmptyString
+    resource_kind: NonEmptyString
+    start_instance_subject_revision: NonNegativeInteger
+    start_observation_digest: Sha256
+    start_observation_generation: PositiveInteger
 
 
 def _actor_for(
@@ -275,6 +316,8 @@ def _resource_intent_mutation(
     before: StoredWorkState,
     decision: ResourceIntentDecision,
     *,
+    actor_task_id: TaskId,
+    actor_host_id: HostId,
     decided_at: datetime,
     input_schema: str,
     input_payload: CanonicalJson,
@@ -297,8 +340,8 @@ def _resource_intent_mutation(
         HistorySubjectId(intent.intent_id),
         None,
         TransitionHistoryAuthorizationKind.ATTEMPT,
-        intent.task_id,
-        intent.host_id,
+        actor_task_id,
+        actor_host_id,
         input_schema,
         input_payload,
     )
@@ -321,6 +364,8 @@ def register_mutation_intent(
         mutation = _resource_intent_mutation(
             before,
             decision,
+            actor_task_id=decision.intent_change.after.task_id,
+            actor_host_id=decision.intent_change.after.host_id,
             decided_at=value.recorded_at,
             input_schema=value.policy_schema,
             input_payload=value.policy,
@@ -344,9 +389,62 @@ def advance_resource_observation(
         mutation = _resource_intent_mutation(
             before,
             decision,
+            actor_task_id=decision.intent_change.after.task_id,
+            actor_host_id=decision.intent_change.after.host_id,
             decided_at=value.resolved_at,
             input_schema=value.evidence_schema,
             input_payload=value.evidence,
             evidence=value.evidence_digest,
+        )
+        return transaction.commit(mutation)
+
+
+def abandon_mutation_intent(
+    store: WorkStore,
+    value: AbandonMutationIntentInput,
+) -> TransitionReceipt | DecisionFailure:
+    with store.write() as transaction:
+        before = transaction.snapshot()
+        result = decide_abandonment(project_decision_snapshot(before), value)
+        match result:
+            case DecisionFailure():
+                return result
+            case decision:
+                pass
+        intent = decision.intent_change.after
+        capability = value.intent.resource
+        history_input = AbandonMutationIntentHistoryInput(
+            capability.locator_observation_digest,
+            capability.locator_observation_generation,
+            str(value.attempt_authority.task_id),
+            value.observation.discovery_fingerprint,
+            value.form,
+            str(intent.intent_id),
+            msgspec.Raw(value.observation.locator),
+            value.observation.locator_schema,
+            value.observation.digest,
+            str(value.observation.host_id),
+            value.observation.observed_at,
+            intent.attempt_lease_generation,
+            str(intent.attempt_lease_id),
+            str(intent.task_id),
+            intent.resource_use_generation,
+            str(intent.resource_use_lease_id),
+            value.reason,
+            str(value.observation.instance_id),
+            value.observation.resource_kind,
+            intent.start_instance_subject_revision,
+            intent.start_observation_digest,
+            intent.start_observation_generation,
+        )
+        mutation = _resource_intent_mutation(
+            before,
+            decision,
+            actor_task_id=value.attempt_authority.task_id,
+            actor_host_id=value.attempt_authority.host_id,
+            decided_at=value.decided_at,
+            input_schema=ABANDON_MUTATION_INTENT_INPUT_SCHEMA,
+            input_payload=CanonicalJson(msgspec.json.encode(history_input, order="sorted")),
+            evidence=value.reason,
         )
         return transaction.commit(mutation)

@@ -28,6 +28,9 @@ from charlie_pinboard.application.mutations import (
 )
 from charlie_pinboard.application.ports import WorkStore, WorkTransaction
 from charlie_pinboard.application.stored_state import (
+    AttemptLeaseCounter,
+    AttemptLeaseGeneration,
+    AttemptLeaseState,
     CanonicalJson,
     HistoryRecords,
     ItemDependency,
@@ -38,6 +41,7 @@ from charlie_pinboard.application.stored_state import (
     PlanningRecords,
     ProposalDisposition,
     ProposalRelation,
+    StoredAttemptLease,
     StoredPlanningImpact,
     StoredPlanningObligation,
     StoredPlanningReplacement,
@@ -68,6 +72,7 @@ from charlie_pinboard.domain.decisions import (
 from charlie_pinboard.domain.decisions import (
     decide as decision_outcome,
 )
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.history import HistoryOutcome, planning_impact_outcome, planning_resolution_outcome
 from charlie_pinboard.domain.identifiers import (
     ActionId,
@@ -95,11 +100,13 @@ from charlie_pinboard.domain.model import (
     DeferInput,
     LedgerSnapshot,
     MergeProposalInput,
+    MutationIntentState,
     PlanningDisposition,
     PlanningImpact,
     PlanningObligation,
     ReasonInput,
     ResourceIntentCapability,
+    ResourceMutationCapability,
     SubmitReviewInput,
     Timing,
     TransitionInput,
@@ -108,10 +115,12 @@ from charlie_pinboard.domain.model import (
 from charlie_pinboard.domain.planning_decisions import PlanningResolutionDecision, decide_planning_resolution
 from charlie_pinboard.domain.resource_decisions import (
     AdvanceResourceObservationInput,
+    FencedIntentDisposition,
     IntentDecisionKind,
     MutationIntentChange,
     ObservedResource,
     RegisterMutationIntentInput,
+    ResolveFencedIntentInput,
     ResolverEvidenceDecision,
     ResourceDecision,
     ResourceDecisionKind,
@@ -120,6 +129,7 @@ from charlie_pinboard.domain.resource_decisions import (
     reallocate_resource,
     register_mutation_intent,
     release_resource,
+    resolve_fenced_resource_intent,
 )
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
@@ -844,6 +854,135 @@ class MutationPersistenceTest(unittest.TestCase):
         reopened = store.snapshot().resources.mutation_intents[0]
         self.assertEqual(("abandoned", TaskId("worker")), (reopened.state.value, reopened.disposition_task_id))
         self.assertEqual(SQLITE_DIGEST, reopened.start_observation_digest)
+
+    def test_unchanged_fenced_resolution_requires_a_reason_and_persists_the_abandoned_row_shape(self) -> None:
+        state = complete_sqlite_state()
+        intent_record = state.resources.mutation_intents[0]
+        retained_uses = tuple(
+            value
+            for value in state.resources.use_leases
+            if value.generation <= intent_record.resource_use_generation + 1
+        )
+        recovery_generation = intent_record.attempt_lease_generation + 1
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                attempt_counters=(AttemptLeaseCounter(intent_record.attempt_id, recovery_generation),),
+                attempt_generations=(
+                    *state.authority.attempt_generations,
+                    AttemptLeaseGeneration(
+                        intent_record.attempt_id,
+                        recovery_generation,
+                        LeaseId("attempt-lease-fenced-recovery"),
+                        TaskId("fenced-recovery-worker"),
+                        HostId("host-a"),
+                    ),
+                ),
+                attempt_leases=(
+                    StoredAttemptLease(
+                        intent_record.attempt_id,
+                        recovery_generation,
+                        SQLITE_NOW + timedelta(seconds=1),
+                        SQLITE_NOW + timedelta(minutes=5),
+                        AttemptLeaseState.ACTIVE,
+                    ),
+                ),
+            ),
+            resources=replace(state.resources, use_leases=retained_uses),
+        )
+        store = self._store_with_state(state)
+        before = store.snapshot()
+        snapshot = project_decision_snapshot(before)
+        intent = snapshot.mutation_intents[0]
+        reservation = snapshot.mutation_reservation(intent.reservation_id)
+        instance = snapshot.resource_instance(intent.instance_id)
+        observation = snapshot.resource_observation(intent.instance_id)
+        prior_use = snapshot.mutation_use_lease(intent.resource_use_lease_id, intent.resource_use_generation)
+        coordination = snapshot.coordination_authority
+        assert reservation is not None
+        definition = snapshot.resource_definition(reservation.resource_id)
+        assert instance is not None
+        assert observation is not None
+        assert definition is not None
+        assert prior_use is not None
+        assert coordination is not None
+        capability = ResourceIntentCapability(
+            ResourceMutationCapability(
+                reservation.resource_id,
+                reservation.reservation_id,
+                reservation.acquisition_generation,
+                instance.instance_id,
+                prior_use.instance_subject_revision,
+                prior_use.observation_generation,
+                prior_use.observation_digest,
+                prior_use.lease_id,
+                prior_use.generation,
+                prior_use.task_id,
+                prior_use.host_id,
+                prior_use.host_epoch,
+                prior_use.attempt_lease_id,
+                prior_use.attempt_lease_generation,
+            ),
+            intent.intent_id,
+            intent.policy_digest,
+            intent.state,
+        )
+        supplied_observation = ObservedResource(
+            instance.instance_id,
+            instance.host_id,
+            definition.kind,
+            instance.discovery_fingerprint,
+            observation.locator_schema,
+            observation.locator,
+            observation.digest,
+            SQLITE_NOW + timedelta(seconds=2),
+        )
+        empty_reason = ResolveFencedIntentInput(
+            capability,
+            coordination,
+            snapshot.command_attempt_authorities[0],
+            supplied_observation,
+            snapshot.resource_reservation_counters[-1].generation_high_water,
+            FencedIntentDisposition.UNCHANGED,
+            "",
+            None,
+            None,
+            None,
+            None,
+            SQLITE_NOW + timedelta(seconds=2),
+        )
+        rejected = resolve_fenced_resource_intent(snapshot, empty_reason)
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
+        accepted = resolve_fenced_resource_intent(
+            snapshot, replace(empty_reason, reason="The fenced dispatch left the resource unchanged.")
+        )
+        self.assertNotIsInstance(accepted, DecisionFailure)
+        decision = accepted
+        receipt, common_after = self._receipt_state(before, "inspect:resolve-fenced")
+        draft = ResourceIntentMutation(
+            decision,
+            before,
+            common_after,
+            self._mutation_receipt(receipt, common_after),
+        )
+        mutation = replace(draft, after=expected_stored_state(draft))
+        with store.write() as transaction:
+            transaction.commit(mutation)
+
+        reopened = store.snapshot()
+        persisted = reopened.resources.mutation_intents[0]
+        self.assertEqual(MutationIntentState.ABANDONED, persisted.state)
+        self.assertEqual(
+            (None, None, None),
+            (
+                persisted.result_observation_generation,
+                persisted.result_observation_digest,
+                persisted.evidence_digest,
+            ),
+        )
+        self.assertEqual("The fenced dispatch left the resource unchanged.", persisted.disposition_reason)
 
     def test_resource_intent_registration_and_observation_changes_apply_every_decision_member(self) -> None:
         baseline = complete_sqlite_state()

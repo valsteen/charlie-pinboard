@@ -1015,8 +1015,6 @@ def abandon_mutation_intent(  # noqa: C901, PLR0912
         intent,
         state=MutationIntentState.ABANDONED,
         resolved_at=value.decided_at,
-        result_observation_generation=accepted.generation,
-        result_observation_digest=accepted.digest,
         disposition_task_id=value.attempt_authority.task_id,
         disposition_reason=value.reason,
     )
@@ -1235,12 +1233,15 @@ def resolve_fenced_resource_intent(  # noqa: C901, PLR0912
                 DecisionFailureCode.TRANSITION_INPUT_INVALID,
                 "An unchanged fenced intent requires the unchanged disposition.",
             )
+        if not value.reason.strip():
+            return DecisionFailure(
+                DecisionFailureCode.TRANSITION_INPUT_INVALID,
+                "Unchanged fenced intent resolution requires a reason.",
+            )
         resolved = replace(
             intent,
             state=MutationIntentState.ABANDONED,
             resolved_at=value.resolved_at,
-            result_observation_generation=accepted.generation,
-            result_observation_digest=accepted.digest,
             disposition_task_id=authority.task_id,
             disposition_reason=value.reason,
         )

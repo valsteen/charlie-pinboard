@@ -4,18 +4,32 @@ from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
+import msgspec
+
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.application.service import (
+    ABANDON_MUTATION_INTENT_INPUT_SCHEMA,
+    AbandonMutationIntentHistoryInput,
+    abandon_mutation_intent,
     advance_resource_observation,
     execute,
     record_planning_impact,
     register_mutation_intent,
     resolve_planning_obligation,
 )
-from charlie_pinboard.application.stored_state import PlanningRecords
+from charlie_pinboard.application.stored_state import (
+    AttemptLeaseCounter,
+    AttemptLeaseGeneration,
+    AttemptLeaseState,
+    PlanningRecords,
+    ResourceMutationIntent,
+    StoredAttemptLease,
+    StoredResourceUseLease,
+    StoredWorkState,
+)
 from charlie_pinboard.domain.decisions import (
     Action,
     ActionKind,
@@ -27,17 +41,31 @@ from charlie_pinboard.domain.decisions import (
 )
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.history import planning_impact_outcome, planning_resolution_outcome
-from charlie_pinboard.domain.identifiers import AttemptId, ItemId, LeaseId, MutationIntentId, PlanningImpactId
+from charlie_pinboard.domain.identifiers import (
+    AttemptId,
+    HostId,
+    ItemId,
+    LeaseId,
+    MutationIntentId,
+    PlanningImpactId,
+    TaskId,
+)
 from charlie_pinboard.domain.model import (
     CanonicalJson,
     EvidenceInput,
+    MutationIntentState,
     PlanningDisposition,
     PlanningImpact,
     PlanningObligation,
     ReasonInput,
     ResourceIntentCapability,
+    ResourceMutationCapability,
+    UseLeaseGenerationKind,
+    UseLeaseState,
 )
 from charlie_pinboard.domain.resource_decisions import (
+    AbandonmentForm,
+    AbandonMutationIntentInput,
     AdvanceResourceObservationInput,
     ObservedResource,
     RegisterMutationIntentInput,
@@ -69,6 +97,157 @@ class ServiceTest(unittest.TestCase):
             )
         )
         return first, SQLiteWorkStore(roots.database_path)
+
+    def _store_with_state(self, state: StoredWorkState) -> tuple[SQLiteWorkStore, Path]:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        store = SQLiteWorkStore(roots.database_path)
+        store.initialize_state(state)
+        return store, roots.database_path
+
+    def _registered_resource_store(self) -> tuple[SQLiteWorkStore, Path, ResourceMutationCapability]:
+        state = complete_sqlite_state()
+        state = replace(state, resources=replace(state.resources, mutation_intents=()))
+        store, database_path = self._store_with_state(state)
+        snapshot = project_decision_snapshot(store.snapshot())
+        authority = snapshot.command_attempt_authorities[0]
+        actor = ActorAuthority(
+            Role.WORKER,
+            AuthorizationKind.ATTEMPT,
+            authority.generation,
+            authority.lease_id,
+            (authority.attempt,),
+            False,
+        )
+        actions = available_actions(snapshot, actor)
+        self.assertIsInstance(actions, tuple)
+        capability = next(
+            action for action in actions if action.kind == ActionKind.SUBMIT_REVIEW
+        ).resource_capabilities[0]
+        registered = register_mutation_intent(
+            store,
+            RegisterMutationIntentInput(
+                capability,
+                MutationIntentId("intent-abandon-service"),
+                "mutation-policy/v1",
+                CanonicalJson(b'{"paths":["src"]}'),
+                "c" * 64,
+                SQLITE_NOW + timedelta(seconds=1),
+            ),
+        )
+        self.assertNotIsInstance(registered, DecisionFailure)
+        return store, database_path, capability
+
+    def _abandonment_value(
+        self,
+        store: SQLiteWorkStore,
+        capability: ResourceMutationCapability,
+        form: AbandonmentForm,
+    ) -> AbandonMutationIntentInput:
+        snapshot = project_decision_snapshot(store.snapshot())
+        intent = snapshot.mutation_intents[-1]
+        authority = snapshot.command_attempt_authorities[0]
+        instance = snapshot.resource_instance(intent.instance_id)
+        observation = snapshot.resource_observation(intent.instance_id)
+        definition = snapshot.resource_definition(capability.resource_id)
+        assert instance is not None
+        assert observation is not None
+        assert definition is not None
+        return AbandonMutationIntentInput(
+            ResourceIntentCapability(capability, intent.intent_id, intent.policy_digest, intent.state),
+            authority,
+            ObservedResource(
+                instance.instance_id,
+                instance.host_id,
+                definition.kind,
+                instance.discovery_fingerprint,
+                observation.locator_schema,
+                observation.locator,
+                observation.digest,
+                SQLITE_NOW + timedelta(seconds=2),
+            ),
+            form,
+            "The observed resource remained unchanged.",
+            SQLITE_NOW + timedelta(seconds=2),
+        )
+
+    def _interrupted_resource_state(
+        self,
+    ) -> tuple[StoredWorkState, ResourceMutationCapability, ResourceMutationIntent, StoredResourceUseLease]:
+        source, _, capability = self._registered_resource_store()
+        registered = source.snapshot()
+        intent = registered.resources.mutation_intents[-1]
+        prior_use = next(
+            value for value in registered.resources.use_leases if value.lease_id == intent.resource_use_lease_id
+        )
+        recovery_generation = intent.attempt_lease_generation + 1
+        interrupted = replace(
+            registered,
+            authority=replace(
+                registered.authority,
+                attempt_counters=(AttemptLeaseCounter(intent.attempt_id, recovery_generation),),
+                attempt_generations=(
+                    *registered.authority.attempt_generations,
+                    AttemptLeaseGeneration(
+                        intent.attempt_id,
+                        recovery_generation,
+                        LeaseId("attempt-lease-recovery"),
+                        TaskId("recovery-worker"),
+                        HostId("host-a"),
+                    ),
+                ),
+                attempt_leases=(
+                    StoredAttemptLease(
+                        intent.attempt_id,
+                        recovery_generation,
+                        SQLITE_NOW + timedelta(seconds=2),
+                        SQLITE_NOW + timedelta(minutes=5),
+                        AttemptLeaseState.ACTIVE,
+                    ),
+                ),
+            ),
+            resources=replace(
+                registered.resources,
+                use_leases=tuple(
+                    replace(value, state=UseLeaseState.EXPIRED) if value.lease_id == prior_use.lease_id else value
+                    for value in registered.resources.use_leases
+                ),
+            ),
+        )
+        return interrupted, capability, intent, prior_use
+
+    def _expected_abandonment_history(
+        self,
+        value: AbandonMutationIntentInput,
+        prior_intent: ResourceMutationIntent,
+    ) -> AbandonMutationIntentHistoryInput:
+        capability = value.intent.resource
+        observation = value.observation
+        return AbandonMutationIntentHistoryInput(
+            capability.locator_observation_digest,
+            capability.locator_observation_generation,
+            str(value.attempt_authority.task_id),
+            observation.discovery_fingerprint,
+            value.form,
+            str(value.intent.intent_id),
+            msgspec.Raw(observation.locator),
+            observation.locator_schema,
+            observation.digest,
+            str(observation.host_id),
+            observation.observed_at,
+            prior_intent.attempt_lease_generation,
+            str(prior_intent.attempt_lease_id),
+            str(prior_intent.task_id),
+            prior_intent.resource_use_generation,
+            str(prior_intent.resource_use_lease_id),
+            value.reason,
+            str(observation.instance_id),
+            observation.resource_kind,
+            prior_intent.start_instance_subject_revision,
+            prior_intent.start_observation_digest,
+            prior_intent.start_observation_generation,
+        )
 
     def _coordinator_action(self, store: SQLiteWorkStore, kind: ActionKind) -> Action:
         snapshot = project_decision_snapshot(store.snapshot())
@@ -325,6 +504,168 @@ class ServiceTest(unittest.TestCase):
         locator = next(value for value in final.resources.locators if value.instance_id == instance.instance_id)
         self.assertEqual("b" * 64, locator.observation_digest)
         self.assertEqual(14, final.lifecycle.project.revision)
+
+    def test_abandonment_commits_both_authority_forms_with_complete_typed_provenance(self) -> None:
+        live_store, live_database, live_capability = self._registered_resource_store()
+        live_before = live_store.snapshot()
+        live_value = self._abandonment_value(live_store, live_capability, AbandonmentForm.LIVE_OWNER)
+        live_receipt = abandon_mutation_intent(live_store, live_value)
+        self.assertNotIsInstance(live_receipt, DecisionFailure)
+        live_reopened = SQLiteWorkStore(live_database).snapshot()
+        live_intent = live_reopened.resources.mutation_intents[-1]
+        self.assertEqual(live_before.lifecycle.project.revision + 1, live_reopened.lifecycle.project.revision)
+        self.assertEqual(len(live_before.history.receipts) + 1, len(live_reopened.history.receipts))
+        self.assertEqual(
+            (None, None, None),
+            (
+                live_intent.result_observation_generation,
+                live_intent.result_observation_digest,
+                live_intent.evidence_digest,
+            ),
+        )
+        live_history = live_reopened.history.receipts[-1]
+        self.assertEqual(ABANDON_MUTATION_INTENT_INPUT_SCHEMA, live_history.input_schema)
+        self.assertEqual(live_value.attempt_authority.task_id, live_history.actor_task_id)
+        decoded_live = msgspec.json.decode(
+            live_history.input_payload,
+            type=AbandonMutationIntentHistoryInput,
+        )
+        self.assertEqual(
+            self._expected_abandonment_history(live_value, live_before.resources.mutation_intents[-1]),
+            decoded_live,
+        )
+        self.assertEqual(live_history.input_payload, msgspec.json.encode(decoded_live, order="sorted"))
+
+        interrupted_state, clean_capability, prior_intent, _ = self._interrupted_resource_state()
+        clean_store, clean_database = self._store_with_state(interrupted_state)
+        clean_before = clean_store.snapshot()
+        clean_value = self._abandonment_value(clean_store, clean_capability, AbandonmentForm.CLEAN_INTERRUPTION)
+        clean_receipt = abandon_mutation_intent(clean_store, clean_value)
+        self.assertNotIsInstance(clean_receipt, DecisionFailure)
+        clean_reopened = SQLiteWorkStore(clean_database).snapshot()
+        clean_intent = clean_reopened.resources.mutation_intents[-1]
+        clean_history = clean_reopened.history.receipts[-1]
+        decoded_clean = msgspec.json.decode(
+            clean_history.input_payload,
+            type=AbandonMutationIntentHistoryInput,
+        )
+        self.assertEqual(clean_before.lifecycle.project.revision + 1, clean_reopened.lifecycle.project.revision)
+        self.assertEqual(len(clean_before.history.receipts) + 1, len(clean_reopened.history.receipts))
+        self.assertEqual(
+            (None, None, None),
+            (
+                clean_intent.result_observation_generation,
+                clean_intent.result_observation_digest,
+                clean_intent.evidence_digest,
+            ),
+        )
+        self.assertEqual(TaskId("recovery-worker"), clean_history.actor_task_id)
+        self.assertEqual(self._expected_abandonment_history(clean_value, prior_intent), decoded_clean)
+        self.assertEqual(clean_history.input_payload, msgspec.json.encode(decoded_clean, order="sorted"))
+
+    def test_abandonment_history_codec_rejects_malformed_constrained_or_unknown_input(self) -> None:
+        interrupted, capability, _, _ = self._interrupted_resource_state()
+        store, _ = self._store_with_state(interrupted)
+        value = self._abandonment_value(store, capability, AbandonmentForm.CLEAN_INTERRUPTION)
+        receipt = abandon_mutation_intent(store, value)
+        self.assertNotIsInstance(receipt, DecisionFailure)
+        payload = store.snapshot().history.receipts[-1].input_payload
+        decoded = msgspec.json.decode(payload, type=AbandonMutationIntentHistoryInput)
+        revision_zero = msgspec.structs.replace(decoded, start_instance_subject_revision=0)
+        revision_zero_payload = msgspec.json.encode(revision_zero, order="sorted")
+        decoded_revision_zero = msgspec.json.decode(
+            revision_zero_payload,
+            type=AbandonMutationIntentHistoryInput,
+        )
+        self.assertEqual(revision_zero, decoded_revision_zero)
+        self.assertEqual(revision_zero_payload, msgspec.json.encode(decoded_revision_zero, order="sorted"))
+
+        with self.assertRaises(msgspec.DecodeError):
+            msgspec.json.decode(b"{", type=AbandonMutationIntentHistoryInput)
+        invalid_payloads = (
+            msgspec.json.encode(msgspec.structs.replace(decoded, reason=""), order="sorted"),
+            payload[:-1] + b',"unknown":true}',
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload), self.assertRaises(msgspec.ValidationError):
+                msgspec.json.decode(payload, type=AbandonMutationIntentHistoryInput)
+
+    def test_abandonment_rejects_reuse_stale_authority_later_use_or_later_intent_without_commit(self) -> None:
+        interrupted_state, capability, prior_intent, prior_use = self._interrupted_resource_state()
+        clean_store, _ = self._store_with_state(interrupted_state)
+        clean_value = self._abandonment_value(clean_store, capability, AbandonmentForm.CLEAN_INTERRUPTION)
+        accepted = abandon_mutation_intent(clean_store, clean_value)
+        self.assertNotIsInstance(accepted, DecisionFailure)
+        committed = clean_store.snapshot()
+        replay = abandon_mutation_intent(clean_store, clean_value)
+        self.assertIsInstance(replay, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, replay.code)
+        self.assertEqual(committed, clean_store.snapshot())
+
+        later_use = replace(
+            prior_use,
+            task_id=TaskId("recovery-worker"),
+            attempt_lease_id=LeaseId("attempt-lease-recovery"),
+            attempt_lease_generation=prior_intent.attempt_lease_generation + 1,
+            lease_id=LeaseId("use-later"),
+            generation=prior_use.generation + 1,
+            generation_kind=UseLeaseGenerationKind.GRANT,
+            acquired_at=SQLITE_NOW + timedelta(seconds=2),
+            state=UseLeaseState.ACTIVE,
+        )
+        later_intent = replace(
+            prior_intent,
+            intent_id=MutationIntentId("intent-later"),
+            state=MutationIntentState.ABANDONED,
+            recorded_at=SQLITE_NOW + timedelta(seconds=3),
+            resolved_at=SQLITE_NOW + timedelta(seconds=3),
+            disposition_task_id=TaskId("recovery-worker"),
+            disposition_reason="A later operation already resolved.",
+        )
+        rejection_states = (
+            (
+                "stale-attempt",
+                interrupted_state,
+                replace(clean_value.attempt_authority, lease_id=LeaseId("stale")),
+                DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
+            ),
+            (
+                "later-use",
+                replace(
+                    interrupted_state,
+                    resources=replace(
+                        interrupted_state.resources,
+                        use_leases=(*interrupted_state.resources.use_leases, later_use),
+                    ),
+                ),
+                clean_value.attempt_authority,
+                DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
+            ),
+            (
+                "later-intent",
+                replace(
+                    interrupted_state,
+                    resources=replace(
+                        interrupted_state.resources,
+                        mutation_intents=(*interrupted_state.resources.mutation_intents, later_intent),
+                    ),
+                ),
+                clean_value.attempt_authority,
+                DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
+            ),
+        )
+        for name, state, authority, expected_code in rejection_states:
+            with self.subTest(name=name):
+                store, _ = self._store_with_state(state)
+                before = store.snapshot()
+                candidate = replace(
+                    self._abandonment_value(store, capability, AbandonmentForm.CLEAN_INTERRUPTION),
+                    attempt_authority=authority,
+                )
+                rejected = abandon_mutation_intent(store, candidate)
+                self.assertIsInstance(rejected, DecisionFailure)
+                self.assertEqual(expected_code, rejected.code)
+                self.assertEqual(before, store.snapshot())
 
 
 if __name__ == "__main__":

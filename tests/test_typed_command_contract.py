@@ -552,6 +552,8 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             ),
         )
         self.assertEqual(MutationIntentState.ABANDONED, abandoned.intent_change.after.state)
+        self.assertIsNone(abandoned.intent_change.after.result_observation_generation)
+        self.assertIsNone(abandoned.intent_change.after.result_observation_digest)
 
         interrupted_use = replace(
             self.snapshot.mutation_use_leases[-1],
@@ -574,6 +576,8 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             ),
         )
         self.assertEqual(MutationIntentState.ABANDONED, clean.intent_change.after.state)
+        self.assertIsNone(clean.intent_change.after.result_observation_generation)
+        self.assertIsNone(clean.intent_change.after.result_observation_digest)
 
         starting_observation = next(
             candidate
@@ -771,9 +775,31 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             ),
         )
         self.assertEqual(MutationIntentState.ABANDONED, resolved.intent_change.after.state)
+        self.assertIsNone(resolved.intent_change.after.result_observation_generation)
+        self.assertIsNone(resolved.intent_change.after.result_observation_digest)
         assert resolved.reservation_change is not None
         self.assertEqual("revoked", resolved.reservation_change.after.state.value)
         self.assertEqual((), resolved.use_lease_changes)
+
+        missing_reason = resolve_fenced_resource_intent_outcome(
+            fenced,
+            ResolveFencedIntentInput(
+                self.intent_capability,
+                coordination,
+                self.recovery_authority,
+                _observation(fenced),
+                2,
+                FencedIntentDisposition.UNCHANGED,
+                "",
+                None,
+                None,
+                None,
+                None,
+                SQLITE_NOW + timedelta(seconds=2),
+            ),
+        )
+        self.assertIsInstance(missing_reason, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, missing_reason.code)
 
     def test_changed_fenced_state_uses_only_supported_reconcile_or_human_preserve(self) -> None:
         fenced = self._fenced_snapshot()
