@@ -57,6 +57,9 @@ branch = true
 source = ["charlie_pinboard"]
 
 [tool.coverage.report]
+exclude_also = [
+    "case _ as unreachable:",
+]
 fail_under = 90
 show_missing = true
 
