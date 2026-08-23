@@ -5,21 +5,24 @@ import tempfile
 import unittest
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
+from typing import cast
 
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.database import initialize_database
+from charlie_pinboard.adapters.sqlite.database import StorageError, initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.domain.decisions import (
+    Action,
     ActionKind,
     ActorAuthority,
     AuthorizationKind,
+    Decision,
     Role,
+    TransitionCommand,
     available_actions,
     bind_transition,
     decide,
 )
-from charlie_pinboard.domain.errors import DecisionError
 from charlie_pinboard.domain.model import ReasonInput
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
@@ -32,13 +35,15 @@ def _commit_same_pause(
     store = SQLiteWorkStore(Path(database_path))
     snapshot = project_decision_snapshot(store.snapshot())
     actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
-    action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.PAUSE)
-    decision = decide(snapshot, bind_transition(action, ReasonInput("Concurrent pause.")), SQLITE_NOW)
+    actions = cast(tuple[Action, ...], available_actions(snapshot, actor))
+    action = next(value for value in actions if value.kind == ActionKind.PAUSE)
+    command = cast(TransitionCommand, bind_transition(action, ReasonInput("Concurrent pause.")))
+    decision = cast(Decision, decide(snapshot, command, SQLITE_NOW))
     barrier.wait()
     try:
         with store.write() as transaction:
             transaction.commit(decision)
-    except DecisionError as error:
+    except StorageError as error:
         results.put(error.code.value)
     else:
         results.put("committed")

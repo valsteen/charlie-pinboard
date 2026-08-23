@@ -561,8 +561,63 @@ class LedgerSnapshot:
     def items_by_id(self) -> dict[ItemId, WorkItem]:
         return {item.item: item for item in self.items}
 
+    def item(self, item_id: ItemId) -> WorkItem | None:
+        return next((item for item in self.items if item.item == item_id), None)
+
+    def item_for_attempt(self, attempt_id: AttemptId) -> WorkItem | None:
+        return next((item for item in self.items if item.attempt == attempt_id), None)
+
     def attempts_by_id(self) -> dict[AttemptId, AttemptRecord]:
         return {attempt.attempt: attempt for attempt in self.attempts}
+
+    def attempt(self, attempt_id: AttemptId) -> AttemptRecord | None:
+        return next((attempt for attempt in self.attempts if attempt.attempt == attempt_id), None)
+
+    def proposal(self, proposal_id: ProposalId) -> ProposalRecord | None:
+        return next((proposal for proposal in self.proposals if proposal.proposal == proposal_id), None)
+
+    def resource_definition(self, resource_id: ResourceId) -> ResourceDefinition | None:
+        return next(
+            (definition for definition in self.resource_definitions if definition.resource_id == resource_id), None
+        )
+
+    def resource_instance(self, instance_id: ResourceInstanceId) -> ResourceInstance | None:
+        return next((instance for instance in self.resource_instances if instance.instance_id == instance_id), None)
+
+    def resource_reservation(self, reservation_id: ReservationId) -> ResourceReservation | None:
+        return next(
+            (reservation for reservation in self.resource_reservations if reservation.reservation_id == reservation_id),
+            None,
+        )
+
+    def resource_reservation_counter(self, instance_id: ResourceInstanceId) -> ResourceReservationCounter | None:
+        matches = tuple(counter for counter in self.resource_reservation_counters if counter.instance_id == instance_id)
+        return matches[0] if len(matches) == 1 else None
+
+    def resource_observation(self, instance_id: ResourceInstanceId) -> ResourceObservation | None:
+        return next(
+            (observation for observation in self.resource_observations if observation.instance_id == instance_id),
+            None,
+        )
+
+    def mutation_reservation(self, reservation_id: ReservationId) -> MutationReservation | None:
+        return next(
+            (reservation for reservation in self.mutation_reservations if reservation.reservation_id == reservation_id),
+            None,
+        )
+
+    def mutation_use_lease(self, lease_id: LeaseId, generation: int) -> MutationUseLease | None:
+        return next(
+            (
+                use_lease
+                for use_lease in self.mutation_use_leases
+                if use_lease.lease_id == lease_id and use_lease.generation == generation
+            ),
+            None,
+        )
+
+    def mutation_intent(self, intent_id: MutationIntentId) -> MutationIntent | None:
+        return next((intent for intent in self.mutation_intents if intent.intent_id == intent_id), None)
 
     def proposal_revisions(self) -> dict[ProposalId, str]:
         return {proposal.proposal: proposal.revision for proposal in self.proposals}

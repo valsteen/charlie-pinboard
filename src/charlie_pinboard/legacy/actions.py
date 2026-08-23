@@ -10,7 +10,7 @@ from charlie_pinboard.domain.decisions import (
     Role,
     available_actions,
 )
-from charlie_pinboard.domain.errors import DecisionError
+from charlie_pinboard.domain.errors import DecisionFailure
 from charlie_pinboard.domain.identifiers import AttemptId, HostId, ItemId, LeaseId, ProposalId, ResourceId
 from charlie_pinboard.domain.model import (
     AttemptAuthority,
@@ -324,7 +324,9 @@ def actions_for(
             attempts,
             actor.revision_scoped,
         )
-    try:
-        return available_actions(_snapshot(work_root, root, queue.items, actor), actor)
-    except DecisionError as error:
-        raise ActionError(error.code.value, str(error).partition(": ")[2]) from error
+    result = available_actions(_snapshot(work_root, root, queue.items, actor), actor)
+    match result:
+        case DecisionFailure(code=code, message=message):
+            raise ActionError(code.value, message)
+        case actions:
+            return actions

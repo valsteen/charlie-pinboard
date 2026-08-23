@@ -2,8 +2,9 @@ import sqlite3
 import tempfile
 import unittest
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from charlie_pinboard.adapters.files.file_io import (
@@ -37,15 +38,23 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
 )
 from charlie_pinboard.domain.decisions import (
+    Action,
     ActionKind,
     ActorAuthority,
     AuthorizationKind,
+    Decision,
     Role,
-    available_actions,
-    bind_transition,
-    decide,
+    TransitionCommand,
 )
-from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
+from charlie_pinboard.domain.decisions import (
+    available_actions as available_actions_outcome,
+)
+from charlie_pinboard.domain.decisions import (
+    bind_transition as bind_transition_outcome,
+)
+from charlie_pinboard.domain.decisions import (
+    decide as decision_outcome,
+)
 from charlie_pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
@@ -58,17 +67,32 @@ from charlie_pinboard.domain.identifiers import (
 from charlie_pinboard.domain.model import (
     AttemptState,
     EvidenceInput,
+    LedgerSnapshot,
     PlanningDisposition,
     ReasonInput,
     SubmitReviewInput,
+    TransitionInput,
     UseLeaseState,
 )
 from charlie_pinboard.domain.resource_decisions import (
+    ResourceDecision,
     ResourceUseLeaseChange,
     reallocate_resource,
     revoke_resource,
 )
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
+
+
+def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
+    return cast(tuple[Action, ...], available_actions_outcome(snapshot, actor))
+
+
+def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand:
+    return cast(TransitionCommand, bind_transition_outcome(action, value))
+
+
+def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:
+    return cast(Decision, decision_outcome(snapshot, command, now))
 
 
 class SQLiteStoreTest(unittest.TestCase):
@@ -206,10 +230,10 @@ class SQLiteStoreTest(unittest.TestCase):
             self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, invariant_error.exception.code)
             self.assertEqual(0, connection.execute("SELECT revision FROM project_meta").fetchone()[0])
 
-            domain_error = DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "injected domain rejection")
-            with self.assertRaises(DecisionError) as preserved, write_transaction(connection):
-                raise domain_error
-            self.assertIs(domain_error, preserved.exception)
+            storage_error = StorageError(StorageErrorCode.STALE_WRITE, "injected stale write")
+            with self.assertRaises(StorageError) as preserved, write_transaction(connection):
+                raise storage_error
+            self.assertIs(storage_error, preserved.exception)
 
             with self.assertRaises(StorageError) as operation_error, write_transaction(connection):
                 connection.execute("UPDATE project_meta SET revision = 9")
@@ -996,18 +1020,18 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(TransitionHistoryActionKind.PAUSE, committed.history.receipts[-1].action_kind)
         self.assertEqual(initial.resources, committed.resources)
 
-        with self.assertRaises(DecisionError) as stale, store.write() as transaction:
+        with self.assertRaises(StorageError) as stale, store.write() as transaction:
             transaction.commit(decision)
-        self.assertEqual(DecisionErrorCode.ACTION_NOT_AVAILABLE, stale.exception.code)
+        self.assertEqual(StorageErrorCode.STALE_WRITE, stale.exception.code)
         self.assertEqual(committed, store.snapshot())
 
         stale_subject_decision = replace(
             decision,
             action=replace(decision.action, expected_revision="", subject_revision="stale-subject"),
         )
-        with self.assertRaises(DecisionError) as stale_subject, store.write() as transaction:
+        with self.assertRaises(StorageError) as stale_subject, store.write() as transaction:
             transaction.commit(stale_subject_decision)
-        self.assertEqual(DecisionErrorCode.ACTION_NOT_AVAILABLE, stale_subject.exception.code)
+        self.assertEqual(StorageErrorCode.STALE_WRITE, stale_subject.exception.code)
         self.assertEqual(committed, store.snapshot())
 
         failed_path, failed_store = self._store()
@@ -1182,7 +1206,10 @@ class SQLiteStoreTest(unittest.TestCase):
             bind_transition(action, ReasonInput("Persist the resource decision.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
-        revoked = revoke_resource(revocation_snapshot, ReservationId("reservation-a"), unresolved_intent=True)
+        revoked = cast(
+            ResourceDecision,
+            revoke_resource(revocation_snapshot, ReservationId("reservation-a"), unresolved_intent=True),
+        )
         active_use = revocation_snapshot.resource_use_leases[-1]
         revoke_decision = replace(
             base_decision,
@@ -1219,12 +1246,15 @@ class SQLiteStoreTest(unittest.TestCase):
             bind_transition(action, ReasonInput("Persist the resource reallocation.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
-        reallocated = reallocate_resource(
-            reallocation_snapshot,
-            ReservationId("reservation-a"),
-            replacement_id=ReservationId("reservation-b"),
-            instance_id=active_instances[0].instance_id,
-            generation=1,
+        reallocated = cast(
+            ResourceDecision,
+            reallocate_resource(
+                reallocation_snapshot,
+                ReservationId("reservation-a"),
+                replacement_id=ReservationId("reservation-b"),
+                instance_id=active_instances[0].instance_id,
+                generation=1,
+            ),
         )
         active_use = reallocation_snapshot.resource_use_leases[-1]
         reallocate_decision = replace(

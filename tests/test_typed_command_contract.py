@@ -1,7 +1,7 @@
 import unittest
 from dataclasses import replace
-from datetime import timedelta
-from typing import override
+from datetime import datetime, timedelta
+from typing import cast, override
 
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.domain.decisions import (
@@ -9,13 +9,23 @@ from charlie_pinboard.domain.decisions import (
     ActionKind,
     ActorAuthority,
     AuthorizationKind,
+    Decision,
     Role,
-    available_actions,
-    bind_transition,
-    decide,
-    rediscover_action,
+    TransitionCommand,
 )
-from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
+from charlie_pinboard.domain.decisions import (
+    available_actions as available_actions_outcome,
+)
+from charlie_pinboard.domain.decisions import (
+    bind_transition as bind_transition_outcome,
+)
+from charlie_pinboard.domain.decisions import (
+    decide as decision_outcome,
+)
+from charlie_pinboard.domain.decisions import (
+    rediscover_action as rediscover_action_outcome,
+)
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
@@ -37,6 +47,7 @@ from charlie_pinboard.domain.model import (
     ReservationState,
     ResourceIntentCapability,
     SubmitReviewInput,
+    TransitionInput,
     UseLeaseGenerationKind,
     UseLeaseState,
     WorkItem,
@@ -54,12 +65,24 @@ from charlie_pinboard.domain.resource_decisions import (
     ResolveFencedIntentInput,
     ResolverEvidenceDecision,
     ResourceIntentDecision,
-    abandon_mutation_intent,
-    advance_resource_observation,
-    preserve_resource_state,
-    reconcile_interrupted_observation,
-    register_mutation_intent,
-    resolve_fenced_resource_intent,
+)
+from charlie_pinboard.domain.resource_decisions import (
+    abandon_mutation_intent as abandon_mutation_intent_outcome,
+)
+from charlie_pinboard.domain.resource_decisions import (
+    advance_resource_observation as advance_resource_observation_outcome,
+)
+from charlie_pinboard.domain.resource_decisions import (
+    preserve_resource_state as preserve_resource_state_outcome,
+)
+from charlie_pinboard.domain.resource_decisions import (
+    reconcile_interrupted_observation as reconcile_interrupted_observation_outcome,
+)
+from charlie_pinboard.domain.resource_decisions import (
+    register_mutation_intent as register_mutation_intent_outcome,
+)
+from charlie_pinboard.domain.resource_decisions import (
+    resolve_fenced_resource_intent as resolve_fenced_resource_intent_outcome,
 )
 from charlie_pinboard.interfaces.transition_input import (
     encoded_legacy_transition_input_schema,
@@ -79,6 +102,50 @@ def _worker_actor() -> ActorAuthority:
         (AttemptId("work-a-1"),),
         False,
     )
+
+
+def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
+    return cast(tuple[Action, ...], available_actions_outcome(snapshot, actor))
+
+
+def bind_transition(action_value: Action, value: TransitionInput) -> TransitionCommand:
+    return cast(TransitionCommand, bind_transition_outcome(action_value, value))
+
+
+def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:
+    return cast(Decision, decision_outcome(snapshot, command, now))
+
+
+def rediscover_action(snapshot: LedgerSnapshot, actor: ActorAuthority, supplied: Action) -> Action:
+    return cast(Action, rediscover_action_outcome(snapshot, actor, supplied))
+
+
+def register_mutation_intent(snapshot: LedgerSnapshot, value: RegisterMutationIntentInput) -> ResourceIntentDecision:
+    return cast(ResourceIntentDecision, register_mutation_intent_outcome(snapshot, value))
+
+
+def advance_resource_observation(
+    snapshot: LedgerSnapshot, value: AdvanceResourceObservationInput
+) -> ResourceIntentDecision:
+    return cast(ResourceIntentDecision, advance_resource_observation_outcome(snapshot, value))
+
+
+def abandon_mutation_intent(snapshot: LedgerSnapshot, value: AbandonMutationIntentInput) -> ResourceIntentDecision:
+    return cast(ResourceIntentDecision, abandon_mutation_intent_outcome(snapshot, value))
+
+
+def reconcile_interrupted_observation(
+    snapshot: LedgerSnapshot, value: ReconcileInterruptedObservationInput
+) -> ResourceIntentDecision:
+    return cast(ResourceIntentDecision, reconcile_interrupted_observation_outcome(snapshot, value))
+
+
+def preserve_resource_state(snapshot: LedgerSnapshot, value: PreserveResourceStateInput) -> ResourceIntentDecision:
+    return cast(ResourceIntentDecision, preserve_resource_state_outcome(snapshot, value))
+
+
+def resolve_fenced_resource_intent(snapshot: LedgerSnapshot, value: ResolveFencedIntentInput) -> ResourceIntentDecision:
+    return cast(ResourceIntentDecision, resolve_fenced_resource_intent_outcome(snapshot, value))
 
 
 def _stored_action(snapshot: LedgerSnapshot) -> Action:
@@ -111,9 +178,9 @@ class TypedTransitionContractTest(unittest.TestCase):
         snapshot = project_decision_snapshot(state)
         submit = _stored_action(snapshot)
 
-        with self.assertRaises(DecisionError) as missing:
-            bind_transition(submit, EmptyInput())
-        self.assertEqual(DecisionErrorCode.TRANSITION_INPUT_INVALID, missing.exception.code)
+        rejected = bind_transition_outcome(submit, EmptyInput())
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
         candidate = CandidateId("candidate-that-is-not-a-subject-revision")
         parsed = parse_transition_input("submit-review", b'{"candidate":"candidate-that-is-not-a-subject-revision"}')
@@ -135,18 +202,20 @@ class TypedTransitionContractTest(unittest.TestCase):
             ),
         )
         activation = action(ActionKind.ACTIVATE, "ready-item")
-        with self.assertRaises(DecisionError) as mismatched:
-            bind_transition(activation, EmptyInput())
-        self.assertEqual(DecisionErrorCode.TRANSITION_INPUT_INVALID, mismatched.exception.code)
+        rejected = bind_transition_outcome(activation, EmptyInput())
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
         variants = (
             ActivateInput(AttemptId("ready-item-1"), "branch", "base", "task", ArtifactRefId(99)),
             ActivateInput(AttemptId("ready-item-1"), "branch", "base", "task", ArtifactRefId(2)),
         )
         for value in variants:
-            with self.subTest(value=value), self.assertRaises(DecisionError) as rejected:
-                decide(snapshot, bind_transition(activation, value), SQLITE_NOW)
-            self.assertEqual(DecisionErrorCode.TRANSITION_INPUT_INVALID, rejected.exception.code)
+            with self.subTest(value=value):
+                command = bind_transition(activation, value)
+                rejected = decision_outcome(snapshot, command, SQLITE_NOW)
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
         accepted = decide(
             snapshot,
@@ -228,9 +297,10 @@ class ExactMutationAuthorityTest(unittest.TestCase):
             ),
         )
         for supplied in substitutions:
-            with self.subTest(supplied=supplied), self.assertRaises(DecisionError) as stale:
-                rediscover_action(snapshot, _worker_actor(), supplied)
-            self.assertEqual(DecisionErrorCode.ACTION_NOT_AVAILABLE, stale.exception.code)
+            with self.subTest(supplied=supplied):
+                rejected = rediscover_action_outcome(snapshot, _worker_actor(), supplied)
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(DecisionFailureCode.ACTION_NOT_AVAILABLE, rejected.code)
 
         advanced_state = replace(
             state,
@@ -304,22 +374,22 @@ class ResourceIntentDecisionTest(unittest.TestCase):
     def test_register_and_advance_require_exact_live_authority_and_evidence(self) -> None:
         self.assertIsNone(self.registration.intent_change.before)
         self.assertEqual(MutationIntentState.PLANNED, self.intent.state)
-        with self.assertRaises(DecisionError) as stale:
-            register_mutation_intent(
-                self.snapshot,
-                RegisterMutationIntentInput(
-                    replace(
-                        self.capability,
-                        locator_observation_generation=self.capability.locator_observation_generation + 1,
-                    ),
-                    MutationIntentId("intent-stale"),
-                    "mutation-policy/v1",
-                    CanonicalJson(b"{}"),
-                    "policy-digest",
-                    SQLITE_NOW,
+        rejected = register_mutation_intent_outcome(
+            self.snapshot,
+            RegisterMutationIntentInput(
+                replace(
+                    self.capability,
+                    locator_observation_generation=self.capability.locator_observation_generation + 1,
                 ),
-            )
-        self.assertEqual(DecisionErrorCode.RESOURCE_USE_LEASE_STALE, stale.exception.code)
+                MutationIntentId("intent-stale"),
+                "mutation-policy/v1",
+                CanonicalJson(b"{}"),
+                "policy-digest",
+                SQLITE_NOW,
+            ),
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, rejected.code)
 
         advanced = advance_resource_observation(
             self.with_intent,
@@ -360,8 +430,8 @@ class ResourceIntentDecisionTest(unittest.TestCase):
         )
         registration_snapshots = (self.snapshot, self.with_intent)
         expected_registration_codes = (
-            DecisionErrorCode.TRANSITION_INPUT_INVALID,
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
         )
         for candidate_snapshot, candidate_input, expected_code in zip(
             registration_snapshots,
@@ -369,9 +439,10 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             expected_registration_codes,
             strict=True,
         ):
-            with self.subTest(candidate_input=candidate_input), self.assertRaises(DecisionError) as rejected:
-                register_mutation_intent(candidate_snapshot, candidate_input)
-            self.assertEqual(expected_code, rejected.exception.code)
+            with self.subTest(candidate_input=candidate_input):
+                rejected = register_mutation_intent_outcome(candidate_snapshot, candidate_input)
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(expected_code, rejected.code)
 
         advance_values = (
             replace(
@@ -430,8 +501,11 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             ),
         )
         for candidate in advance_values:
-            with self.subTest(candidate=candidate), self.assertRaises(DecisionError):
-                advance_resource_observation(self.with_intent, candidate)
+            with self.subTest(candidate=candidate):
+                self.assertIsInstance(
+                    advance_resource_observation_outcome(self.with_intent, candidate),
+                    DecisionFailure,
+                )
 
         stale_state_variants = (
             replace(self.snapshot, mutation_use_leases=()),
@@ -449,17 +523,20 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             replace(self.snapshot, host_epoch=self.snapshot.host_epoch + 1),
         )
         for candidate_snapshot in stale_state_variants:
-            with self.subTest(candidate_snapshot=candidate_snapshot), self.assertRaises(DecisionError):
-                register_mutation_intent(
-                    candidate_snapshot,
-                    RegisterMutationIntentInput(
-                        self.capability,
-                        MutationIntentId("intent-stale-boundary"),
-                        "mutation-policy/v1",
-                        CanonicalJson(b"{}"),
-                        "policy-digest",
-                        SQLITE_NOW,
+            with self.subTest(candidate_snapshot=candidate_snapshot):
+                self.assertIsInstance(
+                    register_mutation_intent_outcome(
+                        candidate_snapshot,
+                        RegisterMutationIntentInput(
+                            self.capability,
+                            MutationIntentId("intent-stale-boundary"),
+                            "mutation-policy/v1",
+                            CanonicalJson(b"{}"),
+                            "policy-digest",
+                            SQLITE_NOW,
+                        ),
                     ),
+                    DecisionFailure,
                 )
 
     def test_abandonment_and_interruption_reconciliation_are_policy_neutral(self) -> None:
@@ -519,7 +596,7 @@ class ResourceIntentDecisionTest(unittest.TestCase):
                     ),
                 ),
                 "drifted-start",
-                DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+                DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             ),
             (
                 "reservation-revoked-pending-recovery",
@@ -533,15 +610,12 @@ class ResourceIntentDecisionTest(unittest.TestCase):
                     ),
                 ),
                 SQLITE_DIGEST,
-                DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+                DecisionFailureCode.RESOURCE_RESERVATION_STALE,
             ),
         )
         for name, candidate_snapshot, current_digest, expected_code in recovery_variants:
-            with (
-                self.subTest(name=name, operation="clean-abandon"),
-                self.assertRaises(DecisionError) as rejected,
-            ):
-                abandon_mutation_intent(
+            with self.subTest(name=name, operation="clean-abandon"):
+                rejected = abandon_mutation_intent_outcome(
                     candidate_snapshot,
                     AbandonMutationIntentInput(
                         self.intent_capability,
@@ -552,12 +626,10 @@ class ResourceIntentDecisionTest(unittest.TestCase):
                         SQLITE_NOW + timedelta(seconds=2),
                     ),
                 )
-            self.assertEqual(expected_code, rejected.exception.code)
-            with (
-                self.subTest(name=name, operation="reconcile"),
-                self.assertRaises(DecisionError) as rejected,
-            ):
-                reconcile_interrupted_observation(
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(expected_code, rejected.code)
+            with self.subTest(name=name, operation="reconcile"):
+                rejected = reconcile_interrupted_observation_outcome(
                     candidate_snapshot,
                     ReconcileInterruptedObservationInput(
                         self.intent_capability,
@@ -570,23 +642,24 @@ class ResourceIntentDecisionTest(unittest.TestCase):
                         SQLITE_NOW + timedelta(seconds=2),
                     ),
                 )
-            self.assertEqual(expected_code, rejected.exception.code)
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(expected_code, rejected.code)
 
-        with self.assertRaises(DecisionError) as unsupported:
-            reconcile_interrupted_observation(
-                interrupted,
-                ReconcileInterruptedObservationInput(
-                    self.intent_capability,
-                    self.recovery_authority,
-                    _observation(interrupted, digest="interrupted-output"),
-                    "change-evidence/v1",
-                    CanonicalJson(b"{}"),
-                    "evidence-digest",
-                    ResolverEvidenceDecision.POST_INTERRUPTION_PROOF_UNSUPPORTED,
-                    SQLITE_NOW + timedelta(seconds=2),
-                ),
-            )
-        self.assertEqual(DecisionErrorCode.RESOURCE_USE_LEASE_STALE, unsupported.exception.code)
+        rejected = reconcile_interrupted_observation_outcome(
+            interrupted,
+            ReconcileInterruptedObservationInput(
+                self.intent_capability,
+                self.recovery_authority,
+                _observation(interrupted, digest="interrupted-output"),
+                "change-evidence/v1",
+                CanonicalJson(b"{}"),
+                "evidence-digest",
+                ResolverEvidenceDecision.POST_INTERRUPTION_PROOF_UNSUPPORTED,
+                SQLITE_NOW + timedelta(seconds=2),
+            ),
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, rejected.code)
 
         reconciled = reconcile_interrupted_observation(
             interrupted,
@@ -635,23 +708,23 @@ class ResourceIntentDecisionTest(unittest.TestCase):
                 ),
             ),
         )
-        with self.assertRaises(DecisionError) as rejected_quarantine:
-            preserve_resource_state(
-                quarantined,
-                PreserveResourceStateInput(
-                    self.intent_capability,
-                    coordination,
-                    self.recovery_authority,
-                    _observation(quarantined, digest="human-kept-output"),
-                    LeaseId("use-fence-quarantined"),
-                    "Keep the inspected changes.",
-                    None,
-                    None,
-                    None,
-                    SQLITE_NOW + timedelta(seconds=2),
-                ),
-            )
-        self.assertEqual(DecisionErrorCode.RESOURCE_RESERVATION_STALE, rejected_quarantine.exception.code)
+        rejected = preserve_resource_state_outcome(
+            quarantined,
+            PreserveResourceStateInput(
+                self.intent_capability,
+                coordination,
+                self.recovery_authority,
+                _observation(quarantined, digest="human-kept-output"),
+                LeaseId("use-fence-quarantined"),
+                "Keep the inspected changes.",
+                None,
+                None,
+                None,
+                SQLITE_NOW + timedelta(seconds=2),
+            ),
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.RESOURCE_RESERVATION_STALE, rejected.code)
 
         for use_state in (UseLeaseState.EXPIRED, UseLeaseState.RELEASED):
             interrupted_use = replace(self.snapshot.mutation_use_leases[-1], state=use_state)
@@ -714,8 +787,8 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             *,
             reason: str = "Preserve the inspected output.",
             evidence: bool = True,
-        ) -> ResourceIntentDecision:
-            return resolve_fenced_resource_intent(
+        ) -> ResourceIntentDecision | DecisionFailure:
+            return resolve_fenced_resource_intent_outcome(
                 fenced,
                 ResolveFencedIntentInput(
                     self.intent_capability,
@@ -733,8 +806,14 @@ class ResourceIntentDecisionTest(unittest.TestCase):
                 ),
             )
 
-        reconciled = resolve(FencedIntentDisposition.RECONCILE, ResolverEvidenceDecision.ACCEPTED)
-        preserved = resolve(FencedIntentDisposition.HUMAN_PRESERVE, None, evidence=False)
+        reconciled = cast(
+            ResourceIntentDecision,
+            resolve(FencedIntentDisposition.RECONCILE, ResolverEvidenceDecision.ACCEPTED),
+        )
+        preserved = cast(
+            ResourceIntentDecision,
+            resolve(FencedIntentDisposition.HUMAN_PRESERVE, None, evidence=False),
+        )
         self.assertEqual(MutationIntentState.RECONCILED, reconciled.intent_change.after.state)
         self.assertEqual(MutationIntentState.HUMAN_PRESERVED, preserved.intent_change.after.state)
         self.assertEqual((), reconciled.use_lease_changes)
@@ -747,11 +826,14 @@ class ResourceIntentDecisionTest(unittest.TestCase):
             (FencedIntentDisposition.UNCHANGED, None, False, "reason"),
         )
         for disposition, resolver_decision, evidence, reason in invalid:
-            with self.subTest(disposition=disposition), self.assertRaises(DecisionError):
-                resolve(disposition, resolver_decision, evidence=evidence, reason=reason)
+            with self.subTest(disposition=disposition):
+                self.assertIsInstance(
+                    resolve(disposition, resolver_decision, evidence=evidence, reason=reason),
+                    DecisionFailure,
+                )
 
-        with self.assertRaises(DecisionError):
-            preserve_resource_state(
+        self.assertIsInstance(
+            preserve_resource_state_outcome(
                 replace(fenced, coordination_authority=coordination),
                 PreserveResourceStateInput(
                     self.intent_capability,
@@ -765,7 +847,9 @@ class ResourceIntentDecisionTest(unittest.TestCase):
                     None,
                     SQLITE_NOW + timedelta(seconds=2),
                 ),
-            )
+            ),
+            DecisionFailure,
+        )
 
 
 if __name__ == "__main__":

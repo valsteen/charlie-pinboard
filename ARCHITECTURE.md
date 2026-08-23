@@ -18,7 +18,7 @@ interfaces ────────> application ────────> domai
      └────────────> legacy ─────────────────┘
 ```
 
-`domain` imports only the Python standard library. `application` depends on domain values and decisions, not on concrete storage. Adapters may satisfy application needs and translate environment facts, while interfaces compose those pieces and turn command-line or JSON values into typed values.
+`domain` imports the Python standard library plus `msgspec` for exact declared canonical records. `application` depends on domain values and decisions, not on concrete storage. Adapters may satisfy application needs and translate environment facts, while interfaces compose those pieces and turn command-line or JSON values into typed values.
 
 The downward call from `interfaces` to `legacy` is the one deliberate transitional path. The CLI still invokes the Markdown authority, filesystem locks, and custom file transaction machinery. External transition input is decoded by an interface-owned decoder injected into that legacy transaction, so the legacy package does not import the interface package and domain signatures never receive JSON representations.
 
@@ -36,6 +36,8 @@ Only identity and composition entry files sit at the package root.
 
 `domain` contains immutable values and pure decisions. It has no dependency on application, adapters, interfaces, filesystems, SQL, Markdown, CLI parsing, or legacy owners.
 
+Expected lifecycle, planning, resource, and history rejection over constructed domain models is part of each operation's return type. Operations return their accepted value or `DecisionFailure`; validators without an accepted value return `DecisionFailure | None`. `LedgerSnapshot` owns storage-independent read-only lookup and reports absence as `None`, leaving each decision operation to produce the failure that is meaningful for that call. Serialized history payloads decode directly into exact frozen `msgspec` records; field constraints, unknown-member rejection, and record post-init invariants run during that instantiation, while canonical sorted-byte comparison remains a codec check. Decode failures raise `HistoryOutcomeError`; only operations over constructed domain models use returned failures. Interfaces and transitional legacy owners may translate returned failures or boundary exceptions into their existing presentation or transaction error contract.
+
 | Module | Current ownership |
 | --- | --- |
 | `identifiers.py` | Distinct opaque identifier types |
@@ -44,7 +46,7 @@ Only identity and composition entry files sit at the package root.
 | `decisions.py` | Lifecycle and action-legality decisions |
 | `planning_decisions.py` | Pure planning-impact checks for item and attempt changes |
 | `resource_decisions.py` | Pure resource reservation and use-lease decisions |
-| `history.py` | Canonical history projections, digests, and receipt relationships |
+| `history.py` | Declared canonical scope and history records, direct typed codecs, digests, and receipt relationships |
 
 ### Application
 

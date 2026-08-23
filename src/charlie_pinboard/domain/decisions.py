@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import assert_never
 
-from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.history import item_scope_digest
 from charlie_pinboard.domain.identifiers import (
     ActionId,
@@ -35,7 +35,6 @@ from charlie_pinboard.domain.model import (
     LedgerSnapshot,
     LegacyActivateInput,
     MergeProposalInput,
-    ProposalRecord,
     ReasonInput,
     ReservationState,
     ResourceAuthority,
@@ -364,14 +363,10 @@ def command_action(command: TransitionCommand | LegacyTransitionCommand) -> Acti
     )
 
 
-def _invalid_transition_input(action: Action) -> DecisionError:
-    return DecisionError(
-        DecisionErrorCode.TRANSITION_INPUT_INVALID,
-        f"Input for '{action.kind.value}' does not match its canonical command variant.",
-    )
-
-
-def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand:  # noqa: C901, PLR0912
+def bind_transition(  # noqa: C901, PLR0912
+    action: Action,
+    value: TransitionInput,
+) -> TransitionCommand | DecisionFailure:
     """Bind an external action discriminator and decoded payload into one closed command variant."""
 
     capability = _action_capability(action)
@@ -415,8 +410,8 @@ def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand
 
     match action.kind:
         case ActionKind.CONTINUE | ActionKind.DISPATCH | ActionKind.INSPECT | ActionKind.REPORT_BLOCKER:
-            raise DecisionError(
-                DecisionErrorCode.ACTION_NOT_MUTATING,
+            return DecisionFailure(
+                DecisionFailureCode.ACTION_NOT_MUTATING,
                 f"Action '{action.kind.value}' is not a canonical transition.",
             )
         case (
@@ -439,12 +434,15 @@ def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand
             | ActionKind.SUBMIT_REVIEW
             | ActionKind.TRANSFER_COORDINATOR
         ):
-            raise _invalid_transition_input(action)
+            return DecisionFailure(
+                DecisionFailureCode.TRANSITION_INPUT_INVALID,
+                f"Input for '{action.kind.value}' does not match its canonical command variant.",
+            )
         case _ as unreachable:
             assert_never(unreachable)
 
 
-def bind_legacy_transition(action: Action, value: TransitionInput) -> LegacyTransitionCommand:
+def bind_legacy_transition(action: Action, value: TransitionInput) -> LegacyTransitionCommand | DecisionFailure:
     """Bind the two temporary Markdown payload differences before canonical decision-making."""
 
     capability = _action_capability(action)
@@ -454,10 +452,15 @@ def bind_legacy_transition(action: Action, value: TransitionInput) -> LegacyTran
         case ActionKind.SUBMIT_REVIEW, EmptyInput():
             return LegacySubmitReviewCommand(capability, value)
         case _:
-            command = bind_transition(action, value)
-            match command:
+            result = bind_transition(action, value)
+            match result:
+                case DecisionFailure():
+                    return result
                 case ActivateCommand() | SubmitReviewCommand():
-                    raise _invalid_transition_input(action)
+                    return DecisionFailure(
+                        DecisionFailureCode.TRANSITION_INPUT_INVALID,
+                        f"Input for '{action.kind.value}' does not match its canonical command variant.",
+                    )
                 case (
                     AcceptCheckpointCommand()
                     | AcceptProposalCommand()
@@ -475,7 +478,7 @@ def bind_legacy_transition(action: Action, value: TransitionInput) -> LegacyTran
                     | ReturnForCorrectionCommand()
                     | ReturnProposalCommand()
                     | TransferCoordinatorCommand()
-                ):
+                ) as command:
                     return command
                 case _ as unreachable:
                     assert_never(unreachable)
@@ -695,14 +698,10 @@ def _scope_stale(snapshot: LedgerSnapshot, item: WorkItem) -> bool:
     return (attempt.accepted_scope_revision, attempt.accepted_scope_digest) != (scope.revision, scope.digest)
 
 
-def _item_for_attempt(snapshot: LedgerSnapshot, attempt: AttemptId) -> WorkItem | None:
-    return next((item for item in snapshot.items if item.attempt == attempt), None)
-
-
 def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[Action, ...]:
     result: list[Action] = []
     for attempt in factory.actor.attempts:
-        item = _item_for_attempt(snapshot, attempt)
+        item = snapshot.item_for_attempt(attempt)
         authority = _authority(snapshot, factory.actor, attempt)
         if item is None or authority is None or item.state != WorkState.ACTIVE:
             continue
@@ -819,7 +818,7 @@ def _item_actions(snapshot: LedgerSnapshot, item: WorkItem, factory: ActionFacto
     return []
 
 
-def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
+def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...] | DecisionFailure:
     revision = snapshot.revision if actor.revision_scoped else ""
     factory = ActionFactory(revision, actor)
     match actor.role:
@@ -828,8 +827,8 @@ def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[
         case Role.WORKER:
             result = _worker_actions(snapshot, factory)
             if not result:
-                raise DecisionError(
-                    DecisionErrorCode.ATTEMPT_LEASE_REQUIRED,
+                return DecisionFailure(
+                    DecisionFailureCode.ATTEMPT_LEASE_REQUIRED,
                     "The supplied attempt lease is not current for an active item.",
                 )
             return result
@@ -856,40 +855,31 @@ def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[
             assert_never(unreachable)
 
 
-def rediscover_action(snapshot: LedgerSnapshot, actor: ActorAuthority, supplied: Action) -> Action:
+def rediscover_action(snapshot: LedgerSnapshot, actor: ActorAuthority, supplied: Action) -> Action | DecisionFailure:
     """Reselect one action and compare its complete subject-scoped mutation authority."""
 
-    current = next(
-        (candidate for candidate in available_actions(snapshot, actor) if candidate.action_id == supplied.action_id),
-        None,
-    )
+    result = available_actions(snapshot, actor)
+    match result:
+        case DecisionFailure():
+            return result
+        case available:
+            current = next(
+                (candidate for candidate in available if candidate.action_id == supplied.action_id),
+                None,
+            )
     if current is None:
-        raise DecisionError(
-            DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Action '{supplied.action_id}' is no longer legal."
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Action '{supplied.action_id}' is no longer legal."
         )
     comparable = supplied
     if supplied.authorization == AuthorizationKind.ATTEMPT:
         comparable = replace(supplied, expected_revision=current.expected_revision)
     if comparable != current:
-        raise DecisionError(
-            DecisionErrorCode.ACTION_NOT_AVAILABLE,
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
             f"Action '{supplied.action_id}' no longer carries the exact current authority.",
         )
     return current
-
-
-def _item(snapshot: LedgerSnapshot, item_id: ItemId) -> WorkItem:
-    item = snapshot.items_by_id().get(item_id)
-    if item is None:
-        raise DecisionError(DecisionErrorCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
-    return item
-
-
-def _attempt_item(snapshot: LedgerSnapshot, attempt: AttemptId) -> WorkItem:
-    item = _item_for_attempt(snapshot, attempt)
-    if item is None:
-        raise DecisionError(DecisionErrorCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt}' does not exist.")
-    return item
 
 
 def _receipt(
@@ -932,19 +922,24 @@ def _result(
     )
 
 
-def _activate(snapshot: LedgerSnapshot, command: ActivateCommand, now: datetime) -> Decision:
+def _activate(snapshot: LedgerSnapshot, command: ActivateCommand, now: datetime) -> Decision | DecisionFailure:
     action = command_action(command)
     value = command.value
-    item = _item(snapshot, ItemId(action.subject))
+    item_id = ItemId(action.subject)
+    item = snapshot.item(item_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
     if item.state != WorkState.READY or _unresolved_target(snapshot, item.item):
-        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not ready for activation.")
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not ready for activation."
+        )
     artifact = next(
         (candidate for candidate in snapshot.artifacts if candidate.artifact_ref_id == value.brief_artifact_ref_id),
         None,
     )
     if artifact is None or artifact.kind != "brief":
-        raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID,
+        return DecisionFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
             "Activation requires one existing brief artifact reference.",
         )
     return _result(
@@ -964,7 +959,11 @@ def _activate(snapshot: LedgerSnapshot, command: ActivateCommand, now: datetime)
     )
 
 
-def _pause_or_block(snapshot: LedgerSnapshot, command: PauseCommand | BlockCommand, now: datetime) -> Decision:
+def _pause_or_block(
+    snapshot: LedgerSnapshot,
+    command: PauseCommand | BlockCommand,
+    now: datetime,
+) -> Decision | DecisionFailure:
     action = command_action(command)
     match command:
         case PauseCommand():
@@ -974,9 +973,11 @@ def _pause_or_block(snapshot: LedgerSnapshot, command: PauseCommand | BlockComma
         case _ as unreachable:
             assert_never(unreachable)
     attempt_id = AttemptId(action.subject)
-    item = _attempt_item(snapshot, attempt_id)
+    item = snapshot.item_for_attempt(attempt_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
     if item.state != WorkState.ACTIVE:
-        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "The named attempt is not active.")
+        return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "The named attempt is not active.")
     return _result(
         action,
         now,
@@ -1008,21 +1009,27 @@ def _release_attempt_resources(
     return reservation_changes, use_lease_changes
 
 
-def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime) -> Decision:
+def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime) -> Decision | DecisionFailure:
     action = command_action(command)
     value = command.value
     attempt_id = AttemptId(action.subject)
-    item = _attempt_item(snapshot, attempt_id)
+    item = snapshot.item_for_attempt(attempt_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
     if item.state not in {WorkState.ACTIVE, WorkState.REVIEW}:
-        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, "The named attempt is not active or in review.")
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE, "The named attempt is not active or in review."
+        )
     if _unresolved_target(snapshot, item.item) or _unresolved_source(snapshot, item.item):
-        raise DecisionError(DecisionErrorCode.PLANNING_IMPACT_UNRESOLVED, "Resolve planning impacts before completion.")
+        return DecisionFailure(
+            DecisionFailureCode.PLANNING_IMPACT_UNRESOLVED, "Resolve planning impacts before completion."
+        )
     if _scope_stale(snapshot, item):
-        raise DecisionError(
-            DecisionErrorCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
         )
     if item.item in snapshot.history_items:
-        raise DecisionError(DecisionErrorCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
+        return DecisionFailure(DecisionFailureCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     before = AttemptState.REVIEW if item.state == WorkState.REVIEW else AttemptState.ACTIVE
     reservation_changes, use_lease_changes = _release_attempt_resources(snapshot, attempt_id)
     return _result(
@@ -1037,18 +1044,21 @@ def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime)
     )
 
 
-def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> Decision:
+def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> Decision | DecisionFailure:
     action = command_action(command)
     value = command.value
-    item = _item(snapshot, ItemId(action.subject))
+    item_id = ItemId(action.subject)
+    item = snapshot.item(item_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
     if item.state in {WorkState.ACTIVE, WorkState.REVIEW}:
-        raise DecisionError(
-            DecisionErrorCode.ACTION_NOT_AVAILABLE, "Active or review work requires the acceptance path."
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE, "Active or review work requires the acceptance path."
         )
     if value.outcome == CloseOutcome.DROPPED and any(item.item in candidate.depends_on for candidate in snapshot.items):
-        raise DecisionError(DecisionErrorCode.LIVE_DEPENDENTS, f"Item '{item.item}' still has live dependents.")
+        return DecisionFailure(DecisionFailureCode.LIVE_DEPENDENTS, f"Item '{item.item}' still has live dependents.")
     if item.item in snapshot.history_items:
-        raise DecisionError(DecisionErrorCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
+        return DecisionFailure(DecisionFailureCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     attempt_change = None
     reservation_changes: tuple[ReservationChange, ...] = ()
     use_lease_changes: tuple[ResourceUseLeaseChange, ...] = ()
@@ -1069,14 +1079,19 @@ def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> De
     )
 
 
-def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> Decision:
+def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> Decision | DecisionFailure:
     action = command_action(command)
-    item = _item(snapshot, ItemId(action.subject))
+    item_id = ItemId(action.subject)
+    item = snapshot.item(item_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
     if item.state not in {WorkState.PAUSED, WorkState.BLOCKED}:
-        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not paused or blocked.")
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not paused or blocked."
+        )
     if any(dependency in snapshot.items_by_id() for dependency in item.depends_on):
-        raise DecisionError(
-            DecisionErrorCode.DEPENDENCY_NOT_SATISFIED, f"Item '{item.item}' still has a live dependency."
+        return DecisionFailure(
+            DecisionFailureCode.DEPENDENCY_NOT_SATISFIED, f"Item '{item.item}' still has a live dependency."
         )
     target = WorkState.ACTIVE if item.attempt is not None else WorkState.READY
     attempt_change = None
@@ -1092,26 +1107,28 @@ def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> 
     )
 
 
-def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: datetime) -> Decision:
+def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: datetime) -> Decision | DecisionFailure:
     action = command_action(command)
     value = command.value
     attempt_id = AttemptId(action.subject)
-    item = _attempt_item(snapshot, attempt_id)
+    item = snapshot.item_for_attempt(attempt_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
     if item.state != WorkState.ACTIVE:
-        raise DecisionError(
-            DecisionErrorCode.ACTION_NOT_AVAILABLE, "Only an active attempt can be submitted for review."
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE, "Only an active attempt can be submitted for review."
         )
     if _unresolved_target(snapshot, item.item):
-        raise DecisionError(
-            DecisionErrorCode.PLANNING_IMPACT_UNRESOLVED, "Resolve target planning impacts before review."
+        return DecisionFailure(
+            DecisionFailureCode.PLANNING_IMPACT_UNRESOLVED, "Resolve target planning impacts before review."
         )
     if _scope_stale(snapshot, item):
-        raise DecisionError(
-            DecisionErrorCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
         )
-    attempt = snapshot.attempts_by_id().get(attempt_id)
+    attempt = snapshot.attempt(attempt_id)
     if attempt is None:
-        raise DecisionError(DecisionErrorCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
     return _result(
         action,
         now,
@@ -1132,19 +1149,21 @@ def _return_for_correction(
     snapshot: LedgerSnapshot,
     command: ReturnForCorrectionCommand,
     now: datetime,
-) -> Decision:
+) -> Decision | DecisionFailure:
     action = command_action(command)
     value = command.value
     attempt_id = AttemptId(action.subject)
-    item = _attempt_item(snapshot, attempt_id)
+    item = snapshot.item_for_attempt(attempt_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
     if item.state != WorkState.REVIEW:
-        raise DecisionError(
-            DecisionErrorCode.ACTION_NOT_AVAILABLE, "Only an attempt in review can be returned for correction."
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE, "Only an attempt in review can be returned for correction."
         )
     authorities = tuple(candidate for candidate in snapshot.attempt_authorities if candidate.attempt == attempt_id)
     if len(authorities) != 1:
-        raise DecisionError(
-            DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED,
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
             "Returning a review requires exactly one current attempt-authority record to fence.",
         )
     authority = authorities[0]
@@ -1186,20 +1205,22 @@ def _accept_checkpoint(
     snapshot: LedgerSnapshot,
     command: AcceptCheckpointCommand,
     now: datetime,
-) -> Decision:
+) -> Decision | DecisionFailure:
     action = command_action(command)
     value = command.value
     attempt_id = AttemptId(action.subject)
-    item = _attempt_item(snapshot, attempt_id)
+    item = snapshot.item_for_attempt(attempt_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
     if item.state != WorkState.REVIEW:
-        raise DecisionError(
-            DecisionErrorCode.ACTION_NOT_AVAILABLE,
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
             "Only an attempt in review can have a checkpoint accepted.",
         )
     authorities = tuple(candidate for candidate in snapshot.attempt_authorities if candidate.attempt == attempt_id)
     if len(authorities) != 1:
-        raise DecisionError(
-            DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED,
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
             "Checkpoint acceptance requires exactly one current attempt-authority record to fence.",
         )
     authority = authorities[0]
@@ -1243,7 +1264,7 @@ def _simple_item_transition(
     snapshot: LedgerSnapshot,
     command: ReopenCommand | MarkReadyCommand | BlockItemCommand,
     now: datetime,
-) -> Decision:
+) -> Decision | DecisionFailure:
     action = command_action(command)
     match command:
         case ReopenCommand():
@@ -1257,28 +1278,41 @@ def _simple_item_transition(
             target = WorkState.BLOCKED
         case _ as unreachable:
             assert_never(unreachable)
-    item = _item(snapshot, ItemId(action.subject))
+    item_id = ItemId(action.subject)
+    item = snapshot.item(item_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
     if item.state not in expected:
-        raise DecisionError(
-            DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot perform '{action.kind.value}' now."
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot perform '{action.kind.value}' now."
         )
     return _result(action, now, item=item.item, item_change=ItemChange(item.item, item.state, target))
 
 
-def _defer(snapshot: LedgerSnapshot, command: DeferCommand, now: datetime) -> Decision:
+def _defer(snapshot: LedgerSnapshot, command: DeferCommand, now: datetime) -> Decision | DecisionFailure:
     action = command_action(command)
-    item = _item(snapshot, ItemId(action.subject))
+    item_id = ItemId(action.subject)
+    item = snapshot.item(item_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
     if item.state not in {WorkState.INTAKE, WorkState.READY, WorkState.BLOCKED} or item.attempt is not None:
-        raise DecisionError(DecisionErrorCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot be deferred now.")
+        return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot be deferred now.")
     return _result(action, now, item=item.item, item_change=ItemChange(item.item, item.state, WorkState.DEFERRED))
 
 
-def _accept_proposal(snapshot: LedgerSnapshot, command: AcceptProposalCommand, now: datetime) -> Decision:
+def _accept_proposal(
+    snapshot: LedgerSnapshot,
+    command: AcceptProposalCommand,
+    now: datetime,
+) -> Decision | DecisionFailure:
     action = command_action(command)
     value = command.value
-    proposal = _require_proposal(snapshot, ProposalId(action.subject))
+    proposal_id = ProposalId(action.subject)
+    proposal = snapshot.proposal(proposal_id)
+    if proposal is None:
+        return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
     if value.item in snapshot.items_by_id() or value.item in snapshot.history_items:
-        raise DecisionError(DecisionErrorCode.ITEM_ALREADY_EXISTS, f"Item '{value.item}' already exists.")
+        return DecisionFailure(DecisionFailureCode.ITEM_ALREADY_EXISTS, f"Item '{value.item}' already exists.")
     change = ItemChange(value.item, None, WorkState(value.state.value))
     accepted_item: AcceptedProposalItem | None = None
     if (
@@ -1302,6 +1336,12 @@ def _accept_proposal(snapshot: LedgerSnapshot, command: AcceptProposalCommand, n
                 for position, resource_id in enumerate(value.resource_requirements)
             ),
         )
+        result = item_scope_digest(scope)
+        match result:
+            case DecisionFailure():
+                return result
+            case scope_digest:
+                pass
         accepted_item = AcceptedProposalItem(
             value.item,
             WorkState(value.state.value),
@@ -1316,7 +1356,7 @@ def _accept_proposal(snapshot: LedgerSnapshot, command: AcceptProposalCommand, n
             proposal.effect,
             proposal.unlock,
             proposal.urgency_evidence,
-            item_scope_digest(scope),
+            scope_digest,
         )
     return _result(
         action,
@@ -1334,17 +1374,17 @@ def _accept_proposal(snapshot: LedgerSnapshot, command: AcceptProposalCommand, n
     )
 
 
-def _require_proposal(snapshot: LedgerSnapshot, proposal: ProposalId) -> ProposalRecord:
-    record = next((value for value in snapshot.proposals if value.proposal == proposal), None)
-    if record is None:
-        raise DecisionError(DecisionErrorCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal}' does not exist.")
-    return record
-
-
-def _merge_proposal(snapshot: LedgerSnapshot, command: MergeProposalCommand, now: datetime) -> Decision:
+def _merge_proposal(
+    snapshot: LedgerSnapshot,
+    command: MergeProposalCommand,
+    now: datetime,
+) -> Decision | DecisionFailure:
     action = command_action(command)
     value = command.value
-    proposal = _require_proposal(snapshot, ProposalId(action.subject))
+    proposal_id = ProposalId(action.subject)
+    proposal = snapshot.proposal(proposal_id)
+    if proposal is None:
+        return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
     return _result(
         action,
         now,
@@ -1362,7 +1402,7 @@ def _dispose_proposal(
     snapshot: LedgerSnapshot,
     command: ReturnProposalCommand | RejectProposalCommand,
     now: datetime,
-) -> Decision:
+) -> Decision | DecisionFailure:
     action = command_action(command)
     match command:
         case ReturnProposalCommand(value=value):
@@ -1371,7 +1411,10 @@ def _dispose_proposal(
             disposition = ProposalDispositionKind.REJECTED
         case _ as unreachable:
             assert_never(unreachable)
-    proposal = _require_proposal(snapshot, ProposalId(action.subject))
+    proposal_id = ProposalId(action.subject)
+    proposal = snapshot.proposal(proposal_id)
+    if proposal is None:
+        return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
     return _result(
         action,
         now,
@@ -1380,16 +1423,22 @@ def _dispose_proposal(
     )
 
 
-def _transfer(snapshot: LedgerSnapshot, command: TransferCoordinatorCommand, now: datetime) -> Decision:
+def _transfer(
+    snapshot: LedgerSnapshot, command: TransferCoordinatorCommand, now: datetime
+) -> Decision | DecisionFailure:
     action = command_action(command)
     if not snapshot.can_transfer_coordinator:
-        raise DecisionError(
-            DecisionErrorCode.ACTION_NOT_AVAILABLE, "This ledger does not use transferable coordinator ownership."
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE, "This ledger does not use transferable coordinator ownership."
         )
     return _result(action, now)
 
 
-def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:  # noqa: C901, PLR0912
+def decide(  # noqa: C901, PLR0912
+    snapshot: LedgerSnapshot,
+    command: TransitionCommand,
+    now: datetime,
+) -> Decision | DecisionFailure:
     match command:
         case AcceptCheckpointCommand():
             return _accept_checkpoint(snapshot, command, now)

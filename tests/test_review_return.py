@@ -8,9 +8,19 @@ import unittest
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
-from charlie_pinboard.domain.decisions import ActionKind, AuthorizationKind, bind_transition, decide
-from charlie_pinboard.domain.errors import DecisionError
+from charlie_pinboard.domain.decisions import (
+    ActionKind,
+    AuthorizationKind,
+    Decision,
+    TransitionCommand,
+    bind_transition,
+)
+from charlie_pinboard.domain.decisions import (
+    decide as decision_outcome,
+)
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, CheckpointId, ItemId
 from charlie_pinboard.domain.model import (
     AcceptCheckpointInput,
@@ -322,17 +332,23 @@ class ReviewReturnTest(unittest.TestCase):
         )
         accepted_at = datetime(2026, 8, 22, tzinfo=UTC)
 
-        decision = decide(
-            snapshot,
-            bind_transition(
-                action,
-                AcceptCheckpointInput(
-                    CheckpointId("design-accepted"),
-                    CandidateId("sha256:candidate"),
-                    "review.md accepted this exact candidate",
+        decision = cast(
+            Decision,
+            decision_outcome(
+                snapshot,
+                cast(
+                    TransitionCommand,
+                    bind_transition(
+                        action,
+                        AcceptCheckpointInput(
+                            CheckpointId("design-accepted"),
+                            CandidateId("sha256:candidate"),
+                            "review.md accepted this exact candidate",
+                        ),
+                    ),
                 ),
+                accepted_at,
             ),
-            accepted_at,
         )
 
         self.assertEqual(
@@ -453,10 +469,13 @@ class ReviewReturnTest(unittest.TestCase):
             authorization=AuthorizationKind.COORDINATION,
         )
 
-        decision = decide(
-            snapshot,
-            bind_transition(action, ReasonInput("review.md: authority mismatch")),
-            datetime(2026, 8, 22, tzinfo=UTC),
+        decision = cast(
+            Decision,
+            decision_outcome(
+                snapshot,
+                cast(TransitionCommand, bind_transition(action, ReasonInput("review.md: authority mismatch"))),
+                datetime(2026, 8, 22, tzinfo=UTC),
+            ),
         )
 
         self.assertIsNotNone(decision.attempt_authority_change)
@@ -473,12 +492,13 @@ class ReviewReturnTest(unittest.TestCase):
             ((use, replace(use, state=UseLeaseState.REVOKED)),),
             tuple((change.before, change.after) for change in decision.resource_use_lease_changes),
         )
-        with self.assertRaisesRegex(DecisionError, "ATTEMPT_AUTHORITY_REQUIRED"):
-            decide(
-                replace(snapshot, attempt_authorities=()),
-                bind_transition(action, ReasonInput("review.md: authority mismatch")),
-                datetime(2026, 8, 22, tzinfo=UTC),
-            )
+        rejected = decision_outcome(
+            replace(snapshot, attempt_authorities=()),
+            cast(TransitionCommand, bind_transition(action, ReasonInput("review.md: authority mismatch"))),
+            datetime(2026, 8, 22, tzinfo=UTC),
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, rejected.code)
 
     def test_review_action_visibility_is_role_and_state_scoped(self) -> None:
         fixture = _review_fixture()

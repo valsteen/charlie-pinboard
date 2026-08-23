@@ -1,8 +1,9 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import Enum
+from typing import assert_never
 
-from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import (
     AttemptId,
     HostId,
@@ -249,19 +250,19 @@ def validate_mutation_resources(
     attempt: AttemptId,
     required_resources: tuple[ResourceId, ...],
     tokens: tuple[ResourceToken, ...],
-) -> None:
+) -> DecisionFailure | None:
     authorities = tuple(value for value in snapshot.attempt_authorities if value.attempt == attempt)
     if len(authorities) != 1 or authorities[0].lease_id is None:
-        raise DecisionError(
-            DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED, "Mutation requires one current attempt authority."
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "Mutation requires one current attempt authority."
         )
     authority = authorities[0]
     if len(required_resources) != len(set(required_resources)):
-        raise DecisionError(DecisionErrorCode.RESOURCE_REQUIREMENT_INVALID, "Required resources must be unique.")
+        return DecisionFailure(DecisionFailureCode.RESOURCE_REQUIREMENT_INVALID, "Required resources must be unique.")
     token_by_resource = {token.resource_id: token for token in tokens}
     if set(token_by_resource) != set(required_resources) or len(token_by_resource) != len(tokens):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
             "Mutation requires one exact token per resource requirement.",
         )
     instances = {value.instance_id: value for value in snapshot.resource_instances}
@@ -277,23 +278,23 @@ def validate_mutation_resources(
             None,
         )
         if reservation is None:
-            raise DecisionError(
-                DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+            return DecisionFailure(
+                DecisionFailureCode.RESOURCE_RESERVATION_STALE,
                 f"Resource '{resource_id}' is not reserved by this attempt.",
             )
         instance = instances.get(reservation.instance_id)
         token = token_by_resource[resource_id]
         if instance is None or instance.host_id != token.host_id:
-            raise DecisionError(
-                DecisionErrorCode.RESOURCE_INSTANCE_REQUIRED,
+            return DecisionFailure(
+                DecisionFailureCode.RESOURCE_INSTANCE_REQUIRED,
                 f"Resource '{resource_id}' has no matching host-local instance.",
             )
         if (
             ResourceAuthority(token.resource_id, token.host_id, token.lease_id, token.generation)
             not in authority.resources
         ):
-            raise DecisionError(
-                DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+            return DecisionFailure(
+                DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
                 f"Resource '{resource_id}' is not held by this attempt authority.",
             )
         use_lease = current_authorizing_grant(snapshot.resource_use_leases, reservation.reservation_id)
@@ -304,36 +305,11 @@ def validate_mutation_resources(
             or use_lease.attempt_lease_id != authority.lease_id
             or use_lease.attempt_generation != authority.generation
         ):
-            raise DecisionError(
-                DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+            return DecisionFailure(
+                DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
                 f"Resource '{resource_id}' has no current mutation lease.",
             )
-
-
-def _reservation(snapshot: LedgerSnapshot, reservation_id: ReservationId) -> ResourceReservation:
-    reservation = next(
-        (value for value in snapshot.resource_reservations if value.reservation_id == reservation_id),
-        None,
-    )
-    if reservation is None:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
-            f"Reservation '{reservation_id}' does not exist.",
-        )
-    return reservation
-
-
-def _reservation_counter(
-    snapshot: LedgerSnapshot,
-    instance_id: ResourceInstanceId,
-) -> ResourceReservationCounter:
-    counters = tuple(value for value in snapshot.resource_reservation_counters if value.instance_id == instance_id)
-    if len(counters) != 1:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
-            f"Instance '{instance_id}' requires one reservation counter.",
-        )
-    return counters[0]
+    return None
 
 
 def _advance_counter(counter: ResourceReservationCounter) -> ResourceReservationCounterChange:
@@ -351,17 +327,17 @@ def assign_resource(
     instance_id: ResourceInstanceId,
     attempt: AttemptId,
     generation: int,
-) -> ResourceDecision:
+) -> ResourceDecision | DecisionFailure:
     definitions = {value.resource_id for value in snapshot.resource_definitions}
     instance = next((value for value in snapshot.resource_instances if value.instance_id == instance_id), None)
     if resource_id not in definitions or instance is None or instance.resource_id != resource_id:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_INSTANCE_REQUIRED,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_INSTANCE_REQUIRED,
             "Assignment requires a matching definition and instance.",
         )
     if generation < 1 or not reservation_id:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
             "Reservation identity and generation must be current.",
         )
     exclusive = tuple(
@@ -370,19 +346,25 @@ def assign_resource(
         if value.state in {ReservationState.ACTIVE, ReservationState.REVOKED_PENDING_RECOVERY}
     )
     if any(value.instance_id == instance_id for value in exclusive):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_INSTANCE_RESERVED,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_INSTANCE_RESERVED,
             f"Instance '{instance_id}' is already reserved.",
         )
     if any(value.attempt == attempt and value.resource_id == resource_id for value in exclusive):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_INSTANCE_RESERVED,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_INSTANCE_RESERVED,
             "The attempt already has this resource requirement assigned.",
         )
-    counter_change = _advance_counter(_reservation_counter(snapshot, instance_id))
+    counter = snapshot.resource_reservation_counter(instance_id)
+    if counter is None:
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
+            f"Instance '{instance_id}' requires one reservation counter.",
+        )
+    counter_change = _advance_counter(counter)
     if generation != counter_change.after.generation_high_water:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
             "Assignment generation must advance the instance reservation counter exactly once.",
         )
     reservation = ResourceReservation(
@@ -400,11 +382,19 @@ def assign_resource(
     )
 
 
-def release_resource(snapshot: LedgerSnapshot, reservation_id: ReservationId) -> ResourceDecision:
-    reservation = _reservation(snapshot, reservation_id)
+def release_resource(
+    snapshot: LedgerSnapshot,
+    reservation_id: ReservationId,
+) -> ResourceDecision | DecisionFailure:
+    reservation = snapshot.resource_reservation(reservation_id)
+    if reservation is None:
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
+            f"Reservation '{reservation_id}' does not exist.",
+        )
     if reservation.state != ReservationState.ACTIVE:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
             "Only an active reservation can be released.",
         )
     released = replace(reservation, state=ReservationState.RELEASED)
@@ -416,16 +406,27 @@ def revoke_resource(
     reservation_id: ReservationId,
     *,
     unresolved_intent: bool,
-) -> ResourceDecision:
-    reservation = _reservation(snapshot, reservation_id)
+) -> ResourceDecision | DecisionFailure:
+    reservation = snapshot.resource_reservation(reservation_id)
+    if reservation is None:
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
+            f"Reservation '{reservation_id}' does not exist.",
+        )
     if reservation.state != ReservationState.ACTIVE:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
             "Only an active reservation can be revoked.",
         )
     state = ReservationState.REVOKED_PENDING_RECOVERY if unresolved_intent else ReservationState.REVOKED
     revoked = replace(reservation, state=state)
-    counter_change = _advance_counter(_reservation_counter(snapshot, reservation.instance_id))
+    counter = snapshot.resource_reservation_counter(reservation.instance_id)
+    if counter is None:
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
+            f"Instance '{reservation.instance_id}' requires one reservation counter.",
+        )
+    counter_change = _advance_counter(counter)
     return ResourceDecision(
         ResourceDecisionKind.REVOKE,
         (ReservationChange(reservation, revoked),),
@@ -440,16 +441,26 @@ def reallocate_resource(
     replacement_id: ReservationId,
     instance_id: ResourceInstanceId,
     generation: int,
-) -> ResourceDecision:
-    previous = _reservation(snapshot, reservation_id)
-    released = release_resource(snapshot, reservation_id).changes[0]
+) -> ResourceDecision | DecisionFailure:
+    previous = snapshot.resource_reservation(reservation_id)
+    if previous is None:
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
+            f"Reservation '{reservation_id}' does not exist.",
+        )
+    result = release_resource(snapshot, reservation_id)
+    match result:
+        case DecisionFailure():
+            return result
+        case ResourceDecision(changes=changes):
+            released = changes[0]
     remaining = replace(
         snapshot,
         resource_reservations=tuple(
             value for value in snapshot.resource_reservations if value.reservation_id != reservation_id
         ),
     )
-    assigned_decision = assign_resource(
+    result = assign_resource(
         remaining,
         reservation_id=replacement_id,
         resource_id=previous.resource_id,
@@ -457,6 +468,11 @@ def reallocate_resource(
         attempt=previous.attempt,
         generation=generation,
     )
+    match result:
+        case DecisionFailure():
+            return result
+        case assigned_decision:
+            pass
     assigned = assigned_decision.changes[0]
     return ResourceDecision(
         ResourceDecisionKind.REALLOCATE,
@@ -469,15 +485,15 @@ def _current_attempt_authority(
     snapshot: LedgerSnapshot,
     supplied: CommandAttemptAuthority,
     now: datetime,
-) -> CommandAttemptAuthority:
+) -> CommandAttemptAuthority | DecisionFailure:
     if supplied.host_epoch != snapshot.host_epoch or supplied.expires_at <= now:
-        raise DecisionError(
-            DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED,
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
             "Mutation requires current host and attempt authority.",
         )
     if supplied not in snapshot.command_attempt_authorities:
-        raise DecisionError(
-            DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED,
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
             "Mutation requires the exact current attempt authority.",
         )
     return supplied
@@ -487,14 +503,14 @@ def _current_coordination_authority(
     snapshot: LedgerSnapshot,
     supplied: CoordinationCommandAuthority,
     now: datetime,
-) -> CoordinationCommandAuthority:
+) -> CoordinationCommandAuthority | DecisionFailure:
     if (
         supplied.host_epoch != snapshot.host_epoch
         or supplied.expires_at <= now
         or supplied != snapshot.coordination_authority
     ):
-        raise DecisionError(
-            DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED,
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
             "Recovery requires the exact current coordination authority.",
         )
     return supplied
@@ -504,17 +520,10 @@ def _mutation_records(
     snapshot: LedgerSnapshot,
     capability: ResourceMutationCapability,
     now: datetime,
-) -> tuple[CommandAttemptAuthority, MutationReservation, MutationUseLease, ResourceObservation]:
-    use_lease = next(
-        (
-            value
-            for value in snapshot.mutation_use_leases
-            if value.lease_id == capability.task_use_lease_id and value.generation == capability.task_use_generation
-        ),
-        None,
-    )
+) -> tuple[CommandAttemptAuthority, MutationReservation, MutationUseLease, ResourceObservation] | DecisionFailure:
+    use_lease = snapshot.mutation_use_lease(capability.task_use_lease_id, capability.task_use_generation)
     if use_lease is None:
-        raise DecisionError(DecisionErrorCode.RESOURCE_USE_LEASE_STALE, "The task-use lease is not retained.")
+        return DecisionFailure(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, "The task-use lease is not retained.")
     authority = next(
         (
             value
@@ -526,17 +535,19 @@ def _mutation_records(
         None,
     )
     if authority is None:
-        raise DecisionError(
-            DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED,
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
             "The task-use lease has no exact current attempt authority.",
         )
-    _current_attempt_authority(snapshot, authority, now)
-    reservation = next(
-        (value for value in snapshot.mutation_reservations if value.reservation_id == capability.reservation_id),
-        None,
-    )
+    result = _current_attempt_authority(snapshot, authority, now)
+    match result:
+        case DecisionFailure():
+            return result
+        case CommandAttemptAuthority():
+            pass
+    reservation = snapshot.mutation_reservation(capability.reservation_id)
     if reservation is None or reservation.state != ReservationState.ACTIVE:
-        raise DecisionError(DecisionErrorCode.RESOURCE_RESERVATION_STALE, "The reservation is not active.")
+        return DecisionFailure(DecisionFailureCode.RESOURCE_RESERVATION_STALE, "The reservation is not active.")
     instance = next(
         (value for value in snapshot.resource_instances if value.instance_id == capability.instance_id),
         None,
@@ -561,7 +572,7 @@ def _mutation_records(
         or use_lease.expires_at <= now
         or use_lease.generation != latest_generation
     ):
-        raise DecisionError(DecisionErrorCode.RESOURCE_USE_LEASE_STALE, "The mutation grant is not current.")
+        return DecisionFailure(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, "The mutation grant is not current.")
     actual = ResourceMutationCapability(
         reservation.resource_id,
         reservation.reservation_id,
@@ -579,23 +590,26 @@ def _mutation_records(
         use_lease.attempt_lease_generation,
     )
     if actual != capability:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "The mutation capability does not match the current reservation, instance, observation, and leases.",
         )
     return authority, reservation, use_lease, observation
 
 
-def _planned_intent(snapshot: LedgerSnapshot, capability: ResourceIntentCapability) -> MutationIntent:
-    intent = next((value for value in snapshot.mutation_intents if value.intent_id == capability.intent_id), None)
+def _planned_intent(
+    snapshot: LedgerSnapshot,
+    capability: ResourceIntentCapability,
+) -> MutationIntent | DecisionFailure:
+    intent = snapshot.mutation_intent(capability.intent_id)
     if (
         intent is None
         or intent.policy_digest != capability.policy_digest
         or intent.state != capability.state
         or intent.state != MutationIntentState.PLANNED
     ):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "The exact planned mutation intent is not current.",
         )
     resource = capability.resource
@@ -613,8 +627,8 @@ def _planned_intent(snapshot: LedgerSnapshot, capability: ResourceIntentCapabili
         or intent.start_observation_generation != resource.locator_observation_generation
         or intent.start_observation_digest != resource.locator_observation_digest
     ):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "The mutation intent is cross-wired to different authority.",
         )
     return intent
@@ -623,23 +637,10 @@ def _planned_intent(snapshot: LedgerSnapshot, capability: ResourceIntentCapabili
 def _validate_observation_identity(
     snapshot: LedgerSnapshot,
     observation: ObservedResource,
-) -> ResourceObservation:
-    instance = next(
-        (value for value in snapshot.resource_instances if value.instance_id == observation.instance_id),
-        None,
-    )
-    accepted = next(
-        (value for value in snapshot.resource_observations if value.instance_id == observation.instance_id),
-        None,
-    )
-    definition = (
-        next(
-            (value for value in snapshot.resource_definitions if value.resource_id == instance.resource_id),
-            None,
-        )
-        if instance is not None
-        else None
-    )
+) -> ResourceObservation | DecisionFailure:
+    instance = snapshot.resource_instance(observation.instance_id)
+    accepted = snapshot.resource_observation(observation.instance_id)
+    definition = snapshot.resource_definition(instance.resource_id) if instance is not None else None
     if (
         instance is None
         or accepted is None
@@ -649,8 +650,8 @@ def _validate_observation_identity(
         or instance.discovery_fingerprint != observation.discovery_fingerprint
         or accepted.locator_schema != observation.locator_schema
     ):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_INSTANCE_REQUIRED,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_INSTANCE_REQUIRED,
             "The resolver observation does not identify the accepted resource instance.",
         )
     return accepted
@@ -670,12 +671,13 @@ def _observation_is_unchanged(accepted: ResourceObservation, observed: ObservedR
     )
 
 
-def _require_evidence(schema: str, evidence: CanonicalJson, digest: str) -> None:
+def _require_evidence(schema: str, evidence: CanonicalJson, digest: str) -> DecisionFailure | None:
     if not schema.strip() or not evidence or not digest.strip():
-        raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID,
+        return DecisionFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
             "Canonical resolver evidence identity must be complete.",
         )
+    return None
 
 
 def _advance_intent(
@@ -692,9 +694,19 @@ def _advance_intent(
     update_use_lease: MutationUseLease | None,
     disposition_task_id: TaskId | None = None,
     disposition_reason: str | None = None,
-) -> ResourceIntentDecision:
-    accepted = _validate_observation_identity(snapshot, observed)
-    instance = next(value for value in snapshot.resource_instances if value.instance_id == observed.instance_id)
+) -> ResourceIntentDecision | DecisionFailure:
+    result = _validate_observation_identity(snapshot, observed)
+    match result:
+        case DecisionFailure():
+            return result
+        case accepted:
+            pass
+    instance = snapshot.resource_instance(observed.instance_id)
+    if instance is None:
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_INSTANCE_REQUIRED,
+            "The resolver observation does not identify the accepted resource instance.",
+        )
     next_observation = ResourceObservation(
         accepted.instance_id,
         accepted.host_id,
@@ -741,23 +753,28 @@ def _advance_intent(
 def register_mutation_intent(
     snapshot: LedgerSnapshot,
     value: RegisterMutationIntentInput,
-) -> ResourceIntentDecision:
-    authority, reservation, _use_lease, observation = _mutation_records(
+) -> ResourceIntentDecision | DecisionFailure:
+    result = _mutation_records(
         snapshot,
         value.capability,
         value.recorded_at,
     )
+    match result:
+        case DecisionFailure():
+            return result
+        case (authority, reservation, _use_lease, observation):
+            pass
     if not value.intent_id or not value.policy_schema.strip() or not value.policy or not value.policy_digest.strip():
-        raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID,
+        return DecisionFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
             "Mutation intent identity and canonical policy must be complete.",
         )
     if any(candidate.intent_id == value.intent_id for candidate in snapshot.mutation_intents) or any(
         candidate.reservation_id == reservation.reservation_id and candidate.state == MutationIntentState.PLANNED
         for candidate in snapshot.mutation_intents
     ):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "The reservation already has this or another planned mutation intent.",
         )
     intent = MutationIntent(
@@ -787,19 +804,30 @@ def register_mutation_intent(
 def advance_resource_observation(
     snapshot: LedgerSnapshot,
     value: AdvanceResourceObservationInput,
-) -> ResourceIntentDecision:
+) -> ResourceIntentDecision | DecisionFailure:
     if value.resolver_decision != ResolverEvidenceDecision.ACCEPTED:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "Only accepted deterministic evidence can advance a live observation.",
         )
-    _require_evidence(value.evidence_schema, value.evidence, value.evidence_digest)
-    _authority, _reservation, use_lease, _observation = _mutation_records(
+    if (failure := _require_evidence(value.evidence_schema, value.evidence, value.evidence_digest)) is not None:
+        return failure
+    result = _mutation_records(
         snapshot,
         value.intent.resource,
         value.resolved_at,
     )
-    intent = _planned_intent(snapshot, value.intent)
+    match result:
+        case DecisionFailure():
+            return result
+        case (_authority, _reservation, use_lease, _observation):
+            pass
+    result = _planned_intent(snapshot, value.intent)
+    match result:
+        case DecisionFailure():
+            return result
+        case intent:
+            pass
     return _advance_intent(
         snapshot,
         intent,
@@ -814,23 +842,19 @@ def advance_resource_observation(
     )
 
 
-def _interrupted_use_lease(snapshot: LedgerSnapshot, intent: MutationIntent) -> MutationUseLease:
-    use_lease = next(
-        (
-            value
-            for value in snapshot.mutation_use_leases
-            if value.lease_id == intent.resource_use_lease_id and value.generation == intent.resource_use_generation
-        ),
-        None,
-    )
+def _interrupted_use_lease(
+    snapshot: LedgerSnapshot,
+    intent: MutationIntent,
+) -> MutationUseLease | DecisionFailure:
+    use_lease = snapshot.mutation_use_lease(intent.resource_use_lease_id, intent.resource_use_generation)
     if use_lease is None:
-        raise DecisionError(DecisionErrorCode.RESOURCE_USE_LEASE_STALE, "The interrupted grant is not retained.")
+        return DecisionFailure(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, "The interrupted grant is not retained.")
     if any(
         candidate.reservation_id == intent.reservation_id and candidate.generation > use_lease.generation
         for candidate in snapshot.mutation_use_leases
     ):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "A later task-use generation already exists.",
         )
     if any(
@@ -842,14 +866,17 @@ def _interrupted_use_lease(snapshot: LedgerSnapshot, intent: MutationIntent) -> 
         )
         for candidate in snapshot.mutation_intents
     ):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "A later mutation intent already exists.",
         )
     return use_lease
 
 
-def _require_intent_start_observation(snapshot: LedgerSnapshot, intent: MutationIntent) -> None:
+def _require_intent_start_observation(
+    snapshot: LedgerSnapshot,
+    intent: MutationIntent,
+) -> DecisionFailure | None:
     instance = next(
         (value for value in snapshot.resource_instances if value.instance_id == intent.instance_id),
         None,
@@ -865,22 +892,24 @@ def _require_intent_start_observation(snapshot: LedgerSnapshot, intent: Mutation
         or observation.generation != intent.start_observation_generation
         or observation.digest != intent.start_observation_digest
     ):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "Interruption recovery requires the intent's exact starting observation.",
         )
+    return None
 
 
-def _require_active_intent_reservation(snapshot: LedgerSnapshot, intent: MutationIntent) -> None:
-    reservation = next(
-        (value for value in snapshot.mutation_reservations if value.reservation_id == intent.reservation_id),
-        None,
-    )
+def _require_active_intent_reservation(
+    snapshot: LedgerSnapshot,
+    intent: MutationIntent,
+) -> DecisionFailure | None:
+    reservation = snapshot.mutation_reservation(intent.reservation_id)
     if reservation is None or reservation.state != ReservationState.ACTIVE:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
             "Resource recovery requires the intent's exact active reservation.",
         )
+    return None
 
 
 def _validate_recovery_attempt(
@@ -888,20 +917,22 @@ def _validate_recovery_attempt(
     intent: MutationIntent,
     supplied: CommandAttemptAuthority,
     now: datetime,
-) -> CommandAttemptAuthority:
-    authority = _current_attempt_authority(snapshot, supplied, now)
-    reservation = next(
-        (value for value in snapshot.mutation_reservations if value.reservation_id == intent.reservation_id),
-        None,
-    )
+) -> CommandAttemptAuthority | DecisionFailure:
+    result = _current_attempt_authority(snapshot, supplied, now)
+    match result:
+        case DecisionFailure():
+            return result
+        case authority:
+            pass
+    reservation = snapshot.mutation_reservation(intent.reservation_id)
     if (
         reservation is None
         or reservation.attempt_id != authority.attempt
         or reservation.item_id != authority.item
         or reservation.acquisition_generation != intent.reservation_generation
     ):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_RESERVATION_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
             "Recovery authority is cross-wired to another reservation or attempt.",
         )
     if (
@@ -909,50 +940,77 @@ def _validate_recovery_attempt(
         and authority.generation == intent.attempt_lease_generation
         and authority.task_id == intent.task_id
     ):
-        raise DecisionError(
-            DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED,
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
             "Interruption recovery requires fresh attempt authority.",
         )
     return authority
 
 
-def abandon_mutation_intent(
+def abandon_mutation_intent(  # noqa: C901, PLR0912
     snapshot: LedgerSnapshot,
     value: AbandonMutationIntentInput,
-) -> ResourceIntentDecision:
-    intent = _planned_intent(snapshot, value.intent)
+) -> ResourceIntentDecision | DecisionFailure:
+    result = _planned_intent(snapshot, value.intent)
+    match result:
+        case DecisionFailure():
+            return result
+        case intent:
+            pass
     if not value.reason.strip():
-        raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Abandonment requires a reason.")
-    accepted = _validate_observation_identity(snapshot, value.observation)
+        return DecisionFailure(DecisionFailureCode.TRANSITION_INPUT_INVALID, "Abandonment requires a reason.")
+    result = _validate_observation_identity(snapshot, value.observation)
+    match result:
+        case DecisionFailure():
+            return result
+        case accepted:
+            pass
     if not _observation_is_unchanged(accepted, value.observation):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "A changed observation cannot be abandoned as unused.",
         )
     match value.form:
         case AbandonmentForm.LIVE_OWNER:
-            authority, _reservation, _use, _observation = _mutation_records(
+            result = _mutation_records(
                 snapshot,
                 value.intent.resource,
                 value.decided_at,
             )
+            match result:
+                case DecisionFailure():
+                    return result
+                case (authority, _reservation, _use, _observation):
+                    pass
             if authority != value.attempt_authority:
-                raise DecisionError(
-                    DecisionErrorCode.ATTEMPT_AUTHORITY_REQUIRED,
+                return DecisionFailure(
+                    DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
                     "Live abandonment requires the exact intent owner.",
                 )
         case AbandonmentForm.CLEAN_INTERRUPTION:
-            old_use = _interrupted_use_lease(snapshot, intent)
+            result = _interrupted_use_lease(snapshot, intent)
+            match result:
+                case DecisionFailure():
+                    return result
+                case old_use:
+                    pass
             if old_use.state not in {UseLeaseState.RELEASED, UseLeaseState.EXPIRED}:
-                raise DecisionError(
-                    DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+                return DecisionFailure(
+                    DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
                     "Clean interruption requires released or expired prior use authority.",
                 )
-            _require_intent_start_observation(snapshot, intent)
-            _require_active_intent_reservation(snapshot, intent)
-            _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.decided_at)
+            if (failure := _require_intent_start_observation(snapshot, intent)) is not None:
+                return failure
+            if (failure := _require_active_intent_reservation(snapshot, intent)) is not None:
+                return failure
+            result = _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.decided_at)
+            match result:
+                case DecisionFailure():
+                    return result
+                case CommandAttemptAuthority():
+                    pass
         case _ as unreachable:
-            raise AssertionError(unreachable)
+            assert_never(unreachable)
     abandoned = replace(
         intent,
         state=MutationIntentState.ABANDONED,
@@ -968,23 +1026,41 @@ def abandon_mutation_intent(
 def reconcile_interrupted_observation(
     snapshot: LedgerSnapshot,
     value: ReconcileInterruptedObservationInput,
-) -> ResourceIntentDecision:
+) -> ResourceIntentDecision | DecisionFailure:
     if value.resolver_decision != ResolverEvidenceDecision.ACCEPTED:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "Post-interruption reconciliation requires supported deterministic proof.",
         )
-    _require_evidence(value.evidence_schema, value.evidence, value.evidence_digest)
-    intent = _planned_intent(snapshot, value.intent)
-    old_use = _interrupted_use_lease(snapshot, intent)
+    if (failure := _require_evidence(value.evidence_schema, value.evidence, value.evidence_digest)) is not None:
+        return failure
+    result = _planned_intent(snapshot, value.intent)
+    match result:
+        case DecisionFailure():
+            return result
+        case intent:
+            pass
+    result = _interrupted_use_lease(snapshot, intent)
+    match result:
+        case DecisionFailure():
+            return result
+        case old_use:
+            pass
     if old_use.state not in {UseLeaseState.RELEASED, UseLeaseState.EXPIRED}:
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "Reconciliation requires interrupted prior use authority.",
         )
-    _require_intent_start_observation(snapshot, intent)
-    _require_active_intent_reservation(snapshot, intent)
-    authority = _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.resolved_at)
+    if (failure := _require_intent_start_observation(snapshot, intent)) is not None:
+        return failure
+    if (failure := _require_active_intent_reservation(snapshot, intent)) is not None:
+        return failure
+    result = _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.resolved_at)
+    match result:
+        case DecisionFailure():
+            return result
+        case authority:
+            pass
     return _advance_intent(
         snapshot,
         intent,
@@ -1000,25 +1076,46 @@ def reconcile_interrupted_observation(
     )
 
 
-def preserve_resource_state(
+def preserve_resource_state(  # noqa: PLR0912
     snapshot: LedgerSnapshot,
     value: PreserveResourceStateInput,
-) -> ResourceIntentDecision:
-    _current_coordination_authority(snapshot, value.coordination_authority, value.resolved_at)
-    intent = _planned_intent(snapshot, value.intent)
-    authority = _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.resolved_at)
-    _require_active_intent_reservation(snapshot, intent)
+) -> ResourceIntentDecision | DecisionFailure:
+    result = _current_coordination_authority(snapshot, value.coordination_authority, value.resolved_at)
+    match result:
+        case DecisionFailure():
+            return result
+        case CoordinationCommandAuthority():
+            pass
+    result = _planned_intent(snapshot, value.intent)
+    match result:
+        case DecisionFailure():
+            return result
+        case intent:
+            pass
+    result = _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.resolved_at)
+    match result:
+        case DecisionFailure():
+            return result
+        case authority:
+            pass
+    if (failure := _require_active_intent_reservation(snapshot, intent)) is not None:
+        return failure
     if not value.reason.strip() or not value.fence_lease_id:
-        raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID,
+        return DecisionFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
             "Human preserve requires an explicit reason and fence identity.",
         )
     if (value.evidence_schema, value.evidence, value.evidence_digest).count(None) not in {0, 3}:
-        raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID,
+        return DecisionFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
             "Human preserve evidence must be wholly present or absent.",
         )
-    old_use = _interrupted_use_lease(snapshot, intent)
+    result = _interrupted_use_lease(snapshot, intent)
+    match result:
+        case DecisionFailure():
+            return result
+        case old_use:
+            pass
     fence = replace(
         old_use,
         lease_id=value.fence_lease_id,
@@ -1031,7 +1128,7 @@ def preserve_resource_state(
         use_changes = (MutationUseLeaseChange(old_use, revoked), MutationUseLeaseChange(None, fence))
     else:
         use_changes = (MutationUseLeaseChange(None, fence),)
-    decision = _advance_intent(
+    result = _advance_intent(
         snapshot,
         intent,
         value.observation,
@@ -1045,28 +1142,43 @@ def preserve_resource_state(
         disposition_task_id=authority.task_id,
         disposition_reason=value.reason,
     )
+    match result:
+        case DecisionFailure():
+            return result
+        case decision:
+            pass
     return replace(decision, use_lease_changes=use_changes)
 
 
-def resolve_fenced_resource_intent(
+def resolve_fenced_resource_intent(  # noqa: C901, PLR0912
     snapshot: LedgerSnapshot,
     value: ResolveFencedIntentInput,
-) -> ResourceIntentDecision:
-    _current_coordination_authority(snapshot, value.coordination_authority, value.resolved_at)
-    intent = _planned_intent(snapshot, value.intent)
-    authority = _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.resolved_at)
-    reservation = next(
-        candidate for candidate in snapshot.mutation_reservations if candidate.reservation_id == intent.reservation_id
-    )
-    old_use = next(
-        (
-            candidate
-            for candidate in snapshot.mutation_use_leases
-            if candidate.lease_id == intent.resource_use_lease_id
-            and candidate.generation == intent.resource_use_generation
-        ),
-        None,
-    )
+) -> ResourceIntentDecision | DecisionFailure:
+    result = _current_coordination_authority(snapshot, value.coordination_authority, value.resolved_at)
+    match result:
+        case DecisionFailure():
+            return result
+        case CoordinationCommandAuthority():
+            pass
+    result = _planned_intent(snapshot, value.intent)
+    match result:
+        case DecisionFailure():
+            return result
+        case intent:
+            pass
+    result = _validate_recovery_attempt(snapshot, intent, value.attempt_authority, value.resolved_at)
+    match result:
+        case DecisionFailure():
+            return result
+        case authority:
+            pass
+    reservation = snapshot.mutation_reservation(intent.reservation_id)
+    if reservation is None:
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_RESERVATION_STALE,
+            "Resource recovery requires the intent's exact reservation.",
+        )
+    old_use = snapshot.mutation_use_lease(intent.resource_use_lease_id, intent.resource_use_generation)
     fence = (
         next(
             (
@@ -1101,11 +1213,16 @@ def resolve_fenced_resource_intent(
         and value.reservation_counter_generation > reservation.acquisition_generation
     )
     if later_grant or not (task_fenced or reservation_fenced):
-        raise DecisionError(
-            DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
             "Fenced intent resolution requires the exact fence or recovery quarantine with no later grant.",
         )
-    accepted = _validate_observation_identity(snapshot, value.observation)
+    result = _validate_observation_identity(snapshot, value.observation)
+    match result:
+        case DecisionFailure():
+            return result
+        case accepted:
+            pass
     unchanged = _observation_is_unchanged(accepted, value.observation)
     reservation_change = (
         MutationReservationChange(reservation, replace(reservation, state=ReservationState.REVOKED))
@@ -1114,8 +1231,8 @@ def resolve_fenced_resource_intent(
     )
     if unchanged:
         if value.disposition != FencedIntentDisposition.UNCHANGED:
-            raise DecisionError(
-                DecisionErrorCode.TRANSITION_INPUT_INVALID,
+            return DecisionFailure(
+                DecisionFailureCode.TRANSITION_INPUT_INVALID,
                 "An unchanged fenced intent requires the unchanged disposition.",
             )
         resolved = replace(
@@ -1134,32 +1251,33 @@ def resolve_fenced_resource_intent(
         )
     if value.disposition == FencedIntentDisposition.RECONCILE:
         if value.resolver_decision != ResolverEvidenceDecision.ACCEPTED:
-            raise DecisionError(
-                DecisionErrorCode.RESOURCE_USE_LEASE_STALE,
+            return DecisionFailure(
+                DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
                 "Changed fenced state requires supported deterministic proof or human preserve.",
             )
         state = MutationIntentState.RECONCILED
         if value.evidence_schema is None or value.evidence is None or value.evidence_digest is None:
-            raise DecisionError(
-                DecisionErrorCode.TRANSITION_INPUT_INVALID,
+            return DecisionFailure(
+                DecisionFailureCode.TRANSITION_INPUT_INVALID,
                 "Mechanical reconciliation requires canonical evidence.",
             )
-        _require_evidence(value.evidence_schema, value.evidence, value.evidence_digest)
+        if (failure := _require_evidence(value.evidence_schema, value.evidence, value.evidence_digest)) is not None:
+            return failure
     elif value.disposition == FencedIntentDisposition.HUMAN_PRESERVE:
         if not value.reason.strip():
-            raise DecisionError(DecisionErrorCode.TRANSITION_INPUT_INVALID, "Human preserve requires a reason.")
+            return DecisionFailure(DecisionFailureCode.TRANSITION_INPUT_INVALID, "Human preserve requires a reason.")
         state = MutationIntentState.HUMAN_PRESERVED
         if (value.evidence_schema, value.evidence, value.evidence_digest).count(None) not in {0, 3}:
-            raise DecisionError(
-                DecisionErrorCode.TRANSITION_INPUT_INVALID,
+            return DecisionFailure(
+                DecisionFailureCode.TRANSITION_INPUT_INVALID,
                 "Human preserve evidence must be wholly present or absent.",
             )
     else:
-        raise DecisionError(
-            DecisionErrorCode.TRANSITION_INPUT_INVALID,
+        return DecisionFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
             "Changed fenced state cannot use the unchanged disposition.",
         )
-    decision = _advance_intent(
+    result = _advance_intent(
         snapshot,
         intent,
         value.observation,
@@ -1173,4 +1291,9 @@ def resolve_fenced_resource_intent(
         disposition_task_id=authority.task_id,
         disposition_reason=value.reason,
     )
+    match result:
+        case DecisionFailure():
+            return result
+        case decision:
+            pass
     return replace(decision, reservation_change=reservation_change)

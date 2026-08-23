@@ -34,7 +34,7 @@ from charlie_pinboard.domain.decisions import (
     command_action,
     decide,
 )
-from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import (
     AttemptId,
     HostId,
@@ -956,18 +956,18 @@ def _decide_legacy_transition(
     snapshot: LedgerSnapshot,
     command: LegacyTransitionCommand,
     now: datetime,
-) -> Decision:
+) -> Decision | DecisionFailure:
     """Keep the temporary Markdown command shape separate from the richer SQLite contract."""
 
     action = command_action(command)
     match command:
         case LegacyActivateCommand(value=value):
-            item = snapshot.items_by_id().get(ItemId(action.subject))
+            item = snapshot.item(ItemId(action.subject))
             if item is None:
-                raise DecisionError(DecisionErrorCode.ITEM_NOT_FOUND, f"Item '{action.subject}' does not exist.")
+                return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{action.subject}' does not exist.")
             if item.state != WorkState.READY:
-                raise DecisionError(
-                    DecisionErrorCode.ACTION_NOT_AVAILABLE,
+                return DecisionFailure(
+                    DecisionFailureCode.ACTION_NOT_AVAILABLE,
                     f"Item '{item.item}' is not ready for activation.",
                 )
             return Decision(
@@ -977,15 +977,15 @@ def _decide_legacy_transition(
                 TransitionReceipt(action.action_id, item.item, action.kind.value, None, now),
             )
         case LegacySubmitReviewCommand():
-            item = next((candidate for candidate in snapshot.items if candidate.attempt == action.subject), None)
+            item = snapshot.item_for_attempt(AttemptId(action.subject))
             if item is None:
-                raise DecisionError(
-                    DecisionErrorCode.ATTEMPT_NOT_FOUND,
+                return DecisionFailure(
+                    DecisionFailureCode.ATTEMPT_NOT_FOUND,
                     f"Attempt '{action.subject}' does not name a live item.",
                 )
             if item.state != WorkState.ACTIVE:
-                raise DecisionError(
-                    DecisionErrorCode.ACTION_NOT_AVAILABLE,
+                return DecisionFailure(
+                    DecisionFailureCode.ACTION_NOT_AVAILABLE,
                     "Only an active attempt can be submitted for review.",
                 )
             attempt_id = AttemptId(action.subject)
@@ -1118,10 +1118,12 @@ def plan_transition(work_root: Path, project_root: Path, command: LegacyTransiti
         resource_use_leases=resource_use_leases,
         can_transfer_coordinator=(work_root / "coordinator.json").is_file(),
     )
-    try:
-        decision = _decide_legacy_transition(snapshot, command, datetime.now(UTC))
-    except DecisionError as error:
-        raise TransitionPlanError(error.code.value, str(error).partition(": ")[2]) from error
+    result = _decide_legacy_transition(snapshot, command, datetime.now(UTC))
+    match result:
+        case DecisionFailure(code=code, message=message):
+            raise TransitionPlanError(code.value, message)
+        case decision:
+            pass
     context = replace(context, decision=decision)
     changes = _plan_command(context, command)
     if context.queue.header.get("schema") != SCHEMA_V2:

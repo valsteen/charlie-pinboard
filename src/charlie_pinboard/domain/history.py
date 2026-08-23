@@ -1,10 +1,10 @@
 import hashlib
-import json
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, cast, overload
+from typing import Annotated, Literal, assert_never
 
-from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
+import msgspec
+
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import ItemId
 from charlie_pinboard.domain.model import (
     ArtifactRole,
@@ -18,7 +18,206 @@ from charlie_pinboard.domain.model import (
     ScopeDependency,
 )
 
-type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
+type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
+type NonNegativeInteger = Annotated[int, msgspec.Meta(ge=0)]
+type PositiveInteger = Annotated[int, msgspec.Meta(ge=1)]
+type Sha256 = Annotated[str, msgspec.Meta(pattern=r"^[0-9a-f]{64}$")]
+type SemanticArtifactRole = Literal["design", "plan", "requirements"]
+
+
+class HistoryOutcomeError(ValueError):
+    code = DecisionFailureCode.HISTORY_OUTCOME_INVALID
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"{self.code.value}: {message}")
+
+
+def _encoded_record(value: msgspec.Struct) -> bytes:
+    return msgspec.json.encode(value, order="sorted") + b"\n"
+
+
+def _canonical_positions(positions: tuple[int, ...], identities: tuple[str, ...]) -> bool:
+    return positions == tuple(range(len(positions))) and len(identities) == len(set(identities))
+
+
+def _canonical_selector(selector: str) -> bool:
+    parts = selector.split("/")
+    return not selector.startswith("/") and all(part not in {"", ".", ".."} for part in parts)
+
+
+class ScopeDependencyRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    dependency_id: NonEmptyString
+    position: NonNegativeInteger
+
+
+class ScopeResourceRequirementRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    position: NonNegativeInteger
+    resource_id: NonEmptyString
+
+
+class ScopeArtifactRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    content_sha256: Sha256
+    key: NonEmptyString
+    kind: SemanticArtifactRole
+    position: NonNegativeInteger
+    revision: PositiveInteger
+    role: SemanticArtifactRole
+    selector: NonEmptyString
+
+    def __post_init__(self) -> None:
+        if self.kind != self.role:
+            raise ValueError("Semantic artifact kind must equal its role.")
+        if not _canonical_selector(self.selector):
+            raise ValueError("Artifact selector must be a canonical relative POSIX path.")
+
+
+class ItemScopeRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    artifacts: tuple[ScopeArtifactRecord, ...]
+    dependencies: tuple[ScopeDependencyRecord, ...]
+    effect: NonEmptyString | None
+    item_id: NonEmptyString
+    resource_requirements: tuple[ScopeResourceRequirementRecord, ...]
+    schema: Literal["item-scope/v1"]
+    trigger: NonEmptyString | None
+    unlock: NonEmptyString | None
+    user_label: NonEmptyString
+    why_it_matters: NonEmptyString | None
+
+    def __post_init__(self) -> None:
+        dependency_positions = tuple(value.position for value in self.dependencies)
+        dependency_ids = tuple(value.dependency_id for value in self.dependencies)
+        if not _canonical_positions(dependency_positions, dependency_ids):
+            raise ValueError("Dependency positions or identities are not canonical.")
+        requirement_positions = tuple(value.position for value in self.resource_requirements)
+        resource_ids = tuple(value.resource_id for value in self.resource_requirements)
+        if not _canonical_positions(requirement_positions, resource_ids):
+            raise ValueError("Resource requirement positions or identities are not canonical.")
+        artifact_positions: dict[SemanticArtifactRole, list[int]] = {}
+        artifact_identities: set[tuple[str, str, int]] = set()
+        artifact_order: list[tuple[str, int, str, str, int]] = []
+        for artifact in self.artifacts:
+            artifact_positions.setdefault(artifact.role, []).append(artifact.position)
+            identity = (artifact.kind, artifact.key, artifact.revision)
+            if identity in artifact_identities:
+                raise ValueError("Semantic artifact identity is duplicated.")
+            artifact_identities.add(identity)
+            artifact_order.append((artifact.role, artifact.position, artifact.kind, artifact.key, artifact.revision))
+        if any(positions != list(range(len(positions))) for positions in artifact_positions.values()):
+            raise ValueError("Artifact role positions are not canonical.")
+        if artifact_order != sorted(artifact_order):
+            raise ValueError("Artifact order is not canonical.")
+
+
+class ScopeAnchorRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    scope_digest: Sha256
+    scope_revision: PositiveInteger
+
+
+class ScopeSnapshotRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    scope_digest: Sha256
+    scope_revision: PositiveInteger
+    semantic: ItemScopeRecord
+
+    def __post_init__(self) -> None:
+        computed = hashlib.sha256(_encoded_record(self.semantic)).hexdigest()
+        if self.scope_digest != computed:
+            raise ValueError("Scope digest does not match its semantic value.")
+
+
+class ItemScopeChangeOutcome(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    after: ScopeSnapshotRecord
+    before: ScopeSnapshotRecord | None
+    item_id: NonEmptyString
+
+    def __post_init__(self) -> None:
+        if self.item_id != self.after.semantic.item_id:
+            raise ValueError("Scope outcome item IDs do not match.")
+        if self.before is None:
+            if self.after.scope_revision != 1:
+                raise ValueError("Initial scope revision must be one.")
+            return
+        if (
+            self.before.semantic.item_id != self.item_id
+            or self.before.scope_revision + 1 != self.after.scope_revision
+            or self.before.scope_digest == self.after.scope_digest
+        ):
+            raise ValueError("Scope outcome anchors are not a semantic change.")
+
+
+class PlanningImpactSourceRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    attempt_id: NonEmptyString | None
+    item_id: NonEmptyString
+    scope: ScopeAnchorRecord
+
+
+class PlanningImpactTargetRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    item_id: NonEmptyString
+    position: NonNegativeInteger
+    scope: ScopeAnchorRecord
+
+
+class PlanningImpactOutcome(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    evidence: NonEmptyString
+    impact_id: NonEmptyString
+    source: PlanningImpactSourceRecord
+    summary: NonEmptyString
+    targets: tuple[PlanningImpactTargetRecord, ...]
+
+    def __post_init__(self) -> None:
+        if not self.targets:
+            raise ValueError("Planning impact targets cannot be empty.")
+        positions = tuple(value.position for value in self.targets)
+        identities = tuple(value.item_id for value in self.targets)
+        if not _canonical_positions(positions, identities):
+            raise ValueError("Planning target positions or identities are not canonical.")
+
+
+class PlanningReplacementRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    item_id: NonEmptyString
+    position: NonNegativeInteger
+
+
+class PlanningResolutionOutcome(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    disposition: PlanningDisposition
+    evaluated_scope: ScopeAnchorRecord
+    impact_id: NonEmptyString
+    observed_scope: ScopeAnchorRecord
+    outcome_evidence: NonEmptyString | None
+    reason: NonEmptyString
+    replacements: tuple[PlanningReplacementRecord, ...]
+    resulting_scope: ScopeAnchorRecord | None
+    target_item_id: NonEmptyString
+
+    def __post_init__(self) -> None:
+        positions = tuple(value.position for value in self.replacements)
+        identities = tuple(value.item_id for value in self.replacements)
+        if not _canonical_positions(positions, identities):
+            raise ValueError("Planning replacement positions or identities are not canonical.")
+        if self.disposition == PlanningDisposition.REVISED:
+            if self.resulting_scope is None:
+                raise ValueError("Revised resolution requires a resulting scope.")
+            if (
+                self.resulting_scope.scope_revision != self.evaluated_scope.scope_revision + 1
+                or self.resulting_scope.scope_digest == self.evaluated_scope.scope_digest
+            ):
+                raise ValueError("Revised scope anchor is invalid.")
+        elif self.resulting_scope is not None:
+            raise ValueError("Only revised resolution may carry a resulting scope.")
+        terminal = self.disposition in {PlanningDisposition.DROPPED, PlanningDisposition.SUPERSEDED}
+        if terminal != (self.outcome_evidence is not None):
+            raise ValueError("Terminal outcome evidence does not match disposition.")
+        if (self.disposition == PlanningDisposition.SUPERSEDED) != bool(self.replacements):
+            raise ValueError("Replacement records do not match disposition.")
+
+
+class TransitionReceiptOutcome(msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_defaults=True):
+    evidence: str | None
+    outcome: str | None
+    candidate: str | None = None
+    checkpoint: str | None = None
+
+
+type DecodedHistoryOutcome = ItemScopeChangeOutcome | PlanningImpactOutcome | PlanningResolutionOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,70 +226,58 @@ class HistoryOutcome:
     payload: bytes
 
 
-def _nonempty(value: str, field: str) -> None:
-    if not value:
-        raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, f"{field} must be nonempty.")
-
-
-def _positioned(positions: list[int], identities: list[str], field: str) -> None:
-    if sorted(positions) != list(range(len(positions))) or len(positions) != len(set(positions)):
-        raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, f"{field} positions must be zero-based and gapless.")
-    if len(identities) != len(set(identities)) or any(not value for value in identities):
-        raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, f"{field} identities must be unique and nonempty.")
-
-
-def _semantic_artifacts(scope: ItemScope) -> tuple[dict[str, int | str], ...]:
-    semantic_roles = {ArtifactRole.REQUIREMENTS, ArtifactRole.PLAN, ArtifactRole.DESIGN}
-    artifacts = tuple(value for value in scope.artifacts if value.role in semantic_roles)
-    identities: set[tuple[str, str, int]] = set()
-    role_positions: dict[ArtifactRole, list[int]] = {}
-    for artifact in artifacts:
-        if artifact.position < 0:
-            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Artifact positions must be non-negative.")
-        if artifact.kind != artifact.role.value:
-            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Semantic artifact kind must equal its role.")
-        if artifact.revision < 1:
-            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Artifact revisions must be positive.")
-        for field, value in (
-            ("artifact key", artifact.key),
-            ("artifact selector", artifact.selector),
-            ("artifact content digest", artifact.content_sha256),
-        ):
-            _nonempty(value, field)
-        if len(artifact.content_sha256) != 64 or any(
-            character not in "0123456789abcdef" for character in artifact.content_sha256
-        ):
-            raise DecisionError(
-                DecisionErrorCode.ITEM_SCOPE_INVALID, "Artifact content digest must be lowercase SHA-256."
-            )
-        selector_parts = artifact.selector.split("/")
-        if artifact.selector.startswith("/") or any(part in {"", ".", ".."} for part in selector_parts):
-            raise DecisionError(
-                DecisionErrorCode.ITEM_SCOPE_INVALID, "Artifact selector must be a canonical relative POSIX path."
-            )
-        identity = (artifact.kind, artifact.key, artifact.revision)
-        if identity in identities:
-            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, "Semantic artifact identities must be unique.")
-        identities.add(identity)
-        role_positions.setdefault(artifact.role, []).append(artifact.position)
-    for role, positions in role_positions.items():
-        ordered = sorted(positions)
-        if ordered != list(range(len(ordered))) or len(ordered) != len(set(ordered)):
-            raise DecisionError(
-                DecisionErrorCode.ITEM_SCOPE_INVALID, f"Artifact positions for role '{role.value}' must be gapless."
-            )
-    return tuple(
-        {
-            "content_sha256": artifact.content_sha256,
-            "key": artifact.key,
-            "kind": artifact.kind,
-            "position": artifact.position,
-            "revision": artifact.revision,
-            "role": artifact.role.value,
-            "selector": artifact.selector,
-        }
-        for artifact in sorted(artifacts, key=_artifact_sort_key)
+def encode_transition_receipt_outcome(
+    *,
+    evidence: str | None,
+    outcome: str | None,
+    candidate: str | None = None,
+    checkpoint: str | None = None,
+) -> bytes:
+    return msgspec.json.encode(
+        TransitionReceiptOutcome(evidence, outcome, candidate, checkpoint),
+        order="sorted",
     )
+
+
+def decode_history_outcome(outcome_schema: str, payload: bytes) -> DecodedHistoryOutcome:
+    if not payload.endswith(b"\n"):
+        raise HistoryOutcomeError("Outcome JSON requires one final LF.")
+    try:
+        decoded: DecodedHistoryOutcome
+        match outcome_schema:
+            case "item-scope-change/v1":
+                decoded = msgspec.json.decode(payload, type=ItemScopeChangeOutcome)
+            case "planning-impact/v1":
+                decoded = msgspec.json.decode(payload, type=PlanningImpactOutcome)
+            case "planning-impact-resolution/v1":
+                decoded = msgspec.json.decode(payload, type=PlanningResolutionOutcome)
+            case _:
+                raise HistoryOutcomeError(f"Unsupported outcome schema '{outcome_schema}'.")
+    except msgspec.DecodeError as error:
+        raise HistoryOutcomeError(f"Cannot decode history outcome: {error}") from error
+    if _encoded_record(decoded) != payload:
+        raise HistoryOutcomeError("Outcome JSON is not canonical.")
+    return decoded
+
+
+def _nonempty(value: str, field: str) -> DecisionFailure | None:
+    if not value:
+        return DecisionFailure(DecisionFailureCode.ITEM_SCOPE_INVALID, f"{field} must be nonempty.")
+    return None
+
+
+def _positioned(positions: list[int], identities: list[str], field: str) -> DecisionFailure | None:
+    if sorted(positions) != list(range(len(positions))) or len(positions) != len(set(positions)):
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_SCOPE_INVALID,
+            f"{field} positions must be zero-based and gapless.",
+        )
+    if len(identities) != len(set(identities)) or any(not value for value in identities):
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_SCOPE_INVALID,
+            f"{field} identities must be unique and nonempty.",
+        )
+    return None
 
 
 def _artifact_sort_key(artifact: ScopeArtifact) -> tuple[str, int, str, str, int]:
@@ -109,9 +296,91 @@ def _obligation_sort_key(value: PlanningObligation) -> tuple[int, str]:
     return (value.position, value.target)
 
 
-def item_scope_bytes(scope: ItemScope) -> bytes:
-    _nonempty(scope.item_id, "item ID")
-    _nonempty(scope.user_label, "user label")
+def _semantic_role(role: ArtifactRole) -> SemanticArtifactRole | None:
+    match role:
+        case ArtifactRole.DESIGN:
+            return "design"
+        case ArtifactRole.PLAN:
+            return "plan"
+        case ArtifactRole.REQUIREMENTS:
+            return "requirements"
+        case ArtifactRole.EVIDENCE:
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _semantic_artifacts(  # noqa: C901, PLR0912
+    scope: ItemScope,
+) -> tuple[ScopeArtifactRecord, ...] | DecisionFailure:
+    semantic_roles = {ArtifactRole.REQUIREMENTS, ArtifactRole.PLAN, ArtifactRole.DESIGN}
+    artifacts = tuple(value for value in scope.artifacts if value.role in semantic_roles)
+    identities: set[tuple[str, str, int]] = set()
+    role_positions: dict[ArtifactRole, list[int]] = {}
+    for artifact in artifacts:
+        if artifact.position < 0:
+            return DecisionFailure(DecisionFailureCode.ITEM_SCOPE_INVALID, "Artifact positions must be non-negative.")
+        if artifact.kind != artifact.role.value:
+            return DecisionFailure(
+                DecisionFailureCode.ITEM_SCOPE_INVALID,
+                "Semantic artifact kind must equal its role.",
+            )
+        if artifact.revision < 1:
+            return DecisionFailure(DecisionFailureCode.ITEM_SCOPE_INVALID, "Artifact revisions must be positive.")
+        for field, value in (
+            ("artifact key", artifact.key),
+            ("artifact selector", artifact.selector),
+            ("artifact content digest", artifact.content_sha256),
+        ):
+            if (failure := _nonempty(value, field)) is not None:
+                return failure
+        if len(artifact.content_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in artifact.content_sha256
+        ):
+            return DecisionFailure(
+                DecisionFailureCode.ITEM_SCOPE_INVALID, "Artifact content digest must be lowercase SHA-256."
+            )
+        if not _canonical_selector(artifact.selector):
+            return DecisionFailure(
+                DecisionFailureCode.ITEM_SCOPE_INVALID, "Artifact selector must be a canonical relative POSIX path."
+            )
+        identity = (artifact.kind, artifact.key, artifact.revision)
+        if identity in identities:
+            return DecisionFailure(
+                DecisionFailureCode.ITEM_SCOPE_INVALID,
+                "Semantic artifact identities must be unique.",
+            )
+        identities.add(identity)
+        role_positions.setdefault(artifact.role, []).append(artifact.position)
+    for role, positions in role_positions.items():
+        ordered = sorted(positions)
+        if ordered != list(range(len(ordered))) or len(ordered) != len(set(ordered)):
+            return DecisionFailure(
+                DecisionFailureCode.ITEM_SCOPE_INVALID, f"Artifact positions for role '{role.value}' must be gapless."
+            )
+    records: list[ScopeArtifactRecord] = []
+    for artifact in sorted(artifacts, key=_artifact_sort_key):
+        role = _semantic_role(artifact.role)
+        if role is None:
+            continue
+        records.append(
+            ScopeArtifactRecord(
+                artifact.content_sha256,
+                artifact.key,
+                role,
+                artifact.position,
+                artifact.revision,
+                role,
+                artifact.selector,
+            )
+        )
+    return tuple(records)
+
+
+def _item_scope_record(scope: ItemScope) -> ItemScopeRecord | DecisionFailure:
+    for field, value in (("item ID", scope.item_id), ("user label", scope.user_label)):
+        if (failure := _nonempty(value, field)) is not None:
+            return failure
     for field, value in (
         ("trigger", scope.trigger),
         ("why it matters", scope.why_it_matters),
@@ -119,410 +388,258 @@ def item_scope_bytes(scope: ItemScope) -> bytes:
         ("unlock", scope.unlock),
     ):
         if value == "":
-            raise DecisionError(DecisionErrorCode.ITEM_SCOPE_INVALID, f"{field} must be nonempty or null.")
-    _positioned(
-        [value.position for value in scope.dependencies],
-        [value.dependency_id for value in scope.dependencies],
-        "Dependency",
-    )
-    _positioned(
-        [value.position for value in scope.resource_requirements],
-        [value.resource_id for value in scope.resource_requirements],
-        "Resource requirement",
-    )
-    value = {
-        "artifacts": _semantic_artifacts(scope),
-        "dependencies": tuple(
-            {"dependency_id": dependency.dependency_id, "position": dependency.position}
+            return DecisionFailure(DecisionFailureCode.ITEM_SCOPE_INVALID, f"{field} must be nonempty or null.")
+    if (
+        failure := _positioned(
+            [value.position for value in scope.dependencies],
+            [value.dependency_id for value in scope.dependencies],
+            "Dependency",
+        )
+    ) is not None:
+        return failure
+    if (
+        failure := _positioned(
+            [value.position for value in scope.resource_requirements],
+            [value.resource_id for value in scope.resource_requirements],
+            "Resource requirement",
+        )
+    ) is not None:
+        return failure
+    result = _semantic_artifacts(scope)
+    match result:
+        case DecisionFailure():
+            return result
+        case artifacts:
+            pass
+    return ItemScopeRecord(
+        artifacts,
+        tuple(
+            ScopeDependencyRecord(dependency.dependency_id, dependency.position)
             for dependency in sorted(scope.dependencies, key=_dependency_sort_key)
         ),
-        "effect": scope.effect,
-        "item_id": scope.item_id,
-        "resource_requirements": tuple(
-            {"position": requirement.position, "resource_id": requirement.resource_id}
-            for requirement in sorted(
-                scope.resource_requirements,
-                key=_requirement_sort_key,
-            )
+        scope.effect,
+        scope.item_id,
+        tuple(
+            ScopeResourceRequirementRecord(requirement.position, requirement.resource_id)
+            for requirement in sorted(scope.resource_requirements, key=_requirement_sort_key)
         ),
-        "schema": "item-scope/v1",
-        "trigger": scope.trigger,
-        "unlock": scope.unlock,
-        "user_label": scope.user_label,
-        "why_it_matters": scope.why_it_matters,
-    }
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
+        "item-scope/v1",
+        scope.trigger,
+        scope.unlock,
+        scope.user_label,
+        scope.why_it_matters,
+    )
 
 
-def item_scope_digest(scope: ItemScope) -> str:
-    return hashlib.sha256(item_scope_bytes(scope)).hexdigest()
+def item_scope_bytes(scope: ItemScope) -> bytes | DecisionFailure:
+    result = _item_scope_record(scope)
+    match result:
+        case DecisionFailure():
+            return result
+        case record:
+            return _encoded_record(record)
 
 
-def _anchor_value(revision: int, digest: str) -> dict[str, JsonValue]:
+def item_scope_digest(scope: ItemScope) -> str | DecisionFailure:
+    result = item_scope_bytes(scope)
+    match result:
+        case DecisionFailure():
+            return result
+        case payload:
+            return hashlib.sha256(payload).hexdigest()
+
+
+def _anchor_record(revision: int, digest: str) -> ScopeAnchorRecord | DecisionFailure:
     if revision < 1 or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-        raise DecisionError(
-            DecisionErrorCode.HISTORY_OUTCOME_INVALID,
+        return DecisionFailure(
+            DecisionFailureCode.HISTORY_OUTCOME_INVALID,
             "Scope anchors require a positive revision and lowercase SHA-256.",
         )
-    return {"scope_digest": digest, "scope_revision": revision}
+    return ScopeAnchorRecord(digest, revision)
 
 
-def _scope_snapshot_value(anchor: ScopeAnchor) -> dict[str, JsonValue]:
-    semantic = cast(JsonValue, json.loads(item_scope_bytes(anchor.scope)))
-    return {
-        "scope_digest": anchor.digest,
-        "scope_revision": anchor.revision,
-        "semantic": semantic,
-    }
+def _scope_snapshot_record(anchor: ScopeAnchor) -> ScopeSnapshotRecord | DecisionFailure:
+    result = _item_scope_record(anchor.scope)
+    match result:
+        case DecisionFailure():
+            return result
+        case semantic:
+            return ScopeSnapshotRecord(anchor.digest, anchor.revision, semantic)
 
 
-def _history_bytes(value: JsonValue) -> bytes:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode() + b"\n"
-
-
-def item_scope_change_outcome(before: ScopeAnchor | None, after: ScopeAnchor) -> HistoryOutcome:
-    if after.digest != item_scope_digest(after.scope):
-        raise DecisionError(
-            DecisionErrorCode.HISTORY_OUTCOME_INVALID, "After scope digest does not match its semantic value."
+def item_scope_change_outcome(  # noqa: PLR0912
+    before: ScopeAnchor | None,
+    after: ScopeAnchor,
+) -> HistoryOutcome | DecisionFailure:
+    result = item_scope_digest(after.scope)
+    match result:
+        case DecisionFailure():
+            return result
+        case after_digest:
+            pass
+    if after.digest != after_digest:
+        return DecisionFailure(
+            DecisionFailureCode.HISTORY_OUTCOME_INVALID, "After scope digest does not match its semantic value."
         )
     if before is not None:
         if before.item != after.item or before.revision + 1 != after.revision or before.digest == after.digest:
-            raise DecisionError(
-                DecisionErrorCode.HISTORY_OUTCOME_INVALID,
+            return DecisionFailure(
+                DecisionFailureCode.HISTORY_OUTCOME_INVALID,
                 "Scope changes require consecutive unequal anchors for one item.",
             )
-        if before.digest != item_scope_digest(before.scope):
-            raise DecisionError(
-                DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Before scope digest does not match its semantic value."
+        result = item_scope_digest(before.scope)
+        match result:
+            case DecisionFailure():
+                return result
+            case before_digest:
+                pass
+        if before.digest != before_digest:
+            return DecisionFailure(
+                DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Before scope digest does not match its semantic value."
             )
     elif after.revision != 1:
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "An initial scope starts at revision one.")
-    payload: dict[str, JsonValue] = {
-        "after": _scope_snapshot_value(after),
-        "before": None if before is None else _scope_snapshot_value(before),
-        "item_id": after.item,
-    }
-    outcome = HistoryOutcome("item-scope-change/v1", _history_bytes(payload))
-    validate_history_outcome(outcome.outcome_schema, outcome.payload)
-    return outcome
+        return DecisionFailure(DecisionFailureCode.HISTORY_OUTCOME_INVALID, "An initial scope starts at revision one.")
+    result = _scope_snapshot_record(after)
+    match result:
+        case DecisionFailure():
+            return result
+        case after_record:
+            pass
+    before_record: ScopeSnapshotRecord | None = None
+    if before is not None:
+        result = _scope_snapshot_record(before)
+        match result:
+            case DecisionFailure():
+                return result
+            case record:
+                before_record = record
+    record = ItemScopeChangeOutcome(after_record, before_record, after.item)
+    return HistoryOutcome("item-scope-change/v1", _encoded_record(record))
 
 
-def planning_impact_outcome(impact: PlanningImpact) -> HistoryOutcome:
-    targets: list[JsonValue] = [
-        {
-            "item_id": obligation.target,
-            "position": obligation.position,
-            "scope": _anchor_value(obligation.observed_scope_revision, obligation.observed_scope_digest),
-        }
-        for obligation in sorted(impact.obligations, key=_obligation_sort_key)
-    ]
-    payload: dict[str, JsonValue] = {
-        "evidence": impact.evidence,
-        "impact_id": impact.impact_id,
-        "source": {
-            "attempt_id": impact.source_attempt,
-            "item_id": impact.source_item,
-            "scope": _anchor_value(impact.source_scope_revision, impact.source_scope_digest),
-        },
-        "summary": impact.summary,
-        "targets": targets,
-    }
-    outcome = HistoryOutcome("planning-impact/v1", _history_bytes(payload))
-    validate_history_outcome(outcome.outcome_schema, outcome.payload)
-    return outcome
+def planning_impact_outcome(impact: PlanningImpact) -> HistoryOutcome | DecisionFailure:
+    for field, value in (("impact ID", impact.impact_id), ("summary", impact.summary), ("evidence", impact.evidence)):
+        if not value:
+            return DecisionFailure(DecisionFailureCode.HISTORY_OUTCOME_INVALID, f"{field} must be nonempty.")
+    if impact.source_attempt == "":
+        return DecisionFailure(DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Source attempt must be nonempty or null.")
+    if not impact.obligations:
+        return DecisionFailure(DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Planning impact targets cannot be empty.")
+    if (
+        failure := _positioned(
+            [value.position for value in impact.obligations],
+            [value.target for value in impact.obligations],
+            "Planning target",
+        )
+    ) is not None:
+        return DecisionFailure(DecisionFailureCode.HISTORY_OUTCOME_INVALID, failure.message)
+    targets: list[PlanningImpactTargetRecord] = []
+    for obligation in sorted(impact.obligations, key=_obligation_sort_key):
+        result = _anchor_record(obligation.observed_scope_revision, obligation.observed_scope_digest)
+        match result:
+            case DecisionFailure():
+                return result
+            case scope:
+                targets.append(PlanningImpactTargetRecord(obligation.target, obligation.position, scope))
+    result = _anchor_record(impact.source_scope_revision, impact.source_scope_digest)
+    match result:
+        case DecisionFailure():
+            return result
+        case source_scope:
+            pass
+    record = PlanningImpactOutcome(
+        impact.evidence,
+        impact.impact_id,
+        PlanningImpactSourceRecord(impact.source_attempt, impact.source_item, source_scope),
+        impact.summary,
+        tuple(targets),
+    )
+    return HistoryOutcome("planning-impact/v1", _encoded_record(record))
 
 
-def planning_resolution_outcome(impact: PlanningImpact, target: ItemId) -> HistoryOutcome:
+def planning_resolution_outcome(  # noqa: C901, PLR0912
+    impact: PlanningImpact,
+    target: ItemId,
+) -> HistoryOutcome | DecisionFailure:
     obligation = next((value for value in impact.obligations if value.target == target), None)
     if obligation is None or obligation.disposition is None or obligation.reason is None:
-        raise DecisionError(
-            DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Planning resolution must name one resolved obligation."
+        return DecisionFailure(
+            DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Planning resolution must name one resolved obligation."
         )
     if obligation.evaluated_scope_revision is None or obligation.evaluated_scope_digest is None:
-        raise DecisionError(
-            DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Planning resolution requires its evaluated scope."
+        return DecisionFailure(
+            DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Planning resolution requires its evaluated scope."
         )
-    resulting_scope = None
-    if obligation.resulting_scope_revision is not None and obligation.resulting_scope_digest is not None:
-        resulting_scope = _anchor_value(obligation.resulting_scope_revision, obligation.resulting_scope_digest)
-    replacements: list[JsonValue] = [
-        {"item_id": item_id, "position": position} for position, item_id in enumerate(obligation.replacements)
-    ]
-    payload: dict[str, JsonValue] = {
-        "disposition": obligation.disposition.value,
-        "evaluated_scope": _anchor_value(
-            obligation.evaluated_scope_revision,
-            obligation.evaluated_scope_digest,
-        ),
-        "impact_id": impact.impact_id,
-        "observed_scope": _anchor_value(obligation.observed_scope_revision, obligation.observed_scope_digest),
-        "outcome_evidence": obligation.outcome_evidence,
-        "reason": obligation.reason,
-        "replacements": replacements,
-        "resulting_scope": resulting_scope,
-        "target_item_id": target,
-    }
-    outcome = HistoryOutcome("planning-impact-resolution/v1", _history_bytes(payload))
-    validate_history_outcome(outcome.outcome_schema, outcome.payload)
-    return outcome
-
-
-def _outcome_mapping(value: JsonValue, keys: frozenset[str]) -> dict[str, JsonValue]:
-    if not isinstance(value, dict):
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome records must be JSON objects.")
-    result = value
-    if set(result) != keys or any(not isinstance(key, str) for key in result):
-        raise DecisionError(
-            DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome record members do not match the schema."
+    if not impact.impact_id or not target or not obligation.reason:
+        return DecisionFailure(
+            DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Planning resolution identities and reason must be nonempty."
         )
-    return result
-
-
-def _outcome_array(value: JsonValue) -> list[JsonValue]:
-    if not isinstance(value, list):
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome collection must be a JSON array.")
-    return value
-
-
-@overload
-def _outcome_string(value: JsonValue, *, nullable: Literal[False] = False) -> str: ...
-
-
-@overload
-def _outcome_string(value: JsonValue, *, nullable: Literal[True]) -> str | None: ...
-
-
-def _outcome_string(value: JsonValue, *, nullable: bool = False) -> str | None:
-    if value is None and nullable:
-        return None
-    if not isinstance(value, str) or not value:
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome string must be nonempty.")
-    return value
-
-
-def _outcome_integer(value: JsonValue, *, positive: bool = False) -> int:
-    if (
-        not isinstance(value, int)
-        or isinstance(value, bool)
-        or (positive and value < 1)
-        or (not positive and value < 0)
+    resulting_scope: ScopeAnchorRecord | None = None
+    if obligation.resulting_scope_revision is not None or obligation.resulting_scope_digest is not None:
+        if obligation.resulting_scope_revision is None or obligation.resulting_scope_digest is None:
+            return DecisionFailure(
+                DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Resulting scope anchor must be complete."
+            )
+        result = _anchor_record(obligation.resulting_scope_revision, obligation.resulting_scope_digest)
+        match result:
+            case DecisionFailure():
+                return result
+            case scope:
+                resulting_scope = scope
+    result = _anchor_record(obligation.evaluated_scope_revision, obligation.evaluated_scope_digest)
+    match result:
+        case DecisionFailure():
+            return result
+        case evaluated_scope:
+            pass
+    result = _anchor_record(obligation.observed_scope_revision, obligation.observed_scope_digest)
+    match result:
+        case DecisionFailure():
+            return result
+        case observed_scope:
+            pass
+    if len(obligation.replacements) != len(set(obligation.replacements)) or any(
+        not value for value in obligation.replacements
     ):
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome integer has an invalid type or range.")
-    return value
-
-
-def _validate_anchor_record(value: JsonValue) -> tuple[int, str]:
-    record = _outcome_mapping(value, frozenset({"scope_revision", "scope_digest"}))
-    revision = _outcome_integer(record["scope_revision"], positive=True)
-    digest = _outcome_string(record["scope_digest"])
-    if digest is None or len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope digest must be lowercase SHA-256.")
-    return revision, digest
-
-
-def _validate_positioned_records(
-    records: list[dict[str, JsonValue]],
-    *,
-    identity: Callable[[dict[str, JsonValue]], str],
-) -> None:
-    positions = [_outcome_integer(record["position"]) for record in records]
-    identities = [identity(record) for record in records]
-    if positions != list(range(len(records))) or len(identities) != len(set(identities)):
-        raise DecisionError(
-            DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome positions or identities are not canonical."
+        return DecisionFailure(
+            DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Planning replacement identities must be unique and nonempty."
         )
-
-
-def _validate_semantic_scope(value: JsonValue) -> tuple[str, str]:
-    keys = frozenset(
-        {
-            "schema",
-            "item_id",
-            "user_label",
-            "trigger",
-            "why_it_matters",
-            "effect",
-            "unlock",
-            "dependencies",
-            "resource_requirements",
-            "artifacts",
-        }
+    replacements = tuple(
+        PlanningReplacementRecord(item_id, position) for position, item_id in enumerate(obligation.replacements)
     )
-    record = _outcome_mapping(value, keys)
-    if record["schema"] != "item-scope/v1":
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Semantic scope schema is not item-scope/v1.")
-    item_id = _outcome_string(record["item_id"])
-    _outcome_string(record["user_label"])
-    for field in ("trigger", "why_it_matters", "effect", "unlock"):
-        _outcome_string(record[field], nullable=True)
-    dependencies = [
-        _outcome_mapping(value, frozenset({"position", "dependency_id"}))
-        for value in _outcome_array(record["dependencies"])
-    ]
-    _validate_positioned_records(dependencies, identity=lambda value: _outcome_string(value["dependency_id"]) or "")
-    requirements = [
-        _outcome_mapping(value, frozenset({"position", "resource_id"}))
-        for value in _outcome_array(record["resource_requirements"])
-    ]
-    _validate_positioned_records(requirements, identity=lambda value: _outcome_string(value["resource_id"]) or "")
-    artifacts = [
-        _outcome_mapping(
-            value,
-            frozenset({"role", "position", "kind", "key", "revision", "selector", "content_sha256"}),
-        )
-        for value in _outcome_array(record["artifacts"])
-    ]
-    artifact_positions: dict[str, list[int]] = {}
-    artifact_identities: set[tuple[str, str, int]] = set()
-    artifact_order: list[tuple[str, int, str, str, int]] = []
-    for artifact in artifacts:
-        role = _outcome_string(artifact["role"])
-        kind = _outcome_string(artifact["kind"])
-        key = _outcome_string(artifact["key"])
-        revision = _outcome_integer(artifact["revision"], positive=True)
-        position = _outcome_integer(artifact["position"])
-        selector = _outcome_string(artifact["selector"])
-        digest = _outcome_string(artifact["content_sha256"])
-        if role not in {"requirements", "plan", "design"} or kind != role or selector is None or digest is None:
-            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Semantic artifact identity is invalid.")
-        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
-            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Artifact digest must be lowercase SHA-256.")
-        artifact_positions.setdefault(role, []).append(position)
-        identity = (kind, key, revision)
-        if identity in artifact_identities:
-            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Semantic artifact identity is duplicated.")
-        artifact_identities.add(identity)
-        artifact_order.append((role, position, kind, key, revision))
-    if any(positions != list(range(len(positions))) for positions in artifact_positions.values()):
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Artifact role positions are not canonical.")
-    if artifact_order != sorted(artifact_order):
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Artifact order is not canonical.")
-    if item_id is None:
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope item ID is missing.")
-    digest = hashlib.sha256(_history_bytes(record)).hexdigest()
-    return item_id, digest
-
-
-def _validate_scope_snapshot(value: JsonValue) -> tuple[str, int, str]:
-    record = _outcome_mapping(value, frozenset({"scope_revision", "scope_digest", "semantic"}))
-    revision, digest = _validate_anchor_record(
-        {"scope_revision": record["scope_revision"], "scope_digest": record["scope_digest"]}
-    )
-    item_id, computed = _validate_semantic_scope(record["semantic"])
-    if digest != computed:
-        raise DecisionError(
-            DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope digest does not match its semantic value."
-        )
-    return item_id, revision, digest
-
-
-def _validate_scope_change(value: dict[str, JsonValue]) -> None:
-    record = _outcome_mapping(value, frozenset({"item_id", "before", "after"}))
-    item_id = _outcome_string(record["item_id"])
-    after_item, after_revision, after_digest = _validate_scope_snapshot(record["after"])
-    if item_id != after_item:
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope outcome item IDs do not match.")
-    if record["before"] is None:
-        if after_revision != 1:
-            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Initial scope revision must be one.")
-        return
-    before_item, before_revision, before_digest = _validate_scope_snapshot(record["before"])
-    if before_item != item_id or before_revision + 1 != after_revision or before_digest == after_digest:
-        raise DecisionError(
-            DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Scope outcome anchors are not a semantic change."
-        )
-
-
-def _validate_planning_impact_outcome(value: dict[str, JsonValue]) -> None:
-    record = _outcome_mapping(value, frozenset({"impact_id", "source", "summary", "evidence", "targets"}))
-    _outcome_string(record["impact_id"])
-    _outcome_string(record["summary"])
-    _outcome_string(record["evidence"])
-    source = _outcome_mapping(record["source"], frozenset({"item_id", "attempt_id", "scope"}))
-    _outcome_string(source["item_id"])
-    _outcome_string(source["attempt_id"], nullable=True)
-    _validate_anchor_record(source["scope"])
-    targets = [
-        _outcome_mapping(value, frozenset({"item_id", "position", "scope"}))
-        for value in _outcome_array(record["targets"])
-    ]
-    if not targets:
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Planning impact targets cannot be empty.")
-    for target in targets:
-        _validate_anchor_record(target["scope"])
-    _validate_positioned_records(targets, identity=lambda value: _outcome_string(value["item_id"]) or "")
-
-
-def _validate_planning_resolution_outcome(value: dict[str, JsonValue]) -> None:
-    keys = frozenset(
-        {
-            "impact_id",
-            "target_item_id",
-            "observed_scope",
-            "evaluated_scope",
-            "resulting_scope",
-            "disposition",
-            "reason",
-            "outcome_evidence",
-            "replacements",
-        }
-    )
-    record = _outcome_mapping(value, keys)
-    _outcome_string(record["impact_id"])
-    _outcome_string(record["target_item_id"])
-    _outcome_string(record["reason"])
-    _validate_anchor_record(record["observed_scope"])
-    evaluated_revision, evaluated_digest = _validate_anchor_record(record["evaluated_scope"])
-    disposition_text = _outcome_string(record["disposition"])
-    try:
-        disposition = PlanningDisposition(disposition_text)
-    except ValueError as error:
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Planning disposition is invalid.") from error
-    replacements = [
-        _outcome_mapping(value, frozenset({"position", "item_id"})) for value in _outcome_array(record["replacements"])
-    ]
-    _validate_positioned_records(replacements, identity=lambda value: _outcome_string(value["item_id"]) or "")
-    outcome_evidence = _outcome_string(record["outcome_evidence"], nullable=True)
-    resulting = record["resulting_scope"]
+    disposition = obligation.disposition
     if disposition == PlanningDisposition.REVISED:
-        resulting_revision, resulting_digest = _validate_anchor_record(resulting)
-        if resulting_revision != evaluated_revision + 1 or resulting_digest == evaluated_digest:
-            raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Revised scope anchor is invalid.")
-    elif resulting is not None:
-        raise DecisionError(
-            DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Only revised resolution may carry a resulting scope."
+        if resulting_scope is None:
+            return DecisionFailure(
+                DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Revised resolution requires a resulting scope."
+            )
+        if (
+            resulting_scope.scope_revision != evaluated_scope.scope_revision + 1
+            or resulting_scope.scope_digest == evaluated_scope.scope_digest
+        ):
+            return DecisionFailure(DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Revised scope anchor is invalid.")
+    elif resulting_scope is not None:
+        return DecisionFailure(
+            DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Only revised resolution may carry a resulting scope."
         )
     terminal = disposition in {PlanningDisposition.DROPPED, PlanningDisposition.SUPERSEDED}
-    if terminal != (outcome_evidence is not None):
-        raise DecisionError(
-            DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Terminal outcome evidence does not match disposition."
+    if terminal != (obligation.outcome_evidence is not None):
+        return DecisionFailure(
+            DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Terminal outcome evidence does not match disposition."
         )
     if (disposition == PlanningDisposition.SUPERSEDED) != bool(replacements):
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Replacement records do not match disposition.")
-
-
-def validate_history_outcome(outcome_schema: str, payload: bytes) -> None:
-    if not payload.endswith(b"\n"):
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome JSON requires one final LF.")
-    try:
-        decoded = cast(JsonValue, json.loads(payload))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome is not valid UTF-8 JSON.") from error
-    if not isinstance(decoded, dict):
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome root must be a JSON object.")
-    record = decoded
-    if any(not isinstance(key, str) for key in record):
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome member names must be strings.")
-    if _history_bytes(record) != payload:
-        raise DecisionError(DecisionErrorCode.HISTORY_OUTCOME_INVALID, "Outcome JSON is not canonical.")
-    match outcome_schema:
-        case "item-scope-change/v1":
-            _validate_scope_change(record)
-        case "planning-impact/v1":
-            _validate_planning_impact_outcome(record)
-        case "planning-impact-resolution/v1":
-            _validate_planning_resolution_outcome(record)
-        case _:
-            raise DecisionError(
-                DecisionErrorCode.HISTORY_OUTCOME_INVALID, f"Unsupported outcome schema '{outcome_schema}'."
-            )
+        return DecisionFailure(
+            DecisionFailureCode.HISTORY_OUTCOME_INVALID, "Replacement records do not match disposition."
+        )
+    record = PlanningResolutionOutcome(
+        disposition,
+        evaluated_scope,
+        impact.impact_id,
+        observed_scope,
+        obligation.outcome_evidence,
+        obligation.reason,
+        replacements,
+        resulting_scope,
+        target,
+    )
+    return HistoryOutcome("planning-impact-resolution/v1", _encoded_record(record))

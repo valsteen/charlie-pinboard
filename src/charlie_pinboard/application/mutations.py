@@ -1,4 +1,3 @@
-import json
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import assert_never
@@ -22,6 +21,7 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkState,
 )
 from charlie_pinboard.domain.decisions import Decision, TransitionReceipt
+from charlie_pinboard.domain.history import encode_transition_receipt_outcome
 from charlie_pinboard.domain.identifiers import ItemId
 from charlie_pinboard.domain.model import (
     CanonicalJson,
@@ -173,11 +173,10 @@ def _common_after(mutation: StoredStateMutation) -> StoredWorkState:
     project = before.lifecycle.project
     stored_receipt = mutation.stored_receipt
     expected_outcome = CanonicalJson(
-        json.dumps(
-            {"evidence": mutation.receipt.evidence, "outcome": mutation.receipt.outcome},
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        encode_transition_receipt_outcome(
+            evidence=mutation.receipt.evidence,
+            outcome=mutation.receipt.outcome,
+        )
     )
     next_history_id = 1 + max((int(value.history_id) for value in before.history.receipts), default=0)
     if (

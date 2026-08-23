@@ -9,7 +9,6 @@ from pathlib import Path
 from urllib.parse import quote
 
 from charlie_pinboard.adapters.files.file_io import DurableRoots, FileIOError, ensure_directory_chain
-from charlie_pinboard.domain.errors import DecisionError
 
 APPLICATION = "charlie-pinboard"
 SCHEMA_VERSION = 1
@@ -30,6 +29,7 @@ class StorageErrorCode(Enum):
     SCHEMA_TOO_NEW = "SCHEMA_TOO_NEW"
     IO_ERROR = "STORAGE_IO_ERROR"
     OPERATION_FAILED = "STORAGE_OPERATION_FAILED"
+    STALE_WRITE = "ACTION_NOT_AVAILABLE"
 
 
 class StorageError(RuntimeError):
@@ -368,9 +368,6 @@ def write_transaction(connection: sqlite3.Connection) -> Generator[sqlite3.Conne
         except sqlite3.Error as error:
             connection.rollback()
             raise _translate_database_error(error) from error
-        except DecisionError:
-            connection.rollback()
-            raise
         except Exception as error:
             connection.rollback()
             raise StorageError(

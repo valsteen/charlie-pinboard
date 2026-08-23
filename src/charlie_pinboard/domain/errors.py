@@ -1,7 +1,8 @@
+from dataclasses import dataclass
 from enum import Enum
 
 
-class DecisionErrorCode(Enum):
+class DecisionFailureCode(Enum):
     ACTION_NOT_AVAILABLE = "ACTION_NOT_AVAILABLE"
     ACTION_NOT_MUTATING = "ACTION_NOT_MUTATING"
     ATTEMPT_AUTHORITY_REQUIRED = "ATTEMPT_AUTHORITY_REQUIRED"
@@ -29,9 +30,7 @@ class DecisionErrorCode(Enum):
     TRANSITION_INPUT_INVALID = "TRANSITION_INPUT_INVALID"
 
 
-class DecisionError(RuntimeError):
-    code: DecisionErrorCode
-
-    def __init__(self, code: DecisionErrorCode, message: str) -> None:
-        self.code = code
-        super().__init__(f"{code.value}: {message}")
+@dataclass(frozen=True, slots=True)
+class DecisionFailure:
+    code: DecisionFailureCode
+    message: str

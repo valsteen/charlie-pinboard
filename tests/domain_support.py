@@ -1,5 +1,5 @@
 from dataclasses import replace as dataclass_replace
-from typing import Any  # noqa: TID251 - fixture corruption intentionally crosses the typed boundary
+from typing import Any, cast  # noqa: TID251 - fixture corruption intentionally crosses the typed boundary
 
 from charlie_pinboard.domain import history, planning_decisions, resource_decisions
 from charlie_pinboard.domain.decisions import Action as ActionValue
@@ -314,11 +314,11 @@ def transfer_coordinator_input(task_id: str, host_id: str) -> TransferCoordinato
 
 
 def advance_scope(previous: ScopeAnchorValue | None, item: str, scope: ItemScopeValue) -> ScopeAnchorValue:
-    return planning_decisions.advance_scope(previous, ItemId(item), scope)
+    return cast(ScopeAnchorValue, planning_decisions.advance_scope(previous, ItemId(item), scope))
 
 
 def planning_resolution_outcome(impact: PlanningImpactValue, target: str) -> history.HistoryOutcome:
-    return history.planning_resolution_outcome(impact, ItemId(target))
+    return cast(history.HistoryOutcome, history.planning_resolution_outcome(impact, ItemId(target)))
 
 
 def resolve_planning_obligation(
@@ -333,16 +333,19 @@ def resolve_planning_obligation(
     replacements: tuple[str, ...] = (),
     outcome_evidence: str | None = None,
 ) -> PlanningImpactValue:
-    return planning_decisions.resolve_planning_obligation(
-        snapshot,
-        impact,
-        ItemId(target),
-        disposition,
-        reason=reason,
-        resulting_scope_revision=resulting_scope_revision,
-        resulting_scope_digest=resulting_scope_digest,
-        replacements=tuple(ItemId(value) for value in replacements),
-        outcome_evidence=outcome_evidence,
+    return cast(
+        PlanningImpactValue,
+        planning_decisions.resolve_planning_obligation(
+            snapshot,
+            impact,
+            ItemId(target),
+            disposition,
+            reason=reason,
+            resulting_scope_revision=resulting_scope_revision,
+            resulting_scope_digest=resulting_scope_digest,
+            replacements=tuple(ItemId(value) for value in replacements),
+            outcome_evidence=outcome_evidence,
+        ),
     )
 
 
@@ -358,16 +361,19 @@ def decide_planning_resolution(
     replacements: tuple[str, ...] = (),
     outcome_evidence: str | None = None,
 ) -> planning_decisions.PlanningResolutionDecision:
-    return planning_decisions.decide_planning_resolution(
-        snapshot,
-        impact,
-        ItemId(target),
-        disposition,
-        reason=reason,
-        resulting_scope_revision=resulting_scope_revision,
-        resulting_scope_digest=resulting_scope_digest,
-        replacements=tuple(ItemId(value) for value in replacements),
-        outcome_evidence=outcome_evidence,
+    return cast(
+        planning_decisions.PlanningResolutionDecision,
+        planning_decisions.decide_planning_resolution(
+            snapshot,
+            impact,
+            ItemId(target),
+            disposition,
+            reason=reason,
+            resulting_scope_revision=resulting_scope_revision,
+            resulting_scope_digest=resulting_scope_digest,
+            replacements=tuple(ItemId(value) for value in replacements),
+            outcome_evidence=outcome_evidence,
+        ),
     )
 
 
@@ -380,23 +386,29 @@ def assign_resource(
     attempt: str,
     generation: int,
 ) -> ResourceDecision:
-    return resource_decisions.assign_resource(
-        snapshot,
-        reservation_id=ReservationId(reservation_id),
-        resource_id=ResourceId(resource_id),
-        instance_id=ResourceInstanceId(instance_id),
-        attempt=AttemptId(attempt),
-        generation=generation,
+    return cast(
+        ResourceDecision,
+        resource_decisions.assign_resource(
+            snapshot,
+            reservation_id=ReservationId(reservation_id),
+            resource_id=ResourceId(resource_id),
+            instance_id=ResourceInstanceId(instance_id),
+            attempt=AttemptId(attempt),
+            generation=generation,
+        ),
     )
 
 
 def release_resource(snapshot: LedgerSnapshot, reservation_id: str) -> ResourceDecision:
-    return resource_decisions.release_resource(snapshot, ReservationId(reservation_id))
+    return cast(ResourceDecision, resource_decisions.release_resource(snapshot, ReservationId(reservation_id)))
 
 
 def revoke_resource(snapshot: LedgerSnapshot, reservation_id: str, *, unresolved_intent: bool) -> ResourceDecision:
-    return resource_decisions.revoke_resource(
-        snapshot, ReservationId(reservation_id), unresolved_intent=unresolved_intent
+    return cast(
+        ResourceDecision,
+        resource_decisions.revoke_resource(
+            snapshot, ReservationId(reservation_id), unresolved_intent=unresolved_intent
+        ),
     )
 
 
@@ -408,12 +420,15 @@ def reallocate_resource(
     instance_id: str,
     generation: int,
 ) -> ResourceDecision:
-    return resource_decisions.reallocate_resource(
-        snapshot,
-        ReservationId(reservation_id),
-        replacement_id=ReservationId(replacement_id),
-        instance_id=ResourceInstanceId(instance_id),
-        generation=generation,
+    return cast(
+        ResourceDecision,
+        resource_decisions.reallocate_resource(
+            snapshot,
+            ReservationId(reservation_id),
+            replacement_id=ReservationId(replacement_id),
+            instance_id=ResourceInstanceId(instance_id),
+            generation=generation,
+        ),
     )
 
 
@@ -423,9 +438,12 @@ def validate_mutation_resources(
     required_resources: tuple[str, ...],
     tokens: tuple[ResourceTokenValue, ...],
 ) -> None:
-    resource_decisions.validate_mutation_resources(
-        snapshot,
-        AttemptId(attempt),
-        tuple(ResourceId(value) for value in required_resources),
-        tokens,
-    )
+    if (
+        failure := resource_decisions.validate_mutation_resources(
+            snapshot,
+            AttemptId(attempt),
+            tuple(ResourceId(value) for value in required_resources),
+            tokens,
+        )
+    ) is not None:
+        raise AssertionError(f"Expected success, received {failure.code.value}: {failure.message}")

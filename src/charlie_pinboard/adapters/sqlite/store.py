@@ -1,4 +1,3 @@
-import json
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -6,6 +5,8 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Never, assert_never
+
+import msgspec
 
 from charlie_pinboard.adapters.sqlite.database import (
     APPLICATION,
@@ -90,7 +91,7 @@ from charlie_pinboard.domain.decisions import (
     ProposalDispositionKind,
     TransitionReceipt,
 )
-from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
+from charlie_pinboard.domain.history import encode_transition_receipt_outcome
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -170,10 +171,10 @@ def _optional_time(row: sqlite3.Row, key: str) -> datetime | None:
 def _canonical_json(row: sqlite3.Row, key: str) -> CanonicalJson:
     value = _text(row, key)
     try:
-        json.loads(value)
-    except json.JSONDecodeError as error:
+        decoded = msgspec.json.decode(value, type=msgspec.Raw)
+    except msgspec.DecodeError as error:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has invalid JSON.") from error
-    return CanonicalJson(value.encode("utf-8"))
+    return CanonicalJson(bytes(decoded))
 
 
 def _optional_canonical_json(row: sqlite3.Row, key: str) -> CanonicalJson | None:
@@ -181,10 +182,10 @@ def _optional_canonical_json(row: sqlite3.Row, key: str) -> CanonicalJson | None
     if value is None:
         return None
     try:
-        json.loads(value)
-    except json.JSONDecodeError as error:
+        decoded = msgspec.json.decode(value, type=msgspec.Raw)
+    except msgspec.DecodeError as error:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has invalid JSON.") from error
-    return CanonicalJson(value.encode("utf-8"))
+    return CanonicalJson(bytes(decoded))
 
 
 def _enum_value[EnumValue: Enum](constructor: type[EnumValue], row: sqlite3.Row, key: str) -> EnumValue:
@@ -1429,8 +1430,8 @@ class _DecisionWriter:
         return decision.receipt
 
     def _stale(self) -> Never:
-        raise DecisionError(
-            DecisionErrorCode.ACTION_NOT_AVAILABLE,
+        raise StorageError(
+            StorageErrorCode.STALE_WRITE,
             "The stored work state changed; rediscover the action before retrying.",
         )
 
@@ -1889,19 +1890,19 @@ class _DecisionWriter:
                 actor_task, actor_host = anchor.task_id, anchor.host_id
         if decision.action.authorization == AuthorizationKind.COORDINATION and state.authority.coordination is not None:
             actor_task, actor_host = state.authority.coordination.task_id, state.authority.coordination.host_id
-        outcome: dict[str, str | None] = {
-            "outcome": decision.receipt.outcome,
-            "evidence": decision.receipt.evidence,
-        }
+        checkpoint: str | None = None
+        candidate: str | None = None
         if decision.checkpoint_acceptance_change is not None:
-            outcome.update(
-                {
-                    "checkpoint": str(decision.checkpoint_acceptance_change.checkpoint),
-                    "candidate": str(decision.checkpoint_acceptance_change.candidate),
-                }
-            )
+            checkpoint = str(decision.checkpoint_acceptance_change.checkpoint)
+            candidate = str(decision.checkpoint_acceptance_change.candidate)
         if decision.attempt_change is not None and decision.attempt_change.protected_candidate_after is not None:
-            outcome["candidate"] = str(decision.attempt_change.protected_candidate_after)
+            candidate = str(decision.attempt_change.protected_candidate_after)
+        outcome_json = encode_transition_receipt_outcome(
+            evidence=decision.receipt.evidence,
+            outcome=decision.receipt.outcome,
+            candidate=candidate,
+            checkpoint=checkpoint,
+        ).decode("utf-8")
         history_id = 1 + max((int(value.history_id) for value in state.history.receipts), default=0)
         self._connection.execute(
             """
@@ -1921,7 +1922,7 @@ class _DecisionWriter:
                 decision.action.authorization.value,
                 actor_task,
                 actor_host,
-                json.dumps(outcome, sort_keys=True, separators=(",", ":")),
+                outcome_json,
                 decision.receipt.decided_at.isoformat(),
             ),
         )
@@ -1934,8 +1935,8 @@ class _StoredMutationWriter:
     def commit(self, mutation: StoredStateMutation) -> TransitionReceipt:
         current = _StoredStateReader(self._connection).read()
         if current != mutation.before:
-            raise DecisionError(
-                DecisionErrorCode.ACTION_NOT_AVAILABLE,
+            raise StorageError(
+                StorageErrorCode.STALE_WRITE,
                 "The stored work state changed; rediscover the mutation before retrying.",
             )
         try:

@@ -4,25 +4,55 @@ import unittest
 from datetime import UTC, datetime
 from typing import cast
 
+from charlie_pinboard.domain import planning_decisions, resource_decisions
 from charlie_pinboard.domain.decisions import (
     Action,
     ActionKind,
     ActorAuthority,
     AuthorizationKind,
+    Decision,
     Role,
-    available_actions,
-    bind_transition,
-    decide,
+    TransitionCommand,
 )
-from charlie_pinboard.domain.errors import DecisionError, DecisionErrorCode
+from charlie_pinboard.domain.decisions import (
+    available_actions as available_actions_outcome,
+)
+from charlie_pinboard.domain.decisions import (
+    bind_transition as bind_transition_outcome,
+)
+from charlie_pinboard.domain.decisions import (
+    decide as decision_outcome,
+)
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.history import (
-    item_scope_bytes,
-    item_scope_change_outcome,
-    item_scope_digest,
-    planning_impact_outcome,
-    validate_history_outcome,
+    HistoryOutcome,
+    HistoryOutcomeError,
+    ItemScopeChangeOutcome,
+    PlanningImpactOutcome,
+    PlanningResolutionOutcome,
+    decode_history_outcome,
 )
-from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId, CandidateId, ItemId
+from charlie_pinboard.domain.history import (
+    item_scope_bytes as item_scope_bytes_outcome,
+)
+from charlie_pinboard.domain.history import (
+    item_scope_change_outcome as item_scope_change_outcome_result,
+)
+from charlie_pinboard.domain.history import (
+    item_scope_digest as item_scope_digest_outcome,
+)
+from charlie_pinboard.domain.history import (
+    planning_impact_outcome as planning_impact_outcome_result,
+)
+from charlie_pinboard.domain.identifiers import (
+    ArtifactRefId,
+    AttemptId,
+    CandidateId,
+    ItemId,
+    ReservationId,
+    ResourceId,
+    ResourceInstanceId,
+)
 from charlie_pinboard.domain.model import (
     AcceptedProposalState,
     ActivateInput,
@@ -40,12 +70,18 @@ from charlie_pinboard.domain.model import (
     ReservationState,
     ScopeArtifact,
     SubmitReviewInput,
+    TransitionInput,
     UseLeaseGenerationKind,
     UseLeaseState,
     WorkItem,
     WorkState,
 )
-from charlie_pinboard.domain.planning_decisions import validate_planning_impact
+from charlie_pinboard.domain.model import PlanningImpact as PlanningImpactValue
+from charlie_pinboard.domain.model import ScopeAnchor as ScopeAnchorValue
+from charlie_pinboard.domain.planning_decisions import PlanningResolutionDecision
+from charlie_pinboard.domain.planning_decisions import validate_planning_impact as validate_planning_impact_result
+from charlie_pinboard.domain.resource_decisions import ResourceDecision
+from charlie_pinboard.domain.resource_decisions import ResourceToken as ResourceTokenValue
 from tests.domain_support import (
     accept_proposal_input as AcceptProposalInput,
 )
@@ -124,6 +160,136 @@ type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValu
 NOW = datetime(2026, 8, 21, tzinfo=UTC)
 DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64
+
+
+def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
+    return cast(tuple[Action, ...], available_actions_outcome(snapshot, actor))
+
+
+def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand:
+    return cast(TransitionCommand, bind_transition_outcome(action, value))
+
+
+def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:
+    return cast(Decision, decision_outcome(snapshot, command, now))
+
+
+def item_scope_bytes(scope: ItemScope) -> bytes:
+    return cast(bytes, item_scope_bytes_outcome(scope))
+
+
+def item_scope_digest(scope: ItemScope) -> str:
+    return cast(str, item_scope_digest_outcome(scope))
+
+
+def item_scope_change_outcome(before: ScopeAnchorValue | None, after: ScopeAnchorValue) -> HistoryOutcome:
+    return cast(HistoryOutcome, item_scope_change_outcome_result(before, after))
+
+
+def planning_impact_outcome(impact: PlanningImpactValue) -> HistoryOutcome:
+    return cast(HistoryOutcome, planning_impact_outcome_result(impact))
+
+
+def validate_planning_impact(snapshot: LedgerSnapshot, impact: PlanningImpactValue) -> None:
+    if (failure := validate_planning_impact_result(snapshot, impact)) is not None:
+        raise AssertionError(f"Expected success, received {failure.code.value}: {failure.message}")
+
+
+def resolve_planning_obligation_result(
+    snapshot: LedgerSnapshot,
+    impact: PlanningImpactValue,
+    target: str,
+    disposition: PlanningDisposition,
+    *,
+    reason: str,
+    resulting_scope_revision: int | None = None,
+    resulting_scope_digest: str | None = None,
+    replacements: tuple[str, ...] = (),
+    outcome_evidence: str | None = None,
+) -> PlanningImpactValue | DecisionFailure:
+    return planning_decisions.resolve_planning_obligation(
+        snapshot,
+        impact,
+        ItemId(target),
+        disposition,
+        reason=reason,
+        resulting_scope_revision=resulting_scope_revision,
+        resulting_scope_digest=resulting_scope_digest,
+        replacements=tuple(ItemId(value) for value in replacements),
+        outcome_evidence=outcome_evidence,
+    )
+
+
+def decide_planning_resolution_result(
+    snapshot: LedgerSnapshot,
+    impact: PlanningImpactValue,
+    target: str,
+    disposition: PlanningDisposition,
+    *,
+    reason: str,
+    resulting_scope_revision: int | None = None,
+    resulting_scope_digest: str | None = None,
+    replacements: tuple[str, ...] = (),
+    outcome_evidence: str | None = None,
+) -> PlanningResolutionDecision | DecisionFailure:
+    return planning_decisions.decide_planning_resolution(
+        snapshot,
+        impact,
+        ItemId(target),
+        disposition,
+        reason=reason,
+        resulting_scope_revision=resulting_scope_revision,
+        resulting_scope_digest=resulting_scope_digest,
+        replacements=tuple(ItemId(value) for value in replacements),
+        outcome_evidence=outcome_evidence,
+    )
+
+
+def validate_mutation_resources_result(
+    snapshot: LedgerSnapshot,
+    attempt: str,
+    required_resources: tuple[str, ...],
+    tokens: tuple[ResourceTokenValue, ...],
+) -> DecisionFailure | None:
+    return resource_decisions.validate_mutation_resources(
+        snapshot,
+        AttemptId(attempt),
+        tuple(ResourceId(value) for value in required_resources),
+        tokens,
+    )
+
+
+def assign_resource_result(
+    snapshot: LedgerSnapshot,
+    *,
+    reservation_id: str,
+    resource_id: str,
+    instance_id: str,
+    attempt: str,
+    generation: int,
+) -> ResourceDecision | DecisionFailure:
+    return resource_decisions.assign_resource(
+        snapshot,
+        reservation_id=ReservationId(reservation_id),
+        resource_id=ResourceId(resource_id),
+        instance_id=ResourceInstanceId(instance_id),
+        attempt=AttemptId(attempt),
+        generation=generation,
+    )
+
+
+def release_resource_result(snapshot: LedgerSnapshot, reservation_id: str) -> ResourceDecision | DecisionFailure:
+    return resource_decisions.release_resource(snapshot, ReservationId(reservation_id))
+
+
+def revoke_resource_result(
+    snapshot: LedgerSnapshot, reservation_id: str, *, unresolved_intent: bool
+) -> ResourceDecision | DecisionFailure:
+    return resource_decisions.revoke_resource(
+        snapshot,
+        ReservationId(reservation_id),
+        unresolved_intent=unresolved_intent,
+    )
 
 
 def canonical_history(value: JsonValue) -> bytes:
@@ -214,6 +380,17 @@ def native_scope(*, artifacts: tuple[ScopeArtifact, ...] | None = None) -> ItemS
 
 
 class LifecycleDecisionTest(unittest.TestCase):
+    def test_missing_attempt_is_a_returned_failure(self) -> None:
+        snapshot = LedgerSnapshot("revision", 1, ())
+        command = bind_transition(action(ActionKind.PAUSE, "missing-attempt"), ReasonInput("pause"))
+
+        outcome = decision_outcome(snapshot, command, NOW)
+
+        self.assertEqual(
+            DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, "Attempt 'missing-attempt' does not exist."),
+            outcome,
+        )
+
     def test_action_matrix_respects_exact_planning_boundaries(self) -> None:
         items = (
             item("source", WorkState.ACTIVE, attempt="source-1"),
@@ -319,8 +496,9 @@ class LifecycleDecisionTest(unittest.TestCase):
             tuple((change.before, change.after) for change in completed.resource_use_lease_changes),
         )
 
-        with self.assertRaisesRegex(DecisionError, "TRANSITION_INPUT_INVALID"):
-            bind_transition(action(ActionKind.COMPLETE, "target-1"), EmptyInput())
+        rejected = bind_transition_outcome(action(ActionKind.COMPLETE, "target-1"), EmptyInput())
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
         intake = LedgerSnapshot("revision", 1, (item("obsolete", WorkState.INTAKE),))
         closed = decide(
@@ -355,9 +533,11 @@ class LifecycleDecisionTest(unittest.TestCase):
         self.assertIn("continue:build-map-1", action_ids)
         self.assertNotIn("dispatch:build-map-1", action_ids)
         self.assertNotIn("complete:build-map-1", action_ids)
-        with self.assertRaisesRegex(DecisionError, "ITEM_SCOPE_STALE"):
-            submit = action(ActionKind.SUBMIT_REVIEW, "build-map-1")
-            decide(snapshot, bind_transition(submit, SubmitReviewInput(CandidateId("candidate"))), NOW)
+        submit = action(ActionKind.SUBMIT_REVIEW, "build-map-1")
+        command = bind_transition(submit, SubmitReviewInput(CandidateId("candidate")))
+        rejected = decision_outcome(snapshot, command, NOW)
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ITEM_SCOPE_STALE, rejected.code)
 
     def test_transition_rejections_preserve_the_domain_boundary(self) -> None:
         ready = item("target", WorkState.READY)
@@ -619,10 +799,15 @@ class LifecycleDecisionTest(unittest.TestCase):
             (LedgerSnapshot("r", 1, ()), ActionKind.INSPECT, "ledger", EmptyInput(), "ACTION_NOT_MUTATING"),
         )
         for snapshot, kind, subject, value, code in cases:
-            with self.subTest(kind=kind.value, code=code), self.assertRaises(DecisionError) as raised:
-                command = bind_transition(action(kind, subject), value)
-                decide(snapshot, command, NOW)
-            self.assertEqual(DecisionErrorCode(code), raised.exception.code)
+            with self.subTest(kind=kind.value, code=code):
+                bound = bind_transition_outcome(action(kind, subject), value)
+                match bound:
+                    case DecisionFailure():
+                        rejected = bound
+                    case _:
+                        rejected = decision_outcome(snapshot, bound, NOW)
+                        self.assertIsInstance(rejected, DecisionFailure)
+                self.assertEqual(DecisionFailureCode(code), rejected.code)
 
 
 class ScopeAndPlanningContractTest(unittest.TestCase):
@@ -678,8 +863,10 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             ),
         )
         for scope in invalid:
-            with self.subTest(scope=scope), self.assertRaisesRegex(DecisionError, "ITEM_SCOPE_INVALID"):
-                item_scope_bytes(scope)
+            with self.subTest(scope=scope):
+                rejected = item_scope_bytes_outcome(scope)
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(DecisionFailureCode.ITEM_SCOPE_INVALID, rejected.code)
 
     def test_scope_rejects_malformed_semantic_fields_as_one_contract(self) -> None:
         artifact = ScopeArtifact(
@@ -713,9 +900,10 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             native_scope(artifacts=(artifact, replace(artifact, key="other", position=2))),
         )
         for scope in invalid:
-            with self.subTest(scope=scope), self.assertRaises(DecisionError) as raised:
-                item_scope_bytes(scope)
-            self.assertEqual(DecisionErrorCode.ITEM_SCOPE_INVALID, raised.exception.code)
+            with self.subTest(scope=scope):
+                rejected = item_scope_bytes_outcome(scope)
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(DecisionFailureCode.ITEM_SCOPE_INVALID, rejected.code)
 
     def test_planning_resolution_enforces_scope_replacement_and_evidence_contracts(self) -> None:
         snapshot = LedgerSnapshot(
@@ -747,18 +935,22 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
         )
         resolution_history = planning_resolution_outcome(revised, "target")
         self.assertEqual("planning-impact-resolution/v1", resolution_history.outcome_schema)
-        validate_history_outcome(resolution_history.outcome_schema, resolution_history.payload)
+        self.assertIsInstance(
+            decode_history_outcome(resolution_history.outcome_schema, resolution_history.payload),
+            PlanningResolutionOutcome,
+        )
 
-        with self.assertRaisesRegex(DecisionError, "PLANNING_RESOLUTION_INVALID"):
-            resolve_planning_obligation(
-                snapshot,
-                impact,
-                "target",
-                PlanningDisposition.SUPERSEDED,
-                reason="Split work",
-                replacements=(),
-                outcome_evidence="Superseded by smaller items",
-            )
+        rejected = resolve_planning_obligation_result(
+            snapshot,
+            impact,
+            "target",
+            PlanningDisposition.SUPERSEDED,
+            reason="Split work",
+            replacements=(),
+            outcome_evidence="Superseded by smaller items",
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.PLANNING_RESOLUTION_INVALID, rejected.code)
 
         superseded = resolve_planning_obligation(
             snapshot,
@@ -775,7 +967,10 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
         )
         impact_history = planning_impact_outcome(impact)
         self.assertEqual("planning-impact/v1", impact_history.outcome_schema)
-        validate_history_outcome(impact_history.outcome_schema, impact_history.payload)
+        self.assertIsInstance(
+            decode_history_outcome(impact_history.outcome_schema, impact_history.payload),
+            PlanningImpactOutcome,
+        )
 
         lifecycle_snapshot = replace(
             snapshot,
@@ -826,8 +1021,11 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             history_replace(fixture, ("targets", 0, "scope", "scope_digest"), "not-a-digest"),
         )
         for payload in invalid_payloads:
-            with self.subTest(payload=payload), self.assertRaisesRegex(DecisionError, "HISTORY_OUTCOME_INVALID"):
-                validate_history_outcome(outcome.outcome_schema, payload)
+            with (
+                self.subTest(payload=payload),
+                self.assertRaisesRegex(HistoryOutcomeError, "HISTORY_OUTCOME_INVALID"),
+            ):
+                decode_history_outcome(outcome.outcome_schema, payload)
 
     def test_planning_resolution_history_has_frozen_bytes_and_rejects_malformed_records(self) -> None:
         snapshot = LedgerSnapshot(
@@ -888,8 +1086,11 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             history_replace(superseded_payload, ("replacements", 1, "position"), 2),
         )
         for payload in invalid_payloads:
-            with self.subTest(payload=payload), self.assertRaisesRegex(DecisionError, "HISTORY_OUTCOME_INVALID"):
-                validate_history_outcome(outcome.outcome_schema, payload)
+            with (
+                self.subTest(payload=payload),
+                self.assertRaisesRegex(HistoryOutcomeError, "HISTORY_OUTCOME_INVALID"),
+            ):
+                decode_history_outcome(outcome.outcome_schema, payload)
 
     def test_planning_impact_rejections_cover_identity_scope_and_evidence(self) -> None:
         source = item("source", WorkState.ACTIVE, attempt="source-1")
@@ -942,11 +1143,12 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             ),
         )
         for candidate, invalid_impact in cases:
-            with self.subTest(impact=invalid_impact), self.assertRaises(DecisionError) as raised:
-                validate_planning_impact(candidate, invalid_impact)
+            with self.subTest(impact=invalid_impact):
+                rejected = validate_planning_impact_result(candidate, invalid_impact)
+                self.assertIsInstance(rejected, DecisionFailure)
             self.assertIn(
-                raised.exception.code,
-                {DecisionErrorCode.PLANNING_IMPACT_INVALID, DecisionErrorCode.PLANNING_ACTION_STALE},
+                rejected.code,
+                {DecisionFailureCode.PLANNING_IMPACT_INVALID, DecisionFailureCode.PLANNING_ACTION_STALE},
             )
 
     def test_planning_dispositions_produce_exact_lifecycle_effects(self) -> None:
@@ -1049,14 +1251,8 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             (PlanningDisposition.UNCHANGED, "", None, None, (), None),
         )
         for disposition, reason, revision, digest, replacements, evidence in resolution_cases:
-            with (
-                self.subTest(disposition=disposition.value),
-                self.assertRaisesRegex(
-                    DecisionError,
-                    "PLANNING_RESOLUTION_INVALID",
-                ),
-            ):
-                resolve_planning_obligation(
+            with self.subTest(disposition=disposition.value):
+                rejected = resolve_planning_obligation_result(
                     snapshot,
                     impact,
                     "target",
@@ -1067,9 +1263,18 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
                     replacements=replacements,
                     outcome_evidence=evidence,
                 )
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(DecisionFailureCode.PLANNING_RESOLUTION_INVALID, rejected.code)
 
-        with self.assertRaisesRegex(DecisionError, "PLANNING_OBLIGATION_NOT_FOUND"):
-            resolve_planning_obligation(snapshot, impact, "missing", PlanningDisposition.UNCHANGED, reason="reason")
+        rejected = resolve_planning_obligation_result(
+            snapshot,
+            impact,
+            "missing",
+            PlanningDisposition.UNCHANGED,
+            reason="reason",
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.PLANNING_OBLIGATION_NOT_FOUND, rejected.code)
         resolved = resolve_planning_obligation(
             snapshot,
             impact,
@@ -1077,8 +1282,15 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             PlanningDisposition.UNCHANGED,
             reason="reason",
         )
-        with self.assertRaisesRegex(DecisionError, "PLANNING_ACTION_STALE"):
-            resolve_planning_obligation(snapshot, resolved, "target", PlanningDisposition.UNCHANGED, reason="again")
+        rejected = resolve_planning_obligation_result(
+            snapshot,
+            resolved,
+            "target",
+            PlanningDisposition.UNCHANGED,
+            reason="again",
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.PLANNING_ACTION_STALE, rejected.code)
 
         retained = replace(target, state=WorkState.BLOCKED, attempt="target-1")
         retained_snapshot = replace(
@@ -1086,32 +1298,35 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             items=(source, retained),
             attempts=(*snapshot.attempts, AttemptRecord("target-1", "target", AttemptState.BLOCKED)),
         )
-        with self.assertRaisesRegex(DecisionError, "PLANNING_RESOLUTION_INVALID"):
-            decide_planning_resolution(
-                retained_snapshot,
-                impact,
-                "target",
-                PlanningDisposition.DEFERRED,
-                reason="later",
-            )
-        with self.assertRaisesRegex(DecisionError, "PLANNING_RESOLUTION_INVALID"):
-            decide_planning_resolution(
-                snapshot,
-                impact,
-                "target",
-                PlanningDisposition.SUPERSEDED,
-                reason="split",
-                replacements=("missing",),
-                outcome_evidence="split",
-            )
-        with self.assertRaisesRegex(DecisionError, "PLANNING_RESOLUTION_INVALID"):
-            decide_planning_resolution(
-                replace(snapshot, items=(source, replace(target, state=WorkState.ACTIVE))),
-                impact,
-                "target",
-                PlanningDisposition.DEFERRED,
-                reason="later",
-            )
+        rejected = decide_planning_resolution_result(
+            retained_snapshot,
+            impact,
+            "target",
+            PlanningDisposition.DEFERRED,
+            reason="later",
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.PLANNING_RESOLUTION_INVALID, rejected.code)
+        rejected = decide_planning_resolution_result(
+            snapshot,
+            impact,
+            "target",
+            PlanningDisposition.SUPERSEDED,
+            reason="split",
+            replacements=("missing",),
+            outcome_evidence="split",
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.PLANNING_RESOLUTION_INVALID, rejected.code)
+        rejected = decide_planning_resolution_result(
+            replace(snapshot, items=(source, replace(target, state=WorkState.ACTIVE))),
+            impact,
+            "target",
+            PlanningDisposition.DEFERRED,
+            reason="later",
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.PLANNING_RESOLUTION_INVALID, rejected.code)
 
     def test_scope_change_history_recomputes_digests_and_requires_consecutive_revisions(self) -> None:
         first = advance_scope(None, "build-map", native_scope())
@@ -1142,10 +1357,14 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
         )
         self.assertEqual("item-scope-change/v1", outcome.outcome_schema)
         self.assertEqual(fixture, outcome.payload)
-        validate_history_outcome(outcome.outcome_schema, outcome.payload)
+        self.assertIsInstance(
+            decode_history_outcome(outcome.outcome_schema, outcome.payload),
+            ItemScopeChangeOutcome,
+        )
 
-        with self.assertRaisesRegex(DecisionError, "HISTORY_OUTCOME_INVALID"):
-            item_scope_change_outcome(first, replace(second, revision=3))
+        rejected = item_scope_change_outcome_result(first, replace(second, revision=3))
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.HISTORY_OUTCOME_INVALID, rejected.code)
 
         decoded = json.loads(fixture)
         before_null = json.loads(fixture)
@@ -1167,8 +1386,11 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             fixture[:-1],
         )
         for payload in invalid_payloads:
-            with self.subTest(payload=payload), self.assertRaisesRegex(DecisionError, "HISTORY_OUTCOME_INVALID"):
-                validate_history_outcome(outcome.outcome_schema, payload)
+            with (
+                self.subTest(payload=payload),
+                self.assertRaisesRegex(HistoryOutcomeError, "HISTORY_OUTCOME_INVALID"),
+            ):
+                decode_history_outcome(outcome.outcome_schema, payload)
 
 
 class ResourceAuthorityTest(unittest.TestCase):
@@ -1198,10 +1420,11 @@ class ResourceAuthorityTest(unittest.TestCase):
         validate_mutation_resources(
             snapshot, "attempt-1", ("checkout",), (ResourceToken("checkout", "host-a", "use-1", 5),)
         )
-        with self.assertRaisesRegex(DecisionError, "RESOURCE_USE_LEASE_STALE"):
-            validate_mutation_resources(
-                snapshot, "attempt-1", ("checkout",), (ResourceToken("checkout", "host-a", "use-1", 4),)
-            )
+        rejected = validate_mutation_resources_result(
+            snapshot, "attempt-1", ("checkout",), (ResourceToken("checkout", "host-a", "use-1", 4),)
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, rejected.code)
 
         invalid_authority = (
             ("absent", replace(snapshot, attempt_authorities=())),
@@ -1253,12 +1476,15 @@ class ResourceAuthorityTest(unittest.TestCase):
             ),
         )
         for name, invalid_snapshot in invalid_authority:
-            with self.subTest(name=name), self.assertRaises(DecisionError):
-                validate_mutation_resources(
-                    invalid_snapshot,
-                    "attempt-1",
-                    ("checkout",),
-                    (ResourceToken("checkout", "host-a", "use-1", 5),),
+            with self.subTest(name=name):
+                self.assertIsInstance(
+                    validate_mutation_resources_result(
+                        invalid_snapshot,
+                        "attempt-1",
+                        ("checkout",),
+                        (ResourceToken("checkout", "host-a", "use-1", 5),),
+                    ),
+                    DecisionFailure,
                 )
 
     def test_resource_lifecycle_is_kind_neutral_and_explicit(self) -> None:
@@ -1314,8 +1540,8 @@ class ResourceAuthorityTest(unittest.TestCase):
             ("same attempt requirement", "instance-b", "attempt-1"),
         )
         for name, instance_id, attempt in quarantine_conflicts:
-            with self.subTest(quarantine=name), self.assertRaisesRegex(DecisionError, "RESOURCE_INSTANCE_RESERVED"):
-                assign_resource(
+            with self.subTest(quarantine=name):
+                rejected = assign_resource_result(
                     quarantined_snapshot,
                     reservation_id="quarantine-conflict",
                     resource_id="workspace",
@@ -1323,6 +1549,8 @@ class ResourceAuthorityTest(unittest.TestCase):
                     attempt=attempt,
                     generation=2 if instance_id == "instance-a" else 1,
                 )
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(DecisionFailureCode.RESOURCE_INSTANCE_RESERVED, rejected.code)
         reallocated = reallocate_resource(
             with_reservation,
             "reservation-a",
@@ -1398,19 +1626,20 @@ class ResourceAuthorityTest(unittest.TestCase):
             ),
         )
         for name, candidate, requirements, tokens, code in validation_cases:
-            with self.subTest(name=name), self.assertRaises(DecisionError) as raised:
-                validate_mutation_resources(candidate, "attempt-1", requirements, tokens)
-            self.assertEqual(DecisionErrorCode(code), raised.exception.code)
+            with self.subTest(name=name):
+                rejected = validate_mutation_resources_result(candidate, "attempt-1", requirements, tokens)
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(DecisionFailureCode(code), rejected.code)
 
         lifecycle_cases = (
             (
                 "unknown reservation",
-                lambda: release_resource(snapshot, "missing"),
+                lambda: release_resource_result(snapshot, "missing"),
                 "RESOURCE_RESERVATION_STALE",
             ),
             (
                 "unknown instance",
-                lambda: assign_resource(
+                lambda: assign_resource_result(
                     snapshot,
                     reservation_id="new",
                     resource_id="checkout",
@@ -1422,7 +1651,7 @@ class ResourceAuthorityTest(unittest.TestCase):
             ),
             (
                 "invalid generation",
-                lambda: assign_resource(
+                lambda: assign_resource_result(
                     replace(snapshot, resource_reservations=()),
                     reservation_id="new",
                     resource_id="checkout",
@@ -1434,7 +1663,7 @@ class ResourceAuthorityTest(unittest.TestCase):
             ),
             (
                 "reserved instance",
-                lambda: assign_resource(
+                lambda: assign_resource_result(
                     snapshot,
                     reservation_id="new",
                     resource_id="checkout",
@@ -1446,7 +1675,7 @@ class ResourceAuthorityTest(unittest.TestCase):
             ),
             (
                 "duplicate attempt requirement",
-                lambda: assign_resource(
+                lambda: assign_resource_result(
                     replace(
                         snapshot,
                         resource_instances=(
@@ -1468,7 +1697,7 @@ class ResourceAuthorityTest(unittest.TestCase):
             ),
             (
                 "released twice",
-                lambda: release_resource(
+                lambda: release_resource_result(
                     replace(snapshot, resource_reservations=(replace(reservation, state=ReservationState.RELEASED),)),
                     "reservation-1",
                 ),
@@ -1476,7 +1705,7 @@ class ResourceAuthorityTest(unittest.TestCase):
             ),
             (
                 "revoked twice",
-                lambda: revoke_resource(
+                lambda: revoke_resource_result(
                     replace(snapshot, resource_reservations=(replace(reservation, state=ReservationState.REVOKED),)),
                     "reservation-1",
                     unresolved_intent=False,
@@ -1485,9 +1714,10 @@ class ResourceAuthorityTest(unittest.TestCase):
             ),
         )
         for name, operation, code in lifecycle_cases:
-            with self.subTest(name=name), self.assertRaises(DecisionError) as raised:
-                operation()
-            self.assertEqual(DecisionErrorCode(code), raised.exception.code)
+            with self.subTest(name=name):
+                rejected = operation()
+                self.assertIsInstance(rejected, DecisionFailure)
+            self.assertEqual(DecisionFailureCode(code), rejected.code)
 
 
 if __name__ == "__main__":
