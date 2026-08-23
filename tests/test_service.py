@@ -10,7 +10,10 @@ from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application import service
-from charlie_pinboard.application.decision_projection import project_decision_snapshot
+from charlie_pinboard.application.decision_projection import (
+    project_decision_snapshot,
+    project_inactive_attempt_authority,
+)
 from charlie_pinboard.application.service import (
     ABANDON_MUTATION_INTENT_INPUT_SCHEMA,
     AbandonMutationIntentHistoryInput,
@@ -84,8 +87,11 @@ from charlie_pinboard.domain.identifiers import (
     TaskId,
 )
 from charlie_pinboard.domain.model import (
+    AcceptedProposalState,
+    AcceptProposalInput,
     CanonicalJson,
     EvidenceInput,
+    MergeProposalInput,
     MutationIntentState,
     PlanningImpact,
     PlanningObligation,
@@ -96,12 +102,14 @@ from charlie_pinboard.domain.model import (
     ResourceRequirement,
     ScopeDependency,
     SubmitReviewInput,
+    Timing,
     TransferCoordinatorInput,
     UseLeaseGenerationKind,
     UseLeaseState,
 )
 from charlie_pinboard.domain.planning_decisions import (
     BlockedPlanningDisposition,
+    InterruptedPlanningAttemptAuthority,
     LivePlanningAttemptAuthority,
     NoAttemptPlanningAuthority,
     RecordPlanningImpactOperation,
@@ -454,7 +462,11 @@ class ServiceTest(unittest.TestCase):
         assert revoke_authority is not None
         revoked = change_coordination_authority(
             revoke_store,
-            RevokeCoordinationAuthority(revoke_authority, acquired_at + timedelta(seconds=2)),
+            RevokeCoordinationAuthority(
+                revoke_authority.lease_id,
+                revoke_authority.generation,
+                acquired_at + timedelta(seconds=2),
+            ),
         )
         self.assertNotIsInstance(revoked, DecisionFailure)
         revoked_authority = revoke_store.snapshot().authority.coordination
@@ -524,20 +536,34 @@ class ServiceTest(unittest.TestCase):
         )
         self.assertNotIsInstance(acquired, DecisionFailure)
 
-        normal_store = self._store()
+        normal_state = complete_sqlite_state()
+        normal_state = replace(normal_state, resources=replace(normal_state.resources, mutation_intents=()))
+        normal_store, _normal_database_path = self._store_with_state(normal_state)
         snapshot = project_decision_snapshot(normal_store.snapshot())
         current = snapshot.command_attempt_authorities[0]
         coordination = snapshot.coordination_authority
         assert coordination is not None
+        released = change_attempt_authority(
+            normal_store,
+            ReleaseAttemptAuthority(current, SQLITE_NOW + timedelta(seconds=1)),
+        )
+        self.assertNotIsInstance(released, DecisionFailure)
+        proof = project_inactive_attempt_authority(
+            normal_store.snapshot(),
+            current.attempt,
+            SQLITE_NOW + timedelta(seconds=2),
+        )
+        self.assertNotIsInstance(proof, DecisionFailure)
+        assert not isinstance(proof, DecisionFailure)
         transferred = change_attempt_authority(
             normal_store,
             TransferAttemptAuthority(
-                current,
+                proof,
                 coordination,
                 TaskId("worker-next"),
                 HostId("host-a"),
                 LeaseId("attempt-next"),
-                SQLITE_NOW + timedelta(seconds=1),
+                SQLITE_NOW + timedelta(seconds=2),
                 SQLITE_NOW + timedelta(minutes=2),
             ),
         )
@@ -550,7 +576,7 @@ class ServiceTest(unittest.TestCase):
                 next_authority.lease_id,
                 next_authority.generation,
                 coordination,
-                SQLITE_NOW + timedelta(seconds=2),
+                SQLITE_NOW + timedelta(seconds=3),
             ),
         )
         self.assertNotIsInstance(revoked, DecisionFailure)
@@ -934,8 +960,31 @@ class ServiceTest(unittest.TestCase):
         )
         self.assertIsInstance(stale, DecisionFailure)
 
-    def test_direct_reservation_release_atomically_releases_current_task_use(self) -> None:
+    def test_resource_definition_rejects_nonportable_kind_before_sqlite(self) -> None:
         store = self._store()
+        before = store.snapshot()
+        authority = project_decision_snapshot(before).coordination_authority
+        assert authority is not None
+
+        rejected = edit_resource_definition(
+            store,
+            ResourceDefinitionEditOperation(
+                authority,
+                None,
+                PortableResourceDefinition(ResourceId("bad-kind"), "Bad--Kind", "Invalid portable kind"),
+                SQLITE_NOW + timedelta(seconds=1),
+            ),
+        )
+
+        self.assertIsInstance(rejected, DecisionFailure)
+        assert isinstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.RESOURCE_DECLARATION_INVALID, rejected.code)
+        self.assertEqual(before, store.snapshot())
+
+    def test_direct_reservation_release_atomically_releases_current_task_use(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, resources=replace(state.resources, mutation_intents=()))
+        store, _database_path = self._store_with_state(state)
         snapshot = project_decision_snapshot(store.snapshot())
         authority = snapshot.coordination_authority
         assert authority is not None
@@ -964,6 +1013,67 @@ class ServiceTest(unittest.TestCase):
                 for value in after.resource_use_leases
             )
         )
+
+    def test_direct_reservation_release_rejects_a_planned_intent_without_commit(self) -> None:
+        store, _database_path = self._store_with_state(complete_sqlite_state())
+        before = store.snapshot()
+        snapshot = project_decision_snapshot(before)
+        authority = snapshot.coordination_authority
+        assert authority is not None
+        reservation = next(value for value in snapshot.resource_reservations if value.state.value == "active")
+        observation = snapshot.resource_observation(reservation.instance_id)
+        assert observation is not None
+
+        rejected = change_reservation(
+            store,
+            ReleaseReservationOperation(
+                authority,
+                reservation.reservation_id,
+                observation,
+                SQLITE_NOW + timedelta(seconds=1),
+            ),
+        )
+
+        self.assertIsInstance(rejected, DecisionFailure)
+        assert isinstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED, rejected.code)
+        self.assertEqual(before, store.snapshot())
+
+    def test_proposal_relationships_reject_missing_identities_before_sqlite(self) -> None:
+        dependency_store = self._store()
+        accept = self._coordinator_action(dependency_store, ActionKind.ACCEPT_PROPOSAL)
+        dependency_command = bind_transition(
+            accept,
+            AcceptProposalInput(
+                ItemId("accepted-proposal"),
+                AcceptedProposalState.INTAKE,
+                "review-intake",
+                Timing.SAFE_TO_DEFER,
+                (ItemId("missing-dependency"),),
+            ),
+        )
+        assert not isinstance(dependency_command, DecisionFailure)
+        before = dependency_store.snapshot()
+        dependency_rejected = execute(
+            dependency_store,
+            dependency_command,
+            SQLITE_NOW + timedelta(seconds=1),
+        )
+        self.assertIsInstance(dependency_rejected, DecisionFailure)
+        assert isinstance(dependency_rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.DEPENDENCY_NOT_SATISFIED, dependency_rejected.code)
+        self.assertEqual(before, dependency_store.snapshot())
+
+        merge_store = self._store()
+        merge = self._coordinator_action(merge_store, ActionKind.MERGE_PROPOSAL)
+        merge_command = bind_transition(merge, MergeProposalInput(ItemId("missing-target")))
+        assert not isinstance(merge_command, DecisionFailure)
+        before = merge_store.snapshot()
+        merge_rejected = execute(merge_store, merge_command, SQLITE_NOW + timedelta(seconds=1))
+        self.assertIsInstance(merge_rejected, DecisionFailure)
+        assert isinstance(merge_rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ITEM_NOT_FOUND, merge_rejected.code)
+        self.assertEqual(before, merge_store.snapshot())
 
     def test_resource_claim_atomically_assigns_reservation_and_first_task_use(self) -> None:
         state = complete_sqlite_state()
@@ -1046,8 +1156,9 @@ class ServiceTest(unittest.TestCase):
         )
         store, _database_path = self._store_with_state(state)
         snapshot = project_decision_snapshot(store.snapshot())
-        authority = snapshot.coordination_authority
-        assert authority is not None
+        authority = snapshot.command_attempt_authorities[0]
+        coordination = snapshot.coordination_authority
+        assert coordination is not None
         first, second = snapshot.resource_instances
         first_observation = snapshot.resource_observation(first.instance_id)
         second_observation = snapshot.resource_observation(second.instance_id)
@@ -1082,7 +1193,7 @@ class ServiceTest(unittest.TestCase):
         revoked = change_reservation(
             store,
             RevokeReservationOperation(
-                authority,
+                coordination,
                 ReservationId("reservation-second"),
                 second_observation,
                 SQLITE_NOW + timedelta(seconds=3),
@@ -1251,6 +1362,26 @@ class ServiceTest(unittest.TestCase):
                 live = current.command_attempt_authorities[0]
                 current_coordination = current.coordination_authority
                 assert current_coordination is not None
+                if terminal:
+                    target_authority = LivePlanningAttemptAuthority(live)
+                    resolved_at = SQLITE_NOW + timedelta(seconds=2)
+                else:
+                    released = change_attempt_authority(
+                        store,
+                        ReleaseAttemptAuthority(live, SQLITE_NOW + timedelta(seconds=2)),
+                    )
+                    self.assertNotIsInstance(released, DecisionFailure)
+                    proof = project_inactive_attempt_authority(
+                        store.snapshot(),
+                        live.attempt,
+                        SQLITE_NOW + timedelta(seconds=3),
+                    )
+                    self.assertNotIsInstance(proof, DecisionFailure)
+                    assert not isinstance(proof, DecisionFailure)
+                    target_authority = InterruptedPlanningAttemptAuthority(proof)
+                    current_coordination = project_decision_snapshot(store.snapshot()).coordination_authority
+                    assert current_coordination is not None
+                    resolved_at = SQLITE_NOW + timedelta(seconds=3)
                 resolved = resolve_planning_obligation(
                     store,
                     ResolvePlanningObligationOperation(
@@ -1258,8 +1389,8 @@ class ServiceTest(unittest.TestCase):
                         target.item,
                         disposition,
                         current_coordination,
-                        LivePlanningAttemptAuthority(live),
-                        SQLITE_NOW + timedelta(seconds=2),
+                        target_authority,
+                        resolved_at,
                     ),
                 )
                 self.assertNotIsInstance(resolved, DecisionFailure)
@@ -1270,6 +1401,7 @@ class ServiceTest(unittest.TestCase):
                     self.assertEqual("revoked", after.authority.attempt_leases[0].state.value)
                 else:
                     self.assertEqual("blocked", after.lifecycle.attempts[0].state.value)
+                    self.assertEqual("revoked", after.authority.attempt_leases[0].state.value)
                     self.assertTrue(all(value.state.value == "active" for value in after.resources.reservations))
                     self.assertFalse(any(value.state.value == "active" for value in after.resources.use_leases))
 

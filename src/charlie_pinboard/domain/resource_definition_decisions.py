@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -59,26 +60,30 @@ def decide_resource_definition_edit(
 ) -> ResourceDefinitionResult | DecisionFailure:
     if snapshot.coordination_authority != operation.authority or operation.authority.expires_at <= operation.changed_at:
         return DecisionFailure(
-            DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
             "Resource definition editing requires exact live coordination authority.",
         )
     definition = operation.definition
-    if not definition.resource_id or not definition.kind.strip() or not definition.description.strip():
+    if (
+        not definition.resource_id
+        or re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", definition.kind) is None
+        or not definition.description.strip()
+    ):
         return DecisionFailure(
-            DecisionFailureCode.RESOURCE_REQUIREMENT_INVALID,
+            DecisionFailureCode.RESOURCE_DECLARATION_INVALID,
             "A resource definition requires identity, kind, and description.",
         )
     current = snapshot.resource_definition(definition.resource_id)
     if current is None:
         if operation.current_definition_revision is not None:
             return DecisionFailure(
-                DecisionFailureCode.RESOURCE_REQUIREMENT_INVALID,
+                DecisionFailureCode.ACTION_NOT_AVAILABLE,
                 "The supplied resource definition revision is stale.",
             )
         return ResourceDefinitionEditDecision(None, definition, None, 1, ())
     if current.subject_revision != operation.current_definition_revision:
         return DecisionFailure(
-            DecisionFailureCode.RESOURCE_REQUIREMENT_INVALID,
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
             "The supplied resource definition revision is stale.",
         )
     before = _portable(current)

@@ -1360,6 +1360,26 @@ def _accept_proposal(
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
     if value.item in snapshot.items_by_id() or value.item in snapshot.history_items:
         return DecisionFailure(DecisionFailureCode.ITEM_ALREADY_EXISTS, f"Item '{value.item}' already exists.")
+    if (
+        len(value.depends_on) != len(set(value.depends_on))
+        or value.item in value.depends_on
+        or any(
+            snapshot.item(dependency) is None and dependency not in snapshot.history_items
+            for dependency in value.depends_on
+        )
+    ):
+        return DecisionFailure(
+            DecisionFailureCode.DEPENDENCY_NOT_SATISFIED,
+            "Accepted proposal dependencies must be ordered unique existing identities other than their owner.",
+        )
+    declared_resources = {definition.resource_id for definition in snapshot.resource_definitions}
+    if len(value.resource_requirements) != len(set(value.resource_requirements)) or any(
+        resource_id not in declared_resources for resource_id in value.resource_requirements
+    ):
+        return DecisionFailure(
+            DecisionFailureCode.RESOURCE_REQUIREMENT_INVALID,
+            "Accepted proposal requirements must be ordered unique declared resources.",
+        )
     change = ItemChange(value.item, None, WorkState(value.state.value))
     accepted_item: AcceptedProposalItem | None = None
     if (
@@ -1432,6 +1452,8 @@ def _merge_proposal(
     proposal = snapshot.proposal(proposal_id)
     if proposal is None:
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
+    if snapshot.item(value.target) is None and value.target not in snapshot.history_items:
+        return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{value.target}' does not exist.")
     return _result(
         action,
         now,

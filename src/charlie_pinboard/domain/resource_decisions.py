@@ -239,7 +239,7 @@ class ResolveFencedIntentInput:
 
 @dataclass(frozen=True, slots=True)
 class AssignReservationOperation:
-    authority: CoordinationCommandAuthority
+    authority: CommandAttemptAuthority
     reservation_id: ReservationId
     resource_id: ResourceId
     instance_id: ResourceInstanceId
@@ -251,7 +251,7 @@ class AssignReservationOperation:
 
 @dataclass(frozen=True, slots=True)
 class ReleaseReservationOperation:
-    authority: CoordinationCommandAuthority
+    authority: CommandAttemptAuthority | CoordinationCommandAuthority
     reservation_id: ReservationId
     observation: ResourceObservation
     changed_at: datetime
@@ -259,7 +259,7 @@ class ReleaseReservationOperation:
 
 @dataclass(frozen=True, slots=True)
 class ReallocateReservationOperation:
-    authority: CoordinationCommandAuthority
+    authority: CommandAttemptAuthority
     reservation_id: ReservationId
     replacement_id: ReservationId
     instance_id: ResourceInstanceId
@@ -563,22 +563,26 @@ def reallocate_resource(
     )
 
 
-def decide_reservation_operation(
+def decide_reservation_operation(  # noqa: C901, PLR0912
     snapshot: LedgerSnapshot,
     operation: ReservationOperation,
 ) -> ResourceDecision | DecisionFailure:
-    if snapshot.coordination_authority != operation.authority or operation.authority.expires_at <= operation.changed_at:
-        return DecisionFailure(
-            DecisionFailureCode.ACTION_NOT_AVAILABLE,
-            "Reservation changes require exact live coordination authority.",
-        )
     if snapshot.resource_observation(operation.observation.instance_id) != operation.observation:
         return DecisionFailure(
             DecisionFailureCode.RESOURCE_INSTANCE_REQUIRED,
             "Reservation changes require the exact selected locator observation.",
         )
     match operation:
-        case AssignReservationOperation():
+        case AssignReservationOperation(authority=authority):
+            if (
+                authority not in snapshot.command_attempt_authorities
+                or authority.expires_at <= operation.changed_at
+                or authority.attempt != operation.attempt
+            ):
+                return DecisionFailure(
+                    DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
+                    "Reservation assignment requires exact live attempt authority.",
+                )
             return assign_resource(
                 snapshot,
                 reservation_id=operation.reservation_id,
@@ -587,9 +591,53 @@ def decide_reservation_operation(
                 attempt=operation.attempt,
                 generation=operation.generation,
             )
-        case ReleaseReservationOperation():
+        case ReleaseReservationOperation(authority=authority):
+            reservation = snapshot.resource_reservation(operation.reservation_id)
+            if isinstance(authority, CommandAttemptAuthority):
+                authorized = (
+                    authority in snapshot.command_attempt_authorities
+                    and authority.expires_at > operation.changed_at
+                    and reservation is not None
+                    and authority.attempt == reservation.attempt
+                )
+            else:
+                authorized = (
+                    snapshot.coordination_authority == authority and authority.expires_at > operation.changed_at
+                )
+            if not authorized:
+                return DecisionFailure(
+                    DecisionFailureCode.ACTION_NOT_AVAILABLE,
+                    "Reservation release requires exact live attempt or coordination authority.",
+                )
+            if any(
+                value.reservation_id == operation.reservation_id and value.state == MutationIntentState.PLANNED
+                for value in snapshot.mutation_intents
+            ):
+                return DecisionFailure(
+                    DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED,
+                    "Reservation release requires every mutation intent to be resolved.",
+                )
             return release_resource(snapshot, operation.reservation_id)
-        case ReallocateReservationOperation():
+        case ReallocateReservationOperation(authority=authority):
+            reservation = snapshot.resource_reservation(operation.reservation_id)
+            if (
+                authority not in snapshot.command_attempt_authorities
+                or authority.expires_at <= operation.changed_at
+                or reservation is None
+                or authority.attempt != reservation.attempt
+            ):
+                return DecisionFailure(
+                    DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
+                    "Reservation reallocation requires exact live attempt authority.",
+                )
+            if any(
+                value.reservation_id == operation.reservation_id and value.state == MutationIntentState.PLANNED
+                for value in snapshot.mutation_intents
+            ):
+                return DecisionFailure(
+                    DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED,
+                    "Reservation reallocation requires every mutation intent to be resolved.",
+                )
             return reallocate_resource(
                 snapshot,
                 operation.reservation_id,
@@ -597,7 +645,12 @@ def decide_reservation_operation(
                 instance_id=operation.instance_id,
                 generation=operation.generation,
             )
-        case RevokeReservationOperation():
+        case RevokeReservationOperation(authority=authority):
+            if snapshot.coordination_authority != authority or authority.expires_at <= operation.changed_at:
+                return DecisionFailure(
+                    DecisionFailureCode.ACTION_NOT_AVAILABLE,
+                    "Reservation revocation requires exact live coordination authority.",
+                )
             unresolved = any(
                 value.reservation_id == operation.reservation_id and value.state == MutationIntentState.PLANNED
                 for value in snapshot.mutation_intents

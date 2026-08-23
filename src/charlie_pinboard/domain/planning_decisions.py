@@ -361,7 +361,7 @@ def resolve_planning_obligation(
     return replace(impact, obligations=tuple(obligations))
 
 
-def decide_planning_resolution(
+def decide_planning_resolution(  # noqa: C901, PLR0912
     snapshot: LedgerSnapshot,
     impact: PlanningImpact,
     target: ItemId,
@@ -381,6 +381,21 @@ def decide_planning_resolution(
             DecisionFailureCode.PLANNING_RESOLUTION_INVALID,
             "A target with a retained attempt must be blocked, not deferred.",
         )
+    if disposition == PlanningDisposition.BLOCKED:
+        if item.attempt is None:
+            legal_block = item.state in {WorkState.INTAKE, WorkState.READY}
+        else:
+            attempt = snapshot.attempt(item.attempt)
+            legal_block = (
+                item.state in {WorkState.ACTIVE, WorkState.REVIEW}
+                and attempt is not None
+                and attempt.state in {AttemptState.ACTIVE, AttemptState.REVIEW}
+            )
+        if not legal_block:
+            return DecisionFailure(
+                DecisionFailureCode.PLANNING_RESOLUTION_INVALID,
+                "The target cannot be blocked from its current lifecycle state.",
+            )
     if disposition == PlanningDisposition.SUPERSEDED:
         live = snapshot.items_by_id()
         if any(replacement not in live or replacement == target for replacement in replacements):
@@ -432,15 +447,21 @@ def decide_planning_resolution(
     return PlanningResolutionDecision(updated, item_change, attempt_change)
 
 
-def _planning_authority_failure(
+def _planning_authority_failure(  # noqa: C901
     snapshot: LedgerSnapshot,
     item: ItemId,
     authority: PlanningTargetAuthority,
+    expected_authority: PlanningTargetAuthority,
     now: datetime,
 ) -> DecisionFailure | None:
     work_item = snapshot.item(item)
     if work_item is None:
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item}' does not exist.")
+    if authority != expected_authority:
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
+            "Planning authority no longer matches the exact locked target proof.",
+        )
     if work_item.attempt is None:
         if authority != NoAttemptPlanningAuthority(item):
             return DecisionFailure(
@@ -460,6 +481,8 @@ def _planning_authority_failure(
             "Planning resolution requires every target mutation intent to be resolved.",
         )
     if work_item.state in {WorkState.ACTIVE, WorkState.REVIEW}:
+        if isinstance(authority, InterruptedPlanningAttemptAuthority):
+            return None
         if not isinstance(authority, LivePlanningAttemptAuthority):
             return DecisionFailure(
                 DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
@@ -482,18 +505,9 @@ def _planning_authority_failure(
             DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
             "Interrupted planning resolution requires exact inactive attempt proof.",
         )
-    proof = authority.authority
-    retained = next((value for value in snapshot.attempt_authorities if value.attempt == work_item.attempt), None)
-    if (
-        retained is None
-        or proof.attempt != work_item.attempt
-        or proof.item != item
-        or proof.generation != retained.generation
-        or retained.lease_id is not None
-        or any(
-            value.attempt_id == work_item.attempt and value.state == ReservationState.REVOKED_PENDING_RECOVERY
-            for value in snapshot.mutation_reservations
-        )
+    if any(
+        value.attempt_id == work_item.attempt and value.state == ReservationState.REVOKED_PENDING_RECOVERY
+        for value in snapshot.mutation_reservations
     ):
         return DecisionFailure(
             DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
@@ -549,6 +563,8 @@ def _planning_terminal_effects(
 def decide_planning_obligation_operation(  # noqa: C901, PLR0912, PLR0915
     snapshot: LedgerSnapshot,
     operation: ResolvePlanningObligationOperation,
+    *,
+    expected_target_authority: PlanningTargetAuthority,
 ) -> PlanningResolutionDecision | DecisionFailure:
     if (
         snapshot.coordination_authority != operation.coordination_authority
@@ -566,7 +582,11 @@ def decide_planning_obligation_operation(  # noqa: C901, PLR0912, PLR0915
         )
     if (
         failure := _planning_authority_failure(
-            snapshot, operation.target, operation.target_authority, operation.resolved_at
+            snapshot,
+            operation.target,
+            operation.target_authority,
+            expected_target_authority,
+            operation.resolved_at,
         )
     ) is not None:
         return failure
@@ -636,6 +656,15 @@ def decide_planning_obligation_operation(  # noqa: C901, PLR0912, PLR0915
     reservation_changes: tuple[ReservationChange, ...] = ()
     use_changes: tuple[ResourceUseLeaseChange, ...] = ()
     if disposition == PlanningDisposition.BLOCKED and item.attempt is not None:
+        authority = next((value for value in snapshot.attempt_authorities if value.attempt == item.attempt), None)
+        authority_change = (
+            None
+            if authority is None
+            else AttemptAuthorityChange(
+                authority,
+                replace(authority, lease_id=None, generation=authority.generation + 1, resources=()),
+            )
+        )
         use_changes = tuple(
             ResourceUseLeaseChange(use, replace(use, state=UseLeaseState.REVOKED))
             for reservation in snapshot.resource_reservations

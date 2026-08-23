@@ -42,7 +42,8 @@ class ReleaseCoordinationAuthority:
 
 @dataclass(frozen=True, slots=True)
 class RevokeCoordinationAuthority:
-    authority: CoordinationCommandAuthority
+    lease_id: LeaseId
+    generation: int
     revoked_at: datetime
 
 
@@ -148,13 +149,13 @@ def decide_coordination_authority(  # noqa: C901, PLR0912
                 retained,
                 replace(retained, expires_at=released_at, state=CoordinationLeaseStatus.RELEASED),
             )
-        case RevokeCoordinationAuthority(authority=authority, revoked_at=revoked_at):
+        case RevokeCoordinationAuthority(lease_id=lease_id, generation=generation, revoked_at=revoked_at):
             if retained is None:
                 return DecisionFailure(
                     DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
                     "Coordination authority does not exist.",
                 )
-            if retained.state != CoordinationLeaseStatus.ACTIVE or _coordination_token(retained) != authority:
+            if (retained.lease_id, retained.generation) != (lease_id, generation):
                 return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Coordination authority is fenced.")
             return CoordinationAuthorityDecision(
                 retained,
@@ -217,7 +218,7 @@ class AcquireInitialAttemptAuthority:
 
 @dataclass(frozen=True, slots=True)
 class TransferAttemptAuthority:
-    current: CommandAttemptAuthority
+    current: InactiveAttemptAuthority
     coordination: CoordinationCommandAuthority
     task_id: TaskId
     host_id: HostId
@@ -333,6 +334,10 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
     operation: AttemptAuthorityOperation,
     coordination: CoordinationLeaseAuthority | None,
     planned_intent_attempts: tuple[AttemptId, ...] = (),
+    *,
+    live_attempt: tuple[AttemptId, ItemId] | None = None,
+    project_host_epoch: int | None = None,
+    recovery_pending_attempts: tuple[AttemptId, ...] = (),
 ) -> AttemptAuthorityDecision | DecisionFailure:
     match operation:
         case AcquireInitialAttemptAuthority(
@@ -345,6 +350,11 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
             acquired_at=acquired_at,
             expires_at=expires_at,
         ):
+            if live_attempt != (attempt, item) or project_host_epoch != host_epoch:
+                return DecisionFailure(
+                    DecisionFailureCode.ATTEMPT_LEASE_REQUIRED,
+                    "Initial attempt authority requires the exact live attempt and project host epoch.",
+                )
             if counter != 0 or (
                 retained is not None and (retained.generation != 0 or retained.state != AttemptLeaseStatus.RELEASED)
             ):
@@ -378,12 +388,19 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
             acquired_at=acquired_at,
             expires_at=expires_at,
         ):
-            if (failure := _validate_attempt_change(retained, current, acquired_at)) is not None:
+            if (failure := _validate_attempt_transfer(retained, current, acquired_at)) is not None:
                 return failure
             if retained is not None and retained.attempt in planned_intent_attempts:
                 return DecisionFailure(
                     DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED,
                     "Attempt authority cannot transfer with a planned mutation intent.",
+                )
+            if retained is not None and (
+                retained.attempt in recovery_pending_attempts or _fenced_task_uses(task_uses, retained.attempt)
+            ):
+                return DecisionFailure(
+                    DecisionFailureCode.ATTEMPT_LEASE_REQUIRED,
+                    "Attempt transfer requires completed ordinary authority and resource recovery.",
                 )
             if (failure := _validate_coordination(coordination, supplied_coordination, acquired_at)) is not None:
                 return failure
@@ -495,6 +512,38 @@ def _validate_attempt_change(
         return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Attempt authority is fenced.")
     if retained.expires_at <= now:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_LEASE_EXPIRED, "Attempt authority has expired.")
+    return None
+
+
+def _validate_attempt_transfer(
+    retained: AttemptLeaseAuthority | None,
+    current: InactiveAttemptAuthority,
+    now: datetime,
+) -> DecisionFailure | None:
+    if retained is None:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority does not exist.")
+    if retained.state == AttemptLeaseStatus.ACTIVE and retained.expires_at > now:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority remains live.")
+    expected_state = AttemptLeaseStatus.EXPIRED if retained.state == AttemptLeaseStatus.ACTIVE else retained.state
+    if expected_state not in {
+        AttemptLeaseStatus.RELEASED,
+        AttemptLeaseStatus.REVOKED,
+        AttemptLeaseStatus.EXPIRED,
+    }:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not inactive.")
+    expected = InactiveAttemptAuthority(
+        retained.host_epoch,
+        retained.attempt,
+        retained.item,
+        retained.task_id,
+        retained.host_id,
+        retained.lease_id,
+        retained.generation,
+        retained.expires_at,
+        expected_state,
+    )
+    if current != expected:
+        return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Attempt authority is fenced.")
     return None
 
 

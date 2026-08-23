@@ -4,7 +4,10 @@ from typing import Annotated, assert_never
 
 import msgspec
 
-from charlie_pinboard.application.decision_projection import project_decision_snapshot
+from charlie_pinboard.application.decision_projection import (
+    project_decision_snapshot,
+    project_inactive_attempt_authority,
+)
 from charlie_pinboard.application.mutations import (
     AttemptAuthorityMutation,
     CoordinationAuthorityMutation,
@@ -77,13 +80,19 @@ from charlie_pinboard.domain.identifiers import (
     TaskId,
 )
 from charlie_pinboard.domain.model import (
+    AttemptState,
     CanonicalJson,
     CommandAttemptAuthority,
     LedgerSnapshot,
     MutationIntentState,
     MutationUseLease,
+    ReservationState,
 )
 from charlie_pinboard.domain.planning_decisions import (
+    InterruptedPlanningAttemptAuthority,
+    LivePlanningAttemptAuthority,
+    NoAttemptPlanningAuthority,
+    PlanningTargetAuthority,
     RecordPlanningImpactOperation,
     ResolvePlanningObligationOperation,
     decide_planning_impact,
@@ -212,7 +221,7 @@ def change_coordination_authority(
                 authorization = TransitionHistoryAuthorizationKind.COORDINATION
             case RevokeCoordinationAuthority(revoked_at=decided_at):
                 outcome = "revoke-coordination-authority"
-                authorization = TransitionHistoryAuthorizationKind.COORDINATION
+                authorization = TransitionHistoryAuthorizationKind.COORDINATOR
             case _ as unreachable:
                 assert_never(unreachable)
         transition = TransitionReceipt(
@@ -334,6 +343,17 @@ def change_attempt_authority(
             snapshot.coordination_lease,
             tuple(
                 value.attempt_id for value in snapshot.mutation_intents if value.state == MutationIntentState.PLANNED
+            ),
+            live_attempt=(
+                (attempt_id, attempt.item)
+                if (attempt := snapshot.attempt(attempt_id)) is not None and attempt.state == AttemptState.ACTIVE
+                else None
+            ),
+            project_host_epoch=snapshot.host_epoch,
+            recovery_pending_attempts=tuple(
+                value.attempt_id
+                for value in snapshot.mutation_reservations
+                if value.state == ReservationState.REVOKED_PENDING_RECOVERY
             ),
         )
         match result:
@@ -628,6 +648,7 @@ def change_reservation(
             None,
             operation.changed_at,
         )
+        reservation_authority = operation.authority
         receipt = MutationReceipt(
             transition,
             HistoryId(1 + max((int(value.history_id) for value in before.history.receipts), default=0)),
@@ -635,9 +656,13 @@ def change_reservation(
             TransitionHistoryActionKind.CONTINUE,
             HistorySubjectId(reservation_id),
             None,
-            TransitionHistoryAuthorizationKind.COORDINATION,
-            operation.authority.task_id,
-            operation.authority.host_id,
+            (
+                TransitionHistoryAuthorizationKind.ATTEMPT
+                if isinstance(reservation_authority, CommandAttemptAuthority)
+                else TransitionHistoryAuthorizationKind.COORDINATION
+            ),
+            reservation_authority.task_id,
+            reservation_authority.host_id,
             "reservation-authority/v1",
             CanonicalJson(b"{}"),
         )
@@ -844,39 +869,71 @@ def resolve_planning_obligation(
     with store.write() as transaction:
         before = transaction.snapshot()
         snapshot = project_decision_snapshot(before)
-        result = decide_planning_obligation_operation(snapshot, operation)
+        item = snapshot.item(operation.target)
+        if item is None:
+            return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{operation.target}' does not exist.")
+        locked_authority: PlanningTargetAuthority
+        if item.attempt is None:
+            locked_authority = NoAttemptPlanningAuthority(item.item)
+        else:
+            live = next(
+                (
+                    value
+                    for value in snapshot.command_attempt_authorities
+                    if value.attempt == item.attempt and value.expires_at > operation.resolved_at
+                ),
+                None,
+            )
+            if live is not None:
+                locked_authority = LivePlanningAttemptAuthority(live)
+            else:
+                projected = project_inactive_attempt_authority(before, item.attempt, operation.resolved_at)
+                if isinstance(projected, DecisionFailure):
+                    return projected
+                locked_authority = InterruptedPlanningAttemptAuthority(projected)
+        if operation.target_authority != locked_authority:
+            return DecisionFailure(
+                DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
+                "Planning resolution authority changed before the operation was decided.",
+            )
+        selected_operation = replace(operation, target_authority=locked_authority)
+        result = decide_planning_obligation_operation(
+            snapshot,
+            selected_operation,
+            expected_target_authority=locked_authority,
+        )
         match result:
             case DecisionFailure():
                 return result
             case decision:
                 pass
-        result = planning_resolution_outcome(decision.impact, operation.target)
+        result = planning_resolution_outcome(decision.impact, selected_operation.target)
         match result:
             case DecisionFailure():
                 return result
             case outcome:
                 pass
         receipt = PlanningMutationReceipt(
-            ActionId(f"inspect:{operation.impact_id}:{operation.target}"),
-            operation.resolved_at,
+            ActionId(f"inspect:{selected_operation.impact_id}:{selected_operation.target}"),
+            selected_operation.resolved_at,
             HistoryId(1 + max((int(value.history_id) for value in before.history.receipts), default=0)),
             before.lifecycle.project.revision + 1,
             TransitionHistoryActionKind.INSPECT,
-            HistorySubjectId(operation.target),
+            HistorySubjectId(selected_operation.target),
             None,
             TransitionHistoryAuthorizationKind.COORDINATION,
-            operation.coordination_authority.task_id,
-            operation.coordination_authority.host_id,
+            selected_operation.coordination_authority.task_id,
+            selected_operation.coordination_authority.host_id,
             outcome.outcome_schema,
             CanonicalJson(outcome.payload),
         )
         draft = PlanningResolutionMutation(
             decision,
-            operation.target,
+            selected_operation.target,
             before,
             before,
             receipt,
-            operation.target_authority,
+            selected_operation.target_authority,
         )
         mutation = replace(draft, after=expected_stored_state(draft))
         return transaction.commit(mutation)
