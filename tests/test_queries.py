@@ -41,7 +41,12 @@ from charlie_pinboard.domain.identifiers import (
     PlanningImpactId,
     ResourceInstanceId,
 )
-from charlie_pinboard.domain.model import AttemptState
+from charlie_pinboard.domain.model import (
+    AttemptState,
+    ReservationState,
+    UseLeaseGenerationKind,
+    UseLeaseState,
+)
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -234,6 +239,46 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertNotIn("release-reservation", detailed.legal_actions)
         self.assertIn("revoke-reservation", detailed.legal_actions)
 
+    def test_pending_recovery_resource_conflict_offers_only_fenced_intent_resolution(self) -> None:
+        state = complete_sqlite_state()
+        reservations = tuple(
+            replace(value, state=ReservationState.REVOKED_PENDING_RECOVERY) for value in state.resources.reservations
+        )
+        counters = tuple(
+            replace(value, generation_high_water=2) if value.instance_id == reservations[0].instance_id else value
+            for value in state.resources.reservation_counters
+        )
+        revoked_use_leases = tuple(
+            replace(value, state=UseLeaseState.REVOKED) if value.state == UseLeaseState.ACTIVE else value
+            for value in state.resources.use_leases
+        )
+        latest_grant = revoked_use_leases[-1]
+        use_leases = (
+            *revoked_use_leases,
+            replace(
+                latest_grant,
+                lease_id=LeaseId("use-recovery-fence"),
+                generation=latest_grant.generation + 1,
+                generation_kind=UseLeaseGenerationKind.FENCE,
+            ),
+        )
+        store = self._store(
+            replace(
+                state,
+                resources=replace(
+                    state.resources,
+                    reservation_counters=counters,
+                    reservations=reservations,
+                    use_leases=use_leases,
+                ),
+            )
+        )
+
+        detailed = read_resource_conflict(store, ResourceInstanceId("workspace-on-host"), DetailLevel.DETAILED)
+
+        self.assertEqual("revoked-pending-recovery", detailed.reservation_state)
+        self.assertEqual(("inspect", "resolve-fenced-resource-intent"), detailed.legal_actions)
+
     def test_action_and_query_failure_matrix_is_stable_and_read_only(self) -> None:
         state = self._valid_scope_digests(complete_sqlite_state())
         store = self._store(state)
@@ -420,6 +465,21 @@ class SQLiteQueriesTest(unittest.TestCase):
                 valid,
                 items=(msgspec.structs.replace(first_item, scope_revision=0), *valid.items[1:]),
             ),
+            "nonterminal-item-outcome": msgspec.structs.replace(
+                valid,
+                items=(msgspec.structs.replace(first_item, outcome_evidence="unexpected"), *valid.items[1:]),
+            ),
+            "terminal-item-outcome": msgspec.structs.replace(
+                valid,
+                items=(
+                    msgspec.structs.replace(
+                        first_item,
+                        lifecycle_state=StoredWorkItemState.DONE.value,
+                        outcome_evidence=None,
+                    ),
+                    *valid.items[1:],
+                ),
+            ),
             "root-presence": msgspec.structs.replace(valid, items=valid.items[1:]),
             "dependency-presence": msgspec.structs.replace(valid, items=(first_item,)),
             "exact-closure": msgspec.structs.replace(valid, items=(extra_item, *valid.items[1:])),
@@ -453,6 +513,52 @@ class SQLiteQueriesTest(unittest.TestCase):
             "resolution-outcome": msgspec.structs.replace(
                 valid,
                 resolved_obligations=(msgspec.structs.replace(resolved, outcome_evidence=""),),
+            ),
+            "nonterminal-resolution-outcome": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(
+                    msgspec.structs.replace(
+                        resolved,
+                        disposition="unchanged",
+                        outcome_evidence="",
+                        replacements=(),
+                    ),
+                ),
+            ),
+            "obligation-project-revisions": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(
+                    msgspec.structs.replace(
+                        resolved,
+                        recorded_project_revision=0,
+                        resolved_project_revision=0,
+                    ),
+                ),
+            ),
+            "obligation-anchor-identity": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(
+                    msgspec.structs.replace(
+                        resolved,
+                        evaluated_scope=msgspec.structs.replace(
+                            resolved.evaluated_scope,
+                            scope_revision=resolved.target_scope.scope_revision,
+                            scope_digest="b" * 64,
+                        ),
+                    ),
+                ),
+            ),
+            "obligation-anchor-order": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(
+                    msgspec.structs.replace(
+                        resolved,
+                        target_scope=msgspec.structs.replace(
+                            resolved.target_scope,
+                            scope_revision=resolved.evaluated_scope.scope_revision + 1,
+                        ),
+                    ),
+                ),
             ),
             "resolution-replacement": msgspec.structs.replace(
                 valid,

@@ -1027,6 +1027,11 @@ def _validated_snapshot_scopes(value: PlanSnapshot) -> dict[str, ItemScopeRecord
                 "PLAN_SNAPSHOT_INVALID", f"Item '{item.item_id}' has invalid semantic scope."
             ) from error
         canonical = _canonical_bytes(semantic)
+        terminal = item.lifecycle_state in {
+            StoredWorkItemState.DONE.value,
+            StoredWorkItemState.DROPPED.value,
+            StoredWorkItemState.SUPERSEDED.value,
+        }
         if (
             not item.item_id
             or item.scope_revision < 1
@@ -1034,6 +1039,8 @@ def _validated_snapshot_scopes(value: PlanSnapshot) -> dict[str, ItemScopeRecord
             or bytes(item.semantic) != canonical.removesuffix(b"\n")
             or hashlib.sha256(canonical).hexdigest() != item.scope_digest
             or item.lifecycle_state not in {state.value for state in StoredWorkItemState}
+            or terminal != (item.outcome_evidence is not None)
+            or item.outcome_evidence == ""
         ):
             raise PlanQueryError("PLAN_SNAPSHOT_INVALID", f"Item '{item.item_id}' contradicts its semantic scope.")
         scopes[item.item_id] = semantic
@@ -1056,18 +1063,27 @@ def _validated_snapshot_scopes(value: PlanSnapshot) -> dict[str, ItemScopeRecord
 def _validate_resolved_obligation(value: ResolvedObligation, project_revision: int) -> tuple[str, ...]:
     positions = tuple(replacement.position for replacement in value.replacements)
     identities = tuple(replacement.item_id for replacement in value.replacements)
+    terminal = value.disposition in {"dropped", "superseded"}
     if (
-        value.resolved_project_revision < value.recorded_project_revision
+        value.recorded_project_revision < 1
+        or value.resolved_project_revision < value.recorded_project_revision
         or value.resolved_project_revision > project_revision
         or positions != tuple(range(len(positions)))
         or len(identities) != len(set(identities))
         or any(not identity for identity in identities)
         or value.disposition not in {disposition.value for disposition in PlanningDisposition}
         or (value.disposition == "superseded") != bool(value.replacements)
-        or (value.disposition in {"dropped", "superseded"})
-        != (value.outcome_evidence is not None and bool(value.outcome_evidence))
+        or terminal != (value.outcome_evidence is not None)
+        or value.outcome_evidence == ""
         or (value.disposition == "revised") != (value.resulting_scope is not None)
         or not value.reason
+        or (
+            value.evaluated_scope.scope_revision < value.target_scope.scope_revision
+            or (
+                value.evaluated_scope.scope_revision == value.target_scope.scope_revision
+                and value.evaluated_scope.scope_digest != value.target_scope.scope_digest
+            )
+        )
         or (
             value.resulting_scope is not None
             and (
@@ -1107,7 +1123,7 @@ def _validate_snapshot_obligations(value: PlanSnapshot, selected: frozenset[str]
             or not obligation.summary
             or not obligation.evidence
             or obligation.target_position < 0
-            or obligation.recorded_project_revision < 0
+            or obligation.recorded_project_revision < 1
             or obligation.recorded_project_revision > value.project_revision
             or not _valid_scope_anchor(obligation.source_scope)
             or not _valid_scope_anchor(obligation.target_scope)
@@ -1532,7 +1548,9 @@ def read_resource_conflict(
         for value in state.resources.mutation_intents
     )
     legal = (
-        ("inspect", "preserve", "revoke-reservation")
+        ("inspect", "resolve-fenced-resource-intent")
+        if reservation is not None and reservation.state == ReservationState.REVOKED_PENDING_RECOVERY
+        else ("inspect", "preserve", "revoke-reservation")
         if planned_intent
         else ("inspect", "preserve", "release-reservation", "revoke-reservation")
         if reservation is not None
