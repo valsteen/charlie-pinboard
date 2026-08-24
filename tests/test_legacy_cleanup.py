@@ -42,6 +42,18 @@ class LegacyCleanupTest(unittest.TestCase):
             result = main(["--project-root", str(project), "--work-root", str(work), "overview", "--json"])
         self.assertEqual(0, result)
 
+    def test_cutover_replay_ignores_regenerated_platform_metadata(self) -> None:
+        project, work = _fixture()
+        (work / ".DS_Store").write_bytes(b"frozen platform metadata")
+        receipt = cutover_ledger(project, work, NOW)
+        (work / ".DS_Store").write_bytes(b"regenerated root metadata")
+        (work / "legacy-v1" / ".DS_Store").write_bytes(b"regenerated archive metadata")
+
+        replay = cutover_ledger(project, work, NOW)
+
+        self.assertEqual(receipt, replay)
+        self.assertEqual(CUTOVER_TOMBSTONE, (work / "authority.json").read_bytes())
+
     def test_cleanup_removes_marker_last_and_commits_one_idempotent_receipt(self) -> None:
         project, work = _fixture()
         imported = cutover_ledger(project, work, NOW)

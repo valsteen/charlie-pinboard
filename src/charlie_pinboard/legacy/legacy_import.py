@@ -1187,7 +1187,9 @@ def _archival_source_still_matches(base_work_root: Path, source_snapshot: bytes)
     except msgspec.DecodeError:
         return False
     expected = {
-        entry.selector: (entry.sha256, entry.size) for entry in value.entries if entry.selector != "authority.json"
+        entry.selector: (entry.sha256, entry.size)
+        for entry in value.entries
+        if entry.selector != "authority.json" and entry.classification != "ignored-platform-metadata"
     }
     observed: set[str] = set()
     for path in (candidate for candidate in base_work_root.rglob("*") if candidate.is_file()):
@@ -1195,6 +1197,8 @@ def _archival_source_still_matches(base_work_root: Path, source_snapshot: bytes)
         if (relative.parts and relative.parts[0] in {"artifacts", "views"}) or relative.name.startswith(
             "state.sqlite3"
         ):
+            continue
+        if relative.name == ".DS_Store":
             continue
         selector = relative.as_posix()
         if selector == "authority.json":
