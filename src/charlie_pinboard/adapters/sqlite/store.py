@@ -1541,13 +1541,23 @@ class SQLiteWorkStore:
                     position = sum(
                         1 for value in lifecycle.item_artifacts if value.item_id == item_id and value.role == role
                     )
+                    item_artifact = ItemArtifactLink(item_id, reference.artifact_ref_id, role, position)
+                    item_artifact_order = (str(item_artifact.item_id), item_artifact.role.value, item_artifact.position)
+                    insertion_index = len(lifecycle.item_artifacts)
+                    for index, existing_link in enumerate(lifecycle.item_artifacts):
+                        existing_order = (str(existing_link.item_id), existing_link.role.value, existing_link.position)
+                        if item_artifact_order < existing_order:
+                            insertion_index = index
+                            break
+                    item_artifacts = (
+                        *lifecycle.item_artifacts[:insertion_index],
+                        item_artifact,
+                        *lifecycle.item_artifacts[insertion_index:],
+                    )
                     lifecycle = replace(
                         lifecycle,
                         work_items=tuple(items),
-                        item_artifacts=(
-                            *lifecycle.item_artifacts,
-                            ItemArtifactLink(item_id, reference.artifact_ref_id, role, position),
-                        ),
+                        item_artifacts=item_artifacts,
                     )
                 after = replace(
                     before,

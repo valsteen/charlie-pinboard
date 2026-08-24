@@ -20,6 +20,33 @@ from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
 class ArtifactPersistenceTest(unittest.TestCase):
+    def test_accepting_relationship_preserves_canonical_global_link_order(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        store = SQLiteWorkStore(roots.database_path)
+        store.initialize_state(complete_sqlite_state())
+        published = write_revision(
+            roots,
+            NewArtifact(ArtifactKind.EVIDENCE, "legacy-work-review", 1, ".md", b"ready\n"),
+        )
+
+        accepted = accept_reference(
+            store,
+            roots.work_root,
+            published,
+            SQLITE_NOW,
+            item_id=ItemId("legacy-work"),
+            role=ArtifactRole.EVIDENCE,
+        )
+
+        reloaded = SQLiteWorkStore(roots.database_path).snapshot()
+        self.assertIn(accepted, reloaded.artifacts.references)
+        self.assertEqual(
+            ["legacy-work", "work-a"],
+            [str(value.item_id) for value in reloaded.lifecycle.item_artifacts],
+        )
+
     def test_accepting_transaction_verifies_bytes_and_fresh_reload_contains_reference(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
