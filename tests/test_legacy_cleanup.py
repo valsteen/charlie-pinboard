@@ -1,15 +1,22 @@
 import json
 import shutil
+import sqlite3
 import unittest
-from contextlib import redirect_stdout
+from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, redirect_stdout
 from datetime import timedelta
 from io import StringIO
+from pathlib import Path
+from threading import Barrier, Lock, get_ident
+from unittest.mock import patch
 
+from charlie_pinboard.adapters.sqlite.database import OpenMode, open_database, write_transaction
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.stored_state import TransitionHistoryActionKind
 from charlie_pinboard.interfaces.cli import main
 from charlie_pinboard.legacy.authority import AuthorityError, resolve_authority
-from charlie_pinboard.legacy.legacy_cleanup import cleanup_legacy
+from charlie_pinboard.legacy.legacy_cleanup import CleanupReceipt, _existing_receipt, cleanup_legacy
 from charlie_pinboard.legacy.legacy_import import (
     CUTOVER_TOMBSTONE,
     LegacyImportError,
@@ -76,6 +83,71 @@ class LegacyCleanupTest(unittest.TestCase):
         )
         self.assertEqual(first.artifact_sha256, artifact.content_sha256)
         self.assertEqual(first.receipt_bytes, (work / first.artifact_selector).read_bytes())
+
+    def test_cleanup_selects_receipt_revision_after_ordinary_writer_is_serialized(self) -> None:
+        _project, work = _fixture()
+        imported = cutover_ledger(_project, work, NOW)
+        database_path = work / "state.sqlite3"
+
+        @contextmanager
+        def write_after_ordinary_revision(connection: sqlite3.Connection) -> Generator[None]:
+            ordinary = open_database(database_path, OpenMode.READ_WRITE)
+            try:
+                with write_transaction(ordinary):
+                    ordinary.execute(
+                        "UPDATE project_meta SET revision = revision + 1, updated_at = ? WHERE singleton = 1",
+                        ((NOW + timedelta(seconds=1)).isoformat(),),
+                    )
+            finally:
+                ordinary.close()
+            with write_transaction(connection):
+                yield
+
+        with patch("charlie_pinboard.legacy.legacy_cleanup.write_transaction", write_after_ordinary_revision):
+            receipt = cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=2))
+
+        state = SQLiteWorkStore(database_path).snapshot()
+        self.assertEqual(2, receipt.database_revision_before_receipt)
+        self.assertEqual(3, receipt.committed_revision)
+        self.assertEqual(3, state.lifecycle.project.revision)
+
+    def test_concurrent_cleanup_callers_serialize_to_one_receipt(self) -> None:
+        _project, work = _fixture()
+        imported = cutover_ledger(_project, work, NOW)
+        barrier = Barrier(2)
+        counter_lock = Lock()
+        callers: set[int] = set()
+
+        def synchronize_first_receipt_lookup(work_root: Path, cutover_id: str) -> CleanupReceipt | None:
+            receipt = _existing_receipt(work_root, cutover_id)
+            with counter_lock:
+                caller_id = get_ident()
+                first_lookup = caller_id not in callers
+                callers.add(caller_id)
+            if first_lookup:
+                self.assertIsNone(receipt)
+                barrier.wait()
+            return receipt
+
+        def run_cleanup(offset: int) -> CleanupReceipt:
+            return cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=offset))
+
+        with (
+            patch(
+                "charlie_pinboard.legacy.legacy_cleanup._existing_receipt",
+                synchronize_first_receipt_lookup,
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            receipts = tuple(executor.map(run_cleanup, (1, 2)))
+
+        state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        cleanup_rows = [
+            row for row in state.history.receipts if row.action_kind == TransitionHistoryActionKind.LEGACY_CLEANUP
+        ]
+        self.assertEqual(receipts[0], receipts[1])
+        self.assertEqual(1, len(cleanup_rows))
+        self.assertEqual(2, state.lifecycle.project.revision)
 
     def test_temporary_cleanup_cli_requires_the_exact_cutover_id(self) -> None:
         project, work = _fixture()
