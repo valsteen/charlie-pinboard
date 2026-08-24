@@ -435,13 +435,20 @@ mode: "exclusive"
         self.assertFalse(destination.exists())
 
     def test_unclassified_source_and_invalid_generation_zero_fail_closed(self) -> None:
-        for mutation in ("unexpected-root", "unknown-nested-selector", "partial-sentinel"):
+        for mutation in (
+            "unexpected-root",
+            "unknown-nested-selector",
+            "orphan-attempt-evidence",
+            "partial-sentinel",
+        ):
             with self.subTest(mutation=mutation):
                 project, work = _fixture()
                 if mutation == "unexpected-root":
                     _write(work / "unexpected.txt", "unexpected")
                 elif mutation == "unknown-nested-selector":
                     _write(work / "v2" / "items" / "unclassified.bin", "unexpected")
+                elif mutation == "orphan-attempt-evidence":
+                    _write(work / "v2" / "attempts" / "orphan" / "proof.txt", "unexpected")
                 else:
                     attempt = work / "v2" / "attempts" / "work-b-1" / "attempt.md"
                     attempt.write_text(
@@ -495,6 +502,8 @@ mode: "exclusive"
             "invalid-updated-time",
             "outside-project-root",
             "mismatched-current-attempt",
+            "mismatched-terminal-attempt",
+            "mismatched-terminal-attempt-state",
         )
         for case in cases:
             with self.subTest(case=case):
@@ -521,6 +530,12 @@ mode: "exclusive"
                     item.write_text(item.read_text().replace('attempt: "work-a-1"', 'attempt: "work-b-1"'))
                     queue = selected / "queue.md"
                     queue.write_text(queue.read_text().replace("| work-b | work-a-1 |", "| work-b | work-b-1 |"))
+                elif case == "mismatched-terminal-attempt":
+                    item = selected / "history" / "items" / "work-b.md"
+                    item.write_text(item.read_text().replace('attempt: "work-b-1"', 'attempt: "work-a-1"'))
+                elif case == "mismatched-terminal-attempt-state":
+                    attempt = selected / "attempts" / "work-b-1" / "attempt.md"
+                    attempt.write_text(attempt.read_text().replace('state: "done"', 'state: "closed"'))
 
                 with self.assertRaises(LegacyImportError) as raised:
                     dry_run_ledger(passed_project, work, NOW)

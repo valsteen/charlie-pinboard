@@ -2,6 +2,7 @@ import json
 import shutil
 import unittest
 from contextlib import redirect_stdout
+from datetime import timedelta
 from io import StringIO
 
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
@@ -99,10 +100,13 @@ class LegacyCleanupTest(unittest.TestCase):
         orphan.parent.mkdir(parents=True)
         orphan.write_bytes(expected_receipt)
 
-        receipt = cleanup_legacy(work, imported.cutover_id, NOW)
+        retry_time = NOW + timedelta(seconds=1)
+        receipt = cleanup_legacy(work, imported.cutover_id, retry_time)
 
         self.assertFalse(retired.exists())
         self.assertEqual(receipt.receipt_bytes, orphan.read_bytes())
+        self.assertNotEqual(expected_receipt, receipt.receipt_bytes)
+        self.assertEqual(retry_time, receipt.verified_clean_at)
 
     def test_cleanup_refuses_missing_mapped_artifact_before_legacy_deletion(self) -> None:
         project, work = _fixture()

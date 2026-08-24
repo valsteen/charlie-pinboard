@@ -376,6 +376,16 @@ def _selected_classification(inside: Path, selector: str) -> str:
             raise LegacyImportError("LEGACY_SOURCE_INVALID", f"Unclassified selected-v2 selector: {selector}.")
 
 
+def _validate_attempt_artifact_owners(selected: Path) -> None:
+    attempts_root = selected / "attempts"
+    for path in sorted(candidate for candidate in attempts_root.rglob("*") if candidate.is_file()):
+        relative = path.relative_to(attempts_root)
+        if len(relative.parts) >= 2 and relative.parts[1:] != ("attempt.md",):
+            owner = attempts_root / relative.parts[0] / "attempt.md"
+            if not owner.is_file():
+                raise LegacyImportError("LEGACY_SOURCE_INVALID", f"Attempt artifact {path} has no owning attempt.md.")
+
+
 def _classify_files(base: Path, selected: Path) -> tuple[_SourceEntry, ...]:
     entries: list[_SourceEntry] = []
     selected_relative = selected.relative_to(base)
@@ -482,6 +492,30 @@ def _item_sources(selected: Path) -> tuple[_ItemSource, ...]:
     if len(identities) != len(set(identities)):
         raise LegacyImportError("LEGACY_SOURCE_INVALID", "Live and terminal item identities overlap.")
     return tuple(sources)
+
+
+def _validate_terminal_attempt_links(selected: Path, items: tuple[_ItemSource, ...]) -> None:
+    attempts = {}
+    for path in sorted((selected / "attempts").glob("*/attempt.md")):
+        parsed = parse_attempt(path)
+        if parsed.attempt in attempts:
+            raise LegacyImportError("LEGACY_SOURCE_INVALID", f"Duplicate attempt identity {parsed.attempt}.")
+        attempts[parsed.attempt] = parsed
+    history_root = selected / "history" / "items"
+    for source in items:
+        pointer = source.queue.attempt
+        if pointer is None or not source.path.is_relative_to(history_root):
+            continue
+        attempt = attempts.get(pointer)
+        if (
+            attempt is None
+            or attempt.attempt != pointer
+            or attempt.item != source.record.item
+            or attempt.state.value != source.queue.state.value
+        ):
+            raise LegacyImportError(
+                "LEGACY_SOURCE_INVALID", f"Terminal item {source.record.item} disagrees with attempt {pointer}."
+            )
 
 
 def _proposal_values(selected: Path, now: datetime) -> tuple[ProposalRecords, dict[str, Proposal]]:
@@ -854,6 +888,7 @@ def _prepare(  # noqa: PLR0915 - exhaustive temporary cross-boundary mapping rem
         raise LegacyImportError("LEGACY_SOURCE_INVALID", "Import time must be timezone-aware.")
     now = now.astimezone(UTC)
     selected = _selected_source(project_root, base_work_root)
+    _validate_attempt_artifact_owners(selected)
     entries = _classify_files(base_work_root.resolve(), selected)
     resource_entries = tuple(entry for entry in entries if entry.classification == "legacy-resource-state")
     if resource_entries:
@@ -868,6 +903,7 @@ def _prepare(  # noqa: PLR0915 - exhaustive temporary cross-boundary mapping rem
     source_snapshot = _source_snapshot(entries, queue.revision)
     cutover_id = hashlib.sha256(source_snapshot).hexdigest()
     item_sources = _item_sources(selected)
+    _validate_terminal_attempt_links(selected, item_sources)
     if any(source.record.resources for source in item_sources):
         raise LegacyImportError(
             "LEGACY_RESOURCE_STATE_UNSUPPORTED",

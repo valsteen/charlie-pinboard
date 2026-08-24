@@ -153,16 +153,45 @@ def _remove_legacy(work_root: Path, cutover_id: str) -> None:
         _sync_directory(work_root)
 
 
+def _receipt_time(value: _CleanupReceiptRecord) -> datetime:
+    try:
+        timestamp = datetime.fromisoformat(value.verified_clean_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", "The cleanup receipt time is invalid.") from error
+    if timestamp.tzinfo is None:
+        raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", "The cleanup receipt time must be timezone-aware.")
+    return timestamp.astimezone(UTC)
+
+
 def _decode_receipt(data: bytes) -> tuple[int, datetime]:
     try:
         value = msgspec.json.decode(data, type=_CleanupReceiptRecord)
     except msgspec.DecodeError as error:
         raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", "The cleanup receipt is invalid JSON.") from error
+    return value.database_revision_before_receipt, _receipt_time(value)
+
+
+def _validate_orphan_receipt(data: bytes, current: _CleanupReceiptRecord) -> None:
     try:
-        timestamp = datetime.fromisoformat(value.verified_clean_at.replace("Z", "+00:00"))
-    except ValueError as error:
-        raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", "The cleanup receipt time is invalid.") from error
-    return value.database_revision_before_receipt, timestamp.astimezone(UTC)
+        value = msgspec.json.decode(data, type=_CleanupReceiptRecord)
+    except msgspec.DecodeError as error:
+        raise LegacyImportError(
+            "STORAGE_INVARIANT_VIOLATION", "The unreferenced cleanup artifact is not recoverable."
+        ) from error
+    _receipt_time(value)
+    expected = _CleanupReceiptRecord(
+        current.absent_selectors,
+        current.cutover_id,
+        current.database_revision_before_receipt,
+        current.executable_sha256,
+        current.plugin_version,
+        current.schema,
+        current.validation,
+        value.verified_clean_at,
+    )
+    canonical = msgspec.json.encode(value, order="sorted") + b"\n"
+    if value != expected or data != canonical:
+        raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", "The unreferenced cleanup artifact is not recoverable.")
 
 
 def _validate_receipt_value(
@@ -279,16 +308,7 @@ def cleanup_legacy(  # noqa: PLR0915 - one bounded deletion-time transaction kee
             if referenced is not None or stat.S_ISLNK(status.st_mode) or not stat.S_ISREG(status.st_mode):
                 raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", "Cleanup artifact collision is not recoverable.")
             orphan_bytes = path.read_bytes()
-            try:
-                orphan_value = msgspec.json.decode(orphan_bytes, type=_CleanupReceiptRecord)
-            except msgspec.DecodeError as error:
-                raise LegacyImportError(
-                    "STORAGE_INVARIANT_VIOLATION", "The unreferenced cleanup artifact is not recoverable."
-                ) from error
-            if orphan_value != receipt_value or orphan_bytes != receipt_bytes:
-                raise LegacyImportError(
-                    "STORAGE_INVARIANT_VIOLATION", "The unreferenced cleanup artifact is not recoverable."
-                )
+            _validate_orphan_receipt(orphan_bytes, receipt_value)
             path.unlink()
             _sync_directory(path.parent)
         with write_transaction(connection):
