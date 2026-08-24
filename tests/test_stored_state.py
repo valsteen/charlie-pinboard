@@ -443,7 +443,7 @@ class StoredWorkStateTest(unittest.TestCase):
         )
         self.assertEqual(MutationIntentState.PLANNED, state.resources.mutation_intents[0].state)
         self.assertEqual(
-            {value.value for value in ActionKind} | {"legacy-import", "legacy-cleanup"},
+            {value.value for value in ActionKind} | {"legacy-import", "legacy-cleanup", "portable-copy"},
             {value.value for value in TransitionHistoryActionKind},
         )
         self.assertEqual(

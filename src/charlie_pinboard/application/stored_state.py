@@ -116,6 +116,7 @@ class TransitionHistoryActionKind(Enum):
     MARK_READY = "mark-ready"
     MERGE_PROPOSAL = "merge-proposal"
     PAUSE = "pause"
+    PORTABLE_COPY = "portable-copy"
     REJECT_PROPOSAL = "reject-proposal"
     REOPEN = "reopen"
     REPORT_BLOCKER = "report-blocker"
