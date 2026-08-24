@@ -129,6 +129,15 @@ from charlie_pinboard.legacy.leases import (
     revoke_attempt,
     revoke_coordination,
 )
+from charlie_pinboard.legacy.legacy_cleanup import CleanupReceipt, cleanup_legacy
+from charlie_pinboard.legacy.legacy_import import (
+    CUTOVER_TOMBSTONE,
+    ImportReceipt,
+    LegacyImportError,
+    cutover_ledger,
+    dry_run_ledger,
+    import_ledger,
+)
 from charlie_pinboard.legacy.markdown import parse_current, parse_queue
 from charlie_pinboard.legacy.migration import MigrationError, migrate_to_v2
 from charlie_pinboard.legacy.overview import OverviewError, OverviewItem, WorkOverview, read_overview
@@ -171,6 +180,8 @@ class CommandName(Enum):
     RESOURCE = "resource"
     PARALLEL = "parallel"
     VIEWS = "views"
+    LEGACY_IMPORT = "legacy-import"
+    LEGACY_CLEANUP = "legacy-cleanup"
 
 
 class CoordinationOperation(Enum):
@@ -205,6 +216,12 @@ class ParallelOperation(Enum):
 
 class ViewsOperation(Enum):
     REBUILD = "rebuild"
+
+
+class LegacyImportOperation(Enum):
+    DRY_RUN = "dry-run"
+    STAGE = "stage"
+    CUTOVER = "cutover"
 
 
 class CliArguments(argparse.Namespace):
@@ -247,6 +264,8 @@ class CliArguments(argparse.Namespace):
     outcome: str
     reason: str
     detail: str
+    destination: Path
+    expected_cutover_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +291,65 @@ class DiagnosticView(msgspec.Struct, frozen=True):
 class ValidationView(msgspec.Struct, frozen=True):
     valid: bool
     diagnostics: tuple[DiagnosticView, ...]
+
+
+class LegacyImportCountsView(msgspec.Struct, frozen=True):
+    items: int
+    attempts: int
+    proposals: int
+    artifacts: int
+    resources: int
+    item_resources: int
+    claims: int
+
+
+class LegacyImportView(msgspec.Struct, frozen=True):
+    cutover_id: str
+    source_revision: str
+    destination_revision: int
+    manifest_selector: str
+    manifest_sha256: str
+    counts: LegacyImportCountsView
+
+    @classmethod
+    def from_receipt(cls, receipt: ImportReceipt) -> LegacyImportView:
+        counts = receipt.counts
+        return cls(
+            receipt.cutover_id,
+            receipt.source_revision,
+            receipt.destination_revision,
+            receipt.manifest_selector,
+            receipt.manifest_sha256,
+            LegacyImportCountsView(
+                counts.items,
+                counts.attempts,
+                counts.proposals,
+                counts.artifacts,
+                counts.resources,
+                counts.item_resources,
+                counts.claims,
+            ),
+        )
+
+
+class LegacyCleanupView(msgspec.Struct, frozen=True):
+    cutover_id: str
+    artifact_selector: str
+    artifact_sha256: str
+    database_revision_before_receipt: int
+    committed_revision: int
+    verified_clean_at: str
+
+    @classmethod
+    def from_receipt(cls, receipt: CleanupReceipt) -> LegacyCleanupView:
+        return cls(
+            receipt.cutover_id,
+            receipt.artifact_selector,
+            receipt.artifact_sha256,
+            receipt.database_revision_before_receipt,
+            receipt.committed_revision,
+            receipt.verified_clean_at.isoformat(),
+        )
 
 
 class CoordinatorView(msgspec.Struct, frozen=True):
@@ -620,6 +698,23 @@ def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.Argume
     recover.add_argument("--json", action="store_true")
 
 
+def _add_legacy_cutover_parsers(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    legacy_import = commands.add_parser(
+        "legacy-import", help="Temporarily stage or execute the known Markdown cutover."
+    )
+    import_operations = legacy_import.add_subparsers(dest="operation", required=True)
+    dry_run = import_operations.add_parser("dry-run", help="Validate and map the source without writing it.")
+    dry_run.add_argument("--json", action="store_true")
+    stage = import_operations.add_parser("stage", help="Import into one absent disposable destination.")
+    stage.add_argument("--destination", required=True, type=Path)
+    stage.add_argument("--json", action="store_true")
+    cutover = import_operations.add_parser("cutover", help="Import and atomically select SQLite authority.")
+    cutover.add_argument("--json", action="store_true")
+    legacy_cleanup = commands.add_parser("legacy-cleanup", help="Remove one verified archived Markdown authority.")
+    legacy_cleanup.add_argument("--expected-cutover-id", required=True)
+    legacy_cleanup.add_argument("--json", action="store_true")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=PROGRAM_NAME, description="Inspect and transition one pinboard.")
     parser.add_argument("--version", action="version", version=__version__)
@@ -686,6 +781,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_parallel_parser(commands)
     views = commands.add_parser("views", help="Repair generated human-readable views.")
     views.add_subparsers(dest="operation", required=True).add_parser("rebuild")
+    _add_legacy_cutover_parsers(commands)
     return parser
 
 
@@ -698,7 +794,35 @@ def _roots(arguments: CliArguments) -> tuple[Path, Path]:
 
 
 def _uses_sqlite(work_root: Path) -> bool:
-    return (work_root / "state.sqlite3").is_file()
+    database = work_root / "state.sqlite3"
+    if not database.is_file():
+        return False
+    marker = work_root / "authority.json"
+    if marker.is_file():
+        if marker.read_bytes() == CUTOVER_TOMBSTONE:
+            return True
+        raise RegistrationError(
+            "CUTOVER_NOT_ACTIVE",
+            "A staged SQLite database exists, but the exact SQLite authority marker is not active.",
+        )
+    legacy_selectors = (
+        "v2",
+        "legacy-v2",
+        "legacy-v1",
+        "queue.md",
+        "current.md",
+        "coordinator.json",
+        "items",
+        "attempts",
+        "history",
+        "inbox",
+        "accept-parallel.json",
+        "activate-parallel.json",
+        "pause-receipts.json",
+    )
+    if any((work_root / selector).exists() for selector in legacy_selectors):
+        raise RegistrationError("CUTOVER_NOT_ACTIVE", "SQLite cannot open while legacy authority selectors remain.")
+    return True
 
 
 def _stable_identifier(value: str, *, label: str) -> str:
@@ -1919,6 +2043,40 @@ def _views(context: CommandContext) -> int:
     return 0
 
 
+def _legacy_import(context: CommandContext) -> int:
+    operation = LegacyImportOperation(context.arguments.operation)
+    now = datetime.now(UTC)
+    match operation:
+        case LegacyImportOperation.DRY_RUN:
+            receipt = dry_run_ledger(context.project, context.work, now)
+        case LegacyImportOperation.STAGE:
+            receipt = import_ledger(context.project, context.work, context.arguments.destination, now)
+        case LegacyImportOperation.CUTOVER:
+            receipt = cutover_ledger(context.project, context.work, now)
+        case _ as unreachable:
+            assert_never(unreachable)
+    if context.arguments.json:
+        _write_json(LegacyImportView.from_receipt(receipt))
+    else:
+        print(
+            f"OK LEGACY_IMPORT cutover_id={receipt.cutover_id} source_revision={receipt.source_revision} "
+            f"destination_revision={receipt.destination_revision}"
+        )
+    return 0
+
+
+def _legacy_cleanup(context: CommandContext) -> int:
+    receipt = cleanup_legacy(context.work, context.arguments.expected_cutover_id, datetime.now(UTC))
+    if context.arguments.json:
+        _write_json(LegacyCleanupView.from_receipt(receipt))
+    else:
+        print(
+            f"OK LEGACY_CLEANUP cutover_id={receipt.cutover_id} revision={receipt.committed_revision} "
+            f"artifact={receipt.artifact_selector}"
+        )
+    return 0
+
+
 def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhaustive closed command dispatch
     project, work = _roots(arguments)
     context = CommandContext(arguments, project, work)
@@ -1959,6 +2117,10 @@ def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhausti
             return _parallel(context)
         case CommandName.VIEWS:
             return _views(context)
+        case CommandName.LEGACY_IMPORT:
+            return _legacy_import(context)
+        case CommandName.LEGACY_CLEANUP:
+            return _legacy_cleanup(context)
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -1982,6 +2144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         AtomicCommitError,
         ActionQueryError,
         QueryError,
+        LegacyImportError,
     ) as error:
         print(str(error), file=sys.stderr)
         return 11
