@@ -279,6 +279,15 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertEqual("revoked-pending-recovery", detailed.reservation_state)
         self.assertEqual(("inspect", "resolve-fenced-resource-intent"), detailed.legal_actions)
 
+    def test_active_resource_without_planned_intent_omits_preservation(self) -> None:
+        state = complete_sqlite_state()
+        store = self._store(replace(state, resources=replace(state.resources, mutation_intents=())))
+
+        detailed = read_resource_conflict(store, ResourceInstanceId("workspace-on-host"), DetailLevel.DETAILED)
+
+        self.assertEqual("active", detailed.reservation_state)
+        self.assertEqual(("inspect", "release-reservation", "revoke-reservation"), detailed.legal_actions)
+
     def test_action_and_query_failure_matrix_is_stable_and_read_only(self) -> None:
         state = self._valid_scope_digests(complete_sqlite_state())
         store = self._store(state)
@@ -443,6 +452,11 @@ class SQLiteQueriesTest(unittest.TestCase):
                 ),
             )
         )
+        sibling_obligation = msgspec.structs.replace(
+            resolved,
+            target_item_id="work-a",
+            target_position=1,
+        )
 
         semantic = msgspec.json.decode(bytes(first_item.semantic), type=ItemScopeRecord)
         without_dependency = msgspec.structs.replace(semantic, dependencies=())
@@ -486,6 +500,20 @@ class SQLiteQueriesTest(unittest.TestCase):
             "obligation-order": msgspec.structs.replace(
                 valid,
                 resolved_obligations=(resolved, resolved),
+            ),
+            "obligation-shared-facts": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(
+                    msgspec.structs.replace(sibling_obligation, summary="contradictory summary"),
+                    resolved,
+                ),
+            ),
+            "obligation-target-position": msgspec.structs.replace(
+                valid,
+                resolved_obligations=(
+                    msgspec.structs.replace(sibling_obligation, target_position=resolved.target_position),
+                    resolved,
+                ),
             ),
             "obligation-identity": msgspec.structs.replace(
                 valid,

@@ -1106,6 +1106,8 @@ def _valid_scope_anchor(value: ScopeAnchorView) -> bool:
 
 def _validate_snapshot_obligations(value: PlanSnapshot, selected: frozenset[str]) -> None:
     obligations: tuple[PlanObligation, ...] = (*value.unresolved_obligations, *value.resolved_obligations)
+    impact_owners: dict[str, PlanObligation] = {}
+    impact_positions: dict[str, set[int]] = {}
     unresolved_identities = tuple(_obligation_identity(item) for item in value.unresolved_obligations)
     resolved_identities = tuple(_obligation_identity(item) for item in value.resolved_obligations)
     if (
@@ -1115,6 +1117,8 @@ def _validate_snapshot_obligations(value: PlanSnapshot, selected: frozenset[str]
     ):
         raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "Planning obligations are not canonical and unique.")
     for obligation in obligations:
+        owner = impact_owners.setdefault(obligation.impact_id, obligation)
+        positions = impact_positions.setdefault(obligation.impact_id, set())
         if (
             not obligation.impact_id
             or not obligation.source_item_id
@@ -1127,10 +1131,18 @@ def _validate_snapshot_obligations(value: PlanSnapshot, selected: frozenset[str]
             or obligation.recorded_project_revision > value.project_revision
             or not _valid_scope_anchor(obligation.source_scope)
             or not _valid_scope_anchor(obligation.target_scope)
+            or obligation.target_position in positions
+            or owner.source_item_id != obligation.source_item_id
+            or owner.source_attempt_id != obligation.source_attempt_id
+            or owner.source_scope != obligation.source_scope
+            or owner.summary != obligation.summary
+            or owner.evidence != obligation.evidence
+            or owner.recorded_project_revision != obligation.recorded_project_revision
         ):
             raise PlanQueryError(
                 "PLAN_SNAPSHOT_INVALID", "A planning obligation carries invalid identity or revision facts."
             )
+        positions.add(obligation.target_position)
         endpoints = {obligation.source_item_id, obligation.target_item_id}
         if isinstance(obligation, ResolvedObligation):
             if not _valid_scope_anchor(obligation.evaluated_scope) or (
@@ -1140,6 +1152,9 @@ def _validate_snapshot_obligations(value: PlanSnapshot, selected: frozenset[str]
             endpoints.update(_validate_resolved_obligation(obligation, value.project_revision))
         if not endpoints.intersection(selected):
             raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "An obligation is unrelated to the selected plan.")
+    for impact_id, positions in impact_positions.items():
+        if impact_owners[impact_id].source_item_id in selected and positions != set(range(len(positions))):
+            raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "A selected planning impact has incomplete target order.")
     expected_status = "unreconciled" if value.unresolved_obligations else "reconciled"
     if value.status != expected_status:
         raise PlanQueryError("PLAN_SNAPSHOT_INVALID", "Plan reconciliation status contradicts its obligations.")
@@ -1552,7 +1567,7 @@ def read_resource_conflict(
         if reservation is not None and reservation.state == ReservationState.REVOKED_PENDING_RECOVERY
         else ("inspect", "preserve", "revoke-reservation")
         if planned_intent
-        else ("inspect", "preserve", "release-reservation", "revoke-reservation")
+        else ("inspect", "release-reservation", "revoke-reservation")
         if reservation is not None
         else ("inspect", "assign")
     )
