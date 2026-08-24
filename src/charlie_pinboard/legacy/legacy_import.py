@@ -66,6 +66,7 @@ from charlie_pinboard.domain.identifiers import (
 )
 from charlie_pinboard.domain.model import (
     ArtifactRole,
+    AttemptState,
     CanonicalJson,
     ItemScope,
     ScopeArtifact,
@@ -483,6 +484,7 @@ def _item_sources(selected: Path) -> tuple[_ItemSource, ...]:
             path,
             _required_string(header, "item", str(path)),
             _required_string(header, "user_label", str(path)),
+            resources=_list_value(header, "resources"),
         )
         row = _queue_for_terminal(path)
         if record.item != row.item:
@@ -511,14 +513,16 @@ def _validate_terminal_attempt_links(selected: Path, items: tuple[_ItemSource, .
             attempt is None
             or attempt.attempt != pointer
             or attempt.item != source.record.item
-            or attempt.state.value != source.queue.state.value
+            or attempt.state != AttemptState.DONE
         ):
             raise LegacyImportError(
                 "LEGACY_SOURCE_INVALID", f"Terminal item {source.record.item} disagrees with attempt {pointer}."
             )
 
 
-def _proposal_values(selected: Path, now: datetime) -> tuple[ProposalRecords, dict[str, Proposal]]:
+def _proposal_values(
+    selected: Path, now: datetime, imported_item_ids: set[str]
+) -> tuple[ProposalRecords, dict[str, Proposal]]:
     proposals: list[StoredProposal] = []
     evidence: list[ProposalEvidence] = []
     freshness: list[ProposalFreshness] = []
@@ -565,6 +569,11 @@ def _proposal_values(selected: Path, now: datetime) -> tuple[ProposalRecords, di
         disposition_target = (
             history.target if history is not None else None if flat_history is None else flat_history.target
         )
+        for target in (proposal.relation.item, disposition_target):
+            if target is not None and target not in imported_item_ids:
+                raise LegacyImportError(
+                    "LEGACY_SOURCE_INVALID", f"Proposal {proposal.proposal_id} targets unknown item {target}."
+                )
         disposition_reason = (
             history.coordinator_reason
             if history is not None
@@ -912,7 +921,7 @@ def _prepare(  # noqa: PLR0915 - exhaustive temporary cross-boundary mapping rem
     validation = validate_work_state(base_work_root, project_root)
     if not validation.valid:
         raise LegacyImportError("LEGACY_SOURCE_INVALID", validation.render())
-    proposal_records, proposal_by_id = _proposal_values(selected, now)
+    proposal_records, proposal_by_id = _proposal_values(selected, now, {source.record.item for source in item_sources})
     source_artifacts = _pending_artifacts(selected, item_sources)
     manifest_key = f"legacy-import-{cutover_id}-manifest"
     manifest_selector = f"artifacts/evidence/{manifest_key}/1.json"

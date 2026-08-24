@@ -286,7 +286,7 @@ class LegacyImportTest(unittest.TestCase):
         self.assertFalse((work / "state.sqlite3").exists())
 
     def test_resource_state_is_rejected_before_destination_creation(self) -> None:
-        for resource_state in ("resource-file", "item-resource-header"):
+        for resource_state in ("resource-file", "live-item-resource-header", "terminal-item-resource-header"):
             with self.subTest(resource_state=resource_state):
                 project, work = _fixture()
                 if resource_state == "resource-file":
@@ -302,9 +302,12 @@ mode: "exclusive"
 ---
 """,
                     )
-                else:
+                elif resource_state == "live-item-resource-header":
                     item = work / "v2" / "items" / "work-a.md"
                     item.write_text(item.read_text().replace("resources: —", "resources: workspace"))
+                else:
+                    item = work / "v2" / "history" / "items" / "work-b.md"
+                    item.write_text(item.read_text().replace('resources: "—"', 'resources: "workspace"'))
                 destination = Path(tempfile.mkdtemp()).resolve() / "state.sqlite3"
 
                 with self.assertRaises(LegacyImportError) as raised:
@@ -312,6 +315,42 @@ mode: "exclusive"
 
                 self.assertEqual("LEGACY_RESOURCE_STATE_UNSUPPORTED", raised.exception.code)
                 self.assertFalse(destination.exists())
+
+    def test_proposal_item_targets_reject_before_destination_creation(self) -> None:
+        for target_kind in ("relation", "disposition"):
+            with self.subTest(target_kind=target_kind):
+                project, work = _fixture()
+                selected = work / "v2"
+                inbox = selected / "inbox" / "later.json"
+                value = json.loads(inbox.read_bytes())
+                if target_kind == "relation":
+                    value["relation"]["item"] = "missing-item"
+                    _write(inbox, json.dumps(value, indent=2) + "\n")
+                else:
+                    value.update({"disposition": "accepted", "target": "missing-item"})
+                    _write(selected / "history" / "proposals" / "later.json", json.dumps(value, indent=2) + "\n")
+                    inbox.unlink()
+                destination = Path(tempfile.mkdtemp()).resolve() / "state.sqlite3"
+
+                with self.assertRaises(LegacyImportError) as raised:
+                    import_ledger(project, work, destination, NOW)
+
+                self.assertEqual("LEGACY_SOURCE_INVALID", raised.exception.code)
+                self.assertFalse(destination.exists())
+
+    def test_terminal_item_accepts_its_completed_attempt(self) -> None:
+        project, work = _fixture()
+        selected = work / "v2"
+        item = selected / "history" / "items" / "work-d.md"
+        item.write_text(item.read_text().replace('attempt: "—"', 'attempt: "work-d-1"'))
+        source = selected / "attempts" / "work-b-1" / "attempt.md"
+        attempt = source.read_text().replace('attempt: "work-b-1"', 'attempt: "work-d-1"')
+        attempt = attempt.replace('item: "work-b"', 'item: "work-d"')
+        _write(selected / "attempts" / "work-d-1" / "attempt.md", attempt)
+
+        receipt = dry_run_ledger(project, work, NOW)
+
+        self.assertEqual(3, receipt.counts.attempts)
 
     def test_temporary_cli_exposes_dry_run_without_source_mutation(self) -> None:
         project, work = _fixture()
