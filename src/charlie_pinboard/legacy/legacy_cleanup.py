@@ -59,6 +59,24 @@ class CleanupReceipt:
     correction: CleanupCorrectionReceipt | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _CleanupRepairContract:
+    cutover_id: str
+    original_artifact_selector: str
+    original_artifact_sha256: str
+    original_committed_revision: int
+    removed_selectors: tuple[str, ...]
+
+
+_BITWIG_REPAIR_CONTRACT = _CleanupRepairContract(
+    "228aa94caa0e658c7314174bf484932ff032bc23e03a9774a42add9a56b9b6f9",
+    "artifacts/evidence/legacy-cleanup-228aa94caa0e658c7314174bf484932ff032bc23e03a9774a42add9a56b9b6f9/1.json",
+    "ca5a71d9ca3a967076ee9db1f4ce814a52ad3a3cbea7decf302fad353cccc157",
+    8,
+    ("inbox",),
+)
+
+
 class _ValidationRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     code: Literal["WORK_STATE_VALID"]
     revision: int
@@ -395,6 +413,80 @@ def _single_integer(row: sqlite3.Row | None, label: str) -> int:
     return row[0]
 
 
+def _require_inactive_authority(connection: sqlite3.Connection) -> None:
+    coordination = connection.execute("SELECT 1 FROM coordination_lease WHERE status = 'active' LIMIT 1").fetchone()
+    attempt = connection.execute("SELECT 1 FROM attempt_leases WHERE status = 'active' LIMIT 1").fetchone()
+    if coordination is not None or attempt is not None:
+        raise LegacyImportError(
+            "STORAGE_INVARIANT_VIOLATION",
+            "Legacy cleanup requires every coordination and attempt lease to be inactive.",
+        )
+
+
+def _require_repair_contract(
+    cutover_id: str,
+    original: CleanupReceipt,
+) -> _CleanupRepairContract:
+    contract = _BITWIG_REPAIR_CONTRACT
+    if (
+        cutover_id != contract.cutover_id
+        or original.artifact_selector != contract.original_artifact_selector
+        or original.artifact_sha256 != contract.original_artifact_sha256
+        or original.committed_revision != contract.original_committed_revision
+    ):
+        raise LegacyImportError(
+            "STORAGE_INVARIANT_VIOLATION",
+            "Cleanup correction is limited to the exact accepted Bitwig cleanup receipt.",
+        )
+    return contract
+
+
+def _require_repair_database_state(
+    connection: sqlite3.Connection,
+    contract: _CleanupRepairContract,
+) -> None:
+    revision = connection.execute("SELECT revision FROM project_meta WHERE singleton = 1").fetchone()
+    if revision is None or revision[0] != contract.original_committed_revision:
+        raise LegacyImportError(
+            "STORAGE_INVARIANT_VIOLATION",
+            "Cleanup correction requires the exact accepted Bitwig database revision.",
+        )
+    rows = connection.execute(
+        """
+        SELECT history.project_revision, artifact.relative_path, artifact.content_sha256, artifact.accepted_revision
+        FROM transition_history AS history
+        JOIN artifact_refs AS artifact ON artifact.artifact_ref_id = history.artifact_ref_id
+        WHERE history.action_kind = 'legacy-cleanup' AND history.action_id = ?
+        """,
+        (f"legacy-cleanup:{contract.cutover_id}",),
+    ).fetchall()
+    expected = (
+        contract.original_committed_revision,
+        contract.original_artifact_selector,
+        contract.original_artifact_sha256,
+        contract.original_committed_revision,
+    )
+    if len(rows) != 1 or tuple(rows[0]) != expected:
+        raise LegacyImportError(
+            "STORAGE_INVARIANT_VIOLATION",
+            "Cleanup correction requires the exact accepted Bitwig history and artifact reference.",
+        )
+
+
+def _repair_residue(
+    work_root: Path,
+    repairable_selectors: tuple[str, ...],
+    contract: _CleanupRepairContract,
+) -> tuple[str, ...]:
+    observed = _recognized_empty_residue(work_root, repairable_selectors)
+    if observed not in ((), contract.removed_selectors):
+        raise LegacyImportError(
+            "STORAGE_INVARIANT_VIOLATION",
+            "Cleanup correction residue differs from the exact accepted Bitwig inbox state.",
+        )
+    return observed
+
+
 def _existing_receipt(work_root: Path, cutover_id: str) -> CleanupReceipt | None:
     state = SQLiteWorkStore(work_root / "state.sqlite3").snapshot()
     action_id = f"legacy-cleanup:{cutover_id}"
@@ -485,15 +577,21 @@ def _repair_incomplete_cleanup(  # noqa: PLR0915 - one bounded repair transactio
     inactive: tuple[str, ...],
     absent: tuple[str, ...],
 ) -> CleanupReceipt:
+    contract = _require_repair_contract(cutover_id, original)
     historical_absent = _historical_absent_selectors(cutover_id, inactive)
     _validate_receipt_value(original, historical_absent)
     _verify_absent(work_root, historical_absent)
     correction = _existing_correction_receipt(work_root, cutover_id, original, absent)
     if correction is not None:
+        if correction.removed_selectors != contract.removed_selectors:
+            raise LegacyImportError(
+                "STORAGE_INVARIANT_VIOLATION",
+                "Cleanup correction does not match the accepted Bitwig selector inventory.",
+            )
         _verify_absent(work_root, absent)
         return replace(original, correction=correction)
     repairable_selectors = tuple(selector for selector in INACTIVE_ROOT_SELECTORS if selector not in inactive)
-    _recognized_empty_residue(work_root, repairable_selectors)
+    _repair_residue(work_root, repairable_selectors, contract)
     verified = now.astimezone(UTC)
     executable_sha256 = _runtime_sha256()
     database_path = work_root / "state.sqlite3"
@@ -509,8 +607,10 @@ def _repair_incomplete_cleanup(  # noqa: PLR0915 - one bounded repair transactio
                 (action_id,),
             ).fetchone()
             if committed is None:
-                removed = _recognized_empty_residue(work_root, repairable_selectors)
-                _remove_empty_residue(work_root, removed)
+                _require_inactive_authority(connection)
+                _require_repair_database_state(connection, contract)
+                observed = _repair_residue(work_root, repairable_selectors, contract)
+                _remove_empty_residue(work_root, observed)
                 _verify_absent(work_root, absent)
                 _require_valid_sqlite(work_root)
                 row = connection.execute("SELECT revision FROM project_meta WHERE singleton = 1").fetchone()
@@ -527,7 +627,7 @@ def _repair_incomplete_cleanup(  # noqa: PLR0915 - one bounded repair transactio
                     original.artifact_sha256,
                     original.committed_revision,
                     __version__,
-                    removed,
+                    contract.removed_selectors,
                     "repo-work-cleanup-correction-receipt/v1",
                     _ValidationRecord("WORK_STATE_VALID", before_revision),
                     verified.isoformat().replace("+00:00", "Z"),
@@ -592,7 +692,7 @@ def _repair_incomplete_cleanup(  # noqa: PLR0915 - one bounded repair transactio
                         {
                             "artifact_selector": selector,
                             "artifact_sha256": published.content_sha256,
-                            "removed_selectors": list(removed),
+                            "removed_selectors": list(contract.removed_selectors),
                             "verified_clean_at": verified.isoformat().replace("+00:00", "Z"),
                         }
                     )
@@ -682,6 +782,7 @@ def cleanup_legacy(  # noqa: C901, PLR0912, PLR0915 - one bounded deletion trans
                 (action_id,),
             ).fetchone()
             if committed is None:
+                _require_inactive_authority(connection)
                 empty_residue = _recognized_empty_residue(work_root, repairable_selectors)
                 _remove_empty_residue(work_root, empty_residue)
                 _remove_legacy(work_root, expected_cutover_id)

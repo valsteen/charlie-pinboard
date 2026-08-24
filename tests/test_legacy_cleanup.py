@@ -4,20 +4,21 @@ import sqlite3
 import unittest
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, nullcontext, redirect_stdout
 from datetime import timedelta
 from io import StringIO
 from pathlib import Path
 from threading import Barrier, Lock, get_ident
 from unittest.mock import patch
 
-from charlie_pinboard.adapters.sqlite.database import OpenMode, open_database, write_transaction
+from charlie_pinboard.adapters.sqlite.database import OpenMode, StorageError, open_database, write_transaction
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.stored_state import TransitionHistoryActionKind
 from charlie_pinboard.interfaces.cli import main
 from charlie_pinboard.legacy.authority import AuthorityError, resolve_authority
 from charlie_pinboard.legacy.legacy_cleanup import (
     CleanupReceipt,
+    _CleanupRepairContract,
     _decode_correction_receipt,
     _decode_receipt,
     _existing_receipt,
@@ -31,7 +32,25 @@ from charlie_pinboard.legacy.legacy_import import (
     cutover_ledger,
     import_ledger,
 )
-from tests.test_legacy_import import NOW, _fixture
+from tests.test_legacy_import import NOW
+from tests.test_legacy_import import _fixture as _import_fixture
+
+
+def _fixture() -> tuple[Path, Path]:
+    project, work = _import_fixture()
+    attempt = work / "v2" / "attempts" / "work-a-1" / "attempt.md"
+    attempt.write_text(attempt.read_text().replace('lease_status: "active"', 'lease_status: "released"'))
+    return project, work
+
+
+def _repair_contract(original: CleanupReceipt) -> _CleanupRepairContract:
+    return _CleanupRepairContract(
+        original.cutover_id,
+        original.artifact_selector,
+        original.artifact_sha256,
+        original.committed_revision,
+        ("inbox",),
+    )
 
 
 class LegacyCleanupTest(unittest.TestCase):
@@ -122,8 +141,12 @@ class LegacyCleanupTest(unittest.TestCase):
             original = cleanup_legacy(work, imported.cutover_id, NOW)
         original_bytes = (work / original.artifact_selector).read_bytes()
 
-        repaired = cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=1))
-        replay = cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=2))
+        with patch(
+            "charlie_pinboard.legacy.legacy_cleanup._BITWIG_REPAIR_CONTRACT",
+            _repair_contract(original),
+        ):
+            repaired = cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=1))
+            replay = cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=2))
         state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
 
         self.assertEqual(original.artifact_selector, repaired.artifact_selector)
@@ -157,7 +180,13 @@ class LegacyCleanupTest(unittest.TestCase):
         self.assertEqual(0, result)
         self.assertTrue(json.loads(output.getvalue())["valid"])
         cleanup_output = StringIO()
-        with redirect_stdout(cleanup_output):
+        with (
+            patch(
+                "charlie_pinboard.legacy.legacy_cleanup._BITWIG_REPAIR_CONTRACT",
+                _repair_contract(original),
+            ),
+            redirect_stdout(cleanup_output),
+        ):
             cleanup_result = main(
                 [
                     "--project-root",
@@ -176,7 +205,13 @@ class LegacyCleanupTest(unittest.TestCase):
             json.loads(cleanup_output.getvalue())["correction"]["artifact_selector"],
         )
         plain_output = StringIO()
-        with redirect_stdout(plain_output):
+        with (
+            patch(
+                "charlie_pinboard.legacy.legacy_cleanup._BITWIG_REPAIR_CONTRACT",
+                _repair_contract(original),
+            ),
+            redirect_stdout(plain_output),
+        ):
             plain_result = main(
                 [
                     "--project-root",
@@ -214,6 +249,68 @@ class LegacyCleanupTest(unittest.TestCase):
                 self.assertTrue((work / "legacy-v2").is_dir())
                 self.assertTrue((work / "authority.json").is_file())
 
+    def test_cleanup_and_repair_reject_active_sqlite_authority(self) -> None:
+        for operation, table in (
+            ("cleanup", "coordination_lease"),
+            ("cleanup", "attempt_leases"),
+            ("repair", "coordination_lease"),
+            ("repair", "attempt_leases"),
+        ):
+            with self.subTest(operation=operation, table=table):
+                _project, work = _fixture()
+                (work / "inbox").mkdir()
+                imported = cutover_ledger(_project, work, NOW)
+                original: CleanupReceipt | None = None
+                if operation == "repair":
+                    with patch(
+                        "charlie_pinboard.legacy.legacy_cleanup.INACTIVE_ROOT_SELECTORS",
+                        ("queue.md",),
+                        create=True,
+                    ):
+                        original = cleanup_legacy(work, imported.cutover_id, NOW)
+                connection = sqlite3.connect(work / "state.sqlite3")
+                try:
+                    connection.execute(f"UPDATE {table} SET status = 'active'")
+                    connection.commit()
+                finally:
+                    connection.close()
+
+                repair_patch = (
+                    patch(
+                        "charlie_pinboard.legacy.legacy_cleanup._BITWIG_REPAIR_CONTRACT",
+                        _repair_contract(original),
+                    )
+                    if original is not None
+                    else nullcontext()
+                )
+                with repair_patch, self.assertRaises(LegacyImportError) as raised:
+                    cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=1))
+
+                self.assertEqual("STORAGE_INVARIANT_VIOLATION", raised.exception.code)
+                if operation == "cleanup":
+                    self.assertTrue((work / "legacy-v2").is_dir())
+                    self.assertTrue((work / "authority.json").is_file())
+                else:
+                    self.assertTrue((work / "inbox").is_dir())
+
+    def test_cleanup_repair_rejects_a_non_bitwig_receipt(self) -> None:
+        _project, work = _fixture()
+        (work / "inbox").mkdir()
+        imported = cutover_ledger(_project, work, NOW)
+        with patch(
+            "charlie_pinboard.legacy.legacy_cleanup.INACTIVE_ROOT_SELECTORS",
+            ("queue.md",),
+            create=True,
+        ):
+            original = cleanup_legacy(work, imported.cutover_id, NOW)
+
+        with self.assertRaises(LegacyImportError) as raised:
+            cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=1))
+
+        self.assertEqual("STORAGE_INVARIANT_VIOLATION", raised.exception.code)
+        self.assertTrue((work / "inbox").is_dir())
+        self.assertEqual(original.receipt_bytes, (work / original.artifact_selector).read_bytes())
+
     def test_concurrent_incomplete_receipt_repairs_commit_one_correction(self) -> None:
         project, work = _fixture()
         (work / "inbox").mkdir()
@@ -230,7 +327,15 @@ class LegacyCleanupTest(unittest.TestCase):
             barrier.wait()
             return cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=offset))
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        original = _existing_receipt(work, imported.cutover_id)
+        assert original is not None
+        with (
+            patch(
+                "charlie_pinboard.legacy.legacy_cleanup._BITWIG_REPAIR_CONTRACT",
+                _repair_contract(original),
+            ),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
             receipts = tuple(executor.map(run_repair, (1, 2)))
 
         state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
@@ -351,7 +456,7 @@ class LegacyCleanupTest(unittest.TestCase):
         self.assertEqual(retry_time, receipt.verified_clean_at)
 
     def test_cleanup_repair_resumes_an_unreferenced_correction_artifact(self) -> None:
-        def incomplete_cleanup() -> tuple[Path, str]:
+        def incomplete_cleanup() -> tuple[Path, CleanupReceipt]:
             project, work = _fixture()
             (work / "inbox").mkdir()
             imported = cutover_ledger(project, work, NOW)
@@ -364,20 +469,33 @@ class LegacyCleanupTest(unittest.TestCase):
                 patch("charlie_pinboard.legacy.legacy_cleanup._runtime_sha256", return_value="1" * 64),
                 patch("charlie_pinboard.legacy.legacy_cleanup.__version__", "0.1.0+historical"),
             ):
-                cleanup_legacy(work, imported.cutover_id, NOW)
-            return work, imported.cutover_id
+                original = cleanup_legacy(work, imported.cutover_id, NOW)
+            return work, original
 
-        comparison_work, comparison_cutover_id = incomplete_cleanup()
-        comparison = cleanup_legacy(comparison_work, comparison_cutover_id, NOW + timedelta(seconds=1))
+        comparison_work, comparison_original = incomplete_cleanup()
+        with patch(
+            "charlie_pinboard.legacy.legacy_cleanup._BITWIG_REPAIR_CONTRACT",
+            _repair_contract(comparison_original),
+        ):
+            comparison = cleanup_legacy(
+                comparison_work,
+                comparison_original.cutover_id,
+                NOW + timedelta(seconds=1),
+            )
         assert comparison.correction is not None
         expected_receipt = comparison.correction.receipt_bytes
-        work, cutover_id = incomplete_cleanup()
+        work, original = incomplete_cleanup()
+        cutover_id = original.cutover_id
         orphan = work / "artifacts" / "evidence" / f"legacy-cleanup-repair-{cutover_id}" / "1.json"
         orphan.parent.mkdir(parents=True)
         orphan.write_bytes(expected_receipt)
 
         retry_time = NOW + timedelta(seconds=2)
-        receipt = cleanup_legacy(work, cutover_id, retry_time)
+        with patch(
+            "charlie_pinboard.legacy.legacy_cleanup._BITWIG_REPAIR_CONTRACT",
+            _repair_contract(original),
+        ):
+            receipt = cleanup_legacy(work, cutover_id, retry_time)
 
         self.assertIsNotNone(receipt.correction)
         assert receipt.correction is not None
@@ -407,8 +525,12 @@ class LegacyCleanupTest(unittest.TestCase):
             ("queue.md",),
             create=True,
         ):
-            cleanup_legacy(repair_work, repair_import.cutover_id, NOW)
-        repaired = cleanup_legacy(repair_work, repair_import.cutover_id, NOW + timedelta(seconds=1))
+            original = cleanup_legacy(repair_work, repair_import.cutover_id, NOW)
+        with patch(
+            "charlie_pinboard.legacy.legacy_cleanup._BITWIG_REPAIR_CONTRACT",
+            _repair_contract(original),
+        ):
+            repaired = cleanup_legacy(repair_work, repair_import.cutover_id, NOW + timedelta(seconds=1))
         assert repaired.correction is not None
         correction_record, _verified = _decode_correction_receipt(repaired.correction.receipt_bytes)
         for invalid in ("not-a-time", "2026-08-24T09:00:00"):
@@ -425,6 +547,39 @@ class LegacyCleanupTest(unittest.TestCase):
         noncanonical = json.dumps(json.loads(repaired.correction.receipt_bytes), indent=2).encode() + b"\n"
         with self.assertRaises(LegacyImportError):
             _validate_orphan_correction_receipt(noncanonical, correction_record)
+
+    def test_cleanup_repair_retry_preserves_the_exact_removed_selector_after_interruption(self) -> None:
+        _project, work = _fixture()
+        (work / "inbox").mkdir()
+        imported = cutover_ledger(_project, work, NOW)
+        with patch(
+            "charlie_pinboard.legacy.legacy_cleanup.INACTIVE_ROOT_SELECTORS",
+            ("queue.md",),
+            create=True,
+        ):
+            original = cleanup_legacy(work, imported.cutover_id, NOW)
+
+        def fail_after_selector_removal(*_args: object, **_kwargs: object) -> None:
+            raise OSError("simulated publication interruption")
+
+        contract = _repair_contract(original)
+        with (
+            patch("charlie_pinboard.legacy.legacy_cleanup._BITWIG_REPAIR_CONTRACT", contract),
+            patch(
+                "charlie_pinboard.legacy.legacy_cleanup.ArtifactRepository.publish",
+                fail_after_selector_removal,
+            ),
+            self.assertRaises(StorageError),
+        ):
+            cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=1))
+
+        self.assertFalse((work / "inbox").exists())
+        self.assertEqual(2, SQLiteWorkStore(work / "state.sqlite3").snapshot().lifecycle.project.revision)
+        with patch("charlie_pinboard.legacy.legacy_cleanup._BITWIG_REPAIR_CONTRACT", contract):
+            repaired = cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=2))
+
+        assert repaired.correction is not None
+        self.assertEqual(("inbox",), repaired.correction.removed_selectors)
 
     def test_cleanup_refuses_missing_mapped_artifact_before_legacy_deletion(self) -> None:
         project, work = _fixture()
