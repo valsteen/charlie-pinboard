@@ -43,6 +43,7 @@ from charlie_pinboard.domain.model import (
     ResourceAuthority,
     ResourceMutationCapability,
     ResourceRequirement,
+    ResumeInput,
     ScopeDependency,
     SubmitReviewInput,
     Timing,
@@ -169,7 +170,7 @@ class CloseCommand:
 @dataclass(frozen=True, slots=True)
 class ResumeCommand:
     capability: ActionCapability
-    value: EmptyInput
+    value: ResumeInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,7 +387,7 @@ def bind_transition(  # noqa: C901, PLR0912
             return CompleteCommand(capability, value)
         case ActionKind.CLOSE, CloseInput():
             return CloseCommand(capability, value)
-        case ActionKind.RESUME, EmptyInput():
+        case ActionKind.RESUME, ResumeInput():
             return ResumeCommand(capability, value)
         case ActionKind.SUBMIT_REVIEW, SubmitReviewInput():
             return SubmitReviewCommand(capability, value)
@@ -1126,6 +1127,7 @@ def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> De
 
 def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> Decision | DecisionFailure:
     action = command_action(command)
+    value = command.value
     item_id = ItemId(action.subject)
     item = snapshot.item(item_id)
     if item is None:
@@ -1141,8 +1143,27 @@ def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> 
     target = WorkState.ACTIVE if item.attempt is not None else WorkState.READY
     attempt_change = None
     if item.attempt is not None:
+        if value.brief_artifact_ref_id is not None:
+            artifact = next(
+                (
+                    candidate
+                    for candidate in snapshot.artifacts
+                    if candidate.artifact_ref_id == value.brief_artifact_ref_id
+                ),
+                None,
+            )
+            if artifact is None or artifact.kind != "brief":
+                return DecisionFailure(
+                    DecisionFailureCode.TRANSITION_INPUT_INVALID,
+                    "Resuming with a revised brief requires one existing brief artifact reference.",
+                )
         before = AttemptState.PAUSED if item.state == WorkState.PAUSED else AttemptState.BLOCKED
-        attempt_change = AttemptChange(item.attempt, before, AttemptState.ACTIVE)
+        attempt_change = AttemptChange(
+            item.attempt,
+            before,
+            AttemptState.ACTIVE,
+            brief_artifact_ref_id=value.brief_artifact_ref_id,
+        )
     return _result(
         action,
         now,

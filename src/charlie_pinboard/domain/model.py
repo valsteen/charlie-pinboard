@@ -93,6 +93,11 @@ class EmptyInput:
 
 
 @dataclass(frozen=True, slots=True)
+class ResumeInput:
+    brief_artifact_ref_id: ArtifactRefId | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ActivateInput:
     attempt: AttemptId
     branch: str
@@ -172,6 +177,7 @@ class TransferCoordinatorInput:
 
 type TransitionInput = (
     EmptyInput
+    | ResumeInput
     | ActivateInput
     | LegacyActivateInput
     | ReasonInput

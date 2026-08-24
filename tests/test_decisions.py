@@ -68,6 +68,7 @@ from charlie_pinboard.domain.model import (
     PlanningDisposition,
     ReasonInput,
     ReservationState,
+    ResumeInput,
     ScopeArtifact,
     SubmitReviewInput,
     TransitionInput,
@@ -663,12 +664,12 @@ class LifecycleDecisionTest(unittest.TestCase):
                 CloseInput(CloseOutcome.DONE, "done"),
                 "HISTORY_RECORD_EXISTS",
             ),
-            (LedgerSnapshot("r", 1, (ready,)), ActionKind.RESUME, "target", EmptyInput(), "ACTION_NOT_AVAILABLE"),
+            (LedgerSnapshot("r", 1, (ready,)), ActionKind.RESUME, "target", ResumeInput(), "ACTION_NOT_AVAILABLE"),
             (
                 LedgerSnapshot("r", 1, (replace(paused, depends_on=("source",)), item("source", WorkState.READY))),
                 ActionKind.RESUME,
                 "target",
-                EmptyInput(),
+                ResumeInput(),
                 "DEPENDENCY_NOT_SATISFIED",
             ),
             (

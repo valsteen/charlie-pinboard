@@ -102,6 +102,7 @@ from charlie_pinboard.domain.model import (
     AcceptedProposalState,
     AcceptProposalInput,
     ActivateInput,
+    AttemptState,
     CloseInput,
     CloseOutcome,
     DeferInput,
@@ -116,6 +117,7 @@ from charlie_pinboard.domain.model import (
     ResourceIntentCapability,
     ResourceMutationCapability,
     ResourceRequirement,
+    ResumeInput,
     ScopeAnchor,
     ScopeDependency,
     SubmitReviewInput,
@@ -451,6 +453,47 @@ class MutationPersistenceTest(unittest.TestCase):
         self.assertEqual(13, reopened.lifecycle.project.revision)
         self.assertEqual(2, len(reopened.history.receipts))
         self.assertEqual("transition-receipt/v1", reopened.history.receipts[-1].outcome_schema)
+
+    def test_resume_replaces_the_attempt_brief_and_reloads_it_from_sqlite(self) -> None:
+        state = complete_sqlite_state()
+        current = state.artifacts.references[0]
+        replacement = replace(
+            current,
+            artifact_ref_id=ArtifactRefId(99),
+            revision=current.revision + 1,
+            selector="artifacts/briefs/work-a/2.md",
+            content_sha256="b" * 64,
+            size_bytes=23,
+        )
+        attempt = state.lifecycle.attempts[0]
+        items = tuple(
+            replace(item, state=StoredWorkItemState.PAUSED) if item.item_id == attempt.item_id else item
+            for item in state.lifecycle.work_items
+        )
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                work_items=items,
+                dependencies=tuple(value for value in state.lifecycle.dependencies if value.item_id != attempt.item_id),
+                attempts=(replace(attempt, state=AttemptState.PAUSED),),
+            ),
+            artifacts=replace(state.artifacts, references=(*state.artifacts.references, replacement)),
+        )
+        store = self._store_with_state(state)
+        snapshot = project_decision_snapshot(store.snapshot())
+        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
+        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.RESUME)
+        decision = decide(snapshot, bind_transition(action, ResumeInput(replacement.artifact_ref_id)), SQLITE_NOW)
+
+        with store.write() as transaction:
+            transaction.commit(project_transition_mutation(transaction.snapshot(), decision))
+
+        persisted = next(
+            value for value in store.snapshot().lifecycle.attempts if value.attempt_id == attempt.attempt_id
+        )
+        self.assertEqual(AttemptState.ACTIVE, persisted.state)
+        self.assertEqual(replacement.artifact_ref_id, persisted.brief_artifact_ref_id)
 
     def test_proposal_acceptance_round_trips_semantics_and_ordered_dependencies(self) -> None:
         store = self._store()

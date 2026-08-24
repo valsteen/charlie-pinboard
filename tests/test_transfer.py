@@ -169,6 +169,18 @@ class PortableCopyTest(unittest.TestCase):
         self.assertEqual("STORAGE_INVARIANT_VIOLATION", artifact.exception.code)
         self.assertFalse(missing_destination.exists())
 
+    def test_portable_copy_rejects_destination_nested_in_source_without_changing_source(self) -> None:
+        source, _store = self._source()
+        source_bytes = self._bytes(source)
+        destination = source / "nested-portable-work"
+
+        with self.assertRaises(PortableCopyError) as invalid:
+            create_portable_copy(source, destination)
+
+        self.assertEqual("PORTABLE_COPY_DESTINATION_INVALID", invalid.exception.code)
+        self.assertFalse(destination.exists())
+        self.assertEqual(source_bytes, self._bytes(source))
+
 
 if __name__ == "__main__":
     unittest.main()

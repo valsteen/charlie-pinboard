@@ -38,6 +38,8 @@ from charlie_pinboard.domain.identifiers import (
 from charlie_pinboard.domain.model import (
     ActivateInput,
     ArtifactRecord,
+    AttemptRecord,
+    AttemptState,
     BlockInput,
     CanonicalJson,
     CommandAttemptAuthority,
@@ -49,6 +51,7 @@ from charlie_pinboard.domain.model import (
     ReasonInput,
     ReservationState,
     ResourceIntentCapability,
+    ResumeInput,
     SubmitReviewInput,
     TransitionInput,
     UseLeaseGenerationKind,
@@ -231,6 +234,47 @@ class TypedTransitionContractTest(unittest.TestCase):
         )
         assert accepted.attempt_change is not None
         self.assertEqual(ArtifactRefId(1), accepted.attempt_change.brief_artifact_ref_id)
+
+    def test_resume_may_replace_the_attempt_brief_with_one_existing_brief_reference(self) -> None:
+        paused = WorkItem(
+            ItemId("ready-item"),
+            WorkState.PAUSED,
+            None,
+            (),
+            AttemptId("ready-item-1"),
+            "test",
+            "resume",
+            "",
+        )
+        snapshot = LedgerSnapshot(
+            "project-revision",
+            1,
+            (paused,),
+            attempts=(
+                AttemptRecord(
+                    AttemptId("ready-item-1"),
+                    ItemId("ready-item"),
+                    AttemptState.PAUSED,
+                    brief_artifact_ref_id=ArtifactRefId(1),
+                ),
+            ),
+            artifacts=(
+                ArtifactRecord(ArtifactRefId(1), "brief"),
+                ArtifactRecord(ArtifactRefId(2), "brief"),
+                ArtifactRecord(ArtifactRefId(3), "design"),
+            ),
+        )
+        resume = action(ActionKind.RESUME, "ready-item")
+
+        for value in (ResumeInput(ArtifactRefId(99)), ResumeInput(ArtifactRefId(3))):
+            with self.subTest(value=value):
+                rejected = decision_outcome(snapshot, bind_transition(resume, value), SQLITE_NOW)
+                self.assertIsInstance(rejected, DecisionFailure)
+                self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
+
+        accepted = decide(snapshot, bind_transition(resume, ResumeInput(ArtifactRefId(2))), SQLITE_NOW)
+        assert accepted.attempt_change is not None
+        self.assertEqual(ArtifactRefId(2), accepted.attempt_change.brief_artifact_ref_id)
 
     def test_legacy_input_contract_remains_explicitly_separate(self) -> None:
         self.assertEqual(EmptyInput(), parse_legacy_transition_input("submit-review", b"{}"))

@@ -689,6 +689,11 @@ def _transition_attempt_after(
     attempts[index] = replace(
         attempts[index],
         state=change.after,
+        brief_artifact_ref_id=(
+            change.brief_artifact_ref_id
+            if change.brief_artifact_ref_id is not None
+            else attempts[index].brief_artifact_ref_id
+        ),
         candidate_revision=(
             None
             if clears_candidate

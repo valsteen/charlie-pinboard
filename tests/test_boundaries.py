@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 import msgspec
 
-from charlie_pinboard.domain.model import SCHEMA_V1, SCHEMA_V2, WorkState
+from charlie_pinboard.domain.identifiers import ArtifactRefId
+from charlie_pinboard.domain.model import SCHEMA_V1, SCHEMA_V2, ResumeInput, WorkState
 from charlie_pinboard.interfaces.transition_input import (
     AcceptCheckpointInput,
     ActivateInput,
@@ -71,6 +72,11 @@ class JsonBoundaryTest(unittest.TestCase):
             self.fail("activate payload did not produce ActivateInput")
         self.assertEqual("attempt-1", transition.attempt)
         self.assertEqual(7, transition.brief_artifact_ref_id)
+        self.assertEqual(ResumeInput(), parse_transition_input("resume", "{}"))
+        self.assertEqual(
+            ResumeInput(ArtifactRefId(8)),
+            parse_transition_input("resume", '{"brief_artifact_ref_id": 8}'),
+        )
         with self.assertRaises(TransitionInputError):
             parse_transition_input("resume", '{"unexpected": true}')
         checkpoint = parse_transition_input(

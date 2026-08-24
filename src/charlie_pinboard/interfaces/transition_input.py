@@ -25,6 +25,7 @@ from charlie_pinboard.domain.model import (
     LegacyActivateInput,
     MergeProposalInput,
     ReasonInput,
+    ResumeInput,
     SubmitReviewInput,
     Timing,
     TransferCoordinatorInput,
@@ -46,6 +47,10 @@ class TransitionInputError(ValueError):
 
 class EmptyInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     pass
+
+
+class ResumeInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    brief_artifact_ref_id: Annotated[int, msgspec.Meta(ge=1)] | None = None
 
 
 class ActivateInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -115,6 +120,7 @@ class TransferCoordinatorInputPayload(msgspec.Struct, frozen=True, forbid_unknow
 
 type InputPayload = (
     EmptyInputPayload
+    | ResumeInputPayload
     | ActivateInputPayload
     | StoredActivateInputPayload
     | SubmitReviewInputPayload
@@ -174,7 +180,7 @@ def _input_model(kind: str, *, legacy: bool) -> InputModel:  # noqa: C901, PLR09
         case "merge-proposal":
             return MergeProposalInputPayload
         case "resume":
-            return EmptyInputPayload
+            return ResumeInputPayload
         case "submit-review":
             return EmptyInputPayload if legacy else SubmitReviewInputPayload
         case "transfer-coordinator":
@@ -197,6 +203,8 @@ def _parse_transition_input(  # noqa: C901, PLR0912 - exhaustive boundary conver
     match payload:
         case EmptyInputPayload():
             return EmptyInput()
+        case ResumeInputPayload(brief_artifact_ref_id=brief_artifact_ref_id):
+            return ResumeInput(None if brief_artifact_ref_id is None else ArtifactRefId(brief_artifact_ref_id))
         case ActivateInputPayload(attempt=attempt, branch=branch, base_revision=base_revision, owner=owner):
             return LegacyActivateInput(AttemptId(attempt), branch, base_revision, owner)
         case StoredActivateInputPayload(

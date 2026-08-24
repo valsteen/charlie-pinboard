@@ -221,11 +221,17 @@ def create_portable_copy(source_work_root: Path, destination_work_root: Path) ->
             f"Portable-copy destination already exists: {destination}",
         )
     try:
+        resolved_source = source.resolve(strict=True)
         parent = destination.parent.resolve(strict=True)
     except OSError as error:
         raise PortableCopyError("STORAGE_IO_ERROR", "The portable-copy destination parent is unavailable.") from error
     if not parent.is_dir():
         raise PortableCopyError("STORAGE_IO_ERROR", "The portable-copy destination parent is not a directory.")
+    if parent == resolved_source or resolved_source in parent.parents:
+        raise PortableCopyError(
+            "PORTABLE_COPY_DESTINATION_INVALID",
+            "The portable-copy destination must be outside the source work root.",
+        )
 
     source_store = SQLiteWorkStore(source / "state.sqlite3")
     _quiescent_source(source_store)
