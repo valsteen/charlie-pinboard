@@ -1572,6 +1572,18 @@ class CliTest(unittest.TestCase):
         self.assertIn("PROPOSAL_ALREADY_EXISTS", duplicate_stderr)
         self.assertEqual(before_revision + 1, store.snapshot().lifecycle.project.revision)
 
+        missing_relation = json.loads(proposal_path.read_text(encoding="utf-8"))
+        missing_relation["proposal_id"] = "cli-missing-related-item"
+        missing_relation["relation"] = {"kind": "follow-up", "item": "does-not-exist"}
+        proposal_path.write_text(json.dumps(missing_relation), encoding="utf-8")
+        before_missing = store.snapshot()
+
+        missing_result, _, missing_stderr = self.run_cli(*common, "proposal", "--file", str(proposal_path))
+
+        self.assertEqual(13, missing_result)
+        self.assertIn("ITEM_NOT_FOUND", missing_stderr)
+        self.assertEqual(before_missing, store.snapshot())
+
     def test_current_sqlite_status_uses_one_snapshot_and_query_failures_are_stable(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)

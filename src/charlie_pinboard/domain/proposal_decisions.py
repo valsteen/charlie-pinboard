@@ -53,6 +53,7 @@ def decide_proposal_creation(
     current_project_revision: int,
     current_host_epoch: int,
     existing: tuple[ProposalId, ...],
+    existing_items: tuple[ItemId, ...],
     operation: CreateProposalOperation,
 ) -> ProposalCreationDecision | DecisionFailure:
     intake = operation.intake
@@ -86,4 +87,6 @@ def decide_proposal_creation(
             DecisionFailureCode.PROPOSAL_INVALID,
             "Only an independent proposal omits its related item.",
         )
+    if intake.relation_item is not None and intake.relation_item not in existing_items:
+        return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, "The related work item does not exist.")
     return ProposalCreationDecision(intake, intake.evidence, intake.freshness_assumptions)

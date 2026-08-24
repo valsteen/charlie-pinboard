@@ -490,6 +490,7 @@ execute_task_use_authority_operation = change_task_use_authority
 def create_proposal(
     store: WorkStore,
     operation: CreateProposalOperation,
+    now: datetime,
 ) -> TransitionReceipt | DecisionFailure:
     """Persist one immutable proposal under authority selected from the locked local store."""
 
@@ -502,6 +503,7 @@ def create_proposal(
             project.revision,
             project.host_epoch,
             tuple(value.proposal_id for value in before.proposals.proposals),
+            tuple(value.item_id for value in before.lifecycle.work_items),
             operation,
         )
         match result:
@@ -515,7 +517,7 @@ def create_proposal(
             None,
             "create-proposal",
             intake.urgency_evidence,
-            intake.created_at,
+            now,
         )
         receipt = MutationReceipt(
             transition,

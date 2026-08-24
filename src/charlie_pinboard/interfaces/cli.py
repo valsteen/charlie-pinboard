@@ -1288,7 +1288,7 @@ def _proposal(context: CommandContext) -> int:
             proposal.freshness_assumptions,
         )
         store = SQLiteWorkStore(context.work / "state.sqlite3")
-        result = create_sqlite_proposal(store, CreateProposalOperation(intake))
+        result = create_sqlite_proposal(store, CreateProposalOperation(intake), datetime.now(UTC))
         if isinstance(result, DecisionFailure):
             raise ProposalError(result.code.value, result.message)
         view_result = refresh_views(store, context.work, AffectedViews(queue=True, history=True))

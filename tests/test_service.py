@@ -795,9 +795,11 @@ class ServiceTest(unittest.TestCase):
             authority=replace(state.authority, coordination=None),
         )
         store, _database_path = self._store_with_state(state)
+        created_at = SQLITE_NOW - timedelta(days=1)
+        recorded_at = SQLITE_NOW + timedelta(seconds=1)
         intake = ProposalIntake(
             ProposalId("sqlite-proposal"),
-            SQLITE_NOW + timedelta(seconds=1),
+            created_at,
             TaskId("discovering-task"),
             "SQLite proposal",
             "A local observation needs coordination.",
@@ -811,8 +813,8 @@ class ServiceTest(unittest.TestCase):
             ("The current schema remains accepted.",),
         )
 
-        receipt = create_proposal(store, CreateProposalOperation(intake))
-        duplicate = create_proposal(store, CreateProposalOperation(intake))
+        receipt = create_proposal(store, CreateProposalOperation(intake), recorded_at)
+        duplicate = create_proposal(store, CreateProposalOperation(intake), recorded_at + timedelta(seconds=1))
 
         self.assertNotIsInstance(receipt, DecisionFailure)
         self.assertIsInstance(duplicate, DecisionFailure)
@@ -822,6 +824,38 @@ class ServiceTest(unittest.TestCase):
             (ProposalId("sqlite-proposal"),), tuple(value.proposal_id for value in after.proposals.proposals)
         )
         self.assertEqual(("source:local",), tuple(value.selector for value in after.proposals.evidence))
+        proposal = after.proposals.proposals[0]
+        self.assertEqual(created_at, proposal.created_at)
+        self.assertEqual(recorded_at, proposal.recorded_at)
+        self.assertEqual(recorded_at, after.lifecycle.project.updated_at)
+        self.assertEqual(recorded_at, after.history.receipts[-1].committed_at)
+
+    def test_sqlite_proposal_intake_rejects_a_missing_related_item_before_persistence(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, proposals=replace(state.proposals, proposals=(), evidence=(), freshness=()))
+        store, _database_path = self._store_with_state(state)
+        intake = ProposalIntake(
+            ProposalId("missing-related-item"),
+            SQLITE_NOW,
+            TaskId("discovering-task"),
+            "Missing relation",
+            "A proposal names an absent item.",
+            "Storage must not be the first validator.",
+            "The proposal is rejected without mutation.",
+            "Return a typed item rejection.",
+            ProposalRelationKind.FOLLOW_UP,
+            ItemId("does-not-exist"),
+            "The related item is absent.",
+            (),
+            (),
+        )
+        before = store.snapshot()
+
+        result = create_proposal(store, CreateProposalOperation(intake), SQLITE_NOW + timedelta(seconds=1))
+
+        self.assertIsInstance(result, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ITEM_NOT_FOUND, result.code)
+        self.assertEqual(before, store.snapshot())
 
     def test_dependency_edit_advances_only_the_affected_item_scope_and_subject(self) -> None:
         store = self._store()
