@@ -1523,6 +1523,55 @@ class CliTest(unittest.TestCase):
         self.assertEqual(11, recovery_result)
         self.assertIn("COMMIT_JOURNAL_INVALID", recovery_stderr)
 
+    def test_sqlite_proposal_command_persists_once_without_legacy_authority(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        store = SQLiteWorkStore(roots.database_path)
+        store.initialize_state(complete_sqlite_state())
+        proposal_path = project / "proposal.json"
+        proposal_path.write_text(
+            json.dumps(
+                {
+                    "schema": "repo-work/v1",
+                    "proposal_id": "cli-sqlite-proposal",
+                    "created_at": (SQLITE_NOW + timedelta(seconds=1)).isoformat(),
+                    "source_task_id": "discovering-task",
+                    "user_label": "SQLite CLI proposal",
+                    "trigger": "The public proposal command must use current authority.",
+                    "evidence": ["source:cli"],
+                    "why_it_matters": "A legacy writer cannot persist to SQLite authority.",
+                    "relation": {"kind": "follow-up", "item": "work-c"},
+                    "effect": "The proposal appears once in the SQLite inbox.",
+                    "unlock": "Route the command through the existing application service.",
+                    "urgency_evidence": "The installed command currently fails on SQLite authority.",
+                    "freshness_assumptions": ["SQLite remains authoritative."],
+                }
+            ),
+            encoding="utf-8",
+        )
+        common = ("--project-root", str(project), "--work-root", str(roots.work_root))
+        before_revision = store.snapshot().lifecycle.project.revision
+
+        result, stdout, stderr = self.run_cli(*common, "proposal", "--file", str(proposal_path))
+        duplicate_result, _, duplicate_stderr = self.run_cli(*common, "proposal", "--file", str(proposal_path))
+
+        after = store.snapshot()
+        self.assertEqual(0, result, stderr)
+        created = next(value for value in after.proposals.proposals if str(value.proposal_id) == "cli-sqlite-proposal")
+        self.assertIn("OK PROPOSAL_CREATED cli-sqlite-proposal", stdout)
+        self.assertEqual(before_revision + 1, after.lifecycle.project.revision)
+        self.assertEqual("SQLite CLI proposal", created.user_label)
+        self.assertEqual("follow-up", created.relation.value)
+        self.assertEqual("work-c", created.relation_item_id)
+        self.assertEqual(
+            ("source:cli",),
+            tuple(value.selector for value in after.proposals.evidence if value.proposal_id == created.proposal_id),
+        )
+        self.assertEqual(13, duplicate_result)
+        self.assertIn("PROPOSAL_ALREADY_EXISTS", duplicate_stderr)
+        self.assertEqual(before_revision + 1, store.snapshot().lifecycle.project.revision)
+
     def test_current_sqlite_status_uses_one_snapshot_and_query_failures_are_stable(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)

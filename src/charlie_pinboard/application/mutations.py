@@ -423,6 +423,18 @@ def _common_after(mutation: StoredStateMutation) -> StoredWorkState:
     )
 
 
+def _proposal_key(value: StoredProposal) -> str:
+    return str(value.proposal_id)
+
+
+def _proposal_evidence_key(value: ProposalEvidence) -> tuple[str, int]:
+    return str(value.proposal_id), value.position
+
+
+def _proposal_freshness_key(value: ProposalFreshness) -> tuple[str, int]:
+    return str(value.proposal_id), value.position
+
+
 def _proposal_creation_after(
     mutation: ProposalCreationMutation,
     common: StoredWorkState,
@@ -456,20 +468,35 @@ def _proposal_creation_after(
         common,
         proposals=replace(
             common.proposals,
-            proposals=(*common.proposals.proposals, proposal),
-            evidence=(
-                *common.proposals.evidence,
-                *(
-                    ProposalEvidence(intake.proposal_id, position, value)
-                    for position, value in enumerate(decision.evidence)
-                ),
+            proposals=tuple(
+                sorted(
+                    (*common.proposals.proposals, proposal),
+                    key=_proposal_key,
+                )
             ),
-            freshness=(
-                *common.proposals.freshness,
-                *(
-                    ProposalFreshness(intake.proposal_id, position, value)
-                    for position, value in enumerate(decision.freshness)
-                ),
+            evidence=tuple(
+                sorted(
+                    (
+                        *common.proposals.evidence,
+                        *(
+                            ProposalEvidence(intake.proposal_id, position, value)
+                            for position, value in enumerate(decision.evidence)
+                        ),
+                    ),
+                    key=_proposal_evidence_key,
+                )
+            ),
+            freshness=tuple(
+                sorted(
+                    (
+                        *common.proposals.freshness,
+                        *(
+                            ProposalFreshness(intake.proposal_id, position, value)
+                            for position, value in enumerate(decision.freshness)
+                        ),
+                    ),
+                    key=_proposal_freshness_key,
+                )
             ),
         ),
     )

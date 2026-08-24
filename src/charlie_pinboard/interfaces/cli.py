@@ -56,6 +56,7 @@ from charlie_pinboard.application.service import (
     change_attempt_authority,
     change_coordination_authority,
 )
+from charlie_pinboard.application.service import create_proposal as create_sqlite_proposal
 from charlie_pinboard.application.service import (
     execute as execute_sqlite_transition,
 )
@@ -85,7 +86,8 @@ from charlie_pinboard.domain.identifiers import (
     SubjectId,
     TaskId,
 )
-from charlie_pinboard.domain.model import CoordinationCommandAuthority
+from charlie_pinboard.domain.model import CoordinationCommandAuthority, ProposalRelationKind
+from charlie_pinboard.domain.proposal_decisions import CreateProposalOperation, ProposalIntake
 from charlie_pinboard.domain.resource_decisions import ResourceToken
 from charlie_pinboard.identity import PROGRAM_NAME
 from charlie_pinboard.interfaces.transition_input import (
@@ -142,7 +144,8 @@ from charlie_pinboard.legacy.markdown import parse_current, parse_queue
 from charlie_pinboard.legacy.migration import MigrationError, migrate_to_v2
 from charlie_pinboard.legacy.overview import OverviewError, OverviewItem, WorkOverview, read_overview
 from charlie_pinboard.legacy.parallel import ParallelError, ParallelItem, ParallelPreview, preview_parallel
-from charlie_pinboard.legacy.proposals import ProposalError, create_proposal
+from charlie_pinboard.legacy.proposals import ProposalError, parse_proposal
+from charlie_pinboard.legacy.proposals import create_proposal as create_legacy_proposal
 from charlie_pinboard.legacy.registration import RegistrationError, initialize_sqlite_work_state
 from charlie_pinboard.legacy.resources import (
     ResourceClaim,
@@ -1258,7 +1261,42 @@ def _proposal(context: CommandContext) -> int:
         data = path.read_bytes()
     except OSError as error:
         raise ProposalError("PROPOSAL_INVALID", f"Cannot read proposal at '{path}': {error}") from error
-    created = create_proposal(context.work, context.project, data)
+    if _uses_sqlite(context.work):
+        proposal = parse_proposal(data)
+        try:
+            created_at = datetime.fromisoformat(proposal.created_at.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ProposalError("PROPOSAL_INVALID", "Proposal created_at must be an ISO timestamp.") from error
+        if created_at.tzinfo is None:
+            if len(proposal.created_at) == 10:
+                created_at = created_at.replace(tzinfo=UTC)
+            else:
+                raise ProposalError("PROPOSAL_INVALID", "Proposal created_at must include a timezone.")
+        intake = ProposalIntake(
+            ProposalId(proposal.proposal_id),
+            created_at.astimezone(UTC),
+            TaskId(proposal.source_task_id),
+            proposal.user_label,
+            proposal.trigger,
+            proposal.why_it_matters,
+            proposal.effect,
+            proposal.unlock,
+            ProposalRelationKind(proposal.relation.kind.value),
+            None if proposal.relation.item is None else ItemId(proposal.relation.item),
+            proposal.urgency_evidence,
+            proposal.evidence,
+            proposal.freshness_assumptions,
+        )
+        store = SQLiteWorkStore(context.work / "state.sqlite3")
+        result = create_sqlite_proposal(store, CreateProposalOperation(intake))
+        if isinstance(result, DecisionFailure):
+            raise ProposalError(result.code.value, result.message)
+        view_result = refresh_views(store, context.work, AffectedViews(queue=True, history=True))
+        if view_result.warning is not None:
+            print(view_result.warning.message, file=sys.stderr)
+        print(f"OK PROPOSAL_CREATED {proposal.proposal_id}")
+        return 0
+    created = create_legacy_proposal(context.work, context.project, data)
     print(f"OK PROPOSAL_CREATED {created}")
     return 0
 
