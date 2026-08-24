@@ -46,7 +46,6 @@ from charlie_pinboard.domain.model import (
     EmptyInput,
     EvidenceInput,
     LedgerSnapshot,
-    LegacyActivateInput,
     MutationIntentState,
     ReasonInput,
     ReservationState,
@@ -90,11 +89,7 @@ from charlie_pinboard.domain.resource_decisions import (
 from charlie_pinboard.domain.resource_decisions import (
     resolve_fenced_resource_intent as resolve_fenced_resource_intent_outcome,
 )
-from charlie_pinboard.interfaces.transition_input import (
-    encoded_legacy_transition_input_schema,
-    parse_legacy_transition_input,
-    parse_transition_input,
-)
+from charlie_pinboard.interfaces.transition_input import parse_transition_input
 from tests.domain_support import action
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
@@ -300,15 +295,6 @@ class TypedTransitionContractTest(unittest.TestCase):
         accepted = decide(snapshot, bind_transition(resume, ResumeInput(ArtifactRefId(2))), SQLITE_NOW)
         assert accepted.attempt_change is not None
         self.assertEqual(ArtifactRefId(2), accepted.attempt_change.brief_artifact_ref_id)
-
-    def test_legacy_input_contract_remains_explicitly_separate(self) -> None:
-        self.assertEqual(EmptyInput(), parse_legacy_transition_input("submit-review", b"{}"))
-        self.assertIn(b'"properties":{}', encoded_legacy_transition_input_schema("submit-review"))
-        legacy_activation = parse_legacy_transition_input(
-            "activate",
-            b'{"attempt":"ready-item-1","branch":"branch","base_revision":"base","owner":"task"}',
-        )
-        self.assertIsInstance(legacy_activation, LegacyActivateInput)
 
 
 class ExactMutationAuthorityTest(unittest.TestCase):

@@ -9,7 +9,6 @@ import msgspec
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application import service
 from charlie_pinboard.application.decision_projection import (
     project_decision_snapshot,
     project_inactive_attempt_authority,
@@ -141,36 +140,10 @@ from charlie_pinboard.domain.resource_definition_decisions import (
     ResourceDefinitionUnchanged,
 )
 from charlie_pinboard.domain.scope_decisions import ReplaceDependenciesOperation, ReplaceResourceRequirementsOperation
-from charlie_pinboard.legacy import leases as legacy_leases
-from charlie_pinboard.legacy import proposals as legacy_proposals
-from charlie_pinboard.legacy import resources as legacy_resources
-from charlie_pinboard.legacy import transition as legacy_transition
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
 
 class ServiceTest(unittest.TestCase):
-    def test_temporary_legacy_store_names_expose_the_singular_application_service(self) -> None:
-        self.assertIs(service.execute, legacy_transition.apply_store_transition)
-        self.assertIs(service.create_proposal, legacy_proposals.create_store_proposal)
-        self.assertIs(service.change_coordination_authority, legacy_leases.change_store_coordination_authority)
-        self.assertIs(service.change_attempt_authority, legacy_leases.change_store_attempt_authority)
-        self.assertIs(service.edit_resource_definition, legacy_resources.edit_store_resource_definition)
-        self.assertIs(service.claim_resource, legacy_resources.claim_store_resource)
-        self.assertIs(service.change_reservation, legacy_resources.change_store_reservation)
-        self.assertIs(service.change_task_use_authority, legacy_resources.change_store_task_use_authority)
-        self.assertIs(service.register_mutation_intent, legacy_resources.register_store_mutation_intent)
-        self.assertIs(service.advance_resource_observation, legacy_resources.advance_store_resource_observation)
-        self.assertIs(service.abandon_mutation_intent, legacy_resources.abandon_store_mutation_intent)
-        self.assertIs(
-            service.reconcile_interrupted_observation,
-            legacy_resources.reconcile_store_interrupted_observation,
-        )
-        self.assertIs(service.preserve_resource_state, legacy_resources.preserve_store_resource_state)
-        self.assertIs(
-            service.resolve_fenced_resource_intent,
-            legacy_resources.resolve_store_fenced_resource_intent,
-        )
-
     def _store(self) -> SQLiteWorkStore:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)

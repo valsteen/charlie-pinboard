@@ -12,10 +12,9 @@ Coordinate shared work through one project-local ledger while keeping knowledge 
 1. Resolve this plugin's executable relative to this file as `../../scripts/pinboard`.
 2. For ordinary orientation, run `pinboard overview --json` from the repository checkout and treat its revision-stamped result as the complete default input. When the user has already supplied an exact mutation and its semantic inputs, do not add an overview preflight merely because this skill triggered; use the narrow canonical command or action query directly.
 3. If `.codex/work` is absent, report `WORKFLOW_UNAVAILABLE`. Initialize it with `pinboard init` only when the user explicitly requests coordinated-work setup. Do not ask for a permanent coordinator identity.
-4. If validation fails, stop state-consuming work and use the recovery procedure in `references/state-and-recovery.md`.
-5. Check the returned authority version. For `v1`, do not issue lease guidance or run a lease/resource command. Run `pinboard migrate --to v2` before continuing when migration is authorized; otherwise report `MIGRATION_REQUIRED` with that exact command.
-6. Inspecting v2 state needs no lease. For one graph-wide transition, prepare its semantic payload first, using `pinboard input-contract <action-kind> --json` when the fields are not already known. Then use `pinboard coordination apply --task-id <current-task> --host-id <current-host> --action-id <kind:subject> --payload <file>`; it validates the payload before borrowing coordination, uses a 60-second lease by default, applies one exact legal action, and releases authority before returning. The `close` convenience command has the same borrow-and-release shape for terminal human decisions.
-7. Acquire coordination manually only when an immediate sequence genuinely requires the same authority. Prepare every input first, perform no exploratory reads while holding the lease, query only the needed action with `pinboard actions --role coordinator --lease-id <coordination-lease> --generation <generation> --action-id <kind:subject>`, and release immediately after the atomic change. Before an attempt-local change, use that attempt's lease instead.
+4. Require the returned authority to be exactly `sqlite-v1`. If validation fails or another authority is reported, stop state-consuming work and use the recovery procedure in `references/state-and-recovery.md`; never infer a fallback from generated views or archived files.
+5. Inspecting SQLite state needs no lease. For one graph-wide transition, prepare its semantic payload first, using `pinboard input-contract <action-kind> --json` when the fields are not already known. Then use `pinboard coordination apply --task-id <current-task> --host-id <current-host> --action-id <kind:subject> --payload <file>`; it validates the payload before borrowing coordination, uses a 60-second lease by default, applies one exact legal action, and releases authority before returning. The `close` convenience command has the same borrow-and-release shape for terminal human decisions.
+6. Acquire coordination manually only when an immediate sequence genuinely requires the same authority. Prepare every input first, perform no exploratory reads while holding the lease, query only the needed action with `pinboard actions --role coordinator --lease-id <coordination-lease> --generation <generation> --action-id <kind:subject>`, and release immediately after the atomic change. Before an attempt-local change, use that attempt's lease instead.
 
 Tell the user how to proceed from the chat they are using. In one-chat use, that chat borrows coordination and owns its attempt. In multi-chat use, recommend one chat per distinct outcome. If coordination or a resource is busy, name the current holder and expiry, explain what can continue offline, and ask about revocation only when waiting is unsuitable.
 
@@ -42,12 +41,10 @@ This proportional behavior applies to mutation as well as status. After a succes
 
 ## Ownership
 
-- Let `items/<item>.md` own every nonterminal item's context plus state, dependencies, current attempt, source, next action, and declared resources.
-- Let `queue.md` remain a generated Finder-readable overview. Never edit it as authority.
-- Let `current.md` remain an optional validated coordinator-focus pointer, never a second queue or a limit on concurrent attempts.
-- Let `attempts/<attempt>/` own the execution brief, branch/worktree, renewable ownership lease, current result and review evidence, blocker, and immutable accepted checkpoint archives.
-- Let `resources/` own project-declared scarce-resource definitions and `leases/resources/` own their host-local exclusive claims.
-- Let `inbox/` hold immutable proposals that have been delivered but not admitted.
+- Let `state.sqlite3` own lifecycle, focus, dependencies, attempts, leases, resources, proposals, history, and accepted artifact references.
+- Let `views/` remain generated human-readable output. Never edit it as authority.
+- Let accepted brief and evidence artifacts own execution semantics and review receipts; resolve them through their SQLite artifact references.
+- Let immutable inbox rows hold proposals that have been delivered but not admitted.
 - Let `topics/` organize findings, designs, evidence, and human navigation without owning work state.
 - Let public project documentation own stable architecture and domain truth.
 
@@ -112,7 +109,7 @@ Never describe a partial external launch as complete. Report one result per requ
 ## Apply a transition
 
 1. Identify one action as `<kind>:<subject>`. When its semantic input is not already settled, run `pinboard input-contract <kind> --json` and prepare the payload before borrowing authority.
-2. For one schema-v2 graph-wide change, prefer `pinboard coordination apply`. Its revision-stamped result records the exact post-commit revision while the transition lock is held; coordination is then released before the receipt returns. Do not add an action-list preflight or a confirming overview.
+2. For one graph-wide change, prefer `pinboard coordination apply`. Its revision-stamped result records the exact post-commit SQLite revision; coordination is then released before the receipt returns. Do not add an action-list preflight or a confirming overview.
 3. For an attempt-local change or an exceptional manual coordination sequence, query only the exact action with `pinboard actions --role <role> --lease-id <lease> --generation <generation> --action-id <kind:subject> --json`. Treat the returned action record as one opaque capability receipt. Forward its `action_id`, `expected_revision`, `coordinator_generation`, `authorization`, and every non-empty `subject_revision`, `lease_id`, and `resource_claims` value verbatim. Do not infer authorization from the current role, reuse fields from another action, or reconstruct a partial token from prose.
 4. Run `pinboard transition` with those exact token fields and the prepared payload file. Repeat `--resource-claim` once for every returned claim, preserving its resource, host, lease, and generation.
 5. If either path returns `ACTION_NOT_AVAILABLE`, do not retry the same command, switch roles, or skip to another lifecycle state. Validate once and refresh only the same exact action under fresh authority. If it disappeared, explain the intervening state change. If it remains available with fresh tokens, report an executable contradiction, preserve current attempt evidence, and stop transition work until the command is corrected.
@@ -121,7 +118,7 @@ Never describe a partial external launch as complete. Report one result per requ
 
 The executable rejects stale subject scopes, expired or replaced lease holders, illegal states, invalid dependencies, missing resource claims, and inconsistent references. It does not decide whether evidence is true, whether work is valuable, or what product behavior should mean.
 
-For an explicit terminal human decision about non-active live work, use one `pinboard close <item> --outcome <done|dropped> --reason <text> --task-id <current-task> --host-id <current-host>` invocation instead of manufacturing intake, ready, active, or attempt states. Pass the identities even when the authority version is not already known; schema v1 ignores them, while schema v2 uses them to borrow and release coordination inside the command. Do not precede this exact command with overview or action-list reads. Use `done` when the recorded decision or outcome is complete and may satisfy dependents. Use `dropped` only when the work is intentionally abandoned and has no live dependents. Never use `close` to bypass review for active or review work; keep the normal evidence-backed completion transition there. The returned revision is the durable receipt, so do not create a temporary payload file or re-read status after success.
+For an explicit terminal human decision about non-active live work, use one `pinboard close <item> --outcome <done|dropped> --reason <text> --task-id <current-task> --host-id <current-host>` invocation instead of manufacturing intake, ready, active, or attempt states. The command borrows and releases SQLite coordination internally. Do not precede this exact command with overview or action-list reads. Use `done` when the recorded decision or outcome is complete and may satisfy dependents. Use `dropped` only when the work is intentionally abandoned and has no live dependents. Never use `close` to bypass review for active or review work; keep the normal evidence-backed completion transition there. The returned revision is the durable receipt, so do not create a temporary payload file or re-read status after success.
 
 ## Safe boundaries
 
@@ -186,4 +183,4 @@ When review rejects the candidate, record the exact correction reason through `r
 
 Move terminal scheduling state out of the live queue in the same transition that preserves its history receipt. Do not manufacture follow-up work when the honest result is no follow-up.
 
-Read `references/state-and-recovery.md` only for lease revocation, inconsistent state, schema migration, legacy-queue migration, or interrupted transitions.
+Read `references/state-and-recovery.md` only for lease revocation, invalid SQLite state, or interrupted transitions.

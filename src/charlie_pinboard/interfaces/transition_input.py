@@ -22,7 +22,6 @@ from charlie_pinboard.domain.model import (
     DeferInput,
     EmptyInput,
     EvidenceInput,
-    LegacyActivateInput,
     MergeProposalInput,
     ReasonInput,
     ResumeInput,
@@ -51,13 +50,6 @@ class EmptyInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True)
 
 class ResumeInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     brief_artifact_ref_id: Annotated[int, msgspec.Meta(ge=1)] | None = None
-
-
-class ActivateInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    attempt: Identity
-    branch: NonEmptyLine
-    base_revision: NonEmptyLine
-    owner: NonEmptyLine
 
 
 class StoredActivateInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -121,7 +113,6 @@ class TransferCoordinatorInputPayload(msgspec.Struct, frozen=True, forbid_unknow
 type InputPayload = (
     EmptyInputPayload
     | ResumeInputPayload
-    | ActivateInputPayload
     | StoredActivateInputPayload
     | SubmitReviewInputPayload
     | ReasonInputPayload
@@ -159,14 +150,14 @@ TRANSITION_ACTION_KINDS: Final = (
 )
 
 
-def _input_model(kind: str, *, legacy: bool) -> InputModel:  # noqa: C901, PLR0912
+def _input_model(kind: str) -> InputModel:  # noqa: C901, PLR0912
     match kind:
         case "accept-checkpoint":
             return AcceptCheckpointInputPayload
         case "accept-proposal":
             return AcceptProposalInputPayload
         case "activate":
-            return ActivateInputPayload if legacy else StoredActivateInputPayload
+            return StoredActivateInputPayload
         case "block" | "block-item":
             return BlockInputPayload
         case "close":
@@ -182,20 +173,15 @@ def _input_model(kind: str, *, legacy: bool) -> InputModel:  # noqa: C901, PLR09
         case "resume":
             return ResumeInputPayload
         case "submit-review":
-            return EmptyInputPayload if legacy else SubmitReviewInputPayload
+            return SubmitReviewInputPayload
         case "transfer-coordinator":
             return TransferCoordinatorInputPayload
         case _:
             raise TransitionInputError("ACTION_NOT_MUTATING", f"Action '{kind}' is not a canonical transition.")
 
 
-def _parse_transition_input(  # noqa: C901, PLR0912 - exhaustive boundary conversion
-    kind: str,
-    data: bytes | str,
-    *,
-    legacy: bool,
-) -> TransitionInput:
-    model = _input_model(kind, legacy=legacy)
+def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # noqa: C901, PLR0912
+    model = _input_model(kind)
     try:
         payload = msgspec.json.decode(data, type=model)
     except msgspec.DecodeError as error:
@@ -205,8 +191,6 @@ def _parse_transition_input(  # noqa: C901, PLR0912 - exhaustive boundary conver
             return EmptyInput()
         case ResumeInputPayload(brief_artifact_ref_id=brief_artifact_ref_id):
             return ResumeInput(None if brief_artifact_ref_id is None else ArtifactRefId(brief_artifact_ref_id))
-        case ActivateInputPayload(attempt=attempt, branch=branch, base_revision=base_revision, owner=owner):
-            return LegacyActivateInput(AttemptId(attempt), branch, base_revision, owner)
         case StoredActivateInputPayload(
             attempt=attempt,
             branch=branch,
@@ -257,21 +241,6 @@ def _parse_transition_input(  # noqa: C901, PLR0912 - exhaustive boundary conver
             assert_never(unreachable)
 
 
-def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:
-    return _parse_transition_input(kind, data, legacy=False)
-
-
-def parse_legacy_transition_input(kind: str, data: bytes | str) -> TransitionInput:
-    """Decode the temporary Markdown route without presenting it as the SQLite command contract."""
-
-    return _parse_transition_input(kind, data, legacy=True)
-
-
 def encoded_transition_input_schema(kind: str) -> bytes:
-    model = _input_model(kind, legacy=False)
-    return msgspec.json.encode(msgspec.json.schema(model), order="sorted")
-
-
-def encoded_legacy_transition_input_schema(kind: str) -> bytes:
-    model = _input_model(kind, legacy=True)
+    model = _input_model(kind)
     return msgspec.json.encode(msgspec.json.schema(model), order="sorted")

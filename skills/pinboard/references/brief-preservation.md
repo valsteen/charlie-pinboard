@@ -77,11 +77,11 @@ Its body contains exactly one result row per coverage row:
 | Authority / invariant family | Brief owner | Verdict | Cheapest counterexample result |
 | --- | --- | --- | --- |
 
-Copy the coverage reference and owner exactly, use `covered`, and record the concrete counterexample result. Keep the candidate outside the canonical ready path, then pass it to the existing dispatch command with `--brief-review <candidate-file> --review-id <kebab-case-review-id>`. Dispatch validates the candidate before publication under its existing lock. It creates the canonical path once, reuses byte-identical evidence, and never overwrites differing evidence. A differing ready collision is preserved at `brief-reviews/rejected/<checkpoint-sha256>-<review-id>.md`, then dispatch rejects with `DISPATCH_BRIEF_REVIEW_COLLISION`. Reusing that rejected identity is safe only for identical bytes.
+Copy the coverage reference and owner exactly, use `covered`, and record the concrete counterexample result. Keep the candidate outside the canonical ready path, then pass it to the existing dispatch command with `--brief-review <candidate-file> --review-id <kebab-case-review-id>`. Dispatch validates the candidate before publication through the SQLite artifact workflow. It creates the canonical artifact once, reuses byte-identical evidence, and never overwrites differing evidence. A differing ready collision is preserved as rejected evidence, then dispatch rejects with `DISPATCH_BRIEF_REVIEW_COLLISION`. Reusing that rejected identity is safe only for identical bytes.
 
 Preserve incomplete or rejected work directly under the rejected directory; never offer it as the ready candidate. A corrected checkpoint has a new digest and never overwrites prior evidence. Omit both publication arguments when validated ready evidence already exists. Publication arguments are cross-boundary-only and never change the canonical prompt.
 
-`pinboard dispatch` recomputes the checkpoint, authority-table, and selected-source digests under the existing dispatch lock. It rejects absent, stale, mismatched, incomplete, non-ready, or same-owner review evidence before rendering the canonical prompt.
+`pinboard dispatch` recomputes the checkpoint, authority-table, and selected-source digests and revalidates its SQLite action before returning. It rejects absent, stale, mismatched, incomplete, non-ready, or same-owner review evidence before rendering the canonical prompt.
 
 ## Reuse during implementation review
 

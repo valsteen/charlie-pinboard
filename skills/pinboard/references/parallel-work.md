@@ -10,7 +10,7 @@ Do not use it merely because more than one item exists. Ordinary next-work selec
 
 ## Build the preview
 
-1. Require schema v2 and identify the host on which host-local resources would be used.
+1. Require authority `sqlite-v1` and identify the host on which host-local resources would be used.
 2. Run `pinboard parallel preview --host-id <host> --json` without a coordination lease.
 3. Present the result in three compact groups:
    - **Ready together:** the unambiguous all-safe set.

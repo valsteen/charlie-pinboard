@@ -1,8 +1,7 @@
 import argparse
-import contextlib
 import sys
 from collections import Counter
-from collections.abc import Generator, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -20,13 +19,14 @@ from charlie_pinboard.adapters.files.views import AffectedViews
 from charlie_pinboard.adapters.files.views import rebuild as rebuild_views
 from charlie_pinboard.adapters.files.views import refresh as refresh_views
 from charlie_pinboard.adapters.sqlite.database import StorageError
+from charlie_pinboard.adapters.sqlite.registration import initialize_work_state
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.actions import ActionQueryError, discover_actions
 from charlie_pinboard.application.decision_projection import (
     project_decision_snapshot,
     project_inactive_attempt_authority,
 )
-from charlie_pinboard.application.dispatch import prepare_sqlite_dispatch
+from charlie_pinboard.application.dispatch import DispatchError, prepare_sqlite_dispatch
 from charlie_pinboard.application.queries import (
     DetailLevel,
     QueryError,
@@ -61,6 +61,7 @@ from charlie_pinboard.application.service import (
     execute as execute_sqlite_transition,
 )
 from charlie_pinboard.application.stored_state import ResourceInstanceState
+from charlie_pinboard.application.validation import ValidationReport, validate_sqlite_work_state
 from charlie_pinboard.domain.authority_decisions import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
@@ -72,7 +73,7 @@ from charlie_pinboard.domain.authority_decisions import (
     RevokeCoordinationAuthority,
     TransferAttemptAuthority,
 )
-from charlie_pinboard.domain.decisions import bind_transition
+from charlie_pinboard.domain.decisions import Action, ActionKind, AuthorizationKind, Role, bind_transition
 from charlie_pinboard.domain.errors import DecisionFailure
 from charlie_pinboard.domain.identifiers import (
     ActionId,
@@ -90,79 +91,16 @@ from charlie_pinboard.domain.model import CoordinationCommandAuthority, Proposal
 from charlie_pinboard.domain.proposal_decisions import CreateProposalOperation, ProposalIntake
 from charlie_pinboard.domain.resource_decisions import ResourceToken
 from charlie_pinboard.identity import PROGRAM_NAME
+from charlie_pinboard.interfaces.dispatch_brief import prepare_dispatch_from_artifact, read_dispatch_environment
+from charlie_pinboard.interfaces.errors import ActionError, LeaseError, ProposalError, ResourceError, TransitionError
+from charlie_pinboard.interfaces.proposals import parse_proposal
 from charlie_pinboard.interfaces.transition_input import (
     TRANSITION_ACTION_KINDS,
     CloseOutcome,
     TransitionInputError,
-    encoded_legacy_transition_input_schema,
     encoded_transition_input_schema,
-    parse_legacy_transition_input,
     parse_transition_input,
 )
-from charlie_pinboard.interfaces.transitions import TransitionError, apply_action
-from charlie_pinboard.legacy.actions import (
-    Action,
-    ActionError,
-    ActionKind,
-    AuthorizationKind,
-    Role,
-    actions_for,
-    state_revision,
-)
-from charlie_pinboard.legacy.authority import AuthorityVersion, authority_transaction, resolve_authority
-from charlie_pinboard.legacy.coordinator import read_coordinator
-from charlie_pinboard.legacy.dispatch import (
-    DispatchError,
-    prepare_dispatch,
-    prepare_dispatch_from_artifact,
-    read_dispatch_environment,
-)
-from charlie_pinboard.legacy.leases import (
-    LeaseError,
-    LeaseRecord,
-    acquire_attempt,
-    acquire_coordination,
-    read_attempt_lease,
-    read_coordination_lease,
-    release_attempt,
-    release_coordination,
-    renew_attempt,
-    renew_coordination,
-    revoke_attempt,
-    revoke_coordination,
-)
-from charlie_pinboard.legacy.legacy_cleanup import CleanupReceipt, cleanup_legacy
-from charlie_pinboard.legacy.legacy_import import (
-    CUTOVER_TOMBSTONE,
-    INACTIVE_ROOT_SELECTORS,
-    ImportReceipt,
-    LegacyImportError,
-    cutover_ledger,
-    dry_run_ledger,
-    import_ledger,
-)
-from charlie_pinboard.legacy.markdown import parse_current, parse_queue
-from charlie_pinboard.legacy.migration import MigrationError, migrate_to_v2
-from charlie_pinboard.legacy.overview import OverviewError, OverviewItem, WorkOverview, read_overview
-from charlie_pinboard.legacy.parallel import ParallelError, ParallelItem, ParallelPreview, preview_parallel
-from charlie_pinboard.legacy.proposals import ProposalError, parse_proposal
-from charlie_pinboard.legacy.proposals import create_proposal as create_legacy_proposal
-from charlie_pinboard.legacy.registration import RegistrationError, initialize_sqlite_work_state
-from charlie_pinboard.legacy.resources import (
-    ResourceClaim,
-    ResourceDeclaration,
-    ResourceError,
-    ResourceScope,
-    claim_resource,
-    declare_resource,
-    read_resource,
-    read_resource_claim,
-    release_resource,
-    renew_resource,
-    revoke_resource,
-)
-from charlie_pinboard.legacy.transaction_store import AtomicCommitError, recover_pending_commit
-from charlie_pinboard.legacy.validate import ValidationReport, validate_sqlite_work_state, validate_work_state
 
 
 class CommandName(Enum):
@@ -173,19 +111,15 @@ class CommandName(Enum):
     CLOSE = "close"
     ACTIONS = "actions"
     INPUT_CONTRACT = "input-contract"
-    RECOVER = "recover"
     INIT = "init"
     PROPOSAL = "proposal"
     TRANSITION = "transition"
     DISPATCH = "dispatch"
-    MIGRATE = "migrate"
     COORDINATION = "coordination"
     ATTEMPT = "attempt"
     RESOURCE = "resource"
     PARALLEL = "parallel"
     VIEWS = "views"
-    LEGACY_IMPORT = "legacy-import"
-    LEGACY_CLEANUP = "legacy-cleanup"
 
 
 class CoordinationOperation(Enum):
@@ -222,19 +156,12 @@ class ViewsOperation(Enum):
     REBUILD = "rebuild"
 
 
-class LegacyImportOperation(Enum):
-    DRY_RUN = "dry-run"
-    STAGE = "stage"
-    CUTOVER = "cutover"
-
-
 class CliArguments(argparse.Namespace):
     command: str
     project_root: Path | None
     work_root: Path | None
     json: bool
     role: str
-    coordinator_task_id: str
     host_id: str
     file: Path
     action_id: str
@@ -268,8 +195,6 @@ class CliArguments(argparse.Namespace):
     outcome: str
     reason: str
     detail: str
-    destination: Path
-    expected_cutover_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -297,95 +222,13 @@ class ValidationView(msgspec.Struct, frozen=True):
     diagnostics: tuple[DiagnosticView, ...]
 
 
-class LegacyImportCountsView(msgspec.Struct, frozen=True):
-    items: int
-    attempts: int
-    proposals: int
-    artifacts: int
-    resources: int
-    item_resources: int
-    claims: int
-
-
-class LegacyImportView(msgspec.Struct, frozen=True):
-    cutover_id: str
-    source_revision: str
-    destination_revision: int
-    manifest_selector: str
-    manifest_sha256: str
-    counts: LegacyImportCountsView
-
-    @classmethod
-    def from_receipt(cls, receipt: ImportReceipt) -> LegacyImportView:
-        counts = receipt.counts
-        return cls(
-            receipt.cutover_id,
-            receipt.source_revision,
-            receipt.destination_revision,
-            receipt.manifest_selector,
-            receipt.manifest_sha256,
-            LegacyImportCountsView(
-                counts.items,
-                counts.attempts,
-                counts.proposals,
-                counts.artifacts,
-                counts.resources,
-                counts.item_resources,
-                counts.claims,
-            ),
-        )
-
-
-class LegacyCleanupCorrectionView(msgspec.Struct, frozen=True):
-    artifact_selector: str
-    artifact_sha256: str
-    removed_selectors: tuple[str, ...]
-    database_revision_before_receipt: int
-    committed_revision: int
-    verified_clean_at: str
-
-
-class LegacyCleanupView(msgspec.Struct, frozen=True):
-    cutover_id: str
-    artifact_selector: str
-    artifact_sha256: str
-    database_revision_before_receipt: int
-    committed_revision: int
-    verified_clean_at: str
-    correction: LegacyCleanupCorrectionView | None = None
-
-    @classmethod
-    def from_receipt(cls, receipt: CleanupReceipt) -> LegacyCleanupView:
-        correction = receipt.correction
-        return cls(
-            receipt.cutover_id,
-            receipt.artifact_selector,
-            receipt.artifact_sha256,
-            receipt.database_revision_before_receipt,
-            receipt.committed_revision,
-            receipt.verified_clean_at.isoformat(),
-            (
-                None
-                if correction is None
-                else LegacyCleanupCorrectionView(
-                    correction.artifact_selector,
-                    correction.artifact_sha256,
-                    correction.removed_selectors,
-                    correction.database_revision_before_receipt,
-                    correction.committed_revision,
-                    correction.verified_clean_at.isoformat(),
-                )
-            ),
-        )
-
-
 class CoordinatorView(msgspec.Struct, frozen=True):
     task_id: str
     host_id: str
     generation: int
-    lease_id: str = ""
-    expires_at: str = ""
-    status: str = "legacy"
+    lease_id: str
+    expires_at: str
+    status: str
 
 
 class StatusView(msgspec.Struct, frozen=True):
@@ -414,7 +257,7 @@ class OverviewItemView(msgspec.Struct, frozen=True):
     notes: str
 
     @classmethod
-    def from_item(cls, item: OverviewItem | SQLiteOverviewItem) -> OverviewItemView:
+    def from_item(cls, item: SQLiteOverviewItem) -> OverviewItemView:
         return cls(
             item.item_id,
             item.label,
@@ -439,7 +282,7 @@ class OverviewView(msgspec.Struct, frozen=True):
     immediate_options: tuple[str, ...]
 
     @classmethod
-    def from_overview(cls, overview: WorkOverview | SQLiteWorkOverview) -> OverviewView:
+    def from_overview(cls, overview: SQLiteWorkOverview) -> OverviewView:
         return cls(
             overview.schema,
             overview.authority,
@@ -465,9 +308,8 @@ class InputContractView(msgspec.Struct, frozen=True):
     payload_schema: msgspec.Raw
 
     @classmethod
-    def from_kind(cls, kind: str, *, legacy: bool = True) -> InputContractView:
-        encoded = encoded_legacy_transition_input_schema(kind) if legacy else encoded_transition_input_schema(kind)
-        return cls(kind, msgspec.Raw(encoded))
+    def from_kind(cls, kind: str) -> InputContractView:
+        return cls(kind, msgspec.Raw(encoded_transition_input_schema(kind)))
 
 
 class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
@@ -489,12 +331,11 @@ class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
         action: Action,
         *,
         include_input_contract: bool = False,
-        legacy: bool = True,
     ) -> ActionView:
         input_contract: InputContractView | None = None
         if include_input_contract:
             try:
-                input_contract = InputContractView.from_kind(action.kind.value, legacy=legacy)
+                input_contract = InputContractView.from_kind(action.kind.value)
             except TransitionInputError as error:
                 if error.code != "ACTION_NOT_MUTATING":
                     raise
@@ -522,11 +363,6 @@ class CoordinatedTransitionView(msgspec.Struct, frozen=True):
     revision: str
 
 
-class RecoveryView(msgspec.Struct, frozen=True):
-    recovered: bool
-    revision: str
-
-
 class ParallelReasonView(msgspec.Struct, frozen=True):
     code: str
     message: str
@@ -542,7 +378,7 @@ class ParallelItemView(msgspec.Struct, frozen=True):
     reasons: tuple[ParallelReasonView, ...]
 
     @classmethod
-    def from_item(cls, item: ParallelItem | SQLiteParallelItem) -> ParallelItemView:
+    def from_item(cls, item: SQLiteParallelItem) -> ParallelItemView:
         return cls(
             item.item_id,
             item.label,
@@ -565,7 +401,7 @@ class ParallelPreviewView(msgspec.Struct, frozen=True):
     excluded: tuple[ParallelItemView, ...]
 
     @classmethod
-    def from_preview(cls, preview: ParallelPreview | SQLiteParallelPreview) -> ParallelPreviewView:
+    def from_preview(cls, preview: SQLiteParallelPreview) -> ParallelPreviewView:
         return cls(
             preview.schema,
             preview.revision,
@@ -630,6 +466,8 @@ def _add_attempt_parser(commands: argparse._SubParsersAction[argparse.ArgumentPa
         command.add_argument("--json", action="store_true")
     revoke = operations.add_parser("revoke")
     revoke.add_argument("--attempt-id", required=True)
+    revoke.add_argument("--lease-id", required=True)
+    revoke.add_argument("--generation", required=True, type=int)
     revoke.add_argument("--coordination-lease-id", required=True)
     revoke.add_argument("--coordination-generation", required=True, type=int)
     revoke.add_argument("--json", action="store_true")
@@ -721,25 +559,6 @@ def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.Argume
     )
     input_contract.add_argument("action_kind", choices=TRANSITION_ACTION_KINDS)
     input_contract.add_argument("--json", action="store_true")
-    recover = commands.add_parser("recover", help="Roll back a durable interrupted transition journal.")
-    recover.add_argument("--json", action="store_true")
-
-
-def _add_legacy_cutover_parsers(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    legacy_import = commands.add_parser(
-        "legacy-import", help="Temporarily stage or execute the known Markdown cutover."
-    )
-    import_operations = legacy_import.add_subparsers(dest="operation", required=True)
-    dry_run = import_operations.add_parser("dry-run", help="Validate and map the source without writing it.")
-    dry_run.add_argument("--json", action="store_true")
-    stage = import_operations.add_parser("stage", help="Import into one absent disposable destination.")
-    stage.add_argument("--destination", required=True, type=Path)
-    stage.add_argument("--json", action="store_true")
-    cutover = import_operations.add_parser("cutover", help="Import and atomically select SQLite authority.")
-    cutover.add_argument("--json", action="store_true")
-    legacy_cleanup = commands.add_parser("legacy-cleanup", help="Remove one verified archived Markdown authority.")
-    legacy_cleanup.add_argument("--expected-cutover-id", required=True)
-    legacy_cleanup.add_argument("--json", action="store_true")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -749,9 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--work-root", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
     _add_inspection_parsers(commands)
-    initialize = commands.add_parser("init", help="Create an empty current SQLite work state.")
-    initialize.add_argument("--coordinator-task-id")
-    initialize.add_argument("--host-id")
+    commands.add_parser("init", help="Create an empty current SQLite work state.")
     proposal = commands.add_parser("proposal", help="Create one immutable inbox proposal.")
     proposal.add_argument("--file", type=Path, required=True)
     transition = commands.add_parser("transition", help="Apply one action returned by the actions command.")
@@ -799,16 +616,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--review-id",
         help="Kebab-case identity used only when preserving a differing later review.",
     )
-    migrate = commands.add_parser("migrate", help="Migrate a schema-v1 ledger through one atomic v2 cutover.")
-    migrate.add_argument("--to", choices=("v2",), required=True)
-    migrate.add_argument("--json", action="store_true")
     _add_coordination_parser(commands)
     _add_attempt_parser(commands)
     _add_resource_parser(commands)
     _add_parallel_parser(commands)
     views = commands.add_parser("views", help="Repair generated human-readable views.")
     views.add_subparsers(dest="operation", required=True).add_parser("rebuild")
-    _add_legacy_cutover_parsers(commands)
     return parser
 
 
@@ -818,29 +631,6 @@ def _roots(arguments: CliArguments) -> tuple[Path, Path]:
     work_argument = arguments.work_root
     work = work_argument.resolve() if work_argument is not None else project / ".codex" / "work"
     return project, work
-
-
-def _uses_sqlite(work_root: Path) -> bool:
-    database = work_root / "state.sqlite3"
-    if not database.is_file():
-        return False
-    marker = work_root / "authority.json"
-    if marker.is_file():
-        if marker.read_bytes() == CUTOVER_TOMBSTONE:
-            return True
-        raise RegistrationError(
-            "CUTOVER_NOT_ACTIVE",
-            "A staged SQLite database exists, but the exact SQLite authority marker is not active.",
-        )
-    legacy_selectors = (
-        "v2",
-        "legacy-v2",
-        "legacy-v1",
-        *INACTIVE_ROOT_SELECTORS,
-    )
-    if any((work_root / selector).exists() for selector in legacy_selectors):
-        raise RegistrationError("CUTOVER_NOT_ACTIVE", "SQLite cannot open while legacy authority selectors remain.")
-    return True
 
 
 def _stable_identifier(value: str, *, label: str) -> str:
@@ -866,78 +656,33 @@ def _diagnostic_view(report: ValidationReport) -> ValidationView:
 
 
 def _status_value(work: Path, project: Path) -> StatusView:
-    if _uses_sqlite(work):
-        state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
-        overview = overview_from_state(state)
-        coordinator = state.authority.coordination
-        return StatusView(
-            valid=True,
-            project_root=str(project),
-            work_root=str(work),
-            revision=str(state.lifecycle.project.revision),
-            focus_item=overview.focus_item,
-            focus_attempt=overview.focus_attempt,
-            active_attempts=overview.active_attempts,
-            next_action=state.focus.next_action,
-            counts=dict(Counter(item.state.value for item in state.lifecycle.work_items)),
-            inbox_count=len(overview.inbox),
-            coordinator=(
-                CoordinatorView(
-                    str(coordinator.task_id),
-                    str(coordinator.host_id),
-                    coordinator.generation,
-                    str(coordinator.lease_id),
-                    coordinator.expires_at.isoformat(),
-                    coordinator.state.value,
-                )
-                if coordinator is not None
-                else None
-            ),
-            authority="sqlite-v1",
-        )
-    report = validate_work_state(work, project)
-    if not report.valid:
-        raise ActionError("WORK_STATE_INVALID", report.render())
-    authority = resolve_authority(work)
-    current_root = authority.work_root
-    queue = parse_queue(current_root / "queue.md")
-    current = parse_current(current_root / "current.md")
-    coordinator_view: CoordinatorView | None
-    match authority.version:
-        case AuthorityVersion.V1:
-            coordinator = read_coordinator(current_root / "coordinator.json")
-            coordinator_view = CoordinatorView(coordinator.task_id, coordinator.host_id, coordinator.generation)
-        case AuthorityVersion.V2:
-            lease = read_coordination_lease(current_root)
-            coordinator_view = (
-                CoordinatorView(
-                    lease.task_id,
-                    lease.host_id,
-                    lease.generation,
-                    lease.lease_id,
-                    lease.expires_at.isoformat(),
-                    lease.status.value,
-                )
-                if lease is not None
-                else None
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
+    state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+    overview = overview_from_state(state)
+    coordinator = state.authority.coordination
     return StatusView(
         valid=True,
         project_root=str(project),
         work_root=str(work),
-        revision=state_revision(work),
-        focus_item=current.focus_item,
-        focus_attempt=current.focus_attempt,
-        active_attempts=tuple(
-            item.attempt for item in queue.items if item.state.value == "active" and item.attempt is not None
+        revision=str(state.lifecycle.project.revision),
+        focus_item=overview.focus_item,
+        focus_attempt=overview.focus_attempt,
+        active_attempts=overview.active_attempts,
+        next_action=state.focus.next_action,
+        counts=dict(Counter(item.state.value for item in state.lifecycle.work_items)),
+        inbox_count=len(overview.inbox),
+        coordinator=(
+            CoordinatorView(
+                str(coordinator.task_id),
+                str(coordinator.host_id),
+                coordinator.generation,
+                str(coordinator.lease_id),
+                coordinator.expires_at.isoformat(),
+                coordinator.state.value,
+            )
+            if coordinator is not None
+            else None
         ),
-        next_action=current.next_action,
-        counts=dict(Counter(item.state.value for item in queue.items)),
-        inbox_count=len(list((current_root / "inbox").glob("*.json"))),
-        coordinator=coordinator_view,
-        authority=authority.version.value,
+        authority="sqlite-v1",
     )
 
 
@@ -1055,11 +800,7 @@ def _root(context: CommandContext) -> int:
 
 
 def _validate(context: CommandContext) -> int:
-    report = (
-        validate_sqlite_work_state(context.work)
-        if _uses_sqlite(context.work)
-        else validate_work_state(context.work, context.project)
-    )
+    report = validate_sqlite_work_state(context.work)
     if context.arguments.json:
         _write_json(_diagnostic_view(report))
     else:
@@ -1079,11 +820,7 @@ def _status(context: CommandContext) -> int:
 
 
 def _overview(context: CommandContext) -> int:
-    overview: WorkOverview | SQLiteWorkOverview = (
-        read_sqlite_overview(SQLiteWorkStore(context.work / "state.sqlite3"))
-        if _uses_sqlite(context.work)
-        else read_overview(context.work, context.project)
-    )
+    overview = read_sqlite_overview(SQLiteWorkStore(context.work / "state.sqlite3"))
     if context.arguments.json:
         _write_json(OverviewView.from_overview(overview))
         return 0
@@ -1098,80 +835,20 @@ def _overview(context: CommandContext) -> int:
     return 0
 
 
-def _close_action(context: CommandContext, lease: LeaseRecord | None = None) -> Action:
-    actions = actions_for(
-        context.work,
-        context.project,
-        Role.COORDINATOR,
-        lease_id=lease.lease_id if lease is not None else None,
-        generation=lease.generation if lease is not None else None,
-    )
-    action_id = f"close:{context.arguments.item_id}"
-    action = next((candidate for candidate in actions if candidate.action_id == action_id), None)
-    if action is None:
-        raise TransitionError(
-            "ACTION_NOT_AVAILABLE",
-            f"Item '{context.arguments.item_id}' is not non-active live work that can be closed.",
+def _close(context: CommandContext) -> int:
+    if not context.arguments.task_id or not context.arguments.host_id:
+        raise LeaseError(
+            "COORDINATION_IDENTITY_REQUIRED",
+            "Close requires --task-id and --host-id so the command can borrow coordination.",
         )
-    return action
-
-
-@contextlib.contextmanager
-def _borrow_coordination(context: CommandContext) -> Generator[LeaseRecord]:
-    candidate_lease_id = uuid4().hex
-    try:
-        lease = acquire_coordination(
-            context.work,
-            context.arguments.task_id,
-            context.arguments.host_id,
-            context.arguments.ttl_seconds,
-            lease_id=candidate_lease_id,
-        )
-    except BaseException:
-        try:
-            current = read_coordination_lease(resolve_authority(context.work).work_root)
-            if current is not None and current.lease_id == candidate_lease_id:
-                with contextlib.suppress(LeaseError):
-                    release_coordination(context.work, current.lease_id, current.generation)
-        except LeaseError, OSError:
-            pass
-        raise
-    try:
-        yield lease
-    except BaseException:
-        with contextlib.suppress(LeaseError):
-            release_coordination(context.work, lease.lease_id, lease.generation)
-        raise
-    try:
-        release_coordination(context.work, lease.lease_id, lease.generation)
-    except BaseException:
-        with contextlib.suppress(LeaseError):
-            release_coordination(context.work, lease.lease_id, lease.generation)
-        raise
-
-
-def _apply_close(context: CommandContext, lease: LeaseRecord | None = None) -> str:
     payload = msgspec.json.encode(
         {"outcome": context.arguments.outcome, "reason": context.arguments.reason}, order="sorted"
     )
-    return apply_action(context.work, context.project, _close_action(context, lease), payload)
-
-
-def _close(context: CommandContext) -> int:
-    authority = resolve_authority(context.work)
-    match authority.version:
-        case AuthorityVersion.V1:
-            revision = _apply_close(context)
-        case AuthorityVersion.V2:
-            if not context.arguments.task_id or not context.arguments.host_id:
-                raise LeaseError(
-                    "COORDINATION_IDENTITY_REQUIRED",
-                    "Schema-v2 close requires --task-id and --host-id so the command can borrow coordination.",
-                )
-            with _borrow_coordination(context) as lease:
-                revision = _apply_close(context, lease)
-        case _ as unreachable:
-            assert_never(unreachable)
+    revision = _execute_borrowed_coordination(
+        context,
+        f"close:{context.arguments.item_id}",
+        payload,
+    )
     value = CloseView(
         context.arguments.item_id,
         context.arguments.outcome,
@@ -1186,22 +863,11 @@ def _close(context: CommandContext) -> int:
 
 
 def _actions(context: CommandContext) -> int:
-    sqlite = _uses_sqlite(context.work)
-    available = (
-        discover_actions(
-            SQLiteWorkStore(context.work / "state.sqlite3"),
-            Role(context.arguments.role),
-            lease_id=LeaseId(context.arguments.lease_id) if context.arguments.lease_id is not None else None,
-            generation=context.arguments.generation,
-        )
-        if sqlite
-        else actions_for(
-            context.work,
-            context.project,
-            Role(context.arguments.role),
-            lease_id=context.arguments.lease_id,
-            generation=context.arguments.generation,
-        )
+    available = discover_actions(
+        SQLiteWorkStore(context.work / "state.sqlite3"),
+        Role(context.arguments.role),
+        lease_id=LeaseId(context.arguments.lease_id) if context.arguments.lease_id is not None else None,
+        generation=context.arguments.generation,
     )
     exact_action_id = context.arguments.action_id
     if exact_action_id is not None:
@@ -1217,7 +883,6 @@ def _actions(context: CommandContext) -> int:
                     ActionView.from_action(
                         action,
                         include_input_contract=exact_action_id is not None,
-                        legacy=not sqlite,
                     )
                     for action in available
                 )
@@ -1232,7 +897,7 @@ def _actions(context: CommandContext) -> int:
 
 
 def _input_contract(context: CommandContext) -> int:
-    value = InputContractView.from_kind(context.arguments.action_kind, legacy=not _uses_sqlite(context.work))
+    value = InputContractView.from_kind(context.arguments.action_kind)
     if context.arguments.json:
         _write_json(value)
     else:
@@ -1241,30 +906,9 @@ def _input_contract(context: CommandContext) -> int:
     return 0
 
 
-def _recover(context: CommandContext) -> int:
-    with authority_transaction(context.work) as authority:
-        recovered = recover_pending_commit(authority.work_root)
-        report = validate_work_state(context.work, context.project)
-        if not report.valid:
-            raise ActionError("WORK_STATE_INVALID", report.render())
-        value = RecoveryView(recovered, state_revision(context.work))
-    if context.arguments.json:
-        _write_json(value)
-    else:
-        print(f"OK WORK_STATE_RECOVERED recovered={str(value.recovered).lower()} revision={value.revision}")
-    return 0
-
-
 def _initialize(context: CommandContext) -> int:
-    task_id = context.arguments.coordinator_task_id
-    host_id = context.arguments.host_id
-    if task_id is not None or host_id is not None:
-        raise RegistrationError(
-            "MIGRATION_REQUIRED",
-            "Legacy coordinator initialization is no longer available; initialize SQLite, then acquire coordination.",
-        )
     selected_work = context.work if context.arguments.work_root is not None else None
-    receipt = initialize_sqlite_work_state(context.project, selected_work)
+    receipt = initialize_work_state(context.project, selected_work)
     initialized = receipt.work_root
     print(f"OK WORK_STATE_INITIALIZED {initialized}")
     return 0
@@ -1276,43 +920,39 @@ def _proposal(context: CommandContext) -> int:
         data = path.read_bytes()
     except OSError as error:
         raise ProposalError("PROPOSAL_INVALID", f"Cannot read proposal at '{path}': {error}") from error
-    if _uses_sqlite(context.work):
-        proposal = parse_proposal(data)
-        try:
-            created_at = datetime.fromisoformat(proposal.created_at.replace("Z", "+00:00"))
-        except ValueError as error:
-            raise ProposalError("PROPOSAL_INVALID", "Proposal created_at must be an ISO timestamp.") from error
-        if created_at.tzinfo is None:
-            if len(proposal.created_at) == 10:
-                created_at = created_at.replace(tzinfo=UTC)
-            else:
-                raise ProposalError("PROPOSAL_INVALID", "Proposal created_at must include a timezone.")
-        intake = ProposalIntake(
-            ProposalId(proposal.proposal_id),
-            created_at.astimezone(UTC),
-            TaskId(proposal.source_task_id),
-            proposal.user_label,
-            proposal.trigger,
-            proposal.why_it_matters,
-            proposal.effect,
-            proposal.unlock,
-            ProposalRelationKind(proposal.relation.kind.value),
-            None if proposal.relation.item is None else ItemId(proposal.relation.item),
-            proposal.urgency_evidence,
-            proposal.evidence,
-            proposal.freshness_assumptions,
-        )
-        store = SQLiteWorkStore(context.work / "state.sqlite3")
-        result = create_sqlite_proposal(store, CreateProposalOperation(intake), datetime.now(UTC))
-        if isinstance(result, DecisionFailure):
-            raise ProposalError(result.code.value, result.message)
-        view_result = refresh_views(store, context.work, AffectedViews(queue=True, history=True))
-        if view_result.warning is not None:
-            print(view_result.warning.message, file=sys.stderr)
-        print(f"OK PROPOSAL_CREATED {proposal.proposal_id}")
-        return 0
-    created = create_legacy_proposal(context.work, context.project, data)
-    print(f"OK PROPOSAL_CREATED {created}")
+    proposal = parse_proposal(data)
+    try:
+        created_at = datetime.fromisoformat(proposal.created_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ProposalError("PROPOSAL_INVALID", "Proposal created_at must be an ISO timestamp.") from error
+    if created_at.tzinfo is None:
+        if len(proposal.created_at) == 10:
+            created_at = created_at.replace(tzinfo=UTC)
+        else:
+            raise ProposalError("PROPOSAL_INVALID", "Proposal created_at must include a timezone.")
+    intake = ProposalIntake(
+        ProposalId(proposal.proposal_id),
+        created_at.astimezone(UTC),
+        TaskId(proposal.source_task_id),
+        proposal.user_label,
+        proposal.trigger,
+        proposal.why_it_matters,
+        proposal.effect,
+        proposal.unlock,
+        ProposalRelationKind(proposal.relation.kind.value),
+        None if proposal.relation.item is None else ItemId(proposal.relation.item),
+        proposal.urgency_evidence,
+        proposal.evidence,
+        proposal.freshness_assumptions,
+    )
+    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    result = create_sqlite_proposal(store, CreateProposalOperation(intake), datetime.now(UTC))
+    if isinstance(result, DecisionFailure):
+        raise ProposalError(result.code.value, result.message)
+    view_result = refresh_views(store, context.work, AffectedViews(queue=True, history=True))
+    if view_result.warning is not None:
+        print(view_result.warning.message, file=sys.stderr)
+    print(f"OK PROPOSAL_CREATED {proposal.proposal_id}")
     return 0
 
 
@@ -1331,33 +971,30 @@ def _transition(context: CommandContext) -> int:
         payload = payload_path.read_bytes()
     except OSError as error:
         raise TransitionError("TRANSITION_INPUT_INVALID", f"Cannot read transition payload: {error}") from error
-    if _uses_sqlite(context.work):
-        role = Role.WORKER if action.authorization == AuthorizationKind.ATTEMPT else Role.COORDINATOR
-        action = _reselect_sqlite_action(context, action, role)
-        parsed = parse_transition_input(action.kind.value, payload)
-        command = bind_transition(action, parsed)
-        if isinstance(command, DecisionFailure):
-            raise TransitionError(command.code.value, command.message)
-        store = SQLiteWorkStore(context.work / "state.sqlite3")
-        result = execute_sqlite_transition(store, command, datetime.now(UTC))
-        if isinstance(result, DecisionFailure):
-            raise TransitionError(result.code.value, result.message)
-        state = store.snapshot()
-        affected = AffectedViews(
-            queue=True,
-            current_focus=True,
-            history=True,
-            items=(result.item,) if result.item is not None else (),
-            attempts=(AttemptId(action.subject),)
-            if any(attempt.attempt_id == action.subject for attempt in state.lifecycle.attempts)
-            else (),
-        )
-        view_result = refresh_views(store, context.work, affected)
-        if view_result.warning is not None:
-            print(view_result.warning.message, file=sys.stderr)
-        revision = str(state.lifecycle.project.revision)
-    else:
-        revision = apply_action(context.work, context.project, action, payload)
+    role = Role.WORKER if action.authorization == AuthorizationKind.ATTEMPT else Role.COORDINATOR
+    action = _reselect_sqlite_action(context, action, role)
+    parsed = parse_transition_input(action.kind.value, payload)
+    command = bind_transition(action, parsed)
+    if isinstance(command, DecisionFailure):
+        raise TransitionError(command.code.value, command.message)
+    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    result = execute_sqlite_transition(store, command, datetime.now(UTC))
+    if isinstance(result, DecisionFailure):
+        raise TransitionError(result.code.value, result.message)
+    state = store.snapshot()
+    affected = AffectedViews(
+        queue=True,
+        current_focus=True,
+        history=True,
+        items=(result.item,) if result.item is not None else (),
+        attempts=(AttemptId(action.subject),)
+        if any(attempt.attempt_id == action.subject for attempt in state.lifecycle.attempts)
+        else (),
+    )
+    view_result = refresh_views(store, context.work, affected)
+    if view_result.warning is not None:
+        print(view_result.warning.message, file=sys.stderr)
+    revision = str(state.lifecycle.project.revision)
     print(f"OK TRANSITION_APPLIED {action.action_id} revision={revision}")
     return 0
 
@@ -1390,32 +1027,18 @@ def _prepare_dispatch(context: CommandContext) -> int:
         "coordination" if context.arguments.lease_id is not None else "coordinator",
         context.arguments.lease_id,
     )
-    if _uses_sqlite(context.work):
-        action = _reselect_sqlite_action(context, action, Role.COORDINATOR)
-    prompt = (
-        prepare_sqlite_dispatch(
-            SQLiteWorkStore(context.work / "state.sqlite3"),
-            ArtifactRepository(resolve_durable_roots(context.project, context.work)),
-            prepare_dispatch_from_artifact,
-            context.project,
-            action,
-            context.arguments.checkpoint,
-            environment,
-            supplied_prompt,
-            brief_review,
-            context.arguments.review_id,
-        )
-        if _uses_sqlite(context.work)
-        else prepare_dispatch(
-            context.work,
-            context.project,
-            action,
-            context.arguments.checkpoint,
-            environment,
-            supplied_prompt,
-            brief_review,
-            context.arguments.review_id,
-        )
+    action = _reselect_sqlite_action(context, action, Role.COORDINATOR)
+    prompt = prepare_sqlite_dispatch(
+        SQLiteWorkStore(context.work / "state.sqlite3"),
+        ArtifactRepository(resolve_durable_roots(context.project, context.work)),
+        prepare_dispatch_from_artifact,
+        context.project,
+        action,
+        context.arguments.checkpoint,
+        environment,
+        supplied_prompt,
+        brief_review,
+        context.arguments.review_id,
     )
     if supplied_prompt is None:
         sys.stdout.write(prompt)
@@ -1424,149 +1047,8 @@ def _prepare_dispatch(context: CommandContext) -> int:
     return 0
 
 
-type OperationRecord = LeaseRecord | ResourceClaim | ResourceDeclaration
-
-
-def _lease_value(record: OperationRecord) -> dict[str, str | int]:
-    match record:
-        case ResourceDeclaration():
-            return {"resource_id": record.resource_id, "label": record.label, "scope": record.scope.value}
-        case ResourceClaim():
-            return {
-                "task_id": record.task_id,
-                "host_id": record.host_id,
-                "lease_id": record.lease_id,
-                "generation": record.generation,
-                "acquired_at": record.acquired_at.isoformat(),
-                "expires_at": record.expires_at.isoformat(),
-                "status": record.status.value,
-                "resource_id": record.resource_id,
-                "attempt_id": record.attempt_id,
-                "attempt_lease_id": record.attempt_lease_id,
-                "attempt_lease_generation": record.attempt_lease_generation,
-            }
-        case LeaseRecord():
-            values: dict[str, str | int] = {
-                "task_id": record.task_id,
-                "host_id": record.host_id,
-                "lease_id": record.lease_id,
-                "generation": record.generation,
-                "acquired_at": record.acquired_at.isoformat(),
-                "expires_at": record.expires_at.isoformat(),
-                "status": record.status.value,
-            }
-            if record.attempt_id is not None:
-                values["attempt_id"] = record.attempt_id
-            return values
-        case _ as unreachable:
-            assert_never(unreachable)
-
-
-def _emit_operation(value: OperationRecord, as_json: bool) -> int:
-    if as_json:
-        _write_json(_lease_value(value))
-    else:
-        print("OK " + " ".join(f"{key}={value}" for key, value in _lease_value(value).items()))
-    return 0
-
-
-def _migrate(context: CommandContext) -> int:
-    result = migrate_to_v2(context.work, context.project)
-    value = {
-        "live_items": result.live_items,
-        "attempts": result.attempts,
-        "proposals": result.proposals,
-        "history_items": result.history_items,
-        "cutover": result.cutover,
-    }
-    if context.arguments.json:
-        _write_json(value)
-    else:
-        print(f"OK MIGRATION_V2 cutover={str(result.cutover).lower()} live_items={result.live_items}")
-    return 0
-
-
-def _lease_command_root(work_root: Path) -> Path:
-    authority = resolve_authority(work_root)
-    if authority.version != AuthorityVersion.V2:
-        raise MigrationError(
-            "MIGRATION_REQUIRED",
-            "Lease and resource commands require schema v2; run 'pinboard migrate --to v2' first.",
-        )
-    return authority.work_root
-
-
-def _coordinated_transition(context: CommandContext) -> CoordinatedTransitionView:
-    payload_path = context.arguments.payload
-    try:
-        payload = payload_path.read_bytes()
-    except OSError as error:
-        raise TransitionError(
-            "TRANSITION_INPUT_INVALID", f"Cannot read transition payload at '{payload_path}': {error}"
-        ) from error
-    kind_value, separator, _ = context.arguments.action_id.partition(":")
-    if not separator:
-        raise TransitionError("ACTION_ID_INVALID", "Action identity must be 'kind:subject'.")
-    parse_legacy_transition_input(kind_value, payload)
-    with _borrow_coordination(context) as lease:
-        available = actions_for(
-            context.work,
-            context.project,
-            Role.COORDINATOR,
-            lease_id=lease.lease_id,
-            generation=lease.generation,
-        )
-        action = next(
-            (candidate for candidate in available if candidate.action_id == context.arguments.action_id), None
-        )
-        if action is None:
-            raise TransitionError(
-                "ACTION_NOT_AVAILABLE", f"Action '{context.arguments.action_id}' is not currently legal."
-            )
-        revision = apply_action(context.work, context.project, action, payload)
-    return CoordinatedTransitionView(context.arguments.action_id, revision)
-
-
-def _coordination(context: CommandContext) -> int:  # noqa: PLR0912 - exhaustive legacy/current composition
-    if _uses_sqlite(context.work):
-        return _sqlite_coordination(context)
-    root = _lease_command_root(context.work)
-    operation = CoordinationOperation(context.arguments.operation)
-    match operation:
-        case CoordinationOperation.APPLY:
-            value = _coordinated_transition(context)
-            if context.arguments.json:
-                _write_json(value)
-            else:
-                print(f"OK COORDINATED_TRANSITION action={value.action_id} revision={value.revision}")
-            return 0
-        case CoordinationOperation.ACQUIRE:
-            value = acquire_coordination(
-                context.work, context.arguments.task_id, context.arguments.host_id, context.arguments.ttl_seconds
-            )
-        case CoordinationOperation.RENEW:
-            value = renew_coordination(
-                context.work,
-                context.arguments.lease_id or "",
-                context.arguments.generation,
-                context.arguments.ttl_seconds,
-            )
-        case CoordinationOperation.RELEASE:
-            value = release_coordination(context.work, context.arguments.lease_id or "", context.arguments.generation)
-        case CoordinationOperation.REVOKE:
-            value = revoke_coordination(context.work)
-        case CoordinationOperation.STATUS:
-            current = read_coordination_lease(root)
-            if current is None:
-                if context.arguments.json:
-                    _write_json({"lease": None})
-                else:
-                    print("OK COORDINATION_AVAILABLE")
-                return 0
-            value = current
-        case _ as unreachable:
-            assert_never(unreachable)
-    return _emit_operation(value, context.arguments.json)
+def _coordination(context: CommandContext) -> int:
+    return _sqlite_coordination(context)
 
 
 def _sqlite_coordination_values(context: CommandContext) -> dict[str, str | int] | None:
@@ -1664,6 +1146,16 @@ def _sqlite_coordinated_transition(context: CommandContext) -> int:
         payload = payload_path.read_bytes()
     except OSError as error:
         raise TransitionError("TRANSITION_INPUT_INVALID", f"Cannot read transition payload: {error}") from error
+    transition_revision = _execute_borrowed_coordination(context, context.arguments.action_id, payload)
+    value = CoordinatedTransitionView(context.arguments.action_id, transition_revision)
+    if context.arguments.json:
+        _write_json(value)
+    else:
+        print(f"OK COORDINATED_TRANSITION action={value.action_id} revision={value.revision}")
+    return 0
+
+
+def _execute_borrowed_coordination(context: CommandContext, action_id: str, payload: bytes) -> str:
     store = SQLiteWorkStore(context.work / "state.sqlite3")
     now = datetime.now(UTC)
     state = store.snapshot()
@@ -1690,13 +1182,11 @@ def _sqlite_coordinated_transition(context: CommandContext) -> int:
             generation=coordination.generation,
         )
         action = next(
-            (candidate for candidate in available if candidate.action_id == context.arguments.action_id),
+            (candidate for candidate in available if candidate.action_id == action_id),
             None,
         )
         if action is None:
-            raise TransitionError(
-                "ACTION_NOT_AVAILABLE", f"Action '{context.arguments.action_id}' is not currently legal."
-            )
+            raise TransitionError("ACTION_NOT_AVAILABLE", f"Action '{action_id}' is not currently legal.")
         parsed = parse_transition_input(action.kind.value, payload)
         command = bind_transition(action, parsed)
         if isinstance(command, DecisionFailure):
@@ -1728,55 +1218,11 @@ def _sqlite_coordinated_transition(context: CommandContext) -> int:
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     assert transition_revision is not None
-    value = CoordinatedTransitionView(context.arguments.action_id, transition_revision)
-    if context.arguments.json:
-        _write_json(value)
-    else:
-        print(f"OK COORDINATED_TRANSITION action={value.action_id} revision={value.revision}")
-    return 0
+    return transition_revision
 
 
 def _attempt(context: CommandContext) -> int:
-    if _uses_sqlite(context.work):
-        return _sqlite_attempt(context)
-    root = _lease_command_root(context.work)
-    operation = AttemptOperation(context.arguments.operation)
-    match operation:
-        case AttemptOperation.ACQUIRE:
-            value = acquire_attempt(
-                context.work,
-                context.arguments.attempt_id,
-                context.arguments.task_id,
-                context.arguments.host_id,
-                context.arguments.ttl_seconds,
-            )
-        case AttemptOperation.RENEW:
-            value = renew_attempt(
-                context.work,
-                context.arguments.attempt_id,
-                context.arguments.lease_id or "",
-                context.arguments.generation,
-                context.arguments.ttl_seconds,
-            )
-        case AttemptOperation.RELEASE:
-            value = release_attempt(
-                context.work,
-                context.arguments.attempt_id,
-                context.arguments.lease_id or "",
-                context.arguments.generation,
-            )
-        case AttemptOperation.REVOKE:
-            value = revoke_attempt(
-                context.work,
-                context.arguments.attempt_id,
-                context.arguments.coordination_lease_id,
-                context.arguments.coordination_generation,
-            )
-        case AttemptOperation.STATUS:
-            value = read_attempt_lease(root, context.arguments.attempt_id)
-        case _ as unreachable:
-            assert_never(unreachable)
-    return _emit_operation(value, context.arguments.json)
+    return _sqlite_attempt(context)
 
 
 def _sqlite_attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR0915 - closed authority lifecycle
@@ -1923,74 +1369,16 @@ def _sqlite_attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR
 
 
 def _resource(context: CommandContext) -> int:
-    if _uses_sqlite(context.work):
-        return _sqlite_resource(context)
-    root = _lease_command_root(context.work)
-    operation = ResourceOperation(context.arguments.operation)
-    match operation:
-        case ResourceOperation.DECLARE:
-            value = declare_resource(
-                context.work,
-                context.arguments.resource_id,
-                context.arguments.label,
-                context.arguments.coordination_lease_id,
-                context.arguments.coordination_generation,
-                scope=ResourceScope(context.arguments.scope),
-            )
-        case ResourceOperation.CLAIM:
-            value = claim_resource(
-                context.work,
-                context.arguments.resource_id,
-                context.arguments.attempt_id,
-                context.arguments.task_id,
-                context.arguments.host_id,
-                context.arguments.ttl_seconds,
-                context.arguments.attempt_lease_id,
-                context.arguments.attempt_generation,
-            )
-        case ResourceOperation.RENEW:
-            value = renew_resource(
-                context.work,
-                context.arguments.resource_id,
-                context.arguments.host_id,
-                context.arguments.lease_id or "",
-                context.arguments.generation,
-                context.arguments.ttl_seconds,
-            )
-        case ResourceOperation.RELEASE:
-            value = release_resource(
-                context.work,
-                context.arguments.resource_id,
-                context.arguments.host_id,
-                context.arguments.lease_id or "",
-                context.arguments.generation,
-            )
-        case ResourceOperation.REVOKE:
-            value = revoke_resource(
-                context.work,
-                context.arguments.resource_id,
-                context.arguments.host_id,
-                context.arguments.coordination_lease_id,
-                context.arguments.coordination_generation,
-            )
-        case ResourceOperation.STATUS:
-            value = (
-                read_resource(root, context.arguments.resource_id)
-                if context.arguments.host_id is None
-                else read_resource_claim(root, context.arguments.resource_id, context.arguments.host_id)
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
-    return _emit_operation(value, context.arguments.json)
+    return _sqlite_resource(context)
 
 
 def _sqlite_resource(context: CommandContext) -> int:
-    resource_id = ResourceId(_stable_identifier(context.arguments.resource_id, label="Resource identity"))
-    if context.arguments.host_id is not None:
-        _stable_identifier(context.arguments.host_id, label="Host identity")
     operation = ResourceOperation(context.arguments.operation)
     if operation != ResourceOperation.STATUS:
         raise ResourceError("ACTION_NOT_AVAILABLE", "SQLite resource changes require a current typed operation.")
+    resource_id = ResourceId(_stable_identifier(context.arguments.resource_id, label="Resource identity"))
+    if context.arguments.host_id is not None:
+        _stable_identifier(context.arguments.host_id, label="Host identity")
     store = SQLiteWorkStore(context.work / "state.sqlite3")
     state = store.snapshot()
     definition = next((value for value in state.resources.definitions if value.resource_id == resource_id), None)
@@ -2038,7 +1426,7 @@ def _sqlite_resource(context: CommandContext) -> int:
     return 0
 
 
-def _print_parallel_group(title: str, items: tuple[ParallelItem | SQLiteParallelItem, ...]) -> None:
+def _print_parallel_group(title: str, items: tuple[SQLiteParallelItem, ...]) -> None:
     print(f"{title}:")
     if not items:
         print("- none")
@@ -2054,19 +1442,10 @@ def _parallel(context: CommandContext) -> int:
     operation = ParallelOperation(context.arguments.operation)
     match operation:
         case ParallelOperation.PREVIEW:
-            preview: ParallelPreview | SQLiteParallelPreview = (
-                preview_sqlite_parallel(
-                    SQLiteWorkStore(context.work / "state.sqlite3"),
-                    context.arguments.host_id,
-                    selected=tuple(context.arguments.item),
-                )
-                if _uses_sqlite(context.work)
-                else preview_parallel(
-                    context.work,
-                    context.project,
-                    context.arguments.host_id,
-                    selected=tuple(context.arguments.item),
-                )
+            preview = preview_sqlite_parallel(
+                SQLiteWorkStore(context.work / "state.sqlite3"),
+                context.arguments.host_id,
+                selected=tuple(context.arguments.item),
             )
         case _ as unreachable:
             assert_never(unreachable)
@@ -2084,51 +1463,13 @@ def _parallel(context: CommandContext) -> int:
 
 
 def _views(context: CommandContext) -> int:
-    if not _uses_sqlite(context.work):
-        raise RegistrationError("MIGRATION_REQUIRED", "Generated-view repair requires current SQLite authority.")
     operation = ViewsOperation(context.arguments.operation)
     match operation:
         case ViewsOperation.REBUILD:
             result = rebuild_views(SQLiteWorkStore(context.work / "state.sqlite3"), context.work)
     if result.warning is not None:
-        raise RegistrationError(result.warning.code, result.warning.message)
+        raise InitializationError(result.warning.code, result.warning.message)
     print(f"OK VIEWS_REBUILT revision={result.database_revision}")
-    return 0
-
-
-def _legacy_import(context: CommandContext) -> int:
-    operation = LegacyImportOperation(context.arguments.operation)
-    now = datetime.now(UTC)
-    match operation:
-        case LegacyImportOperation.DRY_RUN:
-            receipt = dry_run_ledger(context.project, context.work, now)
-        case LegacyImportOperation.STAGE:
-            receipt = import_ledger(context.project, context.work, context.arguments.destination, now)
-        case LegacyImportOperation.CUTOVER:
-            receipt = cutover_ledger(context.project, context.work, now)
-        case _ as unreachable:
-            assert_never(unreachable)
-    if context.arguments.json:
-        _write_json(LegacyImportView.from_receipt(receipt))
-    else:
-        print(
-            f"OK LEGACY_IMPORT cutover_id={receipt.cutover_id} source_revision={receipt.source_revision} "
-            f"destination_revision={receipt.destination_revision}"
-        )
-    return 0
-
-
-def _legacy_cleanup(context: CommandContext) -> int:
-    receipt = cleanup_legacy(context.work, context.arguments.expected_cutover_id, datetime.now(UTC))
-    if context.arguments.json:
-        _write_json(LegacyCleanupView.from_receipt(receipt))
-    else:
-        correction = receipt.correction
-        correction_text = "" if correction is None else f" correction={correction.artifact_selector}"
-        print(
-            f"OK LEGACY_CLEANUP cutover_id={receipt.cutover_id} revision={receipt.committed_revision} "
-            f"artifact={receipt.artifact_selector}{correction_text}"
-        )
     return 0
 
 
@@ -2150,8 +1491,6 @@ def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhausti
             return _actions(context)
         case CommandName.INPUT_CONTRACT:
             return _input_contract(context)
-        case CommandName.RECOVER:
-            return _recover(context)
         case CommandName.INIT:
             return _initialize(context)
         case CommandName.PROPOSAL:
@@ -2160,8 +1499,6 @@ def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhausti
             return _transition(context)
         case CommandName.DISPATCH:
             return _prepare_dispatch(context)
-        case CommandName.MIGRATE:
-            return _migrate(context)
         case CommandName.COORDINATION:
             return _coordination(context)
         case CommandName.ATTEMPT:
@@ -2172,10 +1509,6 @@ def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhausti
             return _parallel(context)
         case CommandName.VIEWS:
             return _views(context)
-        case CommandName.LEGACY_IMPORT:
-            return _legacy_import(context)
-        case CommandName.LEGACY_CLEANUP:
-            return _legacy_cleanup(context)
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -2193,17 +1526,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         TransitionInputError,
         LeaseError,
         ResourceError,
-        MigrationError,
-        ParallelError,
-        OverviewError,
-        AtomicCommitError,
         ActionQueryError,
         QueryError,
-        LegacyImportError,
     ) as error:
         print(str(error), file=sys.stderr)
         return 11
-    except (RegistrationError, InitializationError, StorageError, ArtifactError, FileIOError) as error:
+    except (InitializationError, StorageError, ArtifactError, FileIOError) as error:
         print(str(error), file=sys.stderr)
         return 12
     except ProposalError as error:

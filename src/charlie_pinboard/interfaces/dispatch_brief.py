@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -14,12 +15,9 @@ from charlie_pinboard.application.dispatch import (
 )
 from charlie_pinboard.application.dispatch import DispatchPermission as DispatchPermission
 from charlie_pinboard.domain.identifiers import TaskId
-from charlie_pinboard.domain.model import AttemptState
-from charlie_pinboard.legacy.actions import Action, ActionKind, actions_for, coordinator_generation
-from charlie_pinboard.legacy.atomic import PlatformNotSupportedError, atomic_create
-from charlie_pinboard.legacy.authority import AuthorityVersion, authority_transaction, resolve_authority
-from charlie_pinboard.legacy.leases import LeaseError, require_coordination
-from charlie_pinboard.legacy.markdown import Header, ParseError, parse_attempt, parse_header, parse_header_text
+
+type HeaderValue = str | bool | None
+type Header = dict[str, HeaderValue]
 
 HEADING: Final = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 CONTRACT_COLUMNS: Final = (
@@ -44,7 +42,6 @@ DEFERRAL: Final = re.compile(
 )
 ACCEPTANCE_CRITERION: Final = re.compile(r"^(?P<number>[1-9][0-9]*)\.\s+\S")
 REVIEWED_AUTHORITY_COLUMNS: Final = ("Authority ID", "Selector", "Reviewed SHA-256", "In-scope families")
-REVIEW_ID: Final = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 COVERAGE_COLUMNS: Final = (
     "Authority / invariant family",
     "Required distinction",
@@ -161,6 +158,45 @@ class BriefReviewMetadata:
 class CheckpointBoundary(Enum):
     LOCAL = "local"
     CROSS_BOUNDARY = "cross-boundary"
+
+
+def _scalar(raw: str) -> HeaderValue:
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return value[1:-1]
+        return decoded if isinstance(decoded, str) else value[1:-1]
+    if len(value) >= 2 and value[0] == value[-1] == "'":
+        return value[1:-1]
+    if value in {"null", "~"}:
+        return None
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    return value
+
+
+def _parse_header_text(text: str) -> Header:
+    lines = text.splitlines()
+    if not lines or lines[0] != "---":
+        raise ValueError("HEADER_MISSING: cannot parse fields")
+    try:
+        end = lines.index("---", 1)
+    except ValueError as error:
+        raise ValueError("HEADER_UNTERMINATED: cannot parse fields") from error
+    result: Header = {}
+    for line in lines[1:end]:
+        if ":" in line:
+            key, raw = line.split(":", 1)
+            result[key.strip()] = _scalar(raw)
+    return result
+
+
+def _parse_header(path: Path) -> Header:
+    return _parse_header_text(path.read_text(encoding="utf-8"))
 
 
 def read_dispatch_environment(path: Path) -> DispatchEnvironment:
@@ -581,7 +617,7 @@ def _header_string(header: Header, field: str, source: str) -> str:
 def _review_metadata_bytes(data: bytes, source: str) -> BriefReviewMetadata:
     try:
         text = data.decode("utf-8")
-        header = parse_header_text(text)
+        header = _parse_header_text(text)
     except (UnicodeError, ValueError) as error:
         raise DispatchError(
             "DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot parse brief review '{source}': {error}"
@@ -664,8 +700,8 @@ def _validate_brief_review_bytes(
             "DISPATCH_BRIEF_REVIEW_STALE", "Brief review is not bound to the current checkpoint and sources."
         )
     try:
-        attempt_header = parse_header(attempt_path)
-    except (OSError, ParseError) as error:
+        attempt_header = _parse_header(attempt_path)
+    except (OSError, ValueError) as error:
         raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot read attempt owner: {error}") from error
     owner = attempt_header.get("owner_task_id", attempt_header.get("owner"))
     if not isinstance(owner, str) or not owner.strip():
@@ -688,65 +724,6 @@ def _validate_brief_review_bytes(
             "Brief review must be complete with a ready verdict before dispatch.",
         )
     _validate_review_rows(data, source, coverage)
-
-
-def _publish_or_read_brief_review(
-    attempt_path: Path,
-    checkpoint_sha256: str,
-    candidate: bytes | None,
-    review_id: str | None,
-) -> tuple[bytes, str]:
-    review_path = attempt_path.parent / "brief-reviews" / f"{checkpoint_sha256}.md"
-    if candidate is None:
-        if review_id is not None:
-            raise DispatchError(
-                "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
-                "--review-id requires --brief-review.",
-            )
-        try:
-            return review_path.read_bytes(), str(review_path)
-        except OSError as error:
-            raise DispatchError(
-                "DISPATCH_BRIEF_REVIEW_MISSING",
-                f"Ready brief review '{review_path}' does not exist for the exact checkpoint bytes.",
-            ) from error
-    if review_id is None or REVIEW_ID.fullmatch(review_id) is None:
-        raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
-            "--brief-review requires one kebab-case --review-id.",
-        )
-    try:
-        atomic_create(review_path, candidate)
-        return candidate, str(review_path)
-    except FileExistsError:
-        try:
-            existing = review_path.read_bytes()
-        except OSError as error:
-            raise DispatchError(
-                "DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot read existing ready review '{review_path}': {error}"
-            ) from error
-        if existing == candidate:
-            return existing, str(review_path)
-        rejected_path = review_path.parent / "rejected" / f"{checkpoint_sha256}-{review_id}.md"
-        try:
-            atomic_create(rejected_path, candidate)
-        except FileExistsError:
-            try:
-                rejected = rejected_path.read_bytes()
-            except OSError as error:
-                raise DispatchError(
-                    "DISPATCH_BRIEF_REVIEW_INVALID",
-                    f"Cannot read existing rejected review '{rejected_path}': {error}",
-                ) from error
-            if rejected != candidate:
-                raise DispatchError(
-                    "DISPATCH_BRIEF_REVIEW_COLLISION",
-                    f"Rejected review identity '{review_id}' already names different evidence.",
-                ) from None
-        raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_COLLISION",
-            f"Ready review '{review_path}' already exists with different evidence; later evidence is at '{rejected_path}'.",
-        ) from None
 
 
 def _validate_semantic_preservation(
@@ -776,11 +753,12 @@ def _validate_semantic_preservation(
             authority_table,
             coverage,
         )
-    review_bytes, source = (
-        review_publisher(checkpoint_sha256, brief_review, review_id)
-        if review_publisher is not None
-        else _publish_or_read_brief_review(attempt_path, checkpoint_sha256, brief_review, review_id)
-    )
+    if review_publisher is None:
+        raise DispatchError(
+            "DISPATCH_BRIEF_REVIEW_MISSING",
+            "Current SQLite dispatch requires application-owned review publication.",
+        )
+    review_bytes, source = review_publisher(checkpoint_sha256, brief_review, review_id)
     _validate_brief_review_bytes(
         review_bytes,
         source,
@@ -809,45 +787,6 @@ def _checkpoint_boundary(section: tuple[str, ...]) -> CheckpointBoundary:
             "DISPATCH_BOUNDARY_INVALID",
             f"Checkpoint boundary '{values[0]}' is not 'local' or 'cross-boundary'.",
         ) from error
-
-
-def _require_current_dispatch_action(
-    work_root: Path,
-    project_root: Path,
-    supplied: Action,
-) -> None:
-    if supplied.kind != ActionKind.DISPATCH:
-        raise DispatchError("DISPATCH_ACTION_INVALID", "The supplied action is not a dispatch action.")
-    authority = resolve_authority(work_root)
-    match authority.version:
-        case AuthorityVersion.V1:
-            if coordinator_generation(work_root) != supplied.coordinator_generation:
-                raise DispatchError("COORDINATOR_REPLACED", "A different coordinator generation now owns dispatch.")
-        case AuthorityVersion.V2:
-            try:
-                require_coordination(authority.work_root, supplied.lease_id or "", supplied.coordinator_generation)
-            except LeaseError as error:
-                raise DispatchError(error.code, str(error).partition(": ")[2]) from error
-        case _ as unreachable:
-            assert_never(unreachable)
-    current = next(
-        (
-            action
-            for action in actions_for(
-                work_root,
-                project_root,
-                "coordinator",
-                lease_id=supplied.lease_id,
-                generation=supplied.coordinator_generation,
-            )
-            if action.action_id == supplied.action_id
-        ),
-        None,
-    )
-    if current is None:
-        raise DispatchError("DISPATCH_ACTION_UNAVAILABLE", f"Action '{supplied.action_id}' is not currently available.")
-    if current.expected_revision != supplied.expected_revision:
-        raise DispatchError("STALE_ACTION", "The work ledger changed after this dispatch action was selected.")
 
 
 def _canonical_prompt(attempt_path: Path, attempt_id: str, checkpoint: str, environment: DispatchEnvironment) -> str:
@@ -914,90 +853,6 @@ def prepare_dispatch_from_artifact(
         case _ as unreachable:
             assert_never(unreachable)
     prompt = _canonical_prompt(attempt_path, attempt_id, checkpoint, environment)
-    if supplied_prompt is not None and supplied_prompt != prompt.encode():
-        raise DispatchError(
-            "DISPATCH_PROMPT_NOT_CANONICAL",
-            "The launch adds or changes instructions outside the canonical attempt brief; render and use the exact prompt.",
-        )
-    return prompt
-
-
-def prepare_dispatch(
-    work_root: Path,
-    project_root: Path,
-    action: Action,
-    checkpoint: str,
-    environment: DispatchEnvironment,
-    supplied_prompt: bytes | None = None,
-    brief_review: bytes | None = None,
-    review_id: str | None = None,
-) -> str:
-    try:
-        with authority_transaction(work_root) as authority:
-            return _prepare_dispatch_locked(
-                authority.work_root,
-                work_root,
-                project_root,
-                action,
-                checkpoint,
-                environment,
-                supplied_prompt,
-                brief_review,
-                review_id,
-            )
-    except PlatformNotSupportedError as error:
-        message = str(error).partition(": ")[2] or str(error)
-        raise DispatchError("PLATFORM_NOT_SUPPORTED", message) from error
-
-
-def _prepare_dispatch_locked(
-    work_root: Path,
-    base_work_root: Path,
-    project_root: Path,
-    action: Action,
-    checkpoint: str,
-    environment: DispatchEnvironment,
-    supplied_prompt: bytes | None,
-    brief_review: bytes | None,
-    review_id: str | None,
-) -> str:
-    _require_current_dispatch_action(base_work_root, project_root, action)
-    attempt_path = work_root / "attempts" / action.subject / "attempt.md"
-    attempt = parse_attempt(attempt_path)
-    if attempt.state != AttemptState.ACTIVE:
-        raise DispatchError("DISPATCH_ATTEMPT_NOT_ACTIVE", f"Attempt '{attempt.attempt}' is not active.")
-    if environment.branch != attempt.branch:
-        raise DispatchError(
-            "DISPATCH_BRANCH_MISMATCH",
-            f"Environment branch '{environment.branch}' does not match attempt branch '{attempt.branch}'.",
-        )
-    checkout = Path(environment.checkout)
-    if not checkout.is_dir():
-        raise DispatchError("DISPATCH_CHECKOUT_MISSING", f"Checkout '{checkout}' is not a directory.")
-    section = _checkpoint_section(attempt.path, checkpoint)
-    boundary = _checkpoint_boundary(section)
-    match boundary:
-        case CheckpointBoundary.LOCAL:
-            if brief_review is not None or review_id is not None:
-                raise DispatchError(
-                    "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
-                    "Local checkpoints do not publish cross-boundary brief reviews.",
-                )
-        case CheckpointBoundary.CROSS_BOUNDARY:
-            contracts = _validate_cross_boundary_checkpoint(section)
-            _validate_semantic_preservation(
-                attempt.path,
-                attempt.attempt,
-                checkpoint,
-                section,
-                project_root,
-                contracts,
-                brief_review,
-                review_id,
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
-    prompt = _canonical_prompt(attempt.path, attempt.attempt, checkpoint, environment)
     if supplied_prompt is not None and supplied_prompt != prompt.encode():
         raise DispatchError(
             "DISPATCH_PROMPT_NOT_CANONICAL",

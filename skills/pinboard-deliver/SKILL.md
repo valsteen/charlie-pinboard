@@ -10,7 +10,7 @@ Implement one accepted attempt, verify it, leave a durable result, and return it
 ## Establish the attempt
 
 1. Resolve the pinboard executable relative to the installed plugin as `../../scripts/pinboard`.
-2. Run `pinboard status --json`. If it reports v1 authority, stop with `MIGRATION_REQUIRED` and the exact `pinboard migrate --to v2` command; do not imply that v1 has attempt-lease semantics. On v2, acquire or validate the user-supplied attempt lease, then run `pinboard actions --role worker` with its lease identity and fencing generation.
+2. Run `pinboard status --json` and require authority `sqlite-v1`. Stop if validation fails or another authority is reported; never infer current state from generated views or archived files. Acquire or validate the user-supplied attempt lease, then run `pinboard actions --role worker` with its lease identity and fencing generation.
 3. Require the user-supplied attempt to be present and active. Other disjoint attempts may also be active. Stop if state is invalid, the supplied attempt is absent, its item and attempt records disagree, or another unexpired owner holds it. Report that owner and expiry instead of guessing or silently revoking it.
 4. Read that attempt's `attempt.md` fully, then read only the project guidance, item context, accepted knowledge, and source authorities it names. Preserve exact file and section selectors instead of broadening them into exploratory reads.
 5. Inspect the checkout, branch/worktree, base revision, and unrelated user changes before editing.
@@ -26,7 +26,7 @@ When reacquiring an attempt returned from review, read the durable correction re
 - Preserve unrelated user changes.
 - Follow the repository's own testing, formatting, lint, documentation, and safety guidance.
 - Treat a stale instruction as an instruction defect before reshaping working code around it.
-- Do not edit generated `queue.md`, `current.md`, coordination leases, or another item's authoritative lifecycle fields.
+- Do not edit generated views, SQLite authority, coordination leases, or another item's lifecycle state outside the executable workflow.
 - Before live use, claim every scarce resource named by the item with the current attempt-lease token. If a resource is busy, report its holder and expiry; continue only work that does not use it.
 - Do not accept or complete your own item.
 - Prepare the stable candidate for independent review, then return it using the confirmed-delivery rules below. A later chat may borrow coordination to review and accept it; no permanent coordinator chat is required. Do not invoke a generic reviewer-dispatch workflow or launch another reviewer from the worker role.

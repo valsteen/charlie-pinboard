@@ -7,7 +7,7 @@ from charlie_pinboard.adapters.sqlite.database import OpenMode, StorageError, in
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.registration import InitializationError, InitReceipt
 
-_LEGACY_SELECTORS = (
+_RETIRED_STATE_SELECTORS = (
     "authority.json",
     "queue.md",
     "current.md",
@@ -18,12 +18,12 @@ _LEGACY_SELECTORS = (
 )
 
 
-def _reject_legacy_state(work_root: Path) -> None:
-    existing = tuple(selector for selector in _LEGACY_SELECTORS if (work_root / selector).exists())
+def _reject_retired_state(work_root: Path) -> None:
+    existing = tuple(selector for selector in _RETIRED_STATE_SELECTORS if (work_root / selector).exists())
     if existing:
         raise InitializationError(
-            "MIGRATION_REQUIRED",
-            f"Legacy work state requires the explicit importer before SQLite initialization: {', '.join(existing)}.",
+            "WORK_STATE_CONFLICT",
+            f"Fresh SQLite initialization refuses existing predecessor state: {', '.join(existing)}.",
         )
 
 
@@ -35,7 +35,7 @@ def initialize_work_state(
 ) -> InitReceipt:
     try:
         roots = resolve_durable_roots(project_root, work_root)
-        _reject_legacy_state(roots.work_root)
+        _reject_retired_state(roots.work_root)
         resumed = roots.database_path.exists()
         current = now or datetime.now(UTC)
         if resumed:

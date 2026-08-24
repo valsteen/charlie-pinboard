@@ -1,14 +1,11 @@
 import contextlib
 import hashlib
 import io
-import json
-import multiprocessing
 import tempfile
 import unittest
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from multiprocessing.synchronize import Event as EventType
 from pathlib import Path
 
 import msgspec
@@ -18,25 +15,22 @@ from charlie_pinboard.adapters.files.file_io import DurableRoots, resolve_durabl
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.actions import discover_actions
-from charlie_pinboard.application.artifacts import accept_reference
-from charlie_pinboard.application.dispatch import prepare_sqlite_dispatch
-from charlie_pinboard.application.stored_state import ArtifactKind
-from charlie_pinboard.domain.decisions import ActionKind, Role
-from charlie_pinboard.domain.identifiers import LeaseId
-from charlie_pinboard.interfaces.cli import main
-from charlie_pinboard.legacy.actions import Action, actions_for
-from charlie_pinboard.legacy.atomic import transition_lock
-from charlie_pinboard.legacy.dispatch import (
-    BriefReviewPublisher,
+from charlie_pinboard.application.dispatch import (
     DispatchEnvironment,
     DispatchError,
     DispatchPermission,
-    prepare_dispatch,
-    prepare_dispatch_from_artifact,
-    read_dispatch_environment,
+    prepare_sqlite_dispatch,
 )
-
-from .support import SQLITE_NOW, complete_sqlite_state, create_state
+from charlie_pinboard.application.stored_state import ArtifactKind
+from charlie_pinboard.domain.decisions import Action, ActionKind, Role
+from charlie_pinboard.domain.identifiers import LeaseId
+from charlie_pinboard.interfaces.cli import main
+from charlie_pinboard.interfaces.dispatch_brief import (
+    _checkpoint_section,
+    _parse_header_text,
+    prepare_dispatch_from_artifact,
+)
+from tests.support import SQLITE_NOW, complete_sqlite_state
 
 CHECKPOINT = "Sequence 2 — Complete the shared protocol cutover"
 CONTRACT_INVARIANT = "Kotlin and Rust use protocol v13 together."
@@ -50,44 +44,6 @@ CONTRACT_TABLE = """\
 AUTHORITY_COLUMNS = "| Authority ID | Selector | Reviewed SHA-256 | In-scope families |"
 COVERAGE_COLUMNS = "| Authority / invariant family | Required distinction | Required consumer / production observation | Disposition | Brief owner | Cheapest counterexample |"
 REVIEW_COLUMNS = "| Authority / invariant family | Brief owner | Verdict | Cheapest counterexample result |"
-LIFECYCLE_COLUMNS = "| Operation | Allowed source state | Required authority | Required observation / evidence | State and fencing effects | Nearest illegal sibling / stable rejection |"
-ATTEMPT = f"""\
----
-kind: work-attempt
-schema: repo-work/v1
-attempt: universal-reveal-core-1
-item: universal-reveal-core
-state: active
-branch: codex/universal-reveal-core
-base_revision: abc123
-owner: worker-task
-updated: "2026-08-16"
----
-
-# Attempt
-
-### {CHECKPOINT}
-
-Checkpoint boundary: cross-boundary
-Checkpoint outcome: independently-buildable
-
-{CONTRACT_TABLE}
-
-Implement the coherent cutover described here.
-
-### Sequence 3 — Wire the product UI
-
-Later work.
-"""
-
-OLD_CONTRADICTORY_PROMPT = """\
-Use the bounded implementer for sequence 2 only.
-
-Read completely attempt.md, review.md, result.md, all current guidance, and every linked source before editing.
-Update canonical Kotlin vectors and matching Rust decode fixtures now, even though the Rust product adapter remains sequence 3.
-Run the Kotlin checks and only the proportionate Rust format/lint checks needed for protocol model changes.
-Do not begin sequence 3.
-"""
 
 
 def _section_bytes(text: str, heading: str) -> bytes:
@@ -113,97 +69,28 @@ def _cells(line: str) -> tuple[str, ...]:
     return tuple(cell.strip() for cell in line.strip()[1:-1].split("|"))
 
 
-def _prepare_waiting_dispatch(
-    work: str,
-    project: str,
-    environment: str,
-    action: Action,
-    started: EventType,
-    result: str,
-) -> None:
-    started.set()
-    try:
-        prepare_dispatch(
-            Path(work),
-            Path(project),
-            action,
-            CHECKPOINT,
-            read_dispatch_environment(Path(environment)),
-        )
-        outcome = "success"
-    except DispatchError as error:
-        outcome = error.code
-    Path(result).write_text(outcome, encoding="utf-8")
+def _reviewed_brief(project: Path) -> bytes:
+    architecture = "# Architecture\r\n\r\n## Protocol semantics\r\n\r\nProtocol v13 is shared.\r\n\r\n# Other\r\n\r\nNot selected.\r\n"
+    plan = b'{"consumer":"rust"}\n'
+    (project / "architecture.md").write_bytes(architecture.encode())
+    (project / "plan.json").write_bytes(plan)
+    architecture_digest = hashlib.sha256(b"## Protocol semantics\n\nProtocol v13 is shared.\n\n").hexdigest()
+    plan_digest = hashlib.sha256(plan).hexdigest()
+    return f"""\
+---
+kind: work-attempt
+schema: repo-work/v2
+attempt: work-a-1
+item: work-a
+state: active
+branch: codex/work-a
+base_revision: base-revision
+owner_task_id: worker
+updated: "2026-08-25"
+---
 
+# Attempt
 
-class DispatchTest(unittest.TestCase):
-    def _assert_resource_backed_review_validation(
-        self,
-        store: SQLiteWorkStore,
-        roots: DurableRoots,
-        project: Path,
-        dispatch_action: Callable[[], Action],
-        environment: DispatchEnvironment,
-        candidate: bytes,
-    ) -> None:
-        before_unsupported = store.snapshot()
-        mutating_environment = msgspec.structs.replace(
-            environment,
-            permissions=(DispatchPermission.REPOSITORY_READ, DispatchPermission.REPOSITORY_WRITE),
-        )
-        for candidate_value, review_id_value, code in (
-            (None, None, "DISPATCH_BRIEF_REVIEW_MISSING"),
-            (candidate, "Invalid Review", "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID"),
-        ):
-            with self.subTest(resource_backed_validation=code), self.assertRaises(DispatchError) as rejected:
-                prepare_sqlite_dispatch(
-                    store,
-                    ArtifactRepository(roots),
-                    prepare_dispatch_from_artifact,
-                    project,
-                    dispatch_action(),
-                    CHECKPOINT,
-                    mutating_environment,
-                    brief_review=candidate_value,
-                    review_id=review_id_value,
-                )
-            self.assertEqual(code, rejected.exception.code)
-            self.assertEqual(before_unsupported, store.snapshot())
-        with self.assertRaises(DispatchError) as unsupported:
-            prepare_sqlite_dispatch(
-                store,
-                ArtifactRepository(roots),
-                prepare_dispatch_from_artifact,
-                project,
-                dispatch_action(),
-                CHECKPOINT,
-                mutating_environment,
-                brief_review=candidate,
-                review_id="validated-but-unpublished",
-            )
-        self.assertEqual("RESOURCE_BACKED_MUTATING_DISPATCH_UNSUPPORTED", unsupported.exception.code)
-        self.assertEqual(before_unsupported, store.snapshot())
-
-    def run_cli(self, *arguments: str) -> tuple[int, str, str]:
-        stdout = io.StringIO()
-        stderr = io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            result = main(arguments)
-        return result, stdout.getvalue(), stderr.getvalue()
-
-    def _reviewed_attempt(self, project: Path, *, lifecycle: str | None = None) -> str:
-        architecture = "# Architecture\r\n\r\n## Protocol semantics\r\n\r\nProtocol v13 is shared.\r\n\r\n## Other\r\n\r\nNot selected.\r\n"
-        plan = b'{"consumer":"rust"}\n'
-        (project / "architecture.md").write_bytes(architecture.encode())
-        (project / "plan.json").write_bytes(plan)
-        architecture_digest = hashlib.sha256(b"## Protocol semantics\n\nProtocol v13 is shared.\n\n").hexdigest()
-        plan_digest = hashlib.sha256(plan).hexdigest()
-        lifecycle_text = (
-            "Lifecycle partition: not-applicable — this protocol cutover changes no lifecycle operation."
-            if lifecycle is None
-            else lifecycle
-        )
-        checkpoint = f"""\
 ### {CHECKPOINT}
 
 Checkpoint boundary: cross-boundary
@@ -225,563 +112,87 @@ Checkpoint outcome: independently-buildable
 | `authority:architecture#protocol-contract` | The protocol version remains shared. | Kotlin and Rust protocol consumers | contract | `contract:{CONTRACT_INVARIANT}` | Keep Kotlin on v12 while Rust moves to v13. |
 | `authority:plan#consumer-proof` | The Rust consumer is verified directly. | Rust connector | acceptance | `criterion:1` | Delete the Rust protocol test. |
 
-{lifecycle_text}
+Lifecycle partition: not-applicable — this protocol cutover changes no lifecycle operation.
 
 #### Acceptance criteria
 
 1. The production Rust connector accepts protocol v13.
+""".encode()
 
-Implement the coherent cutover described here.
-"""
-        return f"""\
----
-kind: work-attempt
-schema: repo-work/v1
-attempt: universal-reveal-core-1
-item: universal-reveal-core
-state: active
-branch: codex/universal-reveal-core
-base_revision: abc123
-owner: worker-task
-owner_task_id: worker-task
-updated: "2026-08-16"
----
 
-# Attempt
-
-{checkpoint}
-
-### Sequence 3 — Wire the product UI
-
-Later work.
-"""
-
-    def _write_review(
-        self,
-        work: Path,
-        *,
-        status: str = "complete",
-        verdict: str = "ready",
-        reviewer: str = "brief-reviewer-task",
-        authority_set_digest: str | None = None,
-        omit_last_row: bool = False,
-    ) -> Path:
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        section_bytes = _section_bytes(attempt_path.read_text(encoding="utf-8"), CHECKPOINT)
-        section = section_bytes.decode()
-        authority_table = _table_lines(section, AUTHORITY_COLUMNS)
-        coverage_rows = _table_lines(section, COVERAGE_COLUMNS)[2:]
-        if omit_last_row:
-            coverage_rows = coverage_rows[:-1]
-        review_rows = "\n".join(
-            f"| {cells[0]} | {cells[4]} | covered | Counterexample rejected. |"
-            for cells in (_cells(row) for row in coverage_rows)
-        )
-        checkpoint_digest = hashlib.sha256(section_bytes).hexdigest()
-        expected_authority_digest = hashlib.sha256(("\n".join(authority_table) + "\n").encode()).hexdigest()
-        review = f"""\
+def _review(brief: bytes) -> bytes:
+    section = _section_bytes(brief.decode(), CHECKPOINT)
+    authority_table = _table_lines(section.decode(), AUTHORITY_COLUMNS)
+    coverage_rows = _table_lines(section.decode(), COVERAGE_COLUMNS)[2:]
+    rows = "\n".join(
+        f"| {cells[0]} | {cells[4]} | covered | Counterexample rejected. |"
+        for cells in (_cells(row) for row in coverage_rows)
+    )
+    return f"""\
 ---
 kind: work-brief-review
 schema: repo-work/v2
-attempt: universal-reveal-core-1
+attempt: work-a-1
 checkpoint: "{CHECKPOINT}"
-checkpoint_sha256: "{checkpoint_digest}"
-reviewed_authority_set_sha256: "{authority_set_digest or expected_authority_digest}"
-reviewer_task_id: "{reviewer}"
-status: {status}
-verdict: {verdict}
+checkpoint_sha256: "{hashlib.sha256(section).hexdigest()}"
+reviewed_authority_set_sha256: "{hashlib.sha256(("\n".join(authority_table) + "\n").encode()).hexdigest()}"
+reviewer_task_id: "brief-reviewer-task"
+status: complete
+verdict: ready
 ---
 
 # Brief review
 
 {REVIEW_COLUMNS}
 | --- | --- | --- | --- |
-{review_rows}
-"""
-        review_dir = attempt_path.parent / "brief-reviews"
-        review_dir.mkdir(exist_ok=True)
-        path = review_dir / f"{checkpoint_digest}.md"
-        path.write_text(review, encoding="utf-8")
-        return path
+{rows}
+""".encode()
 
-    def active_state(self, *, local: bool = False) -> tuple[Path, Path, Path]:
-        project, work = create_state(
-            ["| universal-reveal-core | active | — | — | universal-reveal-core-1 | design | continue | Active. |"],
-            focus_item="universal-reveal-core",
-            focus_attempt="universal-reveal-core-1",
-            create_active_attempt=True,
-        )
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        if local:
-            local_attempt = ATTEMPT.replace(
-                "Checkpoint boundary: cross-boundary", "Checkpoint boundary: local"
-            ).replace(f"Checkpoint outcome: independently-buildable\n\n{CONTRACT_TABLE}\n", "")
-            attempt_path.write_text(local_attempt, encoding="utf-8")
-        else:
-            attempt_path.write_text(self._reviewed_attempt(project), encoding="utf-8")
-            self._write_review(work)
-        environment_path = Path(tempfile.mkdtemp()) / "environment.json"
-        environment_path.write_text(
-            json.dumps(
-                {
-                    "schema": "repo-work-dispatch/v1",
-                    "checkout": str(project),
-                    "branch": "codex/universal-reveal-core",
-                    "starting_revision": "def456",
-                    "permissions": ["repository-read", "repository-write"],
-                }
-            ),
-            encoding="utf-8",
-        )
-        return project, work, environment_path
 
-    def dispatch_arguments(
+class DispatchTest(unittest.TestCase):
+    def _prepare_cross_boundary(
         self,
         project: Path,
-        work: Path,
-        environment: Path,
+        brief: bytes,
         *,
-        brief_review: Path | None = None,
-        review_id: str | None = None,
-    ) -> tuple[str, ...]:
-        action = next(
-            action
-            for action in actions_for(work, project, "coordinator")
-            if action.action_id == "dispatch:universal-reveal-core-1"
-        )
-        arguments = (
-            "--project-root",
+        review: bytes | None = None,
+    ) -> str:
+        path = project / "candidate-brief.md"
+        path.write_bytes(brief)
+        environment = DispatchEnvironment(
+            "repo-work-dispatch/v1",
             str(project),
-            "--work-root",
-            str(work),
-            "dispatch",
-            "--action-id",
-            action.action_id,
-            "--expected-revision",
-            action.expected_revision,
-            "--generation",
-            str(action.coordinator_generation),
-            "--checkpoint",
+            "codex/work-a",
+            "base-revision",
+            (DispatchPermission.REPOSITORY_READ,),
+        )
+        candidate = _review(brief) if review is None else review
+        return prepare_dispatch_from_artifact(
+            path,
+            "work-a-1",
+            "codex/work-a",
+            project,
             CHECKPOINT,
-            "--environment",
-            str(environment),
-        )
-        if brief_review is not None:
-            arguments += ("--brief-review", str(brief_review))
-        if review_id is not None:
-            arguments += ("--review-id", review_id)
-        return arguments
-
-    def test_real_contradictory_launch_is_rejected_but_canonical_launch_is_accepted(self) -> None:
-        project, work, environment = self.active_state()
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        render_result, canonical_prompt, render_stderr = self.run_cli(*arguments)
-        canonical_path = project / "canonical-prompt.txt"
-        canonical_path.write_text(canonical_prompt, encoding="utf-8")
-        old_path = project / "old-prompt.txt"
-        old_path.write_text(OLD_CONTRADICTORY_PROMPT, encoding="utf-8")
-
-        rejected_result, _, rejected_stderr = self.run_cli(*arguments, "--prompt", str(old_path))
-        accepted_result, accepted_stdout, accepted_stderr = self.run_cli(*arguments, "--prompt", str(canonical_path))
-
-        self.assertEqual(0, render_result, render_stderr)
-        self.assertIn("Use $deliver", canonical_prompt)
-        self.assertIn("sole semantic execution contract", canonical_prompt)
-        self.assertNotIn("pnpm rust:test", canonical_prompt)
-        self.assertEqual(14, rejected_result)
-        self.assertIn("DISPATCH_PROMPT_NOT_CANONICAL", rejected_stderr)
-        self.assertIn("adds or changes instructions", rejected_stderr)
-        self.assertEqual(0, accepted_result, accepted_stderr)
-        self.assertIn("OK DISPATCH_READY", accepted_stdout)
-
-    def test_cross_boundary_checkpoint_requires_a_complete_contract_table(self) -> None:
-        project, work, environment = self.active_state()
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(
-            attempt_path.read_text(encoding="utf-8").replace("Rust connector", "—", 1), encoding="utf-8"
-        )
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, _, stderr = self.run_cli(*arguments)
-
-        self.assertEqual(14, result)
-        self.assertIn("DISPATCH_CONTRACT_INCOMPLETE", stderr)
-        self.assertIn("Required consumer or production observation", stderr)
-
-    def test_contract_table_requires_a_markdown_separator(self) -> None:
-        project, work, environment = self.active_state()
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        invalid_separator = "| not | a | markdown | table | separator | row |"
-        attempt_path.write_text(
-            attempt_path.read_text(encoding="utf-8").replace(
-                "| --- | --- | --- | --- | --- | --- |", invalid_separator, 1
-            ),
-            encoding="utf-8",
-        )
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, _, stderr = self.run_cli(*arguments)
-
-        self.assertEqual(14, result)
-        self.assertIn("DISPATCH_CONTRACT_INVALID", stderr)
-
-    def test_cross_boundary_checkpoint_must_be_independently_buildable(self) -> None:
-        project, work, environment = self.active_state()
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(
-            attempt_path.read_text(encoding="utf-8").replace(
-                "Checkpoint outcome: independently-buildable", "Checkpoint outcome: partial"
-            ),
-            encoding="utf-8",
-        )
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, _, stderr = self.run_cli(*arguments)
-
-        self.assertEqual(14, result)
-        self.assertIn("DISPATCH_CHECKPOINT_NOT_BUILDABLE", stderr)
-
-    def test_checkpoint_requires_an_explicit_boundary_classification(self) -> None:
-        project, work, environment = self.active_state()
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(
-            attempt_path.read_text(encoding="utf-8").replace("Checkpoint boundary: cross-boundary\n", ""),
-            encoding="utf-8",
-        )
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, _, stderr = self.run_cli(*arguments)
-
-        self.assertEqual(14, result)
-        self.assertIn("DISPATCH_BOUNDARY_MISSING", stderr)
-
-    def test_local_checkpoint_does_not_require_a_contract_table(self) -> None:
-        project, work, environment = self.active_state(local=True)
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, prompt, stderr = self.run_cli(*arguments)
-
-        self.assertEqual(0, result, stderr)
-        self.assertIn("sole semantic execution contract", prompt)
-
-    def test_authority_coverage_and_owner_failures_reject_before_launch(self) -> None:
-        cases = (
-            (
-                "absent declared family",
-                "| `authority:plan#consumer-proof` | The Rust consumer is verified directly. | Rust connector | acceptance | `criterion:1` | Delete the Rust protocol test. |",
-                "",
-            ),
-            (
-                "unresolved contract owner",
-                f"`contract:{CONTRACT_INVARIANT}`",
-                "`contract:Missing invariant`",
-            ),
-            (
-                "unknown family",
-                "authority:plan#consumer-proof",
-                "authority:plan#unknown-family",
-            ),
-        )
-        for name, old, new in cases:
-            with self.subTest(name=name):
-                project, work, environment = self.active_state()
-                attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-                attempt_path.write_text(attempt_path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
-                self._write_review(work)
-
-                result, _, stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
-
-                self.assertEqual(14, result)
-                self.assertIn("DISPATCH_AUTHORITY_COVERAGE_INVALID", stderr)
-
-    def test_changed_reviewed_source_rejects_but_unselected_heading_bytes_do_not(self) -> None:
-        project, work, environment = self.active_state()
-        architecture = project / "architecture.md"
-        architecture.write_bytes(architecture.read_bytes().replace(b"Not selected.", b"Still not selected."))
-
-        accepted, _, accepted_stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
-
-        self.assertEqual(0, accepted, accepted_stderr)
-        architecture.write_bytes(
-            architecture.read_bytes().replace(b"Protocol v13 is shared.", b"Protocol v14 is shared.")
-        )
-        rejected, _, rejected_stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
-        self.assertEqual(14, rejected)
-        self.assertIn("DISPATCH_AUTHORITY_STALE", rejected_stderr)
-
-        project, work, environment = self.active_state()
-        plan = project / "plan.json"
-        plan.write_bytes(plan.read_bytes().replace(b"\n", b"\r\n"))
-        rejected, _, rejected_stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
-        self.assertEqual(14, rejected)
-        self.assertIn("DISPATCH_AUTHORITY_STALE", rejected_stderr)
-
-    def test_heading_selectors_support_h1_through_h6_and_literal_hash_characters(self) -> None:
-        cases = (
-            ("h1", "# Protocol semantics", "Protocol semantics"),
-            ("h2 with literal hash", "## Protocol # semantics", "Protocol # semantics"),
-            ("h3", "### Protocol semantics", "Protocol semantics"),
-            ("h4", "#### Protocol semantics", "Protocol semantics"),
-            ("h5", "##### Protocol semantics", "Protocol semantics"),
-            ("h6", "###### Protocol semantics", "Protocol semantics"),
-        )
-        old_digest = hashlib.sha256(b"## Protocol semantics\n\nProtocol v13 is shared.\n\n").hexdigest()
-        for name, heading_line, selector_heading in cases:
-            with self.subTest(name=name):
-                project, work, environment = self.active_state()
-                source = f"{heading_line}\r\n\r\nProtocol v13 is shared.\r\n\r\n# Other\r\n\r\nNot selected.\r\n"
-                (project / "architecture.md").write_bytes(source.encode())
-                selected = f"{heading_line}\n\nProtocol v13 is shared.\n\n".encode()
-                digest = hashlib.sha256(selected).hexdigest()
-                attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-                attempt_path.write_text(
-                    attempt_path.read_text(encoding="utf-8")
-                    .replace("architecture.md#Protocol semantics", f"architecture.md#{selector_heading}")
-                    .replace(old_digest, digest),
-                    encoding="utf-8",
-                )
-                self._write_review(work)
-
-                result, _, stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
-
-                self.assertEqual(0, result, stderr)
-
-    def test_padded_same_owner_reviewer_identity_rejects(self) -> None:
-        project, work, environment = self.active_state()
-        review_path = next((work / "attempts" / "universal-reveal-core-1" / "brief-reviews").glob("*.md"))
-        review_path.unlink()
-        self._write_review(work, reviewer=" worker-task ")
-
-        result, _, stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
-
-        self.assertEqual(14, result)
-        self.assertIn("DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT", stderr)
-
-    def test_ready_review_publication_reuses_identical_and_preserves_differing_collision(self) -> None:
-        project, work, environment = self.active_state()
-        review_dir = work / "attempts" / "universal-reveal-core-1" / "brief-reviews"
-        ready_path = next(review_dir.glob("*.md"))
-        ready_bytes = ready_path.read_bytes()
-        ready_path.unlink()
-        candidate_path = project / "ready-review.md"
-        candidate_path.write_bytes(ready_bytes)
-
-        created, _, created_stderr = self.run_cli(
-            *self.dispatch_arguments(
-                project,
-                work,
-                environment,
-                brief_review=candidate_path,
-                review_id="reviewer-a",
-            )
-        )
-        reused, _, reused_stderr = self.run_cli(
-            *self.dispatch_arguments(
-                project,
-                work,
-                environment,
-                brief_review=candidate_path,
-                review_id="reviewer-a",
-            )
-        )
-        later_bytes = ready_bytes.replace(b"Counterexample rejected.", b"Counterexample rejected again.")
-        later_path = project / "later-ready-review.md"
-        later_path.write_bytes(later_bytes)
-        collided, _, collided_stderr = self.run_cli(
-            *self.dispatch_arguments(
-                project,
-                work,
-                environment,
-                brief_review=later_path,
-                review_id="reviewer-b",
-            )
+            environment,
+            brief_review=candidate,
+            review_id="review-id",
+            review_publisher=lambda _digest, value, _review_id: (value or b"", "review"),
         )
 
-        rejected_path = review_dir / "rejected" / f"{ready_path.stem}-reviewer-b.md"
-        self.assertEqual(0, created, created_stderr)
-        self.assertEqual(0, reused, reused_stderr)
-        self.assertEqual(14, collided)
-        self.assertIn("DISPATCH_BRIEF_REVIEW_COLLISION", collided_stderr)
-        self.assertEqual(ready_bytes, ready_path.read_bytes())
-        self.assertEqual(later_bytes, rejected_path.read_bytes())
-
-    def test_lifecycle_partition_shape_and_review_truth_are_separate(self) -> None:
-        lifecycle_table = f"""\
-Lifecycle partition: required
-
-#### Lifecycle partition
-
-{LIFECYCLE_COLUMNS}
-| --- | --- | --- | --- | --- | --- |
-| direct-preserve | active | human authorization | exact observation | revoke and fence | quarantined / stable rejection |
-"""
-        collapsed_lifecycle_table = lifecycle_table.replace(
-            "| direct-preserve | active |", "| direct-preserve | active or quarantined |"
-        )
-        cases = (
-            ("required and reviewed", lifecycle_table, "ready", 0, ""),
-            (
-                "required without table",
-                "Lifecycle partition: required",
-                "ready",
-                14,
-                "DISPATCH_LIFECYCLE_PARTITION_INVALID",
-            ),
-            (
-                "full shape but rejected semantics",
-                collapsed_lifecycle_table,
-                "rejected",
-                14,
-                "DISPATCH_BRIEF_REVIEW_NOT_READY",
-            ),
-        )
-        for name, lifecycle, verdict, expected_result, expected_error in cases:
-            with self.subTest(name=name):
-                project, work, environment = self.active_state()
-                attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-                attempt_path.write_text(self._reviewed_attempt(project, lifecycle=lifecycle), encoding="utf-8")
-                self._write_review(work, verdict=verdict)
-
-                result, _, stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
-
-                self.assertEqual(expected_result, result, stderr)
-                if expected_error:
-                    self.assertIn(expected_error, stderr)
-
-    def test_absent_stale_mismatched_incomplete_or_nonindependent_review_rejects(self) -> None:
-        cases = (
-            ("absent", "DISPATCH_BRIEF_REVIEW_MISSING"),
-            ("stale", "DISPATCH_BRIEF_REVIEW_MISSING"),
-            ("authority", "DISPATCH_BRIEF_REVIEW_STALE"),
-            ("nonready", "DISPATCH_BRIEF_REVIEW_NOT_READY"),
-            ("incomplete", "DISPATCH_BRIEF_REVIEW_INCOMPLETE"),
-            ("worker", "DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT"),
-        )
-        for mutation, expected in cases:
-            with self.subTest(mutation=mutation):
-                project, work, environment = self.active_state()
-                attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-                review_path = next((attempt_path.parent / "brief-reviews").glob("*.md"))
-                if mutation == "absent":
-                    review_path.unlink()
-                elif mutation == "stale":
-                    attempt_path.write_text(
-                        attempt_path.read_text(encoding="utf-8").replace(
-                            "The production Rust connector accepts protocol v13.",
-                            "The production Rust connector accepts protocol v13 exactly.",
-                        ),
-                        encoding="utf-8",
-                    )
-                elif mutation == "authority":
-                    review_path.unlink()
-                    self._write_review(work, authority_set_digest="b" * 64)
-                elif mutation == "nonready":
-                    review_path.unlink()
-                    self._write_review(work, verdict="rejected")
-                elif mutation == "incomplete":
-                    review_path.unlink()
-                    self._write_review(work, omit_last_row=True)
-                elif mutation == "worker":
-                    review_path.unlink()
-                    self._write_review(work, reviewer="worker-task")
-
-                result, _, stderr = self.run_cli(*self.dispatch_arguments(project, work, environment))
-
-                self.assertEqual(14, result)
-                self.assertIn(expected, stderr)
-
-    def test_environment_branch_must_match_the_attempt(self) -> None:
-        project, work, environment = self.active_state()
-        environment.write_text(
-            json.dumps(
-                {
-                    "schema": "repo-work-dispatch/v1",
-                    "checkout": str(project),
-                    "branch": "codex/different-branch",
-                    "starting_revision": "def456",
-                    "permissions": ["repository-read"],
-                }
-            ),
-            encoding="utf-8",
-        )
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, _, stderr = self.run_cli(*arguments)
-
-        self.assertEqual(14, result)
-        self.assertIn("DISPATCH_BRANCH_MISMATCH", stderr)
-
-    def test_coordinator_replacement_has_a_distinct_dispatch_outcome(self) -> None:
-        project, work, environment = self.active_state()
-        arguments = self.dispatch_arguments(project, work, environment)
-        coordinator_path = work / "coordinator.json"
-        registration = json.loads(coordinator_path.read_text(encoding="utf-8"))
-        registration["generation"] = 2
-        coordinator_path.write_text(json.dumps(registration) + "\n", encoding="utf-8")
-
-        result, _, stderr = self.run_cli(*arguments)
-
-        self.assertEqual(14, result)
-        self.assertIn("COORDINATOR_REPLACED", stderr)
-
-    def test_dispatch_waits_for_transition_lock_then_rejects_changed_state(self) -> None:
-        project, work, environment = self.active_state()
-        action = next(
-            candidate
-            for candidate in actions_for(work, project, "coordinator")
-            if candidate.action_id == "dispatch:universal-reveal-core-1"
-        )
-        result_path = project / "dispatch-result.txt"
-        context = multiprocessing.get_context("fork")
-        started = context.Event()
-        process = context.Process(
-            target=_prepare_waiting_dispatch,
-            args=(str(work), str(project), str(environment), action, started, str(result_path)),
-        )
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-
-        with transition_lock(work):
-            process.start()
-            self.assertTrue(started.wait(timeout=5))
-            attempt_path.write_text(
-                attempt_path.read_text(encoding="utf-8").replace("Later work.", "Later accepted work."),
-                encoding="utf-8",
-            )
-        process.join(timeout=10)
-
-        self.assertEqual(0, process.exitcode)
-        self.assertEqual("STALE_ACTION", result_path.read_text(encoding="utf-8"))
-
-    def test_sqlite_dispatch_reads_accepted_brief_and_preserves_resource_feature_limit(self) -> None:
-        project = Path(tempfile.mkdtemp()).resolve()
+    def _initialized(
+        self, brief_bytes: bytes, project: Path | None = None
+    ) -> tuple[Path, DurableRoots, SQLiteWorkStore, Callable[[], Action], DispatchEnvironment]:
+        project = Path(tempfile.mkdtemp()).resolve() if project is None else project
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
-        brief_bytes = b"""---
-kind: work-attempt
-schema: repo-work/v2
-attempt: work-a-1
-item: work-a
-state: active
-branch: codex/work-a
-base_revision: base-revision
-owner_task_id: worker
-updated: \"2026-08-23\"
----
-
-# Attempt
-
-## Local implementation
-
-Checkpoint boundary: local
-Checkpoint outcome: independently-buildable
-"""
-        published = write_revision(
-            roots,
-            NewArtifact(ArtifactKind.BRIEF, "work-a", 1, ".md", brief_bytes),
-        )
+        published = write_revision(roots, NewArtifact(ArtifactKind.BRIEF, "work-a", 1, ".md", brief_bytes))
         state = complete_sqlite_state()
         now = datetime.now(UTC)
+        assert state.authority.coordination is not None
+        coordination = replace(state.authority.coordination, expires_at=now + timedelta(minutes=5))
+        attempt_leases = tuple(
+            replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+        )
         brief = replace(
             state.artifacts.references[0],
             key=published.key,
@@ -790,12 +201,6 @@ Checkpoint outcome: independently-buildable
             content_sha256=published.content_sha256,
             size_bytes=published.size_bytes,
         )
-        self.assertIsNotNone(state.authority.coordination)
-        assert state.authority.coordination is not None
-        coordination = replace(state.authority.coordination, expires_at=now + timedelta(minutes=5))
-        attempt_leases = tuple(
-            replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
-        )
         state = replace(
             state,
             artifacts=replace(state.artifacts, references=(brief, *state.artifacts.references[1:])),
@@ -803,166 +208,8 @@ Checkpoint outcome: independently-buildable
         )
         store = SQLiteWorkStore(roots.database_path)
         store.initialize_state(state)
-        action = next(
-            value
-            for value in discover_actions(
-                store,
-                Role.COORDINATOR,
-                lease_id=coordination.lease_id,
-                generation=coordination.generation,
-            )
-            if value.kind == ActionKind.DISPATCH
-        )
-        read_only = DispatchEnvironment(
-            "repo-work-dispatch/v1",
-            str(project),
-            "codex/work-a",
-            "base-revision",
-            (DispatchPermission.REPOSITORY_READ,),
-        )
 
-        prompt = prepare_sqlite_dispatch(
-            store,
-            ArtifactRepository(roots),
-            prepare_dispatch_from_artifact,
-            project,
-            action,
-            "Local implementation",
-            read_only,
-        )
-
-        self.assertIn(f"Canonical brief: {roots.work_root / published.selector}", prompt)
-        drift = write_revision(roots, NewArtifact(ArtifactKind.EVIDENCE, "dispatch-drift", 1, ".md", b"drift\n"))
-
-        def mutate_while_preparing(
-            attempt_path: Path,
-            attempt_id: str,
-            attempt_branch: str,
-            project_root: Path,
-            checkpoint: str,
-            environment: DispatchEnvironment,
-            supplied_prompt: bytes | None = None,
-            brief_review: bytes | None = None,
-            review_id: str | None = None,
-            review_publisher: BriefReviewPublisher | None = None,
-        ) -> str:
-            accept_reference(store, roots.work_root, drift, datetime.now(UTC))
-            return prepare_dispatch_from_artifact(
-                attempt_path,
-                attempt_id,
-                attempt_branch,
-                project_root,
-                checkpoint,
-                environment,
-                supplied_prompt,
-                brief_review,
-                review_id,
-                review_publisher,
-            )
-
-        with self.assertRaises(DispatchError) as changed_during_preparation:
-            prepare_sqlite_dispatch(
-                store,
-                ArtifactRepository(roots),
-                mutate_while_preparing,
-                project,
-                action,
-                "Local implementation",
-                read_only,
-            )
-        self.assertEqual("DISPATCH_ACTION_UNAVAILABLE", changed_during_preparation.exception.code)
-        action = next(
-            value
-            for value in discover_actions(
-                store,
-                Role.COORDINATOR,
-                lease_id=coordination.lease_id,
-                generation=coordination.generation,
-            )
-            if value.kind == ActionKind.DISPATCH
-        )
-        for changed, code in (
-            (replace(action, expected_revision="stale"), "STALE_ACTION"),
-            (replace(action, label="changed"), "DISPATCH_ACTION_INVALID"),
-            (replace(action, kind=ActionKind.INSPECT), "DISPATCH_ACTION_UNAVAILABLE"),
-            (replace(action, lease_id=LeaseId("wrong")), "COORDINATION_LEASE_REQUIRED"),
-        ):
-            with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
-                prepare_sqlite_dispatch(
-                    store,
-                    ArtifactRepository(roots),
-                    prepare_dispatch_from_artifact,
-                    project,
-                    changed,
-                    "Local implementation",
-                    read_only,
-                )
-            self.assertEqual(code, rejected.exception.code)
-        before = store.snapshot()
-        mutating = msgspec.structs.replace(
-            read_only,
-            permissions=(DispatchPermission.REPOSITORY_READ, DispatchPermission.REPOSITORY_WRITE),
-        )
-        with self.assertRaises(DispatchError) as unsupported:
-            prepare_sqlite_dispatch(
-                store,
-                ArtifactRepository(roots),
-                prepare_dispatch_from_artifact,
-                project,
-                action,
-                "Local implementation",
-                mutating,
-            )
-        self.assertEqual("RESOURCE_BACKED_MUTATING_DISPATCH_UNSUPPORTED", unsupported.exception.code)
-        self.assertEqual(before, store.snapshot())
-
-    def test_sqlite_cross_boundary_review_is_immutable_reusable_and_collision_preserving(self) -> None:
-        project = Path(tempfile.mkdtemp()).resolve()
-        roots = resolve_durable_roots(project)
-        initialize_database(roots, SQLITE_NOW)
-        reviewed = self._reviewed_attempt(project)
-        review_work = Path(tempfile.mkdtemp())
-        review_attempt = review_work / "attempts" / "universal-reveal-core-1"
-        review_attempt.mkdir(parents=True)
-        (review_attempt / "attempt.md").write_text(reviewed, encoding="utf-8")
-        candidate = self._write_review(review_work).read_bytes().replace(b"universal-reveal-core-1", b"work-a-1")
-        brief_bytes = (
-            reviewed.replace("universal-reveal-core-1", "work-a-1")
-            .replace("universal-reveal-core", "work-a")
-            .replace("codex/work-a", "codex/work-a")
-            .encode()
-        )
-        published = write_revision(
-            roots,
-            NewArtifact(ArtifactKind.BRIEF, "work-a", 1, ".md", brief_bytes),
-        )
-        state = complete_sqlite_state()
-        now = datetime.now(UTC)
-        assert state.authority.coordination is not None
-        coordination = replace(state.authority.coordination, expires_at=now + timedelta(minutes=5))
-        brief = replace(
-            state.artifacts.references[0],
-            key=published.key,
-            selector=published.selector,
-            content_sha256=published.content_sha256,
-            size_bytes=published.size_bytes,
-        )
-        state = replace(
-            state,
-            artifacts=replace(state.artifacts, references=(brief, *state.artifacts.references[1:])),
-            authority=replace(state.authority, coordination=coordination),
-        )
-        store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(state)
-        environment = DispatchEnvironment(
-            "repo-work-dispatch/v1",
-            str(project),
-            "codex/work-a",
-            "base-revision",
-            (DispatchPermission.REPOSITORY_READ,),
-        )
-
-        def dispatch_action() -> Action:
+        def action() -> Action:
             return next(
                 value
                 for value in discover_actions(
@@ -974,61 +221,525 @@ Checkpoint outcome: independently-buildable
                 if value.kind == ActionKind.DISPATCH
             )
 
-        self._assert_resource_backed_review_validation(store, roots, project, dispatch_action, environment, candidate)
+        environment = DispatchEnvironment(
+            "repo-work-dispatch/v1",
+            str(project),
+            "codex/work-a",
+            "base-revision",
+            (DispatchPermission.REPOSITORY_READ,),
+        )
+        return project, roots, store, action, environment
 
-        with self.assertRaises(DispatchError) as missing_review:
+    def test_current_frontmatter_scalars_and_checkpoint_ambiguity_are_explicit(self) -> None:
+        header = _parse_header_text(
+            """---
+double: "value"
+single: 'other'
+null_value: null
+tilde_value: ~
+true_value: true
+false_value: false
+malformed_quote: "unterminated
+---
+"""
+        )
+        self.assertEqual("value", header["double"])
+        self.assertEqual("other", header["single"])
+        self.assertIsNone(header["null_value"])
+        self.assertIsNone(header["tilde_value"])
+        self.assertIs(header["true_value"], True)
+        self.assertIs(header["false_value"], False)
+        self.assertEqual('"unterminated', header["malformed_quote"])
+        with self.assertRaisesRegex(ValueError, "HEADER_MISSING"):
+            _parse_header_text("kind: value\n")
+        with self.assertRaisesRegex(ValueError, "HEADER_UNTERMINATED"):
+            _parse_header_text("---\nkind: value\n")
+
+        path = Path(tempfile.mkdtemp()) / "brief.md"
+        path.write_text("# Attempt\n\n## Same\n\nOne.\n\n## Same\n\nTwo.\n", encoding="utf-8")
+        with self.assertRaises(DispatchError) as ambiguous:
+            _checkpoint_section(path, "Same")
+        self.assertEqual("DISPATCH_CHECKPOINT_AMBIGUOUS", ambiguous.exception.code)
+
+    def test_sqlite_dispatch_reads_accepted_brief_and_rejects_stale_authority(self) -> None:
+        brief = b"""---
+kind: work-attempt
+schema: repo-work/v2
+attempt: work-a-1
+item: work-a
+state: active
+branch: codex/work-a
+base_revision: base-revision
+owner_task_id: worker
+updated: "2026-08-25"
+---
+
+# Attempt
+
+## Local implementation
+
+Checkpoint boundary: local
+Checkpoint outcome: independently-buildable
+"""
+        project, roots, store, action, environment = self._initialized(brief)
+        prompt = prepare_sqlite_dispatch(
+            store,
+            ArtifactRepository(roots),
+            prepare_dispatch_from_artifact,
+            project,
+            action(),
+            "Local implementation",
+            environment,
+        )
+        self.assertIn("Canonical brief:", prompt)
+
+        current = action()
+        for changed, code in (
+            (replace(current, expected_revision="stale"), "STALE_ACTION"),
+            (replace(current, label="changed"), "DISPATCH_ACTION_INVALID"),
+            (replace(current, kind=ActionKind.INSPECT), "DISPATCH_ACTION_UNAVAILABLE"),
+            (replace(current, lease_id=LeaseId("wrong")), "COORDINATION_LEASE_REQUIRED"),
+        ):
+            with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
+                prepare_sqlite_dispatch(
+                    store,
+                    ArtifactRepository(roots),
+                    prepare_dispatch_from_artifact,
+                    project,
+                    changed,
+                    "Local implementation",
+                    environment,
+                )
+            self.assertEqual(code, rejected.exception.code)
+
+        mutating = msgspec.structs.replace(
+            environment,
+            permissions=(DispatchPermission.REPOSITORY_READ, DispatchPermission.REPOSITORY_WRITE),
+        )
+        with self.assertRaises(DispatchError) as unsupported:
             prepare_sqlite_dispatch(
                 store,
                 ArtifactRepository(roots),
                 prepare_dispatch_from_artifact,
                 project,
-                dispatch_action(),
-                CHECKPOINT,
-                environment,
+                action(),
+                "Local implementation",
+                mutating,
             )
-        self.assertEqual("DISPATCH_BRIEF_REVIEW_MISSING", missing_review.exception.code)
-        with self.assertRaises(DispatchError) as orphaned_review_id:
+        self.assertEqual("RESOURCE_BACKED_MUTATING_DISPATCH_UNSUPPORTED", unsupported.exception.code)
+
+    def test_current_brief_parser_rejects_neighboring_invalid_launches(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief_path = project / "brief.md"
+        local = """---
+kind: work-attempt
+schema: repo-work/v2
+attempt: work-a-1
+item: work-a
+state: active
+branch: codex/work-a
+base_revision: base-revision
+owner_task_id: worker
+updated: "2026-08-25"
+---
+
+# Attempt
+
+## Local implementation
+
+Checkpoint boundary: local
+Checkpoint outcome: independently-buildable
+"""
+        brief_path.write_text(local, encoding="utf-8")
+        environment = DispatchEnvironment(
+            "repo-work-dispatch/v1",
+            str(project),
+            "codex/work-a",
+            "base-revision",
+            (DispatchPermission.REPOSITORY_READ,),
+        )
+
+        prompt = prepare_dispatch_from_artifact(
+            brief_path,
+            "work-a-1",
+            "codex/work-a",
+            project,
+            "Local implementation",
+            environment,
+        )
+        self.assertIn("Attempt: work-a-1", prompt)
+        cases = (
+            (
+                msgspec.structs.replace(environment, branch="codex/other"),
+                local,
+                "Local implementation",
+                None,
+                None,
+                "DISPATCH_BRANCH_MISMATCH",
+            ),
+            (
+                msgspec.structs.replace(environment, checkout=str(project / "missing")),
+                local,
+                "Local implementation",
+                None,
+                None,
+                "DISPATCH_CHECKOUT_MISSING",
+            ),
+            (environment, local, "Missing", None, None, "DISPATCH_CHECKPOINT_MISSING"),
+            (
+                environment,
+                local.replace("Checkpoint boundary: local", "Checkpoint boundary: invented"),
+                "Local implementation",
+                None,
+                None,
+                "DISPATCH_BOUNDARY_INVALID",
+            ),
+            (
+                environment,
+                local.replace("Checkpoint boundary: local\n", ""),
+                "Local implementation",
+                None,
+                None,
+                "DISPATCH_BOUNDARY_MISSING",
+            ),
+            (
+                environment,
+                local,
+                "Local implementation",
+                b"review",
+                "review-id",
+                "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
+            ),
+        )
+        for candidate_environment, text, checkpoint, review, review_id, code in cases:
+            brief_path.write_text(text, encoding="utf-8")
+            with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
+                prepare_dispatch_from_artifact(
+                    brief_path,
+                    "work-a-1",
+                    "codex/work-a",
+                    project,
+                    checkpoint,
+                    candidate_environment,
+                    brief_review=review,
+                    review_id=review_id,
+                )
+            self.assertEqual(code, rejected.exception.code)
+
+        brief_path.write_text(local, encoding="utf-8")
+        with self.assertRaises(DispatchError) as noncanonical:
+            prepare_dispatch_from_artifact(
+                brief_path,
+                "work-a-1",
+                "codex/work-a",
+                project,
+                "Local implementation",
+                environment,
+                supplied_prompt=b"changed",
+            )
+        self.assertEqual("DISPATCH_PROMPT_NOT_CANONICAL", noncanonical.exception.code)
+
+    def test_cross_boundary_parser_rejects_incomplete_contract_and_review_neighbors(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief = _reviewed_brief(project)
+        brief_path = project / "brief.md"
+        environment = DispatchEnvironment(
+            "repo-work-dispatch/v1",
+            str(project),
+            "codex/work-a",
+            "base-revision",
+            (DispatchPermission.REPOSITORY_READ,),
+        )
+
+        variants = (
+            (
+                brief.replace(b"Checkpoint outcome: independently-buildable", b"Checkpoint outcome: partial"),
+                "DISPATCH_CHECKPOINT_NOT_BUILDABLE",
+            ),
+            (brief.replace(CONTRACT_TABLE.encode(), b""), "DISPATCH_CONTRACT_MISSING"),
+            (
+                brief.replace(COVERAGE_COLUMNS.encode(), b"| Removed coverage header |"),
+                "DISPATCH_AUTHORITY_COVERAGE_MISSING",
+            ),
+            (
+                brief.replace(b"Lifecycle partition: not-applicable", b"Lifecycle partition: invented"),
+                "DISPATCH_LIFECYCLE_PARTITION_INVALID",
+            ),
+        )
+        for value, code in variants:
+            brief_path.write_bytes(value)
+            with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
+                prepare_dispatch_from_artifact(
+                    brief_path,
+                    "work-a-1",
+                    "codex/work-a",
+                    project,
+                    CHECKPOINT,
+                    environment,
+                    review_publisher=lambda _digest, _candidate, _review_id, value=value: (_review(value), "review"),
+                )
+            self.assertEqual(code, rejected.exception.code)
+
+    def test_cross_boundary_contract_and_coverage_counterexamples_are_rejected(self) -> None:
+        cases: tuple[tuple[Callable[[bytes], bytes], str], ...] = (
+            (
+                lambda value: value.replace(b"Rust connector | Unsupported", "— | Unsupported".encode(), 1),
+                "DISPATCH_CONTRACT_INCOMPLETE",
+            ),
+            (
+                lambda value: value.replace(
+                    b"| --- | --- | --- | --- | --- | --- |",
+                    b"| not | a | markdown | separator | row | here |",
+                    1,
+                ),
+                "DISPATCH_CONTRACT_INVALID",
+            ),
+            (
+                lambda value: value.replace(
+                    b"| `authority:plan#consumer-proof` | The Rust consumer is verified directly. | Rust connector | acceptance | `criterion:1` | Delete the Rust protocol test. |\n",
+                    b"",
+                ),
+                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            ),
+            (
+                lambda value: value.replace(
+                    f"`contract:{CONTRACT_INVARIANT}`".encode(),
+                    b"`contract:Missing invariant`",
+                ),
+                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            ),
+            (
+                lambda value: value.replace(b"authority:plan#consumer-proof", b"authority:plan#unknown-family"),
+                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            ),
+        )
+        for mutate, code in cases:
+            project = Path(tempfile.mkdtemp()).resolve()
+            brief = mutate(_reviewed_brief(project))
+            with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
+                self._prepare_cross_boundary(project, brief)
+            self.assertEqual(code, rejected.exception.code)
+
+    def test_reviewed_authority_digest_tracks_only_the_selected_source(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief = _reviewed_brief(project)
+        self.assertIn(CHECKPOINT, self._prepare_cross_boundary(project, brief))
+
+        architecture = project / "architecture.md"
+        architecture.write_bytes(architecture.read_bytes().replace(b"Not selected.", b"Changed but not selected."))
+        self.assertIn(CHECKPOINT, self._prepare_cross_boundary(project, brief))
+        architecture.write_bytes(
+            architecture.read_bytes().replace(b"Protocol v13 is shared.", b"Protocol v14 is shared.")
+        )
+        with self.assertRaises(DispatchError) as stale:
+            self._prepare_cross_boundary(project, brief)
+        self.assertEqual("DISPATCH_AUTHORITY_STALE", stale.exception.code)
+
+    def test_heading_selectors_support_each_markdown_heading_level(self) -> None:
+        old_digest = hashlib.sha256(b"## Protocol semantics\n\nProtocol v13 is shared.\n\n").hexdigest()
+        for level in range(1, 7):
+            project = Path(tempfile.mkdtemp()).resolve()
+            brief = _reviewed_brief(project)
+            heading = f"{'#' * level} Protocol # semantics"
+            (project / "architecture.md").write_text(
+                f"{heading}\r\n\r\nProtocol v13 is shared.\r\n\r\n# Other\r\n",
+                encoding="utf-8",
+            )
+            digest = hashlib.sha256(f"{heading}\n\nProtocol v13 is shared.\n\n".encode()).hexdigest()
+            brief = brief.replace(b"architecture.md#Protocol semantics", b"architecture.md#Protocol # semantics")
+            brief = brief.replace(old_digest.encode(), digest.encode())
+            with self.subTest(level=level):
+                self.assertIn(CHECKPOINT, self._prepare_cross_boundary(project, brief))
+
+    def test_review_metadata_and_row_failure_matrix_is_complete(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief = _reviewed_brief(project)
+        review = _review(brief)
+        section = _section_bytes(brief.decode(), CHECKPOINT)
+        checkpoint_digest = hashlib.sha256(section).hexdigest().encode()
+        authority_table = _table_lines(section.decode(), AUTHORITY_COLUMNS)
+        authority_digest = hashlib.sha256(("\n".join(authority_table) + "\n").encode()).hexdigest().encode()
+        cases = (
+            (review.replace(checkpoint_digest, b"f" * 64, 1), "DISPATCH_BRIEF_REVIEW_STALE"),
+            (review.replace(authority_digest, b"e" * 64, 1), "DISPATCH_BRIEF_REVIEW_STALE"),
+            (review.replace(b"status: complete", b"status: incomplete"), "DISPATCH_BRIEF_REVIEW_NOT_READY"),
+            (review.replace(b"verdict: ready", b"verdict: rejected"), "DISPATCH_BRIEF_REVIEW_NOT_READY"),
+            (
+                review.replace(b'reviewer_task_id: "brief-reviewer-task"', b'reviewer_task_id: "worker"'),
+                "DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT",
+            ),
+            (
+                review.replace(b"| `authority:plan#consumer-proof`", b"| `authority:plan#other`"),
+                "DISPATCH_BRIEF_REVIEW_INCOMPLETE",
+            ),
+            (review.replace(b"| covered |", b"| missing |", 1), "DISPATCH_BRIEF_REVIEW_INCOMPLETE"),
+        )
+        for candidate, code in cases:
+            with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
+                self._prepare_cross_boundary(project, brief, review=candidate)
+            self.assertEqual(code, rejected.exception.code)
+
+    def test_required_lifecycle_partition_validates_shape_before_review_truth(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief = _reviewed_brief(project)
+        lifecycle = b"""Lifecycle partition: required
+
+#### Lifecycle partition
+
+| Operation | Allowed source state | Required authority | Required observation / evidence | State and fencing effects | Nearest illegal sibling / stable rejection |
+| --- | --- | --- | --- | --- | --- |
+| direct-preserve | active | human authorization | exact observation | revoke and fence | quarantined / stable rejection |
+"""
+        brief = brief.replace(
+            b"Lifecycle partition: not-applicable \xe2\x80\x94 this protocol cutover changes no lifecycle operation.",
+            lifecycle,
+        )
+        self.assertIn(CHECKPOINT, self._prepare_cross_boundary(project, brief))
+
+        invalid = brief.replace(
+            b"| direct-preserve | active | human authorization | exact observation | revoke and fence | quarantined / stable rejection |",
+            "| direct-preserve | active | — | exact observation | revoke and fence | quarantined / stable rejection |".encode(),
+        )
+        with self.assertRaises(DispatchError) as rejected:
+            self._prepare_cross_boundary(project, invalid)
+        self.assertEqual("DISPATCH_LIFECYCLE_PARTITION_INVALID", rejected.exception.code)
+
+    def test_reviewed_authority_selector_and_identity_failure_matrix(self) -> None:
+        cases: tuple[tuple[Callable[[bytes], bytes], str], ...] = (
+            (
+                lambda value: value.replace(b"architecture.md#Protocol semantics", b"/absolute.md"),
+                "DISPATCH_AUTHORITY_SELECTOR_INVALID",
+            ),
+            (
+                lambda value: value.replace(b"architecture.md#Protocol semantics", b"../architecture.md"),
+                "DISPATCH_AUTHORITY_SELECTOR_INVALID",
+            ),
+            (
+                lambda value: value.replace(b"architecture.md#Protocol semantics", b"architecture.md#"),
+                "DISPATCH_AUTHORITY_SELECTOR_INVALID",
+            ),
+            (
+                lambda value: value.replace(b"| plan | `plan.json`", b"| architecture | `plan.json`"),
+                "DISPATCH_REVIEWED_AUTHORITIES_INVALID",
+            ),
+            (
+                lambda value: value.replace(
+                    b"| architecture | `architecture.md#Protocol semantics` | `",
+                    b"| architecture | `architecture.md#Protocol semantics` | `x",
+                    1,
+                ),
+                "DISPATCH_REVIEWED_AUTHORITIES_INVALID",
+            ),
+            (
+                lambda value: value.replace(b"| protocol-contract |", b"| protocol-contract,protocol-contract |"),
+                "DISPATCH_REVIEWED_AUTHORITIES_INVALID",
+            ),
+            (
+                lambda value: value.replace(b"architecture.md#Protocol semantics", b"missing.md"),
+                "DISPATCH_AUTHORITY_UNREADABLE",
+            ),
+            (
+                lambda value: value.replace(b"architecture.md#Protocol semantics", b"architecture.md#Missing"),
+                "DISPATCH_AUTHORITY_SELECTOR_INVALID",
+            ),
+        )
+        for mutate, code in cases:
+            project = Path(tempfile.mkdtemp()).resolve()
+            brief = mutate(_reviewed_brief(project))
+            with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
+                self._prepare_cross_boundary(project, brief)
+            self.assertEqual(code, rejected.exception.code)
+
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief = _reviewed_brief(project)
+        (project / "architecture.md").write_bytes(b"\xff\xfe")
+        with self.assertRaises(DispatchError) as non_utf8:
+            self._prepare_cross_boundary(project, brief)
+        self.assertEqual("DISPATCH_AUTHORITY_SELECTOR_INVALID", non_utf8.exception.code)
+
+    def test_review_frontmatter_and_coverage_owner_failure_matrix(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief = _reviewed_brief(project)
+        review = _review(brief)
+        review_cases = (
+            (b"not frontmatter\n", "DISPATCH_BRIEF_REVIEW_INVALID"),
+            (review.replace(b"kind: work-brief-review", b"kind: other"), "DISPATCH_BRIEF_REVIEW_INVALID"),
+            (review.replace(b"attempt: work-a-1", b"attempt: other"), "DISPATCH_BRIEF_REVIEW_INVALID"),
+            (
+                review.replace(
+                    b'reviewer_task_id: "brief-reviewer-task"', b'reviewer_task_id: " brief-reviewer-task "'
+                ),
+                "DISPATCH_BRIEF_REVIEW_INVALID",
+            ),
+            (
+                review.replace(b'reviewer_task_id: "brief-reviewer-task"', b"reviewer_task_id: null"),
+                "DISPATCH_BRIEF_REVIEW_INVALID",
+            ),
+            (review.replace(b"Counterexample rejected.", "—".encode(), 1), "DISPATCH_BRIEF_REVIEW_INCOMPLETE"),
+        )
+        for candidate, code in review_cases:
+            with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
+                self._prepare_cross_boundary(project, brief, review=candidate)
+            self.assertEqual(code, rejected.exception.code)
+
+        brief_cases = (
+            (
+                brief.replace(b"#### Acceptance criteria", b"#### Missing criteria"),
+                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            ),
+            (
+                brief.replace(b"1. The production Rust connector accepts protocol v13.", b""),
+                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            ),
+            (
+                brief.replace(b"`criterion:1`", b"`criterion:2`"),
+                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            ),
+            (
+                brief.replace(b"| acceptance | `criterion:1` |", b"| deferred | `deferral:missing` |"),
+                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            ),
+            (
+                brief.replace(b"| acceptance | `criterion:1` |", b"| invented | `criterion:1` |"),
+                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            ),
+        )
+        for candidate, code in brief_cases:
+            with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
+                self._prepare_cross_boundary(project, candidate)
+            self.assertEqual(code, rejected.exception.code)
+
+    def test_sqlite_cross_boundary_review_is_immutable_and_collision_preserving(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief = _reviewed_brief(project)
+        candidate = _review(brief)
+        project, roots, store, action, environment = self._initialized(brief, project)
+
+        with self.assertRaises(DispatchError) as missing:
             prepare_sqlite_dispatch(
                 store,
                 ArtifactRepository(roots),
                 prepare_dispatch_from_artifact,
                 project,
-                dispatch_action(),
+                action(),
                 CHECKPOINT,
                 environment,
-                review_id="orphaned-review",
             )
-        self.assertEqual("DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID", orphaned_review_id.exception.code)
-        with self.assertRaises(DispatchError) as invalid_review_id:
-            prepare_sqlite_dispatch(
-                store,
-                ArtifactRepository(roots),
-                prepare_dispatch_from_artifact,
-                project,
-                dispatch_action(),
-                CHECKPOINT,
-                environment,
-                brief_review=candidate,
-                review_id="Invalid Review",
-            )
-        self.assertEqual("DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID", invalid_review_id.exception.code)
+        self.assertEqual("DISPATCH_BRIEF_REVIEW_MISSING", missing.exception.code)
 
         prompt = prepare_sqlite_dispatch(
             store,
             ArtifactRepository(roots),
             prepare_dispatch_from_artifact,
             project,
-            dispatch_action(),
+            action(),
             CHECKPOINT,
             environment,
             brief_review=candidate,
             review_id="sqlite-review",
         )
-        revision_after_publish = store.snapshot().lifecycle.project.revision
         self.assertIn(CHECKPOINT, prompt)
-        self.assertEqual(13, revision_after_publish)
-
-        current_action = dispatch_action()
+        current = action()
         self.assertEqual(
             prompt,
             prepare_sqlite_dispatch(
@@ -1036,23 +747,9 @@ Checkpoint outcome: independently-buildable
                 ArtifactRepository(roots),
                 prepare_dispatch_from_artifact,
                 project,
-                current_action,
+                current,
                 CHECKPOINT,
                 environment,
-            ),
-        )
-        self.assertEqual(
-            prompt,
-            prepare_sqlite_dispatch(
-                store,
-                ArtifactRepository(roots),
-                prepare_dispatch_from_artifact,
-                project,
-                current_action,
-                CHECKPOINT,
-                environment,
-                brief_review=candidate,
-                review_id="sqlite-review",
             ),
         )
         with self.assertRaises(DispatchError) as collision:
@@ -1061,7 +758,7 @@ Checkpoint outcome: independently-buildable
                 ArtifactRepository(roots),
                 prepare_dispatch_from_artifact,
                 project,
-                current_action,
+                current,
                 CHECKPOINT,
                 environment,
                 brief_review=candidate + b"\nAdditional reviewer note.\n",
@@ -1069,6 +766,65 @@ Checkpoint outcome: independently-buildable
             )
         self.assertEqual("DISPATCH_BRIEF_REVIEW_COLLISION", collision.exception.code)
         self.assertTrue(any("rejected-later-review" in value.key for value in store.snapshot().artifacts.references))
+
+    def test_cli_dispatch_publishes_review_and_verifies_the_rendered_prompt(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief = _reviewed_brief(project)
+        candidate = _review(brief)
+        project, roots, _store, action, environment = self._initialized(brief, project)
+        environment_path = project / "environment.json"
+        environment_path.write_bytes(msgspec.json.encode(environment))
+        review_path = project / "review.md"
+        review_path.write_bytes(candidate)
+
+        def arguments(current: Action) -> list[str]:
+            values = [
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(roots.work_root),
+                "dispatch",
+                "--action-id",
+                str(current.action_id),
+                "--expected-revision",
+                current.expected_revision,
+                "--generation",
+                str(current.coordinator_generation),
+                "--checkpoint",
+                CHECKPOINT,
+                "--environment",
+                str(environment_path),
+            ]
+            if current.lease_id is not None:
+                values.extend(("--lease-id", str(current.lease_id)))
+            return values
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = main((*arguments(action()), "--brief-review", str(review_path), "--review-id", "cli-review"))
+        self.assertEqual(0, result, stderr.getvalue())
+        prompt = stdout.getvalue()
+        self.assertIn("sole semantic execution contract", prompt)
+
+        prompt_path = project / "prompt.txt"
+        prompt_path.write_text(prompt, encoding="utf-8")
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            verified = main((*arguments(action()), "--prompt", str(prompt_path)))
+        self.assertEqual(0, verified, stderr.getvalue())
+        self.assertIn("OK DISPATCH_READY", stdout.getvalue())
+
+        for option, code in (
+            ("--prompt", "DISPATCH_PROMPT_UNREADABLE"),
+            ("--brief-review", "DISPATCH_BRIEF_REVIEW_INVALID"),
+        ):
+            stderr = io.StringIO()
+            with self.subTest(option=option), contextlib.redirect_stderr(stderr):
+                rejected = main((*arguments(action()), option, str(project / "missing.md")))
+            self.assertEqual(14, rejected)
+            self.assertIn(code, stderr.getvalue())
 
 
 if __name__ == "__main__":

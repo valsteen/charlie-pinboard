@@ -107,14 +107,6 @@ class ActivateInput:
 
 
 @dataclass(frozen=True, slots=True)
-class LegacyActivateInput:
-    attempt: AttemptId
-    branch: str
-    base_revision: str
-    owner: str
-
-
-@dataclass(frozen=True, slots=True)
 class SubmitReviewInput:
     candidate: CandidateId
 
@@ -179,7 +171,6 @@ type TransitionInput = (
     EmptyInput
     | ResumeInput
     | ActivateInput
-    | LegacyActivateInput
     | ReasonInput
     | BlockInput
     | EvidenceInput

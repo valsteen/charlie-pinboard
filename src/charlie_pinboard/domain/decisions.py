@@ -31,11 +31,9 @@ from charlie_pinboard.domain.model import (
     CoordinationLeaseAuthority,
     CoordinationLeaseStatus,
     DeferInput,
-    EmptyInput,
     EvidenceInput,
     ItemScope,
     LedgerSnapshot,
-    LegacyActivateInput,
     MergeProposalInput,
     MutationIntentState,
     ReasonInput,
@@ -239,18 +237,6 @@ class TransferCoordinatorCommand:
     value: TransferCoordinatorInput
 
 
-@dataclass(frozen=True, slots=True)
-class LegacyActivateCommand:
-    capability: ActionCapability
-    value: LegacyActivateInput
-
-
-@dataclass(frozen=True, slots=True)
-class LegacySubmitReviewCommand:
-    capability: ActionCapability
-    value: EmptyInput
-
-
 type TransitionCommand = (
     AcceptCheckpointCommand
     | ActivateCommand
@@ -272,27 +258,6 @@ type TransitionCommand = (
     | TransferCoordinatorCommand
 )
 
-type LegacyTransitionCommand = (
-    AcceptCheckpointCommand
-    | AcceptProposalCommand
-    | BlockCommand
-    | BlockItemCommand
-    | CloseCommand
-    | CompleteCommand
-    | DeferCommand
-    | LegacyActivateCommand
-    | LegacySubmitReviewCommand
-    | MarkReadyCommand
-    | MergeProposalCommand
-    | PauseCommand
-    | RejectProposalCommand
-    | ReopenCommand
-    | ResumeCommand
-    | ReturnForCorrectionCommand
-    | ReturnProposalCommand
-    | TransferCoordinatorCommand
-)
-
 
 def _action_capability(action: Action) -> ActionCapability:
     return ActionCapability(
@@ -309,7 +274,7 @@ def _action_capability(action: Action) -> ActionCapability:
     )
 
 
-def command_action(command: TransitionCommand | LegacyTransitionCommand) -> Action:  # noqa: C901, PLR0912
+def command_action(command: TransitionCommand) -> Action:  # noqa: C901, PLR0912
     """Reconstruct the advertised action whose kind is fixed by the closed command variant."""
 
     match command:
@@ -317,7 +282,7 @@ def command_action(command: TransitionCommand | LegacyTransitionCommand) -> Acti
             kind = ActionKind.ACCEPT_CHECKPOINT
         case AcceptProposalCommand(capability=capability):
             kind = ActionKind.ACCEPT_PROPOSAL
-        case ActivateCommand(capability=capability) | LegacyActivateCommand(capability=capability):
+        case ActivateCommand(capability=capability):
             kind = ActionKind.ACTIVATE
         case BlockCommand(capability=capability):
             kind = ActionKind.BLOCK
@@ -345,7 +310,7 @@ def command_action(command: TransitionCommand | LegacyTransitionCommand) -> Acti
             kind = ActionKind.RETURN_FOR_CORRECTION
         case ReturnProposalCommand(capability=capability):
             kind = ActionKind.RETURN_PROPOSAL
-        case SubmitReviewCommand(capability=capability) | LegacySubmitReviewCommand(capability=capability):
+        case SubmitReviewCommand(capability=capability):
             kind = ActionKind.SUBMIT_REVIEW
         case TransferCoordinatorCommand(capability=capability):
             kind = ActionKind.TRANSFER_COORDINATOR
@@ -444,48 +409,6 @@ def bind_transition(  # noqa: C901, PLR0912
             )
         case _ as unreachable:
             assert_never(unreachable)
-
-
-def bind_legacy_transition(action: Action, value: TransitionInput) -> LegacyTransitionCommand | DecisionFailure:
-    """Bind the two temporary Markdown payload differences before canonical decision-making."""
-
-    capability = _action_capability(action)
-    match action.kind, value:
-        case ActionKind.ACTIVATE, LegacyActivateInput():
-            return LegacyActivateCommand(capability, value)
-        case ActionKind.SUBMIT_REVIEW, EmptyInput():
-            return LegacySubmitReviewCommand(capability, value)
-        case _:
-            result = bind_transition(action, value)
-            match result:
-                case DecisionFailure():
-                    return result
-                case ActivateCommand() | SubmitReviewCommand():
-                    return DecisionFailure(
-                        DecisionFailureCode.TRANSITION_INPUT_INVALID,
-                        f"Input for '{action.kind.value}' does not match its canonical command variant.",
-                    )
-                case (
-                    AcceptCheckpointCommand()
-                    | AcceptProposalCommand()
-                    | BlockCommand()
-                    | BlockItemCommand()
-                    | CloseCommand()
-                    | CompleteCommand()
-                    | DeferCommand()
-                    | MarkReadyCommand()
-                    | MergeProposalCommand()
-                    | PauseCommand()
-                    | RejectProposalCommand()
-                    | ReopenCommand()
-                    | ResumeCommand()
-                    | ReturnForCorrectionCommand()
-                    | ReturnProposalCommand()
-                    | TransferCoordinatorCommand()
-                ) as command:
-                    return command
-                case _ as unreachable:
-                    assert_never(unreachable)
 
 
 @dataclass(frozen=True, slots=True)
@@ -722,7 +645,7 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
             None,
         )
         capabilities = _resource_capabilities(snapshot, command_authority) if command_authority is not None else ()
-        legacy_claims = claims if command_authority is None else ()
+        direct_claims = claims if command_authority is None else ()
         revision = snapshot.subject_revision(item.item)
         result.extend(
             (
@@ -731,7 +654,7 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
                     attempt,
                     f"Continue {item.item}",
                     revision,
-                    legacy_claims,
+                    direct_claims,
                     command_authority,
                     capabilities,
                 ),
@@ -740,7 +663,7 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
                     attempt,
                     f"Report a blocker for {item.item}",
                     revision,
-                    legacy_claims,
+                    direct_claims,
                     command_authority,
                     capabilities,
                 ),
@@ -753,7 +676,7 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
                     attempt,
                     f"Submit {item.item} for review",
                     revision,
-                    legacy_claims,
+                    direct_claims,
                     command_authority,
                     capabilities,
                 )

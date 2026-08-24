@@ -1,96 +1,72 @@
-# State And Recovery
+# State and recovery
 
 ## Contents
 
-- [State layout](#state-layout)
+- [Authoritative state](#authoritative-state)
 - [Leases and revocation](#leases-and-revocation)
-- [Recovery](#recovery)
-- [Legacy migration](#legacy-migration)
+- [Invalid state](#invalid-state)
+- [Interrupted tasks](#interrupted-tasks)
 
-## State layout
+## Authoritative state
 
-Schema version 2 selects one current authority root:
+The project-local work root contains one SQLite authority and generated or immutable supporting artifacts:
 
 ```text
 .codex/work/
-  authority.json
-  v2/
-    current.md
-    queue.md
-    inbox/
-    items/
-    attempts/
-    resources/
-    leases/
-    history/
+  state.sqlite3
+  artifacts/
+  views/
 .codex/topics/
 ```
 
-Resolve the project through Git's shared common directory. A linked worktree must therefore use the primary checkout's `.codex/work`, not create a competing ignored root.
+Resolve the project through Git's shared common directory. A linked worktree therefore uses the primary checkout's `.codex/work`, not a competing ignored root.
 
-Each live item Markdown file owns its lifecycle fields. `queue.md` is a generated overview, not a second writer. Use these nonterminal states:
+Require `authority: sqlite-v1` from the executable. `state.sqlite3` owns lifecycle, focus, attempts, leases, resources, proposals, history, and accepted artifact references. `views/` is replaceable output and never a fallback authority. Archived predecessor files are evidence only; do not parse, edit, or consult them to reconstruct current state.
+
+Use these nonterminal states:
 
 - `intake`: admitted but not yet ready for selection;
 - `ready`: eligible for activation;
 - `active`: one current execution attempt for that item; several disjoint items may be active concurrently;
 - `paused`: preserved attempt intentionally preempted;
 - `blocked`: waiting for named work, evidence, or a decision;
-- `deferred`: deliberately unscheduled with a concrete reopen condition.
+- `deferred`: deliberately unscheduled with a concrete reopen condition;
 - `review`: a frozen attempt awaiting independent acceptance.
 
-Keep `done`, `superseded`, and `dropped` in history, never in the live queue.
+Terminal state remains queryable as history and does not appear as live work.
 
 ## Leases and revocation
 
-Coordination is a short-lived exclusive lease, not a permanent task role. Acquire it only for a graph-wide atomic change, use its lease identity and generation in the action, then release it. Another chat may acquire it after release or expiry.
+Coordination is a short-lived exclusive SQLite lease, not a permanent task role. Acquire it only for a graph-wide atomic change, use its lease identity and generation in the action, then release it. Another chat may acquire it after release or expiry.
 
-Attempt ownership is also renewable and fenced. A worker must present its current attempt lease for item-local transitions. A resource claim records the exact attempt-lease identity and generation, so replacing the attempt owner also fences retained live-resource claims.
+Attempt ownership is renewable and fenced. A worker presents its current attempt lease for item-local transitions. A resource capability binds the exact attempt-lease identity and generation, so replacing the attempt owner also fences retained mutation authority.
 
 Use forced revocation only with explicit user authority when the recorded holder cannot release or has demonstrably abandoned the lease. Revocation increments the fencing generation. Never infer ownership from task titles, pinning, recency, or semantic similarity.
 
-## Recovery
+## Invalid state
 
-When validation fails, report a compact recovery packet:
+When `pinboard validate --json` fails, report a compact recovery packet:
 
-- observed facts;
-- exact conflicting artifacts or diagnostics;
-- the safest action that does not guess intent;
-- one human question when intent, scope, or product meaning is missing.
+- the diagnostic codes and exact affected SQLite or artifact paths;
+- whether the failure is authority, accepted-artifact, or generated-view state;
+- the safest supported action that does not guess intent;
+- one human question only when intent, scope, or product meaning is missing.
 
-Repair the earliest authoritative owner. Use the executable for lifecycle transitions. Use a direct file repair only when malformed state prevents the executable from operating, obtain explicit human confirmation, preserve the pre-repair bytes in ignored recovery evidence, and validate immediately afterward.
+A `VIEW_REFRESH_REQUIRED` warning does not invalidate SQLite authority. Rebuild generated views only when the user authorizes that write or the active attempt requires it.
 
-Do not search history merely to avoid asking for intent. Do not weaken validation to admit the current files.
+Do not edit SQLite directly, recreate a predecessor root, weaken validation, or use archived files as current authority. Recovery beyond initialization from absent `state.sqlite3` is not a general supported command. Preserve the observed failure and return it to the owning implementation when the executable cannot reopen the current database atomically.
 
-### Interrupted tasks
+## Interrupted tasks
 
-Assume any task may stop between commands or before its final message appears. A missing chat receipt is not evidence that a transition failed or succeeded.
+A missing chat receipt is not evidence that a transition failed or succeeded. Never replay a retained action token.
 
-For a task interrupted around a graph-wide transition:
+For a task interrupted around a mutation:
 
-1. Run `pinboard validate`. Do not replay a retained action token.
-2. If validation reports `COMMIT_RECOVERY_REQUIRED`, run `pinboard recover`, then validate again. Recovery rolls the durable journal back to the exact pre-transition bytes before normal status or coordination resumes.
-3. Run one `pinboard status --json` or `pinboard overview --json` read. If the intended item still has its prior state, no transition committed. If it has the intended next state, the atomic transition committed completely even if the task stopped before reporting it.
-4. If coordination is still active for the interrupted task, the ledger is valid but temporarily reserved. Wait for its recorded expiry when practical. One-shot coordinated transitions default to 60 seconds and perform best-effort cleanup for catchable interruption around acquisition and release. Use forced revocation only with explicit user authority when waiting is unsuitable.
-5. Acquire fresh coordination only after release or expiry. Its higher generation fences every action retained by the interrupted task.
-6. Resume from the authoritative item and attempt state. Never reconstruct ownership from the stopped task's prose, title, or temporary payload files.
+1. Run `pinboard validate --json`.
+2. Run one `pinboard status --json` or `pinboard overview --json` read. If the intended item still has its prior state, no transition committed. If it has the intended next state, the SQLite transition committed completely even if the task stopped before reporting it.
+3. If coordination is still active for the interrupted task, wait for its recorded expiry when practical. One-shot coordinated transitions default to 60 seconds and perform best-effort release.
+4. Use forced revocation only with explicit user authority when waiting is unsuitable.
+5. Acquire fresh coordination only after release, expiry, or authorized revocation. Its higher generation fences actions retained by the interrupted task.
+6. Resume from the authoritative item and attempt state. Never reconstruct ownership from the stopped task's prose, generated views, archived files, or temporary payloads.
 
-The same rule applies to manual transitions: the ledger remains at the previous valid revision or at one complete new revision. A transition must never leave an intermediate lifecycle state for a human to interpret.
-
-## Legacy migration
-
-Lease and resource commands exist only in schema v2. If status reports v1, run `pinboard migrate --to v2` before giving lease instructions. When the current request does not authorize migration, return `MIGRATION_REQUIRED` and that exact command instead of treating permanent v1 ownership as a lease.
-
-Use a shadow root before changing authority:
-
-1. inventory every nonterminal row from all prior queues and indexes;
-2. reconcile contradictions using current hot state, accepted receipts, and repository evidence;
-3. copy each live candidate exactly once into the shadow ledger;
-4. preserve completed and superseded material as cold history without reviving it;
-5. validate representative intake, duplicate, prerequisite, shelving, selection, and concurrency scenarios;
-6. stop if the model needs a topic-owned queue, transcript reconstruction, or a competing worktree root;
-7. reach a safe atomic boundary;
-8. perform one authority cutover;
-9. verify the selected v2 root without consulting v1 as current authority;
-10. preserve v1 files as cold readable history.
-
-Never leave two roots claiming current work authority.
+The observable transaction contract remains binary: the previous valid revision or one complete new revision. Report any counterexample as a current SQLite defect rather than routing around it.
