@@ -134,6 +134,7 @@ from charlie_pinboard.legacy.leases import (
 from charlie_pinboard.legacy.legacy_cleanup import CleanupReceipt, cleanup_legacy
 from charlie_pinboard.legacy.legacy_import import (
     CUTOVER_TOMBSTONE,
+    INACTIVE_ROOT_SELECTORS,
     ImportReceipt,
     LegacyImportError,
     cutover_ledger,
@@ -335,6 +336,15 @@ class LegacyImportView(msgspec.Struct, frozen=True):
         )
 
 
+class LegacyCleanupCorrectionView(msgspec.Struct, frozen=True):
+    artifact_selector: str
+    artifact_sha256: str
+    removed_selectors: tuple[str, ...]
+    database_revision_before_receipt: int
+    committed_revision: int
+    verified_clean_at: str
+
+
 class LegacyCleanupView(msgspec.Struct, frozen=True):
     cutover_id: str
     artifact_selector: str
@@ -342,9 +352,11 @@ class LegacyCleanupView(msgspec.Struct, frozen=True):
     database_revision_before_receipt: int
     committed_revision: int
     verified_clean_at: str
+    correction: LegacyCleanupCorrectionView | None = None
 
     @classmethod
     def from_receipt(cls, receipt: CleanupReceipt) -> LegacyCleanupView:
+        correction = receipt.correction
         return cls(
             receipt.cutover_id,
             receipt.artifact_selector,
@@ -352,6 +364,18 @@ class LegacyCleanupView(msgspec.Struct, frozen=True):
             receipt.database_revision_before_receipt,
             receipt.committed_revision,
             receipt.verified_clean_at.isoformat(),
+            (
+                None
+                if correction is None
+                else LegacyCleanupCorrectionView(
+                    correction.artifact_selector,
+                    correction.artifact_sha256,
+                    correction.removed_selectors,
+                    correction.database_revision_before_receipt,
+                    correction.committed_revision,
+                    correction.verified_clean_at.isoformat(),
+                )
+            ),
         )
 
 
@@ -812,16 +836,7 @@ def _uses_sqlite(work_root: Path) -> bool:
         "v2",
         "legacy-v2",
         "legacy-v1",
-        "queue.md",
-        "current.md",
-        "coordinator.json",
-        "items",
-        "attempts",
-        "history",
-        "inbox",
-        "accept-parallel.json",
-        "activate-parallel.json",
-        "pause-receipts.json",
+        *INACTIVE_ROOT_SELECTORS,
     )
     if any((work_root / selector).exists() for selector in legacy_selectors):
         raise RegistrationError("CUTOVER_NOT_ACTIVE", "SQLite cannot open while legacy authority selectors remain.")
@@ -2108,9 +2123,11 @@ def _legacy_cleanup(context: CommandContext) -> int:
     if context.arguments.json:
         _write_json(LegacyCleanupView.from_receipt(receipt))
     else:
+        correction = receipt.correction
+        correction_text = "" if correction is None else f" correction={correction.artifact_selector}"
         print(
             f"OK LEGACY_CLEANUP cutover_id={receipt.cutover_id} revision={receipt.committed_revision} "
-            f"artifact={receipt.artifact_selector}"
+            f"artifact={receipt.artifact_selector}{correction_text}"
         )
     return 0
 

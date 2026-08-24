@@ -186,20 +186,19 @@ _TRANSFORMATION_VERSION = "legacy-markdown-to-sqlite-v1"
 CUTOVER_TOMBSTONE = (
     b'{\n  "schema": "repo-work-authority/v2",\n  "current": "sqlite-v1",\n  "database": "state.sqlite3"\n}\n'
 )
-_INACTIVE_ROOTS = frozenset(
-    {
-        "queue.md",
-        "current.md",
-        "coordinator.json",
-        "items",
-        "attempts",
-        "history",
-        "inbox",
-        "accept-parallel.json",
-        "activate-parallel.json",
-        "pause-receipts.json",
-    }
+INACTIVE_ROOT_SELECTORS = (
+    "queue.md",
+    "current.md",
+    "coordinator.json",
+    "items",
+    "attempts",
+    "history",
+    "inbox",
+    "accept-parallel.json",
+    "activate-parallel.json",
+    "pause-receipts.json",
 )
+_INACTIVE_ROOTS = frozenset(INACTIVE_ROOT_SELECTORS)
 
 
 class LegacyImportError(RuntimeError):

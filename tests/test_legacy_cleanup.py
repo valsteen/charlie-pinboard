@@ -16,7 +16,14 @@ from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.stored_state import TransitionHistoryActionKind
 from charlie_pinboard.interfaces.cli import main
 from charlie_pinboard.legacy.authority import AuthorityError, resolve_authority
-from charlie_pinboard.legacy.legacy_cleanup import CleanupReceipt, _existing_receipt, cleanup_legacy
+from charlie_pinboard.legacy.legacy_cleanup import (
+    CleanupReceipt,
+    _decode_correction_receipt,
+    _decode_receipt,
+    _existing_receipt,
+    _validate_orphan_correction_receipt,
+    cleanup_legacy,
+)
 from charlie_pinboard.legacy.legacy_import import (
     CUTOVER_TOMBSTONE,
     LegacyImportError,
@@ -83,6 +90,157 @@ class LegacyCleanupTest(unittest.TestCase):
         )
         self.assertEqual(first.artifact_sha256, artifact.content_sha256)
         self.assertEqual(first.receipt_bytes, (work / first.artifact_selector).read_bytes())
+
+    def test_cleanup_removes_unmanifested_empty_legacy_root_and_reopens_sqlite_cli(self) -> None:
+        project, work = _fixture()
+        (work / "inbox").mkdir()
+        imported = cutover_ledger(project, work, NOW)
+
+        receipt = cleanup_legacy(work, imported.cutover_id, NOW)
+
+        self.assertFalse((work / "inbox").exists())
+        self.assertIn("inbox", json.loads(receipt.receipt_bytes)["absent_selectors"])
+        output = StringIO()
+        with redirect_stdout(output):
+            result = main(["--project-root", str(project), "--work-root", str(work), "overview", "--json"])
+        self.assertEqual(0, result)
+        self.assertEqual("sqlite-v1", json.loads(output.getvalue())["authority"])
+
+    def test_cleanup_repairs_one_incomplete_historical_receipt_without_replacing_it(self) -> None:
+        project, work = _fixture()
+        (work / "inbox").mkdir()
+        imported = cutover_ledger(project, work, NOW)
+        with (
+            patch(
+                "charlie_pinboard.legacy.legacy_cleanup.INACTIVE_ROOT_SELECTORS",
+                ("queue.md",),
+                create=True,
+            ),
+            patch("charlie_pinboard.legacy.legacy_cleanup._runtime_sha256", return_value="1" * 64),
+            patch("charlie_pinboard.legacy.legacy_cleanup.__version__", "0.1.0+historical"),
+        ):
+            original = cleanup_legacy(work, imported.cutover_id, NOW)
+        original_bytes = (work / original.artifact_selector).read_bytes()
+
+        repaired = cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=1))
+        replay = cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=2))
+        state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+
+        self.assertEqual(original.artifact_selector, repaired.artifact_selector)
+        self.assertEqual(original.artifact_sha256, repaired.artifact_sha256)
+        self.assertEqual(original_bytes, (work / original.artifact_selector).read_bytes())
+        self.assertFalse((work / "inbox").exists())
+        self.assertIsNotNone(repaired.correction)
+        assert repaired.correction is not None
+        self.assertEqual(("inbox",), repaired.correction.removed_selectors)
+        self.assertEqual(2, repaired.correction.database_revision_before_receipt)
+        self.assertEqual(3, repaired.correction.committed_revision)
+        self.assertEqual(repaired, replay)
+        repair_rows = [
+            row for row in state.history.receipts if row.action_id == f"legacy-cleanup-repair:{imported.cutover_id}"
+        ]
+        self.assertEqual(1, len(repair_rows))
+        self.assertEqual(3, state.lifecycle.project.revision)
+        correction_reference = next(
+            reference
+            for reference in state.artifacts.references
+            if reference.selector == repaired.correction.artifact_selector
+        )
+        self.assertEqual(repaired.correction.artifact_sha256, correction_reference.content_sha256)
+        self.assertEqual(
+            repaired.correction.receipt_bytes,
+            (work / repaired.correction.artifact_selector).read_bytes(),
+        )
+        output = StringIO()
+        with redirect_stdout(output):
+            result = main(["--project-root", str(project), "--work-root", str(work), "validate", "--json"])
+        self.assertEqual(0, result)
+        self.assertTrue(json.loads(output.getvalue())["valid"])
+        cleanup_output = StringIO()
+        with redirect_stdout(cleanup_output):
+            cleanup_result = main(
+                [
+                    "--project-root",
+                    str(project),
+                    "--work-root",
+                    str(work),
+                    "legacy-cleanup",
+                    "--expected-cutover-id",
+                    imported.cutover_id,
+                    "--json",
+                ]
+            )
+        self.assertEqual(0, cleanup_result)
+        self.assertEqual(
+            repaired.correction.artifact_selector,
+            json.loads(cleanup_output.getvalue())["correction"]["artifact_selector"],
+        )
+        plain_output = StringIO()
+        with redirect_stdout(plain_output):
+            plain_result = main(
+                [
+                    "--project-root",
+                    str(project),
+                    "--work-root",
+                    str(work),
+                    "legacy-cleanup",
+                    "--expected-cutover-id",
+                    imported.cutover_id,
+                ]
+            )
+        self.assertEqual(0, plain_result)
+        self.assertIn(f"correction={repaired.correction.artifact_selector}", plain_output.getvalue())
+
+    def test_cleanup_rejects_unmanifested_file_symlink_or_nonempty_root(self) -> None:
+        for residue in ("file", "symlink", "nonempty"):
+            with self.subTest(residue=residue):
+                project, work = _fixture()
+                imported = cutover_ledger(project, work, NOW)
+                inbox = work / "inbox"
+                if residue == "file":
+                    inbox.write_text("unexpected")
+                elif residue == "symlink":
+                    target = work / "unrelated-empty-directory"
+                    target.mkdir()
+                    inbox.symlink_to(target, target_is_directory=True)
+                else:
+                    inbox.mkdir()
+                    (inbox / "unexpected.json").write_text("{}")
+
+                with self.assertRaises(LegacyImportError) as raised:
+                    cleanup_legacy(work, imported.cutover_id, NOW)
+
+                self.assertEqual("STORAGE_INVARIANT_VIOLATION", raised.exception.code)
+                self.assertTrue((work / "legacy-v2").is_dir())
+                self.assertTrue((work / "authority.json").is_file())
+
+    def test_concurrent_incomplete_receipt_repairs_commit_one_correction(self) -> None:
+        project, work = _fixture()
+        (work / "inbox").mkdir()
+        imported = cutover_ledger(project, work, NOW)
+        with patch(
+            "charlie_pinboard.legacy.legacy_cleanup.INACTIVE_ROOT_SELECTORS",
+            ("queue.md",),
+            create=True,
+        ):
+            cleanup_legacy(work, imported.cutover_id, NOW)
+        barrier = Barrier(2)
+
+        def run_repair(offset: int) -> CleanupReceipt:
+            barrier.wait()
+            return cleanup_legacy(work, imported.cutover_id, NOW + timedelta(seconds=offset))
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            receipts = tuple(executor.map(run_repair, (1, 2)))
+
+        state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        self.assertEqual(receipts[0], receipts[1])
+        self.assertIsNotNone(receipts[0].correction)
+        repair_rows = [
+            row for row in state.history.receipts if row.action_id == f"legacy-cleanup-repair:{imported.cutover_id}"
+        ]
+        self.assertEqual(1, len(repair_rows))
+        self.assertEqual(3, state.lifecycle.project.revision)
 
     def test_cleanup_selects_receipt_revision_after_ordinary_writer_is_serialized(self) -> None:
         _project, work = _fixture()
@@ -192,6 +350,82 @@ class LegacyCleanupTest(unittest.TestCase):
         self.assertNotEqual(expected_receipt, receipt.receipt_bytes)
         self.assertEqual(retry_time, receipt.verified_clean_at)
 
+    def test_cleanup_repair_resumes_an_unreferenced_correction_artifact(self) -> None:
+        def incomplete_cleanup() -> tuple[Path, str]:
+            project, work = _fixture()
+            (work / "inbox").mkdir()
+            imported = cutover_ledger(project, work, NOW)
+            with (
+                patch(
+                    "charlie_pinboard.legacy.legacy_cleanup.INACTIVE_ROOT_SELECTORS",
+                    ("queue.md",),
+                    create=True,
+                ),
+                patch("charlie_pinboard.legacy.legacy_cleanup._runtime_sha256", return_value="1" * 64),
+                patch("charlie_pinboard.legacy.legacy_cleanup.__version__", "0.1.0+historical"),
+            ):
+                cleanup_legacy(work, imported.cutover_id, NOW)
+            return work, imported.cutover_id
+
+        comparison_work, comparison_cutover_id = incomplete_cleanup()
+        comparison = cleanup_legacy(comparison_work, comparison_cutover_id, NOW + timedelta(seconds=1))
+        assert comparison.correction is not None
+        expected_receipt = comparison.correction.receipt_bytes
+        work, cutover_id = incomplete_cleanup()
+        orphan = work / "artifacts" / "evidence" / f"legacy-cleanup-repair-{cutover_id}" / "1.json"
+        orphan.parent.mkdir(parents=True)
+        orphan.write_bytes(expected_receipt)
+
+        retry_time = NOW + timedelta(seconds=2)
+        receipt = cleanup_legacy(work, cutover_id, retry_time)
+
+        self.assertIsNotNone(receipt.correction)
+        assert receipt.correction is not None
+        self.assertEqual(receipt.correction.receipt_bytes, orphan.read_bytes())
+        self.assertNotEqual(expected_receipt, receipt.correction.receipt_bytes)
+        self.assertEqual(retry_time, receipt.correction.verified_clean_at)
+
+    def test_cleanup_receipt_boundaries_reject_invalid_json_times_and_noncanonical_orphans(self) -> None:
+        project, work = _fixture()
+        imported = cutover_ledger(project, work, NOW)
+        receipt = cleanup_legacy(work, imported.cutover_id, NOW)
+        for invalid in ("not-a-time", "2026-08-24T09:00:00"):
+            with self.subTest(receipt_time=invalid):
+                payload = json.loads(receipt.receipt_bytes)
+                payload["verified_clean_at"] = invalid
+                data = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+                with self.assertRaises(LegacyImportError):
+                    _decode_receipt(data)
+        with self.assertRaises(LegacyImportError):
+            _decode_receipt(b"{")
+
+        repair_project, repair_work = _fixture()
+        (repair_work / "inbox").mkdir()
+        repair_import = cutover_ledger(repair_project, repair_work, NOW)
+        with patch(
+            "charlie_pinboard.legacy.legacy_cleanup.INACTIVE_ROOT_SELECTORS",
+            ("queue.md",),
+            create=True,
+        ):
+            cleanup_legacy(repair_work, repair_import.cutover_id, NOW)
+        repaired = cleanup_legacy(repair_work, repair_import.cutover_id, NOW + timedelta(seconds=1))
+        assert repaired.correction is not None
+        correction_record, _verified = _decode_correction_receipt(repaired.correction.receipt_bytes)
+        for invalid in ("not-a-time", "2026-08-24T09:00:00"):
+            with self.subTest(correction_time=invalid):
+                payload = json.loads(repaired.correction.receipt_bytes)
+                payload["verified_clean_at"] = invalid
+                data = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+                with self.assertRaises(LegacyImportError):
+                    _decode_correction_receipt(data)
+        with self.assertRaises(LegacyImportError):
+            _decode_correction_receipt(b"{")
+        with self.assertRaises(LegacyImportError):
+            _validate_orphan_correction_receipt(b"{", correction_record)
+        noncanonical = json.dumps(json.loads(repaired.correction.receipt_bytes), indent=2).encode() + b"\n"
+        with self.assertRaises(LegacyImportError):
+            _validate_orphan_correction_receipt(noncanonical, correction_record)
+
     def test_cleanup_refuses_missing_mapped_artifact_before_legacy_deletion(self) -> None:
         project, work = _fixture()
         imported = cutover_ledger(project, work, NOW)
@@ -262,14 +496,18 @@ class LegacyCleanupTest(unittest.TestCase):
                 elif condition == "naive-time":
                     now = NOW.replace(tzinfo=None)
                 elif condition == "wrong-marker":
+                    (work / "inbox").mkdir()
                     (work / "authority.json").write_text("wrong marker")
                 elif condition == "ambiguous-retired-tree":
+                    (work / "inbox").mkdir()
                     (work / f".retired-legacy-v2-{cutover_id}").mkdir()
 
                 with self.assertRaises(LegacyImportError) as raised:
                     cleanup_legacy(work, cutover_id, now)
 
                 self.assertEqual("STORAGE_INVARIANT_VIOLATION", raised.exception.code)
+                if condition in {"wrong-marker", "ambiguous-retired-tree"}:
+                    self.assertTrue((work / "inbox").is_dir())
 
     def test_cleanup_rejects_unrecoverable_receipt_artifact_collision(self) -> None:
         for collision_kind in ("directory", "arbitrary-file"):
