@@ -89,16 +89,36 @@ class LegacyCleanupTest(unittest.TestCase):
     def test_cleanup_resumes_retired_tree_and_unreferenced_receipt_artifact(self) -> None:
         project, work = _fixture()
         imported = cutover_ledger(project, work, NOW)
+        comparison_project, comparison_work = _fixture()
+        comparison_imported = cutover_ledger(comparison_project, comparison_work, NOW)
+        self.assertEqual(imported.cutover_id, comparison_imported.cutover_id)
+        expected_receipt = cleanup_legacy(comparison_work, comparison_imported.cutover_id, NOW).receipt_bytes
         retired = work / f".retired-legacy-v2-{imported.cutover_id}"
         (work / "legacy-v2").replace(retired)
         orphan = work / "artifacts" / "evidence" / f"legacy-cleanup-{imported.cutover_id}" / "1.json"
         orphan.parent.mkdir(parents=True)
-        orphan.write_bytes(b"complete but unreferenced")
+        orphan.write_bytes(expected_receipt)
 
         receipt = cleanup_legacy(work, imported.cutover_id, NOW)
 
         self.assertFalse(retired.exists())
         self.assertEqual(receipt.receipt_bytes, orphan.read_bytes())
+
+    def test_cleanup_refuses_missing_mapped_artifact_before_legacy_deletion(self) -> None:
+        project, work = _fixture()
+        imported = cutover_ledger(project, work, NOW)
+        state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        requirement = next(
+            reference for reference in state.artifacts.references if reference.kind.value == "requirements"
+        )
+        (work / requirement.selector).unlink()
+
+        with self.assertRaises(LegacyImportError) as raised:
+            cleanup_legacy(work, imported.cutover_id, NOW)
+
+        self.assertEqual("STORAGE_INVARIANT_VIOLATION", raised.exception.code)
+        self.assertTrue((work / "legacy-v2").is_dir())
+        self.assertEqual(CUTOVER_TOMBSTONE, (work / "authority.json").read_bytes())
 
     def test_cleanup_replay_revalidates_absence_and_input_contract(self) -> None:
         project, work = _fixture()
@@ -164,15 +184,34 @@ class LegacyCleanupTest(unittest.TestCase):
                 self.assertEqual("STORAGE_INVARIANT_VIOLATION", raised.exception.code)
 
     def test_cleanup_rejects_unrecoverable_receipt_artifact_collision(self) -> None:
+        for collision_kind in ("directory", "arbitrary-file"):
+            with self.subTest(collision_kind=collision_kind):
+                project, work = _fixture()
+                imported = cutover_ledger(project, work, NOW)
+                collision = work / "artifacts" / "evidence" / f"legacy-cleanup-{imported.cutover_id}" / "1.json"
+                if collision_kind == "directory":
+                    collision.mkdir(parents=True)
+                else:
+                    collision.parent.mkdir(parents=True)
+                    collision.write_bytes(b"not a cleanup receipt")
+
+                with self.assertRaises(LegacyImportError) as raised:
+                    cleanup_legacy(work, imported.cutover_id, NOW)
+
+                self.assertEqual("STORAGE_INVARIANT_VIOLATION", raised.exception.code)
+
+    def test_archival_resume_revalidates_frozen_source_after_tombstone(self) -> None:
         project, work = _fixture()
-        imported = cutover_ledger(project, work, NOW)
-        collision = work / "artifacts" / "evidence" / f"legacy-cleanup-{imported.cutover_id}" / "1.json"
-        collision.mkdir(parents=True)
+        receipt = import_ledger(project, work, work / "state.sqlite3", NOW)
+        (work / "authority.json").write_bytes(CUTOVER_TOMBSTONE)
+        queue = work / "v2" / "queue.md"
+        queue.write_bytes(queue.read_bytes() + b"changed after tombstone\n")
 
         with self.assertRaises(LegacyImportError) as raised:
-            cleanup_legacy(work, imported.cutover_id, NOW)
+            archive_legacy(work, receipt)
 
-        self.assertEqual("STORAGE_INVARIANT_VIOLATION", raised.exception.code)
+        self.assertEqual("LEGACY_SOURCE_INVALID", raised.exception.code)
+        self.assertTrue((work / "v2").is_dir())
 
     def test_cleanup_resumes_after_physical_removal_before_receipt(self) -> None:
         project, work = _fixture()

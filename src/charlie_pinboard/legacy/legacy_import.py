@@ -8,6 +8,7 @@ from typing import Annotated, Literal, cast
 
 import msgspec
 
+from charlie_pinboard import __version__
 from charlie_pinboard.adapters.files.artifacts import ArtifactRepository
 from charlie_pinboard.adapters.files.file_io import DurableRoots, atomic_replace
 from charlie_pinboard.adapters.files.views import rebuild as rebuild_views
@@ -92,6 +93,7 @@ from charlie_pinboard.legacy.proposals import (
 from charlie_pinboard.legacy.proposals import (
     ProposalRelation as LegacyProposalRelation,
 )
+from charlie_pinboard.legacy.validate import validate_work_state
 
 type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
 type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
@@ -129,6 +131,8 @@ class _ImportCountRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True
 class _ImportOutcomeRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     cutover_id: str
     source_revision: str
+    source_schema: Literal["repo-work/v2"]
+    importer_version: str
     destination_revision: int
     manifest_selector: str
     manifest_sha256: str
@@ -156,6 +160,8 @@ class _ManifestEntryRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=Tr
 class _ManifestRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     schema: Literal["repo-work-mapping-manifest/v1"]
     cutover_id: str
+    source_schema: Literal["repo-work/v2"]
+    source_revision: str
     entries: tuple[_ManifestEntryRecord, ...]
 
 
@@ -343,6 +349,33 @@ def _source_path_key(path: Path, base: Path) -> bytes:
     return path.relative_to(base).as_posix().encode()
 
 
+def _selected_classification(inside: Path, selector: str) -> str:
+    if inside in {Path("queue.md"), Path("migration-complete.md")}:
+        return "validation-only-generated"
+    if inside == Path("current.md") or inside == Path("leases/coordination.md"):
+        return "consumed-authority"
+    parts = inside.parts
+    match parts:
+        case ("items", filename) if filename.endswith(".md"):
+            return "consumed-record"
+        case ("inbox", filename) if filename.endswith(".json"):
+            return "consumed-record"
+        case ("history", "items", filename) if filename.endswith(".md"):
+            return "consumed-record"
+        case ("history", "proposals", filename) if filename.endswith(".json"):
+            return "consumed-record"
+        case ("attempts", _, "attempt.md"):
+            return "consumed-record"
+        case ("attempts", _, *_) if len(parts) >= 3:
+            return "consumed-artifact"
+        case ("resources", *_):
+            return "legacy-resource-state"
+        case ("leases", "resources", *_):
+            return "legacy-resource-state"
+        case _:
+            raise LegacyImportError("LEGACY_SOURCE_INVALID", f"Unclassified selected-v2 selector: {selector}.")
+
+
 def _classify_files(base: Path, selected: Path) -> tuple[_SourceEntry, ...]:
     entries: list[_SourceEntry] = []
     selected_relative = selected.relative_to(base)
@@ -360,19 +393,7 @@ def _classify_files(base: Path, selected: Path) -> tuple[_SourceEntry, ...]:
             classification = "validation-only-authority"
         elif relative.is_relative_to(selected_relative):
             inside = relative.relative_to(selected_relative)
-            parts = inside.parts
-            if inside in {Path("queue.md"), Path("migration-complete.md")}:
-                classification = "validation-only-generated"
-            elif inside == Path("current.md") or inside == Path("leases/coordination.md"):
-                classification = "consumed-authority"
-            elif (parts and parts[0] in {"items", "attempts", "inbox"}) or (
-                len(parts) >= 2 and parts[:2] in {("history", "items"), ("history", "proposals")}
-            ):
-                classification = "consumed-record"
-            elif (parts and parts[0] == "resources") or (len(parts) >= 2 and parts[:2] == ("leases", "resources")):
-                classification = "legacy-resource-state"
-            else:
-                raise LegacyImportError("LEGACY_SOURCE_INVALID", f"Unclassified selected-v2 selector: {selector}.")
+            classification = _selected_classification(inside, selector)
         elif relative.parts and relative.parts[0] in _INACTIVE_ROOTS:
             classification = "superseded-by-selected-v2"
         else:
@@ -682,6 +703,7 @@ def _artifact_references(artifacts: tuple[_PendingArtifact, ...], now: datetime)
 
 def _manifest_bytes(
     cutover_id: str,
+    source_revision: str,
     entries: tuple[_SourceEntry, ...],
     artifacts: tuple[_PendingArtifact, ...],
 ) -> bytes:
@@ -716,7 +738,15 @@ def _manifest_bytes(
                 "position": None if artifact is None else position_by_selector.get(artifact.selector),
             }
         )
-    return _canonical_json({"schema": _MANIFEST_SCHEMA, "cutover_id": cutover_id, "entries": rows})
+    return _canonical_json(
+        {
+            "schema": _MANIFEST_SCHEMA,
+            "cutover_id": cutover_id,
+            "source_schema": "repo-work/v2",
+            "source_revision": source_revision,
+            "entries": rows,
+        }
+    )
 
 
 def inactive_roots_from_manifest(manifest_bytes: bytes) -> tuple[str, ...]:
@@ -838,11 +868,19 @@ def _prepare(  # noqa: PLR0915 - exhaustive temporary cross-boundary mapping rem
     source_snapshot = _source_snapshot(entries, queue.revision)
     cutover_id = hashlib.sha256(source_snapshot).hexdigest()
     item_sources = _item_sources(selected)
+    if any(source.record.resources for source in item_sources):
+        raise LegacyImportError(
+            "LEGACY_RESOURCE_STATE_UNSUPPORTED",
+            "The legacy ledger contains resource, item-resource, or claim state.",
+        )
+    validation = validate_work_state(base_work_root, project_root)
+    if not validation.valid:
+        raise LegacyImportError("LEGACY_SOURCE_INVALID", validation.render())
     proposal_records, proposal_by_id = _proposal_values(selected, now)
     source_artifacts = _pending_artifacts(selected, item_sources)
     manifest_key = f"legacy-import-{cutover_id}-manifest"
     manifest_selector = f"artifacts/evidence/{manifest_key}/1.json"
-    provisional_manifest = _manifest_bytes(cutover_id, entries, source_artifacts)
+    provisional_manifest = _manifest_bytes(cutover_id, queue.revision, entries, source_artifacts)
     manifest_artifact = _PendingArtifact(
         "",
         ArtifactKind.EVIDENCE,
@@ -952,6 +990,8 @@ def _prepare(  # noqa: PLR0915 - exhaustive temporary cross-boundary mapping rem
     outcome: JsonValue = {
         "cutover_id": cutover_id,
         "source_revision": queue.revision,
+        "source_schema": "repo-work/v2",
+        "importer_version": __version__,
         "destination_revision": 1,
         "manifest_selector": manifest_selector,
         "manifest_sha256": manifest_reference.content_sha256,
@@ -1096,6 +1136,42 @@ def _source_still_matches(base_work_root: Path, source_snapshot: bytes) -> bool:
     return observed == set(expected)
 
 
+def _archival_source_still_matches(base_work_root: Path, source_snapshot: bytes) -> bool:
+    try:
+        value = msgspec.json.decode(source_snapshot, type=_SourceSnapshotRecord)
+    except msgspec.DecodeError:
+        return False
+    expected = {
+        entry.selector: (entry.sha256, entry.size) for entry in value.entries if entry.selector != "authority.json"
+    }
+    observed: set[str] = set()
+    for path in (candidate for candidate in base_work_root.rglob("*") if candidate.is_file()):
+        relative = path.relative_to(base_work_root)
+        if (relative.parts and relative.parts[0] in {"artifacts", "views"}) or relative.name.startswith(
+            "state.sqlite3"
+        ):
+            continue
+        selector = relative.as_posix()
+        if selector == "authority.json":
+            if path.read_bytes() != CUTOVER_TOMBSTONE:
+                return False
+            continue
+        if relative.parts and relative.parts[0] == "legacy-v2":
+            canonical = PurePosixPath("v2", *relative.parts[1:]).as_posix()
+        elif relative.parts and relative.parts[0] == "legacy-v1":
+            canonical = PurePosixPath(*relative.parts[1:]).as_posix()
+        else:
+            canonical = selector
+        expected_value = expected.get(canonical)
+        if expected_value is None or canonical in observed:
+            return False
+        data = path.read_bytes()
+        if (hashlib.sha256(data).hexdigest(), len(data)) != expected_value:
+            return False
+        observed.add(canonical)
+    return observed == set(expected)
+
+
 def _sync_directory(path: Path) -> None:
     try:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
@@ -1117,6 +1193,8 @@ def archive_legacy(base_work_root: Path, receipt: ImportReceipt) -> None:
     archived = base / "legacy-v2"
     if selected.exists() and archived.exists():
         raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", "Both current and archived v2 trees exist.")
+    if not _archival_source_still_matches(base, receipt.source_snapshot):
+        raise LegacyImportError("LEGACY_SOURCE_INVALID", "The frozen source changed before archival completed.")
     if selected.exists():
         selected.replace(archived)
         _sync_directory(base)

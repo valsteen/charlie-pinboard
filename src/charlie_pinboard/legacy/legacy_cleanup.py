@@ -25,6 +25,7 @@ from charlie_pinboard.legacy.legacy_import import (
     LegacyImportError,
     inactive_roots_from_manifest,
 )
+from charlie_pinboard.legacy.validate import validate_sqlite_work_state
 
 type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
 
@@ -113,6 +114,12 @@ def _verify_absent(work_root: Path, selectors: tuple[str, ...]) -> None:
     present = [selector for selector in selectors if (work_root / selector).exists()]
     if present:
         raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", f"Legacy selectors remain: {', '.join(present)}.")
+
+
+def _require_valid_sqlite(work_root: Path) -> None:
+    report = validate_sqlite_work_state(work_root)
+    if not report.valid:
+        raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", report.render())
 
 
 def _runtime_sha256() -> str:
@@ -230,6 +237,7 @@ def cleanup_legacy(  # noqa: PLR0915 - one bounded deletion-time transaction kee
     _manifest_selector, manifest = _import_manifest(work_root, expected_cutover_id)
     inactive = inactive_roots_from_manifest(manifest)
     absent = _absent_selectors(expected_cutover_id, inactive)
+    _require_valid_sqlite(work_root)
     existing = _existing_receipt(work_root, expected_cutover_id)
     if existing is not None:
         _verify_absent(work_root, absent)
@@ -237,6 +245,7 @@ def cleanup_legacy(  # noqa: PLR0915 - one bounded deletion-time transaction kee
         return existing
     _remove_legacy(work_root, expected_cutover_id)
     _verify_absent(work_root, absent)
+    _require_valid_sqlite(work_root)
     verified = now.astimezone(UTC)
     executable_sha256 = _runtime_sha256()
     database_path = work_root / "state.sqlite3"
@@ -245,6 +254,22 @@ def cleanup_legacy(  # noqa: PLR0915 - one bounded deletion-time transaction kee
     path = work_root / selector
     connection = open_database(database_path, OpenMode.READ_WRITE)
     try:
+        row = connection.execute("SELECT revision FROM project_meta WHERE singleton = 1").fetchone()
+        if row is None or not isinstance(row[0], int):
+            raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", "Project revision is unavailable.")
+        before_revision = row[0]
+        committed_revision = before_revision + 1
+        receipt_value = _CleanupReceiptRecord(
+            absent,
+            expected_cutover_id,
+            before_revision,
+            executable_sha256,
+            __version__,
+            "repo-work-cleanup-receipt/v1",
+            _ValidationRecord("WORK_STATE_VALID", before_revision),
+            verified.isoformat().replace("+00:00", "Z"),
+        )
+        receipt_bytes = msgspec.json.encode(receipt_value, order="sorted") + b"\n"
         if path.exists():
             status = path.lstat()
             referenced = connection.execute(
@@ -253,25 +278,20 @@ def cleanup_legacy(  # noqa: PLR0915 - one bounded deletion-time transaction kee
             ).fetchone()
             if referenced is not None or stat.S_ISLNK(status.st_mode) or not stat.S_ISREG(status.st_mode):
                 raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", "Cleanup artifact collision is not recoverable.")
+            orphan_bytes = path.read_bytes()
+            try:
+                orphan_value = msgspec.json.decode(orphan_bytes, type=_CleanupReceiptRecord)
+            except msgspec.DecodeError as error:
+                raise LegacyImportError(
+                    "STORAGE_INVARIANT_VIOLATION", "The unreferenced cleanup artifact is not recoverable."
+                ) from error
+            if orphan_value != receipt_value or orphan_bytes != receipt_bytes:
+                raise LegacyImportError(
+                    "STORAGE_INVARIANT_VIOLATION", "The unreferenced cleanup artifact is not recoverable."
+                )
             path.unlink()
             _sync_directory(path.parent)
         with write_transaction(connection):
-            row = connection.execute("SELECT revision FROM project_meta WHERE singleton = 1").fetchone()
-            if row is None or not isinstance(row[0], int):
-                raise LegacyImportError("STORAGE_INVARIANT_VIOLATION", "Project revision is unavailable.")
-            before_revision = row[0]
-            committed_revision = before_revision + 1
-            receipt_value = _CleanupReceiptRecord(
-                absent,
-                expected_cutover_id,
-                before_revision,
-                executable_sha256,
-                __version__,
-                "repo-work-cleanup-receipt/v1",
-                _ValidationRecord("WORK_STATE_VALID", before_revision),
-                verified.isoformat().replace("+00:00", "Z"),
-            )
-            receipt_bytes = msgspec.json.encode(receipt_value, order="sorted") + b"\n"
             published = ArtifactRepository(DurableRoots(work_root, ())).publish(
                 NewArtifact(ArtifactKind.EVIDENCE, key, 1, ".json", receipt_bytes)
             )

@@ -70,6 +70,29 @@ evidence: "accepted evidence"
 
 Terminal body.\n""",
     )
+    for item_id, state in (("work-c", "superseded"), ("work-d", "dropped")):
+        _write(
+            selected / "history" / "items" / f"{item_id}.md",
+            f'''---
+kind: "work-history"
+schema: "repo-work/v2"
+item: "{item_id}"
+user_label: "{item_id.upper()}"
+updated: "2026-08-18"
+state: "{state}"
+timing: "safe-to-defer"
+depends_on: "—"
+attempt: "—"
+source: "—"
+next_action: "—"
+notes: "terminal"
+resources: "—"
+evidence: "{state} evidence"
+---
+
+{state} body.
+''',
+        )
     _write(
         selected / "attempts" / "work-a-1" / "attempt.md",
         """---
@@ -211,10 +234,13 @@ class LegacyImportTest(unittest.TestCase):
         state = SQLiteWorkStore(destination).snapshot()
 
         self.assertEqual(1, receipt.destination_revision)
-        self.assertEqual(2, receipt.counts.items)
+        self.assertEqual(4, receipt.counts.items)
         self.assertEqual((0, 0, 0), (receipt.counts.resources, receipt.counts.item_resources, receipt.counts.claims))
-        self.assertEqual({"work-a", "work-b"}, {str(item.item_id) for item in state.lifecycle.work_items})
-        self.assertEqual(2, len(state.lifecycle.scope_revisions))
+        self.assertEqual(
+            {"work-a", "work-b", "work-c", "work-d"},
+            {str(item.item_id) for item in state.lifecycle.work_items},
+        )
+        self.assertEqual(4, len(state.lifecycle.scope_revisions))
         self.assertEqual(2, len(state.lifecycle.attempts))
         self.assertEqual(1, len(state.proposals.proposals))
         self.assertEqual(("evidence-a",), tuple(value.selector for value in state.proposals.evidence))
@@ -246,14 +272,27 @@ class LegacyImportTest(unittest.TestCase):
         )
         terminal = next(item for item in state.lifecycle.work_items if item.item_id == "work-b")
         self.assertEqual("accepted evidence", terminal.outcome_evidence)
+        self.assertEqual(
+            {"done", "superseded", "dropped"},
+            {item.state.value for item in state.lifecycle.work_items if item.item_id in {"work-b", "work-c", "work-d"}},
+        )
+        outcome = json.loads(bytes(state.history.receipts[0].outcome_payload))
+        self.assertEqual("repo-work/v2", outcome["source_schema"])
+        self.assertEqual("0.1.0", outcome["importer_version"])
+        manifest = json.loads((staged / receipt.manifest_selector).read_bytes())
+        self.assertEqual("repo-work/v2", manifest["source_schema"])
+        self.assertEqual(receipt.source_revision, manifest["source_revision"])
         self.assertTrue((staged / "views" / "queue.md").is_file())
         self.assertFalse((work / "state.sqlite3").exists())
 
     def test_resource_state_is_rejected_before_destination_creation(self) -> None:
-        project, work = _fixture()
-        _write(
-            work / "v2" / "resources" / "workspace.md",
-            """---
+        for resource_state in ("resource-file", "item-resource-header"):
+            with self.subTest(resource_state=resource_state):
+                project, work = _fixture()
+                if resource_state == "resource-file":
+                    _write(
+                        work / "v2" / "resources" / "workspace.md",
+                        """---
 kind: "work-resource"
 schema: "repo-work/v2"
 resource: "workspace"
@@ -262,14 +301,17 @@ scope: "host-local"
 mode: "exclusive"
 ---
 """,
-        )
-        destination = Path(tempfile.mkdtemp()).resolve() / "state.sqlite3"
+                    )
+                else:
+                    item = work / "v2" / "items" / "work-a.md"
+                    item.write_text(item.read_text().replace("resources: —", "resources: workspace"))
+                destination = Path(tempfile.mkdtemp()).resolve() / "state.sqlite3"
 
-        with self.assertRaises(LegacyImportError) as raised:
-            import_ledger(project, work, destination, NOW)
+                with self.assertRaises(LegacyImportError) as raised:
+                    import_ledger(project, work, destination, NOW)
 
-        self.assertEqual("LEGACY_RESOURCE_STATE_UNSUPPORTED", raised.exception.code)
-        self.assertFalse(destination.exists())
+                self.assertEqual("LEGACY_RESOURCE_STATE_UNSUPPORTED", raised.exception.code)
+                self.assertFalse(destination.exists())
 
     def test_temporary_cli_exposes_dry_run_without_source_mutation(self) -> None:
         project, work = _fixture()
@@ -393,11 +435,13 @@ mode: "exclusive"
         self.assertFalse(destination.exists())
 
     def test_unclassified_source_and_invalid_generation_zero_fail_closed(self) -> None:
-        for mutation in ("unexpected-root", "partial-sentinel"):
+        for mutation in ("unexpected-root", "unknown-nested-selector", "partial-sentinel"):
             with self.subTest(mutation=mutation):
                 project, work = _fixture()
                 if mutation == "unexpected-root":
                     _write(work / "unexpected.txt", "unexpected")
+                elif mutation == "unknown-nested-selector":
+                    _write(work / "v2" / "items" / "unclassified.bin", "unexpected")
                 else:
                     attempt = work / "v2" / "attempts" / "work-b-1" / "attempt.md"
                     attempt.write_text(
@@ -450,6 +494,7 @@ mode: "exclusive"
             "duplicate-proposal",
             "invalid-updated-time",
             "outside-project-root",
+            "mismatched-current-attempt",
         )
         for case in cases:
             with self.subTest(case=case):
@@ -471,6 +516,11 @@ mode: "exclusive"
                     attempt.write_text(attempt.read_text().replace('updated: "2026-08-24"', 'updated: "2026-13-40"'))
                 elif case == "outside-project-root":
                     passed_project = project / "nested"
+                elif case == "mismatched-current-attempt":
+                    item = selected / "items" / "work-a.md"
+                    item.write_text(item.read_text().replace('attempt: "work-a-1"', 'attempt: "work-b-1"'))
+                    queue = selected / "queue.md"
+                    queue.write_text(queue.read_text().replace("| work-b | work-a-1 |", "| work-b | work-b-1 |"))
 
                 with self.assertRaises(LegacyImportError) as raised:
                     dry_run_ledger(passed_project, work, NOW)
