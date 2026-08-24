@@ -236,6 +236,31 @@ class TypedTransitionContractTest(unittest.TestCase):
         self.assertEqual(ArtifactRefId(1), accepted.attempt_change.brief_artifact_ref_id)
 
     def test_resume_may_replace_the_attempt_brief_with_one_existing_brief_reference(self) -> None:
+        without_attempt = LedgerSnapshot(
+            "project-revision",
+            1,
+            (
+                WorkItem(
+                    ItemId("ready-item"),
+                    WorkState.PAUSED,
+                    None,
+                    (),
+                    None,
+                    "test",
+                    "resume",
+                    "",
+                ),
+            ),
+            artifacts=(ArtifactRecord(ArtifactRefId(1), "brief"),),
+        )
+        rejected_without_attempt = decision_outcome(
+            without_attempt,
+            bind_transition(action(ActionKind.RESUME, "ready-item"), ResumeInput(ArtifactRefId(1))),
+            SQLITE_NOW,
+        )
+        self.assertIsInstance(rejected_without_attempt, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected_without_attempt.code)
+
         paused = WorkItem(
             ItemId("ready-item"),
             WorkState.PAUSED,

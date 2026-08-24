@@ -1140,23 +1140,24 @@ def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> 
         return DecisionFailure(
             DecisionFailureCode.DEPENDENCY_NOT_SATISFIED, f"Item '{item.item}' still has a live dependency."
         )
+    if value.brief_artifact_ref_id is not None:
+        if item.attempt is None:
+            return DecisionFailure(
+                DecisionFailureCode.TRANSITION_INPUT_INVALID,
+                "Resuming with a revised brief requires an existing attempt.",
+            )
+        artifact = next(
+            (candidate for candidate in snapshot.artifacts if candidate.artifact_ref_id == value.brief_artifact_ref_id),
+            None,
+        )
+        if artifact is None or artifact.kind != "brief":
+            return DecisionFailure(
+                DecisionFailureCode.TRANSITION_INPUT_INVALID,
+                "Resuming with a revised brief requires one existing brief artifact reference.",
+            )
     target = WorkState.ACTIVE if item.attempt is not None else WorkState.READY
     attempt_change = None
     if item.attempt is not None:
-        if value.brief_artifact_ref_id is not None:
-            artifact = next(
-                (
-                    candidate
-                    for candidate in snapshot.artifacts
-                    if candidate.artifact_ref_id == value.brief_artifact_ref_id
-                ),
-                None,
-            )
-            if artifact is None or artifact.kind != "brief":
-                return DecisionFailure(
-                    DecisionFailureCode.TRANSITION_INPUT_INVALID,
-                    "Resuming with a revised brief requires one existing brief artifact reference.",
-                )
         before = AttemptState.PAUSED if item.state == WorkState.PAUSED else AttemptState.BLOCKED
         attempt_change = AttemptChange(
             item.attempt,
