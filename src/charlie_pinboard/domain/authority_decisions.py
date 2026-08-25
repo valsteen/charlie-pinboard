@@ -6,12 +6,11 @@ from typing import assert_never
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import AttemptId, HostId, ItemId, LeaseId, TaskId
 from charlie_pinboard.domain.model import (
+    AttemptTaskUse,
     CommandAttemptAuthority,
     CoordinationCommandAuthority,
     CoordinationLeaseAuthority,
     CoordinationLeaseStatus,
-    MutationReservation,
-    MutationUseLease,
     UseLeaseGenerationKind,
     UseLeaseState,
 )
@@ -265,7 +264,7 @@ class AttemptAuthorityDecision:
     counter_after: int
     current_before: AttemptLeaseAuthority | None
     current_after: AttemptLeaseAuthority
-    fenced_task_uses: tuple[MutationUseLease, ...]
+    fenced_task_uses: tuple[AttemptTaskUse, ...]
 
 
 def _attempt_token(value: AttemptLeaseAuthority) -> CommandAttemptAuthority:
@@ -307,9 +306,9 @@ def _same_attempt_token(retained: AttemptLeaseAuthority, supplied: CommandAttemp
 
 
 def _fenced_task_uses(
-    uses: tuple[MutationUseLease, ...],
+    uses: tuple[AttemptTaskUse, ...],
     attempt: AttemptId,
-) -> tuple[MutationUseLease, ...]:
+) -> tuple[AttemptTaskUse, ...]:
     current = tuple(
         value
         for value in uses
@@ -323,14 +322,14 @@ def _fenced_task_uses(
     return tuple(sorted(current, key=_task_use_key))
 
 
-def _task_use_key(value: MutationUseLease) -> tuple[str, int]:
+def _task_use_key(value: AttemptTaskUse) -> tuple[str, int]:
     return str(value.reservation_id), value.generation
 
 
 def decide_attempt_authority(  # noqa: C901, PLR0912
     retained: AttemptLeaseAuthority | None,
     counter: int,
-    task_uses: tuple[MutationUseLease, ...],
+    task_uses: tuple[AttemptTaskUse, ...],
     operation: AttemptAuthorityOperation,
     coordination: CoordinationLeaseAuthority | None,
     planned_intent_attempts: tuple[AttemptId, ...] = (),
@@ -566,184 +565,3 @@ def _validate_coordination(
     ):
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Coordination authority is not current.")
     return None
-
-
-@dataclass(frozen=True, slots=True)
-class AcquireTaskUseAuthority:
-    requested: MutationUseLease
-    attempt_authority: CommandAttemptAuthority
-    acquired_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class RenewTaskUseAuthority:
-    current: MutationUseLease
-    attempt_authority: CommandAttemptAuthority
-    renewed_at: datetime
-    expires_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class ReleaseTaskUseAuthority:
-    current: MutationUseLease
-    attempt_authority: CommandAttemptAuthority
-    released_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class RevokeTaskUseAuthority:
-    current: MutationUseLease
-    fence: MutationUseLease
-    coordination_authority: CoordinationCommandAuthority
-    revoked_at: datetime
-
-
-type TaskUseAuthorityOperation = (
-    AcquireTaskUseAuthority | RenewTaskUseAuthority | ReleaseTaskUseAuthority | RevokeTaskUseAuthority
-)
-
-
-@dataclass(frozen=True, slots=True)
-class TaskUseAuthorityDecision:
-    before: MutationUseLease | None
-    after: MutationUseLease
-    fence: MutationUseLease | None
-    changed_at: datetime
-
-
-def _task_use_is_current(
-    retained: MutationUseLease | None,
-    current: MutationUseLease,
-) -> bool:
-    return (
-        retained == current
-        and current.state == UseLeaseState.ACTIVE
-        and current.generation_kind == UseLeaseGenerationKind.GRANT
-    )
-
-
-def decide_task_use_authority(  # noqa: C901, PLR0912
-    retained: MutationUseLease | None,
-    operation: TaskUseAuthorityOperation,
-    reservation: MutationReservation | None,
-    retained_attempt: AttemptLeaseAuthority | None,
-    coordination: CoordinationLeaseAuthority | None,
-    planned_intent_reservations: tuple[str, ...] = (),
-) -> TaskUseAuthorityDecision | DecisionFailure:
-    match operation:
-        case AcquireTaskUseAuthority(
-            requested=requested,
-            attempt_authority=attempt_authority,
-            acquired_at=acquired_at,
-        ):
-            if (
-                reservation is None
-                or reservation.reservation_id != requested.reservation_id
-                or reservation.instance_id != requested.instance_id
-                or reservation.attempt_id != requested.attempt_id
-                or reservation.host_id != requested.host_id
-                or reservation.acquisition_generation != requested.reservation_generation
-                or reservation.state.value != "active"
-                or retained_attempt is None
-                or not _same_attempt_token(retained_attempt, attempt_authority)
-                or requested.task_id != attempt_authority.task_id
-                or requested.host_id != attempt_authority.host_id
-                or requested.host_epoch != attempt_authority.host_epoch
-                or requested.attempt_lease_id != attempt_authority.lease_id
-                or requested.attempt_lease_generation != attempt_authority.generation
-                or requested.expires_at <= acquired_at
-            ):
-                return DecisionFailure(
-                    DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
-                    "Task-use acquisition authority is stale or cross-wired.",
-                )
-            if requested.generation_kind != UseLeaseGenerationKind.GRANT or requested.state != UseLeaseState.ACTIVE:
-                return DecisionFailure(
-                    DecisionFailureCode.TRANSITION_INPUT_INVALID,
-                    "Task-use acquisition requires one active grant.",
-                )
-            if retained is not None and requested.generation != retained.generation + 1:
-                return DecisionFailure(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, "Task-use generation is stale.")
-            if retained is None and requested.generation != 1:
-                return DecisionFailure(
-                    DecisionFailureCode.RESOURCE_USE_LEASE_STALE,
-                    "Initial task-use generation must be one.",
-                )
-            return TaskUseAuthorityDecision(None, requested, None, acquired_at)
-        case RenewTaskUseAuthority(
-            current=current,
-            attempt_authority=attempt_authority,
-            renewed_at=renewed_at,
-            expires_at=expires_at,
-        ):
-            if (
-                not _task_use_is_current(retained, current)
-                or retained_attempt is None
-                or not _same_attempt_token(retained_attempt, attempt_authority)
-                or current.attempt_lease_id != attempt_authority.lease_id
-                or current.attempt_lease_generation != attempt_authority.generation
-                or current.expires_at <= renewed_at
-            ):
-                return DecisionFailure(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, "Task-use authority is stale.")
-            if expires_at <= current.expires_at or expires_at <= renewed_at:
-                return DecisionFailure(
-                    DecisionFailureCode.TRANSITION_INPUT_INVALID,
-                    "Task-use renewal must extend its bounded expiry.",
-                )
-            return TaskUseAuthorityDecision(
-                current,
-                replace(current, expires_at=expires_at),
-                None,
-                renewed_at,
-            )
-        case ReleaseTaskUseAuthority(
-            current=current,
-            attempt_authority=attempt_authority,
-            released_at=released_at,
-        ):
-            planned = str(current.reservation_id) in planned_intent_reservations
-            if planned:
-                return DecisionFailure(
-                    DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED,
-                    "Task-use authority cannot release with a planned mutation intent.",
-                )
-            if (
-                not _task_use_is_current(retained, current)
-                or retained_attempt is None
-                or not _same_attempt_token(retained_attempt, attempt_authority)
-            ):
-                return DecisionFailure(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, "Task-use authority is stale.")
-            return TaskUseAuthorityDecision(
-                current,
-                replace(current, expires_at=released_at, state=UseLeaseState.RELEASED),
-                None,
-                released_at,
-            )
-        case RevokeTaskUseAuthority(
-            current=current,
-            fence=fence,
-            coordination_authority=coordination_authority,
-            revoked_at=revoked_at,
-        ):
-            if not _task_use_is_current(retained, current):
-                return DecisionFailure(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, "Task-use authority is stale.")
-            if (failure := _validate_coordination(coordination, coordination_authority, revoked_at)) is not None:
-                return failure
-            expected_fence = replace(
-                current,
-                lease_id=fence.lease_id,
-                generation=current.generation + 1,
-                generation_kind=UseLeaseGenerationKind.FENCE,
-                expires_at=revoked_at,
-                state=UseLeaseState.REVOKED,
-            )
-            if fence != expected_fence:
-                return DecisionFailure(DecisionFailureCode.RESOURCE_USE_LEASE_STALE, "Task-use fence is not exact.")
-            return TaskUseAuthorityDecision(
-                current,
-                replace(current, expires_at=revoked_at, state=UseLeaseState.REVOKED),
-                fence,
-                revoked_at,
-            )
-        case _ as unreachable:
-            assert_never(unreachable)

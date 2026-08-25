@@ -34,7 +34,6 @@ from charlie_pinboard.application.stored_state import (
     ItemScopeRevision,
     MutationIntentState,
     PlanningObligationState,
-    ResourceInstanceState,
     StoredPlanningObligation,
     StoredPlanningReplacement,
     StoredWorkItemState,
@@ -76,13 +75,6 @@ from charlie_pinboard.domain.model import (
     ReasonInput,
     SubmitReviewInput,
     TransitionInput,
-    UseLeaseState,
-)
-from charlie_pinboard.domain.resource_decisions import (
-    ResourceDecision,
-    ResourceUseLeaseChange,
-    reallocate_resource,
-    revoke_resource,
 )
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
@@ -1255,88 +1247,6 @@ class SQLiteStoreTest(unittest.TestCase):
                 for value in returned.resources.use_leases
             ),
         )
-
-    def test_resource_revocation_and_reallocation_persist_domain_decisions(self) -> None:
-        _path, revocation_store = self._store()
-        revocation_snapshot = project_decision_snapshot(revocation_store.snapshot())
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, revocation_snapshot.generation)
-        action = next(
-            value for value in available_actions(revocation_snapshot, actor) if value.kind == ActionKind.PAUSE
-        )
-        base_decision = decide(
-            replace(revocation_snapshot, mutation_intents=()),
-            bind_transition(action, ReasonInput("Persist the resource decision.")),
-            SQLITE_NOW + timedelta(seconds=1),
-        )
-        revoked = cast(
-            ResourceDecision,
-            revoke_resource(revocation_snapshot, ReservationId("reservation-a"), unresolved_intent=True),
-        )
-        active_use = revocation_snapshot.resource_use_leases[-1]
-        revoke_decision = replace(
-            base_decision,
-            item_change=None,
-            attempt_change=None,
-            reservation_changes=revoked.changes,
-            reservation_counter_changes=revoked.counter_changes,
-            resource_use_lease_changes=(
-                ResourceUseLeaseChange(active_use, replace(active_use, state=UseLeaseState.REVOKED)),
-            ),
-        )
-        with revocation_store.write() as transaction:
-            transaction.commit(project_transition_mutation(transaction.snapshot(), revoke_decision))
-        revoked_state = revocation_store.snapshot()
-        self.assertEqual(2, revoked_state.resources.reservation_counters[1].generation_high_water)
-        self.assertEqual("revoked-pending-recovery", revoked_state.resources.reservations[0].state.value)
-        self.assertEqual((1, 2, 3, 4), tuple(value.generation for value in revoked_state.resources.use_leases))
-
-        state = complete_sqlite_state()
-        active_instances = (
-            replace(state.resources.instances[0], state=ResourceInstanceState.ACTIVE),
-            state.resources.instances[1],
-        )
-        reallocatable = replace(state, resources=replace(state.resources, instances=active_instances))
-        _path, reallocation_store = self._store(populated=False)
-        reallocation_store.initialize_state(reallocatable)
-        reallocation_snapshot = project_decision_snapshot(reallocation_store.snapshot())
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, reallocation_snapshot.generation)
-        action = next(
-            value for value in available_actions(reallocation_snapshot, actor) if value.kind == ActionKind.PAUSE
-        )
-        base_decision = decide(
-            replace(reallocation_snapshot, mutation_intents=()),
-            bind_transition(action, ReasonInput("Persist the resource reallocation.")),
-            SQLITE_NOW + timedelta(seconds=1),
-        )
-        reallocated = cast(
-            ResourceDecision,
-            reallocate_resource(
-                reallocation_snapshot,
-                ReservationId("reservation-a"),
-                replacement_id=ReservationId("reservation-b"),
-                instance_id=active_instances[0].instance_id,
-                generation=1,
-            ),
-        )
-        active_use = reallocation_snapshot.resource_use_leases[-1]
-        reallocate_decision = replace(
-            base_decision,
-            item_change=None,
-            attempt_change=None,
-            reservation_changes=reallocated.changes,
-            reservation_counter_changes=reallocated.counter_changes,
-            resource_use_lease_changes=(
-                ResourceUseLeaseChange(active_use, replace(active_use, state=UseLeaseState.RELEASED)),
-            ),
-        )
-        with reallocation_store.write() as transaction:
-            transaction.commit(project_transition_mutation(transaction.snapshot(), reallocate_decision))
-        reallocated_state = reallocation_store.snapshot()
-        self.assertEqual(
-            (("reservation-a", "released"), ("reservation-b", "active")),
-            tuple((value.reservation_id, value.state.value) for value in reallocated_state.resources.reservations),
-        )
-        self.assertEqual(1, reallocated_state.resources.reservation_counters[0].generation_high_water)
 
 
 if __name__ == "__main__":

@@ -35,11 +35,9 @@ from charlie_pinboard.domain.model import (
     ItemScope,
     LedgerSnapshot,
     MergeProposalInput,
-    MutationIntentState,
     ReasonInput,
     ReservationState,
     ResourceAuthority,
-    ResourceMutationCapability,
     ResourceRequirement,
     ResumeInput,
     ScopeDependency,
@@ -47,14 +45,12 @@ from charlie_pinboard.domain.model import (
     Timing,
     TransferCoordinatorInput,
     TransitionInput,
-    UseLeaseGenerationKind,
     UseLeaseState,
     WorkItem,
     WorkState,
 )
 from charlie_pinboard.domain.resource_decisions import (
     ReservationChange,
-    ResourceReservationCounterChange,
     ResourceToken,
     ResourceUseLeaseChange,
     current_authorizing_grant,
@@ -112,7 +108,6 @@ class Action:
     lease_id: LeaseId | None = None
     resource_claims: tuple[ResourceToken, ...] = ()
     command_authority: CommandAttemptAuthority | None = None
-    resource_capabilities: tuple[ResourceMutationCapability, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +121,6 @@ class ActionCapability:
     lease_id: LeaseId | None
     resource_claims: tuple[ResourceToken, ...]
     command_authority: CommandAttemptAuthority | None
-    resource_capabilities: tuple[ResourceMutationCapability, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,7 +264,6 @@ def _action_capability(action: Action) -> ActionCapability:
         action.lease_id,
         action.resource_claims,
         action.command_authority,
-        action.resource_capabilities,
     )
 
 
@@ -328,7 +321,6 @@ def command_action(command: TransitionCommand) -> Action:  # noqa: C901, PLR0912
         capability.lease_id,
         capability.resource_claims,
         capability.command_authority,
-        capability.resource_capabilities,
     )
 
 
@@ -434,7 +426,6 @@ class ActionFactory:
         subject_revision: str | None = None,
         resource_claims: tuple[ResourceToken, ...] = (),
         command_authority: CommandAttemptAuthority | None = None,
-        resource_capabilities: tuple[ResourceMutationCapability, ...] = (),
     ) -> Action:
         return Action(
             action_id=ActionId(f"{kind.value}:{subject}"),
@@ -448,7 +439,6 @@ class ActionFactory:
             lease_id=self.actor.lease_id,
             resource_claims=resource_claims,
             command_authority=command_authority,
-            resource_capabilities=resource_capabilities,
         )
 
 
@@ -548,7 +538,6 @@ class Decision:
     receipt: TransitionReceipt
     attempt_authority_change: AttemptAuthorityChange | None = None
     reservation_changes: tuple[ReservationChange, ...] = ()
-    reservation_counter_changes: tuple[ResourceReservationCounterChange, ...] = ()
     resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = ()
     checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None
     proposal_change: ProposalChange | None = None
@@ -557,48 +546,6 @@ class Decision:
 
 def _resource_token(value: ResourceAuthority) -> ResourceToken:
     return ResourceToken(value.resource_id, value.host_id, value.lease_id, value.generation)
-
-
-def _resource_capabilities(
-    snapshot: LedgerSnapshot,
-    authority: CommandAttemptAuthority,
-) -> tuple[ResourceMutationCapability, ...]:
-    reservations = {value.reservation_id: value for value in snapshot.mutation_reservations}
-    result: list[ResourceMutationCapability] = []
-    for use_lease in snapshot.mutation_use_leases:
-        if (
-            use_lease.attempt_id != authority.attempt
-            or use_lease.state != UseLeaseState.ACTIVE
-            or use_lease.generation_kind != UseLeaseGenerationKind.GRANT
-            or use_lease.attempt_lease_id != authority.lease_id
-            or use_lease.attempt_lease_generation != authority.generation
-            or use_lease.task_id != authority.task_id
-            or use_lease.host_id != authority.host_id
-            or use_lease.host_epoch != authority.host_epoch
-        ):
-            continue
-        reservation = reservations.get(use_lease.reservation_id)
-        if reservation is None or reservation.state != ReservationState.ACTIVE:
-            continue
-        result.append(
-            ResourceMutationCapability(
-                reservation.resource_id,
-                reservation.reservation_id,
-                reservation.acquisition_generation,
-                reservation.instance_id,
-                use_lease.instance_subject_revision,
-                use_lease.observation_generation,
-                use_lease.observation_digest,
-                use_lease.lease_id,
-                use_lease.generation,
-                use_lease.task_id,
-                use_lease.host_id,
-                use_lease.host_epoch,
-                use_lease.attempt_lease_id,
-                use_lease.attempt_lease_generation,
-            )
-        )
-    return tuple(result)
 
 
 def _authority(snapshot: LedgerSnapshot, actor: ActorAuthority, attempt: AttemptId) -> AttemptAuthority | None:
@@ -644,7 +591,6 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
             (value for value in snapshot.command_attempt_authorities if value.attempt == attempt),
             None,
         )
-        capabilities = _resource_capabilities(snapshot, command_authority) if command_authority is not None else ()
         direct_claims = claims if command_authority is None else ()
         revision = snapshot.subject_revision(item.item)
         result.extend(
@@ -656,7 +602,6 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
                     revision,
                     direct_claims,
                     command_authority,
-                    capabilities,
                 ),
                 factory.make(
                     ActionKind.REPORT_BLOCKER,
@@ -665,7 +610,6 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
                     revision,
                     direct_claims,
                     command_authority,
-                    capabilities,
                 ),
             )
         )
@@ -678,7 +622,6 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
                     revision,
                     direct_claims,
                     command_authority,
-                    capabilities,
                 )
             )
     return tuple(result)
@@ -835,7 +778,6 @@ def _result(
     attempt_change: AttemptChange | None = None,
     attempt_authority_change: AttemptAuthorityChange | None = None,
     reservation_changes: tuple[ReservationChange, ...] = (),
-    reservation_counter_changes: tuple[ResourceReservationCounterChange, ...] = (),
     resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = (),
     checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None,
     proposal_change: ProposalChange | None = None,
@@ -850,7 +792,6 @@ def _result(
         _receipt(action, item, outcome or action.kind.value, evidence, now),
         attempt_authority_change,
         reservation_changes,
-        reservation_counter_changes,
         resource_use_lease_changes,
         checkpoint_acceptance_change,
         proposal_change,
@@ -1317,7 +1258,7 @@ def _accept_proposal(
             DecisionFailureCode.DEPENDENCY_NOT_SATISFIED,
             "Accepted proposal dependencies must be ordered unique existing identities other than their owner.",
         )
-    declared_resources = {definition.resource_id for definition in snapshot.resource_definitions}
+    declared_resources = set(snapshot.declared_resources)
     if len(value.resource_requirements) != len(set(value.resource_requirements)) or any(
         resource_id not in declared_resources for resource_id in value.resource_requirements
     ):
@@ -1476,10 +1417,7 @@ def _planned_intent_boundary(snapshot: LedgerSnapshot, command: TransitionComman
         attempt = None if item is None else item.attempt
     else:
         return None
-    if attempt is None or not any(
-        intent.attempt_id == attempt and intent.state == MutationIntentState.PLANNED
-        for intent in snapshot.mutation_intents
-    ):
+    if attempt is None or attempt not in snapshot.planned_mutation_attempts:
         return None
     return DecisionFailure(
         DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED,

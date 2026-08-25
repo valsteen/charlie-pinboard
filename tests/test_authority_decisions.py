@@ -10,27 +10,22 @@ from charlie_pinboard.application.stored_state import AttemptLeaseState
 from charlie_pinboard.domain.authority_decisions import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
-    AcquireTaskUseAuthority,
     AttemptLeaseAuthority,
     AttemptLeaseStatus,
     InactiveAttemptAuthority,
     ReleaseAttemptAuthority,
     ReleaseCoordinationAuthority,
-    ReleaseTaskUseAuthority,
     RenewAttemptAuthority,
     RenewCoordinationAuthority,
-    RenewTaskUseAuthority,
     RevokeAttemptAuthority,
     RevokeCoordinationAuthority,
-    RevokeTaskUseAuthority,
     TransferAttemptAuthority,
     decide_attempt_authority,
     decide_coordination_authority,
-    decide_task_use_authority,
 )
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import HostId, LeaseId, TaskId
-from charlie_pinboard.domain.model import UseLeaseGenerationKind, UseLeaseState
+from charlie_pinboard.domain.model import UseLeaseState
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -190,7 +185,7 @@ class AuthorityDecisionTest(unittest.TestCase):
             )
         )
 
-    def test_attempt_and_task_use_lifecycles_cover_transfer_release_and_revocation(self) -> None:
+    def test_attempt_authority_lifecycle_covers_transfer_release_and_revocation(self) -> None:
         snapshot = project_decision_snapshot(complete_sqlite_state())
         command = snapshot.command_attempt_authorities[0]
         coordination = snapshot.coordination_authority
@@ -262,7 +257,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         renewed = decide_attempt_authority(
             retained,
             command.generation,
-            snapshot.mutation_use_leases,
+            snapshot.attempt_task_uses,
             RenewAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)),
             snapshot.coordination_lease,
         )
@@ -270,7 +265,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         released = decide_attempt_authority(
             retained,
             command.generation,
-            snapshot.mutation_use_leases,
+            snapshot.attempt_task_uses,
             ReleaseAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1)),
             snapshot.coordination_lease,
         )
@@ -278,7 +273,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         revoked = decide_attempt_authority(
             retained,
             command.generation,
-            snapshot.mutation_use_leases,
+            snapshot.attempt_task_uses,
             RevokeAttemptAuthority(
                 command.attempt,
                 command.lease_id,
@@ -289,46 +284,6 @@ class AuthorityDecisionTest(unittest.TestCase):
             snapshot.coordination_lease,
         )
         self.assertNotIsInstance(revoked, DecisionFailure)
-
-        current = snapshot.mutation_use_leases[-1]
-        reservation = snapshot.mutation_reservations[0]
-        renewed_use = decide_task_use_authority(
-            current,
-            RenewTaskUseAuthority(
-                current,
-                command,
-                SQLITE_NOW + timedelta(seconds=1),
-                SQLITE_NOW + timedelta(minutes=6),
-            ),
-            reservation,
-            retained,
-            snapshot.coordination_lease,
-        )
-        self.assertNotIsInstance(renewed_use, DecisionFailure)
-        released_use = decide_task_use_authority(
-            current,
-            ReleaseTaskUseAuthority(current, command, SQLITE_NOW + timedelta(seconds=1)),
-            reservation,
-            retained,
-            snapshot.coordination_lease,
-        )
-        self.assertNotIsInstance(released_use, DecisionFailure)
-        fence = replace(
-            current,
-            lease_id=LeaseId("use-revoke-fence"),
-            generation=current.generation + 1,
-            generation_kind=UseLeaseGenerationKind.FENCE,
-            expires_at=SQLITE_NOW + timedelta(seconds=1),
-            state=UseLeaseState.REVOKED,
-        )
-        revoked_use = decide_task_use_authority(
-            current,
-            RevokeTaskUseAuthority(current, fence, coordination, SQLITE_NOW + timedelta(seconds=1)),
-            reservation,
-            retained,
-            snapshot.coordination_lease,
-        )
-        self.assertNotIsInstance(revoked_use, DecisionFailure)
 
     def test_attempt_authority_rejects_stale_cross_wired_and_unresolved_changes(self) -> None:
         snapshot = project_decision_snapshot(complete_sqlite_state())
@@ -475,117 +430,6 @@ class AuthorityDecisionTest(unittest.TestCase):
                 command.generation,
                 (),
                 replace(revoke, generation=command.generation + 1),
-                retained_coordination,
-            )
-        )
-
-    def test_task_use_authority_rejects_stale_cross_wired_and_inexact_changes(self) -> None:
-        snapshot = project_decision_snapshot(complete_sqlite_state())
-        command = snapshot.command_attempt_authorities[0]
-        coordination = snapshot.coordination_authority
-        retained_coordination = snapshot.coordination_lease
-        current = snapshot.mutation_use_leases[-1]
-        reservation = snapshot.mutation_reservations[0]
-        assert coordination is not None
-        assert retained_coordination is not None
-        retained_attempt = AttemptLeaseAuthority(
-            command.host_epoch,
-            command.attempt,
-            command.item,
-            command.task_id,
-            command.host_id,
-            command.lease_id,
-            command.generation,
-            SQLITE_NOW,
-            command.expires_at,
-            AttemptLeaseStatus.ACTIVE,
-        )
-        requested = replace(
-            current,
-            lease_id=LeaseId("use-next"),
-            generation=current.generation + 1,
-            expires_at=SQLITE_NOW + timedelta(minutes=6),
-        )
-        acquire = AcquireTaskUseAuthority(requested, command, SQLITE_NOW + timedelta(seconds=1))
-        self.assert_failure(decide_task_use_authority(current, acquire, None, retained_attempt, retained_coordination))
-        self.assert_failure(
-            decide_task_use_authority(
-                current,
-                replace(acquire, requested=replace(requested, generation_kind=UseLeaseGenerationKind.FENCE)),
-                reservation,
-                retained_attempt,
-                retained_coordination,
-            )
-        )
-        self.assert_failure(
-            decide_task_use_authority(
-                current,
-                replace(acquire, requested=replace(requested, generation=requested.generation + 1)),
-                reservation,
-                retained_attempt,
-                retained_coordination,
-            )
-        )
-        self.assert_failure(
-            decide_task_use_authority(
-                None,
-                replace(acquire, requested=replace(requested, generation=2)),
-                reservation,
-                retained_attempt,
-                retained_coordination,
-            )
-        )
-        renew = RenewTaskUseAuthority(
-            current,
-            command,
-            SQLITE_NOW + timedelta(seconds=1),
-            SQLITE_NOW + timedelta(minutes=6),
-        )
-        self.assert_failure(
-            decide_task_use_authority(None, renew, reservation, retained_attempt, retained_coordination)
-        )
-        self.assert_failure(
-            decide_task_use_authority(
-                current,
-                replace(renew, expires_at=current.expires_at),
-                reservation,
-                retained_attempt,
-                retained_coordination,
-            )
-        )
-        release = ReleaseTaskUseAuthority(current, command, SQLITE_NOW + timedelta(seconds=1))
-        self.assert_failure(
-            decide_task_use_authority(
-                current,
-                release,
-                reservation,
-                retained_attempt,
-                retained_coordination,
-                (str(current.reservation_id),),
-            )
-        )
-        self.assert_failure(
-            decide_task_use_authority(None, release, reservation, retained_attempt, retained_coordination)
-        )
-        fence = replace(
-            current,
-            lease_id=LeaseId("use-fence"),
-            generation=current.generation + 1,
-            generation_kind=UseLeaseGenerationKind.FENCE,
-            expires_at=SQLITE_NOW + timedelta(seconds=1),
-            state=UseLeaseState.REVOKED,
-        )
-        revoke = RevokeTaskUseAuthority(current, fence, coordination, SQLITE_NOW + timedelta(seconds=1))
-        self.assert_failure(
-            decide_task_use_authority(None, revoke, reservation, retained_attempt, retained_coordination)
-        )
-        self.assert_failure(decide_task_use_authority(current, revoke, reservation, retained_attempt, None))
-        self.assert_failure(
-            decide_task_use_authority(
-                current,
-                replace(revoke, fence=replace(fence, generation=fence.generation + 1)),
-                reservation,
-                retained_attempt,
                 retained_coordination,
             )
         )

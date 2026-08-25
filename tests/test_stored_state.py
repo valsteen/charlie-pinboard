@@ -429,10 +429,7 @@ class StoredWorkStateTest(unittest.TestCase):
         self.assertEqual((ProposalId("proposal-a"),), tuple(value.proposal for value in snapshot.proposals))
         self.assertEqual((item_a,), snapshot.planning_impacts[0].obligations[0].replacements)
         self.assertEqual(1, snapshot.resource_reservations[0].generation)
-        self.assertEqual(1, snapshot.resource_reservation_counters[0].generation_high_water)
         self.assertEqual(LeaseId("use-successor"), snapshot.attempt_authorities[0].resources[0].lease_id)
-        self.assertEqual((instance_id,), tuple(value.instance_id for value in snapshot.resource_instances))
-        self.assertEqual((instance_id,), tuple(value.instance_id for value in snapshot.resource_reservation_counters))
         self.assertEqual(
             (UseLeaseGenerationKind.GRANT, UseLeaseGenerationKind.FENCE, UseLeaseGenerationKind.GRANT),
             tuple(value.generation_kind for value in snapshot.resource_use_leases),

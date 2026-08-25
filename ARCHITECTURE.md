@@ -50,10 +50,10 @@ Only distribution identity and command composition live at the package root.
 | Owner group | Responsibility |
 | --- | --- |
 | `model.py`, `identifiers.py`, `errors.py` | Closed domain values, opaque identifiers, and expected decision failures |
-| `decisions.py`, `planning_decisions.py` | Item and attempt lifecycle, focus, dependency, requirement, and planning legality |
-| `authority_decisions.py` | Coordination, attempt, and task-use authority lifecycle and fencing |
-| `proposal_decisions.py`, `scope_decisions.py` | Immutable inbox intake and exact item-scope replacement decisions |
-| `resource_decisions.py`, `resource_definition_decisions.py` | Portable resource definitions plus host-local reservation, claim, use, and mutation-intent decisions |
+| `decisions.py` | Item and attempt lifecycle, focus, dependency, requirement, planning-boundary, and resource-release legality |
+| `authority_decisions.py` | Coordination and attempt authority lifecycle and fencing |
+| `proposal_decisions.py` | Immutable inbox intake |
+| `resource_decisions.py` | Resource tokens, lifecycle resource-change records, and current-use lookup |
 | `history.py` | Exact history scope records, canonical codecs, digests, and receipt relationships |
 
 Expected rejection over constructed domain values is returned as a typed `DecisionFailure`. Boundary decoding and infrastructure failures remain typed exceptions until input has become a valid domain value.

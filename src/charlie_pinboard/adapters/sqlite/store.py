@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import assert_never, overload
+from typing import assert_never
 
 import msgspec
 
@@ -22,22 +22,10 @@ from charlie_pinboard.adapters.sqlite.database import (
 )
 from charlie_pinboard.application.artifacts import ArtifactRef
 from charlie_pinboard.application.mutations import (
-    AcceptedMutation,
     AttemptAuthorityMutation,
-    CommitReceipt,
     CoordinationAuthorityMutation,
-    DependencyEditMutation,
     MutationContractError,
-    PlanningImpactMutation,
-    PlanningMutation,
-    PlanningMutationReceipt,
-    PlanningResolutionMutation,
     ProposalCreationMutation,
-    ReservationTaskUseMutation,
-    ResourceDefinitionEditMutation,
-    ResourceIntentMutation,
-    ResourceMutation,
-    ResourceRequirementEditMutation,
     TransitionMutation,
     TransitionReceiptMutation,
     expected_stored_state,
@@ -1385,13 +1373,7 @@ class _SQLiteWorkTransaction:
     def snapshot(self) -> StoredWorkState:
         return _StoredStateReader(self._connection).read()
 
-    @overload
-    def commit(self, mutation: TransitionMutation | TransitionReceiptMutation) -> TransitionReceipt: ...
-
-    @overload
-    def commit(self, mutation: PlanningMutation) -> PlanningMutationReceipt: ...
-
-    def commit(self, mutation: AcceptedMutation) -> CommitReceipt:
+    def commit(self, mutation: TransitionReceiptMutation) -> TransitionReceipt:
         current = _StoredStateReader(self._connection).read()
         if current != mutation.before:
             raise StorageError(
@@ -1411,19 +1393,11 @@ class _SQLiteWorkTransaction:
         if _StoredStateReader(self._connection).read() != expected:
             raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "The stored mutation did not round-trip exactly.")
         match mutation:
-            case PlanningImpactMutation() | PlanningResolutionMutation():
-                return mutation.receipt
             case (
                 TransitionMutation()
                 | ProposalCreationMutation()
-                | DependencyEditMutation()
-                | ResourceRequirementEditMutation()
-                | ResourceDefinitionEditMutation()
                 | CoordinationAuthorityMutation()
                 | AttemptAuthorityMutation()
-                | ReservationTaskUseMutation()
-                | ResourceMutation()
-                | ResourceIntentMutation()
             ):
                 return mutation.receipt.transition
             case _ as unreachable:

@@ -9,7 +9,6 @@ from charlie_pinboard.application.stored_state import (
     ItemResourceRequirement,
     ProposalEvidence,
     ProposalFreshness,
-    ResourceInstanceState,
     StoredPlanningObligation,
     StoredPlanningReplacement,
     StoredWorkItem,
@@ -23,26 +22,21 @@ from charlie_pinboard.domain.model import (
     ArtifactRecord,
     AttemptAuthority,
     AttemptRecord,
+    AttemptTaskUse,
     CommandAttemptAuthority,
     CoordinationCommandAuthority,
     CoordinationLeaseAuthority,
     CoordinationLeaseStatus,
     ItemScope,
     LedgerSnapshot,
-    MutationIntent,
-    MutationReservation,
-    MutationUseLease,
+    MutationIntentState,
     PlanningImpact,
     PlanningObligation,
     ProposalRecord,
     ProposalRelationKind,
     ResourceAuthority,
-    ResourceDefinition,
-    ResourceInstance,
-    ResourceObservation,
     ResourceRequirement,
     ResourceReservation,
-    ResourceReservationCounter,
     ResourceUseLease,
     ScopeAnchor,
     ScopeArtifact,
@@ -338,9 +332,6 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         for reservation in state.resources.reservations
         if (grant := current_authorizing_grant(projected_use_leases, reservation.reservation_id)) is not None
     )
-    active_instance_ids = {
-        instance.instance_id for instance in state.resources.instances if instance.state == ResourceInstanceState.ACTIVE
-    }
     attempt_anchors = {(anchor.attempt_id, anchor.generation): anchor for anchor in state.authority.attempt_generations}
     attempt_authorities = tuple(
         AttemptAuthority(
@@ -464,32 +455,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         history_items=tuple(item.item_id for item in state.lifecycle.work_items if _live_state(item.state) is None),
         scopes=scopes,
         planning_impacts=planning_impacts,
-        resource_definitions=tuple(
-            ResourceDefinition(
-                definition.resource_id,
-                definition.kind,
-                definition.description,
-                definition.subject_revision,
-            )
-            for definition in state.resources.definitions
-        ),
-        resource_instances=tuple(
-            ResourceInstance(
-                instance.instance_id,
-                instance.resource_id,
-                instance.host_id,
-                instance.subject_revision,
-                instance.discovery_kind,
-                instance.discovery_fingerprint,
-            )
-            for instance in state.resources.instances
-            if instance.instance_id in active_instance_ids
-        ),
-        resource_reservation_counters=tuple(
-            ResourceReservationCounter(counter.instance_id, counter.generation_high_water)
-            for counter in state.resources.reservation_counters
-            if counter.instance_id in active_instance_ids
-        ),
+        declared_resources=tuple(definition.resource_id for definition in state.resources.definitions),
         resource_reservations=tuple(
             ResourceReservation(
                 reservation.reservation_id,
@@ -502,85 +468,20 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             for reservation in state.resources.reservations
         ),
         resource_use_leases=projected_use_leases,
-        resource_observations=tuple(
-            ResourceObservation(
-                locator.instance_id,
-                locator.host_id,
-                locator.locator_schema,
-                locator.locator,
-                locator.observation_generation,
-                locator.observation_digest,
-                locator.observed_at,
-            )
-            for locator in state.resources.locators
-        ),
-        mutation_reservations=tuple(
-            MutationReservation(
-                reservation.reservation_id,
-                reservation.instance_id,
-                reservation.resource_id,
-                reservation.host_id,
-                reservation.acquisition_generation,
-                reservation.attempt_id,
-                reservation.item_id,
-                reservation.state,
-                reservation.subject_revision,
-            )
-            for reservation in state.resources.reservations
-        ),
-        mutation_use_leases=tuple(
-            MutationUseLease(
+        attempt_task_uses=tuple(
+            AttemptTaskUse(
                 use_lease.reservation_id,
-                use_lease.instance_id,
-                use_lease.reservation_generation,
                 use_lease.attempt_id,
-                use_lease.host_id,
-                use_lease.instance_subject_revision,
-                use_lease.observation_generation,
-                use_lease.observation_digest,
-                use_lease.task_id,
-                use_lease.attempt_lease_id,
-                use_lease.attempt_lease_generation,
-                use_lease.lease_id,
                 use_lease.generation,
                 use_lease.generation_kind,
-                use_lease.host_epoch,
-                use_lease.expires_at,
                 use_lease.state,
             )
             for use_lease in state.resources.use_leases
         ),
-        mutation_intents=tuple(
-            MutationIntent(
-                intent.intent_id,
-                intent.reservation_id,
-                intent.reservation_generation,
-                intent.instance_id,
-                intent.attempt_id,
-                intent.host_id,
-                intent.resource_use_generation,
-                intent.resource_use_lease_id,
-                intent.task_id,
-                intent.attempt_lease_id,
-                intent.attempt_lease_generation,
-                intent.start_instance_subject_revision,
-                intent.start_observation_generation,
-                intent.start_observation_digest,
-                intent.policy_schema,
-                intent.policy,
-                intent.policy_digest,
-                intent.state,
-                intent.recorded_at,
-                intent.resolved_at,
-                intent.result_observation_generation,
-                intent.result_observation_digest,
-                intent.evidence_schema,
-                intent.evidence,
-                intent.evidence_digest,
-                intent.disposition_task_id,
-                intent.disposition_reason,
-            )
+        planned_mutation_attempts=tuple(
+            intent.attempt_id
             for intent in state.resources.mutation_intents
+            if intent.state == MutationIntentState.PLANNED
         ),
         host_epoch=state.lifecycle.project.host_epoch,
         focus_item=state.focus.item_id,

@@ -11,7 +11,6 @@ from charlie_pinboard.domain.identifiers import (
     HostId,
     ItemId,
     LeaseId,
-    MutationIntentId,
     PlanningImpactId,
     ProposalId,
     ReservationId,
@@ -298,24 +297,6 @@ class UseLeaseGenerationKind(Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class ResourceDefinition:
-    resource_id: ResourceId
-    kind: str
-    description: str = ""
-    subject_revision: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceInstance:
-    instance_id: ResourceInstanceId
-    resource_id: ResourceId
-    host_id: HostId
-    subject_revision: int
-    discovery_kind: str = ""
-    discovery_fingerprint: str = ""
-
-
-@dataclass(frozen=True, slots=True)
 class ResourceReservation:
     reservation_id: ReservationId
     resource_id: ResourceId
@@ -323,12 +304,6 @@ class ResourceReservation:
     attempt: AttemptId
     generation: int
     state: ReservationState
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceReservationCounter:
-    instance_id: ResourceInstanceId
-    generation_high_water: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,17 +315,6 @@ class ResourceUseLease:
     generation: int
     state: UseLeaseState
     generation_kind: UseLeaseGenerationKind = UseLeaseGenerationKind.GRANT
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceObservation:
-    instance_id: ResourceInstanceId
-    host_id: HostId
-    locator_schema: str
-    locator: CanonicalJson
-    generation: int
-    digest: str
-    observed_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,24 +353,6 @@ class CoordinationLeaseAuthority:
     state: CoordinationLeaseStatus
 
 
-@dataclass(frozen=True, slots=True)
-class ResourceMutationCapability:
-    resource_id: ResourceId
-    reservation_id: ReservationId
-    reservation_generation: int
-    instance_id: ResourceInstanceId
-    instance_subject_revision: int
-    locator_observation_generation: int
-    locator_observation_digest: str
-    task_use_lease_id: LeaseId
-    task_use_generation: int
-    task_id: TaskId
-    host_id: HostId
-    host_epoch: int
-    attempt_lease_id: LeaseId
-    attempt_lease_generation: int
-
-
 class MutationIntentState(Enum):
     PLANNED = "planned"
     ACCEPTED = "accepted"
@@ -416,76 +362,12 @@ class MutationIntentState(Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class ResourceIntentCapability:
-    resource: ResourceMutationCapability
-    intent_id: MutationIntentId
-    policy_digest: str
-    state: MutationIntentState
-
-
-@dataclass(frozen=True, slots=True)
-class MutationReservation:
+class AttemptTaskUse:
     reservation_id: ReservationId
-    instance_id: ResourceInstanceId
-    resource_id: ResourceId
-    host_id: HostId
-    acquisition_generation: int
     attempt_id: AttemptId
-    item_id: ItemId
-    state: ReservationState
-    subject_revision: int
-
-
-@dataclass(frozen=True, slots=True)
-class MutationUseLease:
-    reservation_id: ReservationId
-    instance_id: ResourceInstanceId
-    reservation_generation: int
-    attempt_id: AttemptId
-    host_id: HostId
-    instance_subject_revision: int
-    observation_generation: int
-    observation_digest: str
-    task_id: TaskId
-    attempt_lease_id: LeaseId
-    attempt_lease_generation: int
-    lease_id: LeaseId
     generation: int
     generation_kind: UseLeaseGenerationKind
-    host_epoch: int
-    expires_at: datetime
     state: UseLeaseState
-
-
-@dataclass(frozen=True, slots=True)
-class MutationIntent:
-    intent_id: MutationIntentId
-    reservation_id: ReservationId
-    reservation_generation: int
-    instance_id: ResourceInstanceId
-    attempt_id: AttemptId
-    host_id: HostId
-    resource_use_generation: int
-    resource_use_lease_id: LeaseId
-    task_id: TaskId
-    attempt_lease_id: LeaseId
-    attempt_lease_generation: int
-    start_instance_subject_revision: int
-    start_observation_generation: int
-    start_observation_digest: str
-    policy_schema: str
-    policy: CanonicalJson
-    policy_digest: str
-    state: MutationIntentState
-    recorded_at: datetime
-    resolved_at: datetime | None = None
-    result_observation_generation: int | None = None
-    result_observation_digest: str | None = None
-    evidence_schema: str | None = None
-    evidence: CanonicalJson | None = None
-    evidence_digest: str | None = None
-    disposition_task_id: TaskId | None = None
-    disposition_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -555,15 +437,11 @@ class LedgerSnapshot:
     history_items: tuple[ItemId, ...] = ()
     scopes: tuple[ScopeAnchor, ...] = ()
     planning_impacts: tuple[PlanningImpact, ...] = ()
-    resource_definitions: tuple[ResourceDefinition, ...] = ()
-    resource_instances: tuple[ResourceInstance, ...] = ()
-    resource_reservation_counters: tuple[ResourceReservationCounter, ...] = ()
+    declared_resources: tuple[ResourceId, ...] = ()
     resource_reservations: tuple[ResourceReservation, ...] = ()
     resource_use_leases: tuple[ResourceUseLease, ...] = ()
-    resource_observations: tuple[ResourceObservation, ...] = ()
-    mutation_reservations: tuple[MutationReservation, ...] = ()
-    mutation_use_leases: tuple[MutationUseLease, ...] = ()
-    mutation_intents: tuple[MutationIntent, ...] = ()
+    attempt_task_uses: tuple[AttemptTaskUse, ...] = ()
+    planned_mutation_attempts: tuple[AttemptId, ...] = ()
     host_epoch: int = 0
     focus_item: ItemId | None = None
     focus_attempt: AttemptId | None = None
@@ -587,52 +465,6 @@ class LedgerSnapshot:
 
     def proposal(self, proposal_id: ProposalId) -> ProposalRecord | None:
         return next((proposal for proposal in self.proposals if proposal.proposal == proposal_id), None)
-
-    def resource_definition(self, resource_id: ResourceId) -> ResourceDefinition | None:
-        return next(
-            (definition for definition in self.resource_definitions if definition.resource_id == resource_id), None
-        )
-
-    def resource_instance(self, instance_id: ResourceInstanceId) -> ResourceInstance | None:
-        return next((instance for instance in self.resource_instances if instance.instance_id == instance_id), None)
-
-    def resource_reservation(self, reservation_id: ReservationId) -> ResourceReservation | None:
-        return next(
-            (reservation for reservation in self.resource_reservations if reservation.reservation_id == reservation_id),
-            None,
-        )
-
-    def resource_reservation_counter(self, instance_id: ResourceInstanceId) -> ResourceReservationCounter | None:
-        matches = tuple(counter for counter in self.resource_reservation_counters if counter.instance_id == instance_id)
-        return matches[0] if len(matches) == 1 else None
-
-    def resource_observation(self, instance_id: ResourceInstanceId) -> ResourceObservation | None:
-        return next(
-            (observation for observation in self.resource_observations if observation.instance_id == instance_id),
-            None,
-        )
-
-    def mutation_reservation(self, reservation_id: ReservationId) -> MutationReservation | None:
-        return next(
-            (reservation for reservation in self.mutation_reservations if reservation.reservation_id == reservation_id),
-            None,
-        )
-
-    def mutation_use_lease(self, lease_id: LeaseId, generation: int) -> MutationUseLease | None:
-        return next(
-            (
-                use_lease
-                for use_lease in self.mutation_use_leases
-                if use_lease.lease_id == lease_id and use_lease.generation == generation
-            ),
-            None,
-        )
-
-    def mutation_intent(self, intent_id: MutationIntentId) -> MutationIntent | None:
-        return next((intent for intent in self.mutation_intents if intent.intent_id == intent_id), None)
-
-    def proposal_revisions(self) -> dict[ProposalId, str]:
-        return {proposal.proposal: proposal.revision for proposal in self.proposals}
 
     def subject_revision(self, subject: ItemId | AttemptId | ProposalId) -> str | None:
         return next((value.revision for value in self.subject_revisions if value.subject == subject), None)
