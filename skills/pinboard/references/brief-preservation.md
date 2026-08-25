@@ -4,6 +4,8 @@ Use this procedure only for a checkpoint declared `Checkpoint boundary: cross-bo
 
 ## Compile the brief
 
+The canonical `attempt.md` front matter uses `kind: work-attempt` and `schema: pinboard-work-brief/v1`. Dispatch rejects missing, arbitrary, or stale brief format tags before interpreting either a local or cross-boundary checkpoint.
+
 1. Read the exact sources that own the checkpoint's relevant semantics. Keep semantic truth in those sources; the brief records durable selectors and the executable subset rather than copying source prose.
 2. Verify the checkpoint's one architecture declaration against those sources. `none` must explain why ownership and dependency direction are unchanged. `read-only` names the project-relative architecture authority implementation must conform to. `update-required` names the authority that must change in the same candidate; a later documentation task is not a valid substitute.
 3. Record `Checkpoint outcome: independently-buildable` and the existing six-column `Contract table`.
@@ -63,7 +65,7 @@ Use this front matter:
 ```yaml
 ---
 kind: work-brief-review
-schema: repo-work/v2
+schema: pinboard-work-brief-review/v1
 attempt: <attempt>
 checkpoint: <exact checkpoint heading>
 checkpoint_sha256: <checkpoint sha256>

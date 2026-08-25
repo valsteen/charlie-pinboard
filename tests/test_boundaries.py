@@ -19,7 +19,7 @@ from tests.support import JsonObject
 
 def proposal() -> JsonObject:
     return {
-        "schema": "repo-work/v1",
+        "schema": "pinboard-proposal/v1",
         "proposal_id": "finding-1",
         "created_at": "2026-08-25T00:00:00Z",
         "source_task_id": "task",
@@ -70,7 +70,8 @@ class JsonBoundaryTest(unittest.TestCase):
     def test_proposal_decoder_rejects_invalid_shapes_and_reports_paths(self) -> None:
         valid = proposal()
         cases = (
-            ({**valid, "schema": "repo-work/v2"}, "schema"),
+            ({**valid, "schema": "repo" + "-work/v1"}, "schema"),
+            ({**valid, "schema": "pinboard" + "-proposal/v2"}, "schema"),
             ({**valid, "proposal_id": "Not Valid"}, "proposal_id"),
             ({**valid, "trigger": ""}, "trigger"),
             ({**valid, "evidence": [""]}, "evidence[0]"),

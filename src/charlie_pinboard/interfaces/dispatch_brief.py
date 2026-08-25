@@ -220,6 +220,20 @@ def _parse_header(path: Path) -> Header:
     return _parse_header_text(path.read_text(encoding="utf-8"))
 
 
+def _validate_work_brief_header(path: Path, attempt_id: str) -> None:
+    try:
+        header = _parse_header(path)
+    except (OSError, UnicodeError, ValueError) as error:
+        raise DispatchError("DISPATCH_BRIEF_INVALID", f"Cannot read canonical work brief: {error}") from error
+    if header.get("kind") != "work-attempt" or header.get("schema") != "pinboard-work-brief/v1":
+        raise DispatchError(
+            "DISPATCH_BRIEF_INVALID",
+            "Canonical work brief kind and schema must be 'work-attempt' and 'pinboard-work-brief/v1'.",
+        )
+    if header.get("attempt") != attempt_id:
+        raise DispatchError("DISPATCH_BRIEF_INVALID", "Canonical work brief names a different attempt.")
+
+
 def read_dispatch_environment(path: Path) -> DispatchEnvironment:
     try:
         data = path.read_bytes()
@@ -686,10 +700,10 @@ def _review_metadata_bytes(data: bytes, source: str) -> BriefReviewMetadata:
         raise DispatchError(
             "DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot parse brief review '{source}': {error}"
         ) from error
-    if header.get("kind") != "work-brief-review" or header.get("schema") != "repo-work/v2":
+    if header.get("kind") != "work-brief-review" or header.get("schema") != "pinboard-work-brief-review/v1":
         raise DispatchError(
             "DISPATCH_BRIEF_REVIEW_INVALID",
-            "Brief review kind and schema must be 'work-brief-review' and 'repo-work/v2'.",
+            "Brief review kind and schema must be 'work-brief-review' and 'pinboard-work-brief-review/v1'.",
         )
     return BriefReviewMetadata(
         _header_string(header, "attempt", source),
@@ -884,6 +898,7 @@ def prepare_dispatch_from_artifact(
 ) -> str:
     """Preserve the accepted brief contract after current authority was selected from SQLite."""
 
+    _validate_work_brief_header(attempt_path, attempt_id)
     if environment.branch != attempt_branch:
         raise DispatchError(
             "DISPATCH_BRANCH_MISMATCH",

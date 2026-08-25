@@ -16,7 +16,7 @@ from charlie_pinboard.domain.identifiers import AttemptId, ItemId, LeaseId
 from charlie_pinboard.domain.model import ArtifactRole, AttemptState
 
 type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
-type DispatchSchema = Literal["repo-work-dispatch/v1"]
+type DispatchSchema = Literal["pinboard-dispatch/v1"]
 type BriefReviewPublisher = Callable[[str, bytes | None, str | None], tuple[bytes, str]]
 
 
@@ -246,7 +246,7 @@ def prepare_sqlite_dispatch(
     if resource_backed_mutating:
         raise DispatchError(
             "RESOURCE_BACKED_MUTATING_DISPATCH_UNSUPPORTED",
-            "Resource-backed mutating dispatch remains unavailable pending the recorded post-cutover revalidation.",
+            "Resource-backed mutating dispatch cannot publish review evidence safely.",
         )
     current = next(
         (

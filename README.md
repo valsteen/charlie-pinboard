@@ -111,22 +111,13 @@ The project stores its private working state in ignored local files:
 
 ```text
 .codex/work/
-  authority.json
-  v2/
-    current.md
-    queue.md                  # generated overview
-    inbox/
-    items/                    # authoritative lifecycle and context Markdown
-    attempts/                 # briefs and renewable ownership leases
-    resources/                # project-declared scarce resources
-    leases/
-      coordination.md         # present after first coordination lease
-      resources/
-    history/
+  state.sqlite3               # authoritative lifecycle, planning, leases, and history
+  artifacts/                  # immutable briefs, evidence, proposals, and reviews
+  views/                      # generated human-readable projections
 .codex/topics/
 ```
 
-The Markdown stays readable and easy to inspect in Finder. Each item file is authoritative; `queue.md` is regenerated as a convenient overview. `pinboard` checks that these files agree before changing them, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt.
+SQLite is the sole current ledger authority. Immutable artifacts retain long-form evidence and execution contracts, while generated views remain convenient to inspect but never become fallback state. `pinboard` validates the database before changing it, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt.
 
 The plugin contains:
 
@@ -139,7 +130,7 @@ The plugin contains:
 
 The package targets Python 3.14 only. msgspec provides the immutable records and strict JSON decoding used at repository boundaries. `.python-version` pins the current stable 3.14 patch release. uv manages Python installation, the project environment, dependencies, the checked-in lockfile, and command execution.
 
-The [architecture map](ARCHITECTURE.md) explains the current SQLite-only package layers, storage boundaries, and representative command flows without requiring readers to reconstruct ownership from imports.
+The [architecture map](ARCHITECTURE.md) explains the package layers, SQLite storage boundaries, and representative command flows without requiring readers to reconstruct ownership from imports.
 
 ```sh
 uv sync --locked
@@ -157,17 +148,3 @@ scripts/pinboard --help
 Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. Its development group includes the YAML parser used for platform-compatible skill validation; the installed `charlie-pinboard` package does not depend on it.
 
 CI validates the plugin and its skills before the repository is published.
-
-<details>
-<summary>Legacy schema-v1 migration</summary>
-
-Existing schema-v1 ledgers need one explicit `pinboard migrate --to v2` cutover before lease or resource commands become available. Until then, those commands return `MIGRATION_REQUIRED` rather than pretending legacy permanent ownership has lease semantics.
-
-</details>
-
-<details>
-<summary>Temporary command compatibility</summary>
-
-`repo-work` currently invokes the same installed `charlie_pinboard` engine as `pinboard` so existing local tasks can move over without a flag day. It is a migration-scoped tested alias, not a second product or protocol. Existing `.codex/work` paths plus `repo-work/*` serialized identifiers remain stable until both known local ledgers are migrated and the separately tracked compatibility-removal follow-up deletes the alias and legacy readers.
-
-</details>

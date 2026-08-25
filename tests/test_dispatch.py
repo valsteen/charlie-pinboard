@@ -29,6 +29,7 @@ from charlie_pinboard.interfaces.dispatch_brief import (
     _checkpoint_section,
     _parse_header_text,
     prepare_dispatch_from_artifact,
+    read_dispatch_environment,
 )
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
@@ -79,7 +80,7 @@ def _reviewed_brief(project: Path) -> bytes:
     return f"""\
 ---
 kind: work-attempt
-schema: repo-work/v2
+schema: pinboard-work-brief/v1
 attempt: work-a-1
 item: work-a
 state: active
@@ -132,7 +133,7 @@ def _review(brief: bytes) -> bytes:
     return f"""\
 ---
 kind: work-brief-review
-schema: repo-work/v2
+schema: pinboard-work-brief-review/v1
 attempt: work-a-1
 checkpoint: "{CHECKPOINT}"
 checkpoint_sha256: "{hashlib.sha256(section).hexdigest()}"
@@ -161,7 +162,7 @@ class DispatchTest(unittest.TestCase):
         path = project / "candidate-brief.md"
         path.write_bytes(brief)
         environment = DispatchEnvironment(
-            "repo-work-dispatch/v1",
+            "pinboard-dispatch/v1",
             str(project),
             "codex/work-a",
             "base-revision",
@@ -223,7 +224,7 @@ class DispatchTest(unittest.TestCase):
             )
 
         environment = DispatchEnvironment(
-            "repo-work-dispatch/v1",
+            "pinboard-dispatch/v1",
             str(project),
             "codex/work-a",
             "base-revision",
@@ -271,7 +272,7 @@ malformed_quote: "unterminated
     def test_sqlite_dispatch_reads_accepted_brief_and_rejects_stale_authority(self) -> None:
         brief = """---
 kind: work-attempt
-schema: repo-work/v2
+schema: pinboard-work-brief/v1
 attempt: work-a-1
 item: work-a
 state: active
@@ -341,7 +342,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
         brief_path = project / "brief.md"
         local = """---
 kind: work-attempt
-schema: repo-work/v2
+schema: pinboard-work-brief/v1
 attempt: work-a-1
 item: work-a
 state: active
@@ -361,7 +362,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
 """
         brief_path.write_text(local, encoding="utf-8")
         environment = DispatchEnvironment(
-            "repo-work-dispatch/v1",
+            "pinboard-dispatch/v1",
             str(project),
             "codex/work-a",
             "base-revision",
@@ -449,6 +450,30 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
 
         cases = (
             (
+                environment,
+                local.replace("kind: work-attempt\n", ""),
+                "Local implementation",
+                None,
+                None,
+                "DISPATCH_BRIEF_INVALID",
+            ),
+            (
+                environment,
+                local.replace("kind: work-attempt", "kind: other"),
+                "Local implementation",
+                None,
+                None,
+                "DISPATCH_BRIEF_INVALID",
+            ),
+            (
+                environment,
+                local.replace("schema: pinboard-work-brief/v1", "schema: " + "repo" + "-work/v2"),
+                "Local implementation",
+                None,
+                None,
+                "DISPATCH_BRIEF_INVALID",
+            ),
+            (
                 msgspec.structs.replace(environment, branch="codex/other"),
                 local,
                 "Local implementation",
@@ -523,7 +548,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
         brief = _reviewed_brief(project)
         brief_path = project / "brief.md"
         environment = DispatchEnvironment(
-            "repo-work-dispatch/v1",
+            "pinboard-dispatch/v1",
             str(project),
             "codex/work-a",
             "base-revision",
@@ -569,7 +594,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
         brief_path = project / "brief.md"
         brief_path.write_bytes(brief)
         environment = DispatchEnvironment(
-            "repo-work-dispatch/v1",
+            "pinboard-dispatch/v1",
             str(project),
             "codex/work-a",
             "base-revision",
@@ -779,6 +804,10 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
         review_cases = (
             (b"not frontmatter\n", "DISPATCH_BRIEF_REVIEW_INVALID"),
             (review.replace(b"kind: work-brief-review", b"kind: other"), "DISPATCH_BRIEF_REVIEW_INVALID"),
+            (
+                review.replace(b"schema: pinboard-work-brief-review/v1", ("schema: " + "repo" + "-work/v2").encode()),
+                "DISPATCH_BRIEF_REVIEW_INVALID",
+            ),
             (review.replace(b"attempt: work-a-1", b"attempt: other"), "DISPATCH_BRIEF_REVIEW_INVALID"),
             (
                 review.replace(
@@ -798,6 +827,18 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
             self.assertEqual(code, rejected.exception.code)
 
         brief_cases = (
+            (
+                brief.replace(b"kind: work-attempt\n", b""),
+                "DISPATCH_BRIEF_INVALID",
+            ),
+            (
+                brief.replace(b"kind: work-attempt", b"kind: other"),
+                "DISPATCH_BRIEF_INVALID",
+            ),
+            (
+                brief.replace(b"schema: pinboard-work-brief/v1", ("schema: " + "repo" + "-work/v2").encode()),
+                "DISPATCH_BRIEF_INVALID",
+            ),
             (
                 brief.replace(b"#### Acceptance criteria", b"#### Missing criteria"),
                 "DISPATCH_AUTHORITY_COVERAGE_INVALID",
@@ -820,21 +861,39 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
             ),
             (
                 brief.replace(b"owner_task_id: worker", b"owner_task_id: worker\nowner_task_id: brief-reviewer-task"),
-                "DISPATCH_BRIEF_REVIEW_INVALID",
+                "DISPATCH_BRIEF_INVALID",
             ),
             (
                 brief.replace(b"owner_task_id: worker", b": worker"),
-                "DISPATCH_BRIEF_REVIEW_INVALID",
+                "DISPATCH_BRIEF_INVALID",
             ),
             (
                 brief.replace(b"owner_task_id: worker", b"owner_task_id: worker\nmalformed-header-field"),
-                "DISPATCH_BRIEF_REVIEW_INVALID",
+                "DISPATCH_BRIEF_INVALID",
             ),
         )
         for candidate, code in brief_cases:
             with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
                 self._prepare_cross_boundary(project, candidate)
             self.assertEqual(code, rejected.exception.code)
+
+    def test_dispatch_environment_rejects_predecessor_schema(self) -> None:
+        path = Path(tempfile.mkdtemp()) / "environment.json"
+        path.write_text(
+            msgspec.json.encode(
+                {
+                    "schema": "repo" + "-work-dispatch/v1",
+                    "checkout": "/project",
+                    "branch": "codex/work-a",
+                    "starting_revision": "base-revision",
+                    "permissions": ["repository-read"],
+                }
+            ).decode(),
+            encoding="utf-8",
+        )
+        with self.assertRaises(DispatchError) as rejected:
+            read_dispatch_environment(path)
+        self.assertEqual("DISPATCH_ENVIRONMENT_INVALID", rejected.exception.code)
 
     def test_sqlite_cross_boundary_review_is_immutable_and_collision_preserving(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Final, Literal, NewType
+from typing import Final, NewType
 
 from charlie_pinboard.domain.identifiers import (
     ArtifactRefId,
@@ -20,9 +20,6 @@ from charlie_pinboard.domain.identifiers import (
     TaskId,
 )
 
-SCHEMA_V1: Final = "repo-work/v1"
-SCHEMA_V2: Final = "repo-work/v2"
-type SchemaV1 = Literal["repo-work/v1"]
 CanonicalJson = NewType("CanonicalJson", bytes)
 
 

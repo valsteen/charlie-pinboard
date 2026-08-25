@@ -41,7 +41,7 @@ class SQLiteValidationTest(unittest.TestCase):
         self.assertFalse(invalid.valid)
         self.assertIn("STORAGE_INVARIANT_VIOLATION", invalid.render())
 
-    def test_initialization_resumes_current_state_and_refuses_predecessor_residue(self) -> None:
+    def test_initialization_resumes_current_state_and_refuses_conflicting_state_files(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         first = initialize_work_state(project, now=SQLITE_NOW)
         second = initialize_work_state(project, now=SQLITE_NOW)

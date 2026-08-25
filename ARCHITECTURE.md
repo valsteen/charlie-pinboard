@@ -4,7 +4,7 @@
 
 Charlie Pinboard is a local coordination system for one repository-owned work ledger. The installed `pinboard` command discovers the project, opens its work root, reads and validates current state, computes legal actions, and applies accepted changes atomically.
 
-SQLite is the sole authority for every supported current ledger. Both known projects have completed the one-way cutover. The executable Markdown predecessor, its importer and cleanup tools, and the `repo-work` command alias have been removed.
+SQLite is the authority for the repository work ledger.
 
 One work root has three durable roles:
 
@@ -83,7 +83,7 @@ Adapters own concrete persistence and filesystem mechanics without deciding prod
 | `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections |
 | `sqlite/schema.sql`, `sqlite/database.py` | Exact current schema, connection configuration, schema verification, transactions, backup, synchronization, and stable storage errors |
 | `sqlite/store.py` | Complete `StoredWorkState` loading and exhaustive accepted-mutation persistence |
-| `sqlite/registration.py` | Fresh initialization, safe reopen of current SQLite, predecessor-state refusal, and initial view generation |
+| `sqlite/registration.py` | Fresh initialization, safe reopen of SQLite, and initial view generation |
 
 ### Interfaces
 
@@ -113,13 +113,13 @@ Accepted requirements, briefs, results, reviews, and other evidence are immutabl
 
 ### Private topic evidence
 
-`.codex/topics/` organizes ignored local research, cutover records, and working evidence. It is not authoritative work state, is not a production dependency, and is not included in the package. Durable execution semantics enter the runtime only through accepted immutable artifact references.
+`.codex/topics/` organizes ignored local working notes. It is not authoritative work state, is not a production dependency, and is not included in the package. Durable execution semantics enter the runtime only through accepted immutable artifact references.
 
 ## Representative flows
 
 ### Initialization and reopen
 
-`pinboard init` resolves the durable roots and creates the current SQLite schema when `state.sqlite3` is absent. When the database exists, it verifies and reopens that exact current schema, ensures the artifact directories exist, and rebuilds views. Fresh initialization refuses retired authority files or legacy trees instead of importing or interpreting them. There is no in-package migration route.
+`pinboard init` resolves the durable roots and creates the SQLite schema when `state.sqlite3` is absent. When the database exists, it verifies and reopens that exact schema, ensures the artifact directories exist, and rebuilds views.
 
 ### Reads and validation
 
@@ -143,11 +143,9 @@ An accepted nonterminal checkpoint preserves exact result and review evidence, p
 
 Portable copy requires a quiescent source. It backs up `state.sqlite3`, copies and verifies every referenced artifact, advances the destination revision and host epoch, neutralizes host-local leases and resource state, rebuilds views, synchronizes the staged tree, and atomically publishes the relocated work root. The source remains unchanged. Project-local source authorities named by accepted briefs are outside the portable work root and must be supplied by the relocated project when dispatch needs them.
 
-## Historical vocabulary and retired runtime
+## Stored formats
 
-The `.codex/work` path is current. Some current wire-format tags deliberately retain the historical `repo-work` prefix, including `repo-work/v2`, `repo-work-dispatch/v1`, `repo-work-overview/v1`, and `repo-work-parallel-preview/v1`; atomic file publication also uses private `.repo-work-stage-*` names. These are serialized schema and storage tags, not a Python package, command alias, Markdown authority, or executable predecessor route.
-
-Retired selectors such as `authority.json`, `queue.md`, `current.md`, `v2/`, `legacy-v1/`, and `legacy-v2/` are recognized only so fresh SQLite initialization can refuse conflicting predecessor state. The supported current states are an absent work database with no predecessor authority, or an exact current `state.sqlite3`. The package contains no executable predecessor package, import or cleanup utility, migration or recovery route, or compatibility entry point.
+The `.codex/work` path is current. Proposal JSON uses `pinboard-proposal/v1`; accepted work briefs use `pinboard-work-brief/v1`; independent review evidence uses `pinboard-work-brief-review/v1`; dispatch environments use `pinboard-dispatch/v1`; and read projections use `pinboard-overview/v1` and `pinboard-parallel-preview/v1`. Atomic file publication uses private `.pinboard-stage-*` names.
 
 ## Keeping this map current
 

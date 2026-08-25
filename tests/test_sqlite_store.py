@@ -1,4 +1,5 @@
 import hashlib
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -554,6 +555,31 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual((12, b"revision one"), (replaced.size, (external.artifacts_root / "view.md").read_bytes()))
         atomic_replace(external.artifacts_root / "view.md", b"revision two")
         self.assertEqual(b"revision two", (external.artifacts_root / "view.md").read_bytes())
+
+        immutable_staging = external.artifacts_root / "staged-evidence.md"
+        with (
+            patch("charlie_pinboard.adapters.files.file_io.secrets.token_hex", return_value="immutable-token"),
+            patch("charlie_pinboard.adapters.files.file_io.os.link", wraps=os.link) as linked,
+        ):
+            create_immutable(immutable_staging, b"staged evidence")
+        self.assertEqual(".pinboard-stage-immutable-token", Path(linked.call_args.args[0]).name)
+
+        original_replace = Path.replace
+
+        def replace_staged(source: Path, target: Path) -> Path:
+            return original_replace(source, target)
+
+        replace_staging = external.artifacts_root / "staged-view.md"
+        with (
+            patch("charlie_pinboard.adapters.files.file_io.secrets.token_hex", return_value="replace-token"),
+            patch(
+                "charlie_pinboard.adapters.files.file_io.Path.replace",
+                autospec=True,
+                side_effect=replace_staged,
+            ) as replaced_path,
+        ):
+            atomic_replace(replace_staging, b"staged view")
+        self.assertEqual(".pinboard-stage-replace-token", Path(replaced_path.call_args.args[0]).name)
 
     def test_file_boundary_translates_root_and_publication_failures(self) -> None:
         missing_project = Path(tempfile.mkdtemp()).resolve() / "missing-project"

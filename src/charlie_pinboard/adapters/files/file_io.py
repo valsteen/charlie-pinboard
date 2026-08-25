@@ -134,7 +134,7 @@ def _cleanup_staging(path: Path, parent: Path) -> None:
 
 def create_immutable(path: Path, content: bytes) -> DurableFile:
     parent = _verified_directory(path.parent, label="Immutable-file parent")
-    staging = parent / f".repo-work-stage-{secrets.token_hex(16)}"
+    staging = parent / f".pinboard-stage-{secrets.token_hex(16)}"
     try:
         result = _write_and_sync(staging, content)
         try:
@@ -154,7 +154,7 @@ def create_immutable(path: Path, content: bytes) -> DurableFile:
 
 def atomic_replace(path: Path, content: bytes) -> DurableFile:
     parent = _verified_directory(path.parent, label="Replacement-file parent")
-    staging = parent / f".repo-work-stage-{secrets.token_hex(16)}"
+    staging = parent / f".pinboard-stage-{secrets.token_hex(16)}"
     try:
         result = _write_and_sync(staging, content)
         staging.replace(path)

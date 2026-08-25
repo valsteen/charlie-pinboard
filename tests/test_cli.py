@@ -136,7 +136,9 @@ class CliTest(unittest.TestCase):
         self.assertFalse((work / "queue.md").exists())
         self.assertTrue(self.run_json_cli(*common, "validate")["valid"])
         self.assertEqual("sqlite-v1", self.run_json_cli(*common, "status")["authority"])
-        self.assertEqual("sqlite-v1", self.run_json_cli(*common, "overview")["authority"])
+        overview = self.run_json_cli(*common, "overview")
+        self.assertEqual("sqlite-v1", overview["authority"])
+        self.assertEqual("pinboard-overview/v1", overview["schema"])
         actions = self.run_json_cli(*common, "actions", "--role", "observer")["actions"]
         self.assertIsInstance(actions, list)
         assert isinstance(actions, list)
@@ -150,7 +152,7 @@ class CliTest(unittest.TestCase):
             action_ids.append(action_id)
         self.assertEqual(["inspect:ledger"], action_ids)
         self.assertEqual(
-            "repo-work-parallel-preview/v1",
+            "pinboard-parallel-preview/v1",
             self.run_json_cli(*common, "parallel", "preview", "--host-id", "studio")["schema"],
         )
 
@@ -407,7 +409,7 @@ class CliTest(unittest.TestCase):
         )
         self.assertEqual("workspace-on-host", conflict["instance_id"])
         self.assertEqual(
-            "repo-work-parallel-preview/v1",
+            "pinboard-parallel-preview/v1",
             self.run_json_cli(*common, "parallel", "preview", "--host-id", "host-a")["schema"],
         )
         self.assertIn("payload_schema", self.run_json_cli(*common, "input-contract", "activate"))
@@ -606,7 +608,7 @@ class CliTest(unittest.TestCase):
         proposal_path.write_text(
             json.dumps(
                 {
-                    "schema": "repo-work/v1",
+                    "schema": "pinboard-proposal/v1",
                     "proposal_id": "cli-sqlite-proposal",
                     "created_at": (SQLITE_NOW + timedelta(seconds=1)).isoformat(),
                     "source_task_id": "discovering-task",
@@ -640,7 +642,7 @@ class CliTest(unittest.TestCase):
         common = ("--project-root", str(project), "--work-root", str(work))
         path = project / "proposal.json"
         value: JsonObject = {
-            "schema": "repo-work/v1",
+            "schema": "pinboard-proposal/v1",
             "proposal_id": "date-only-proposal",
             "created_at": "2026-08-25",
             "source_task_id": "task",

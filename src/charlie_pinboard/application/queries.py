@@ -589,7 +589,7 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
         if proposal.disposition is None
     )
     return WorkOverview(
-        "repo-work-overview/v1",
+        "pinboard-overview/v1",
         "sqlite-v1",
         str(state.lifecycle.project.revision),
         str(state.focus.item_id) if state.focus.item_id is not None else None,
@@ -757,7 +757,7 @@ def preview_parallel(
             (excluded if selected else requires_selection).append(revised)
         launchable = retained
     return ParallelPreview(
-        "repo-work-parallel-preview/v1",
+        "pinboard-parallel-preview/v1",
         str(state.lifecycle.project.revision),
         host_id,
         ParallelSelection.SELECTED if selected else ParallelSelection.ALL_SAFE,

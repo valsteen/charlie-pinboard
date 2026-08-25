@@ -592,7 +592,7 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--action-id", required=True, help="Exact dispatch action returned by coordinator actions.")
     dispatch.add_argument("--expected-revision", required=True, help="Ledger revision from the dispatch action.")
     dispatch.add_argument("--generation", required=True, type=int, help="Coordinator generation from the action.")
-    dispatch.add_argument("--lease-id", help="Current schema-v2 coordination lease identity.")
+    dispatch.add_argument("--lease-id", help="Current coordination lease identity.")
     dispatch.add_argument(
         "--checkpoint", required=True, help="Exact checkpoint heading in the canonical attempt brief."
     )
@@ -600,7 +600,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--environment",
         required=True,
         type=Path,
-        help="repo-work-dispatch/v1 JSON describing the checkout, branch, revision, and permissions.",
+        help="pinboard-dispatch/v1 JSON describing the checkout, branch, revision, and permissions.",
     )
     dispatch.add_argument(
         "--prompt",

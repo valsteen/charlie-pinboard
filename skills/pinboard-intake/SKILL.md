@@ -21,7 +21,7 @@ Intake may be standalone or embedded in ongoing Pinboard coordination. Standalon
 
 Create a bounded JSON proposal containing:
 
-- `schema`: `repo-work/v1`;
+- `schema`: `pinboard-proposal/v1`;
 - unique kebab-case `proposal_id`;
 - `created_at`;
 - exact `source_task_id`;

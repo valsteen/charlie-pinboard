@@ -21,7 +21,7 @@ The project-local work root contains one SQLite authority and generated or immut
 
 Resolve the project through Git's shared common directory. A linked worktree therefore uses the primary checkout's `.codex/work`, not a competing ignored root.
 
-Require `authority: sqlite-v1` from the executable. `state.sqlite3` owns lifecycle, focus, attempts, leases, resources, proposals, history, and accepted artifact references. `views/` is replaceable output and never a fallback authority. Archived predecessor files are evidence only; do not parse, edit, or consult them to reconstruct current state.
+Require `authority: sqlite-v1` from the executable. `state.sqlite3` owns lifecycle, focus, attempts, leases, resources, proposals, history, and accepted artifact references. `views/` is replaceable output and never a fallback authority. Do not reconstruct state from other files.
 
 Use these nonterminal states:
 
@@ -54,7 +54,7 @@ When `pinboard validate --json` fails, report a compact recovery packet:
 
 A `VIEW_REFRESH_REQUIRED` warning does not invalidate SQLite authority. Rebuild generated views only when the user authorizes that write or the active attempt requires it.
 
-Do not edit SQLite directly, recreate a predecessor root, weaken validation, or use archived files as current authority. Recovery beyond initialization from absent `state.sqlite3` is not a general supported command. Preserve the observed failure and return it to the owning implementation when the executable cannot reopen the current database atomically.
+Do not edit SQLite directly or weaken validation. Recovery beyond initialization from absent `state.sqlite3` is not a general supported command. Preserve the observed failure and return it to the owning implementation when the executable cannot reopen the current database atomically.
 
 ## Interrupted tasks
 
