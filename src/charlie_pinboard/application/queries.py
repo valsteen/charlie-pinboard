@@ -56,7 +56,7 @@ def _resource_use_generation(value: StoredResourceUseLease) -> int:
 
 
 def _resource_intent_id(value: ResourceMutationIntent) -> str:
-    return str(value.intent_id)
+    return value.intent_id
 
 
 class DetailLevel(Enum):
