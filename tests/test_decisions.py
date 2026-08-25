@@ -47,13 +47,10 @@ from charlie_pinboard.domain.model import (
     ItemScope,
     LedgerSnapshot,
     ReasonInput,
-    ReservationState,
     ResumeInput,
     ScopeArtifact,
     SubmitReviewInput,
     TransitionInput,
-    UseLeaseGenerationKind,
-    UseLeaseState,
     WorkItem,
     WorkState,
 )
@@ -73,25 +70,10 @@ from tests.domain_support import (
     item_scope as make_item_scope,
 )
 from tests.domain_support import (
-    planning_impact as PlanningImpact,
-)
-from tests.domain_support import (
-    planning_obligation as PlanningObligation,
-)
-from tests.domain_support import (
     proposal_record as ProposalRecord,
 )
 from tests.domain_support import (
     replace,
-)
-from tests.domain_support import (
-    resource_requirement as ResourceRequirement,
-)
-from tests.domain_support import (
-    resource_reservation as ResourceReservation,
-)
-from tests.domain_support import (
-    resource_use_lease as ResourceUseLease,
 )
 from tests.domain_support import (
     scope_anchor as ScopeAnchor,
@@ -154,7 +136,6 @@ def native_scope(*, artifacts: tuple[ScopeArtifact, ...] | None = None) -> ItemS
         effect="Add navigable routes",
         unlock="Reach the next area",
         dependencies=(ScopeDependency(1, "survey-east"), ScopeDependency(0, "survey-west")),
-        resource_requirements=(ResourceRequirement(0, "checkout-main"),),
         artifacts=artifacts
         if artifacts is not None
         else (
@@ -193,110 +174,19 @@ class LifecycleDecisionTest(unittest.TestCase):
             outcome,
         )
 
-    def test_action_matrix_respects_exact_planning_boundaries(self) -> None:
-        items = (
-            item("source", WorkState.ACTIVE, attempt="source-1"),
-            item("target", WorkState.ACTIVE, attempt="target-1"),
-            item("unrelated", WorkState.READY),
-        )
-        impact = PlanningImpact(
-            "impact-1",
-            "source",
-            "source-1",
-            1,
-            DIGEST_A,
-            "Target scope changed",
-            "Experiment result",
-            (PlanningObligation("target", 0, 1, DIGEST_A),),
-        )
-        snapshot = LedgerSnapshot("revision", 1, items, planning_impacts=(impact,))
-
-        action_ids = {
-            value.action_id
-            for value in available_actions(snapshot, ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, 1))
-        }
-
-        self.assertIn("activate:unrelated", action_ids)
-        self.assertIn("continue:target-1", action_ids)
-        self.assertNotIn("dispatch:target-1", action_ids)
-        self.assertNotIn("complete:target-1", action_ids)
-        self.assertNotIn("complete:source-1", action_ids)
-
     def test_terminal_decisions_require_and_return_outcome_evidence(self) -> None:
         active = item("target", WorkState.REVIEW, attempt="target-1")
-        reservation = ResourceReservation(
-            "reservation-1",
-            "checkout",
-            "instance-1",
-            "target-1",
-            2,
-            ReservationState.ACTIVE,
-        )
-        fenced_reservation = replace(
-            reservation,
-            reservation_id="fenced-reservation",
-            instance_id="fenced-instance",
-            generation=1,
-        )
-        current_grant = ResourceUseLease(
-            "current-grant",
-            reservation.reservation_id,
-            "attempt-lease",
-            3,
-            5,
-            UseLeaseState.ACTIVE,
-            UseLeaseGenerationKind.GRANT,
-        )
-        historical_grant = replace(
-            current_grant,
-            lease_id="historical-grant",
-            generation=3,
-            state=UseLeaseState.REVOKED,
-        )
-        historical_fence = replace(
-            current_grant,
-            lease_id="historical-fence",
-            generation=4,
-            state=UseLeaseState.REVOKED,
-            generation_kind=UseLeaseGenerationKind.FENCE,
-        )
-        fenced_grant = replace(
-            current_grant,
-            lease_id="fenced-grant",
-            reservation_id=fenced_reservation.reservation_id,
-            generation=1,
-        )
-        later_fence = replace(
-            fenced_grant,
-            lease_id="later-fence",
-            generation=2,
-            state=UseLeaseState.REVOKED,
-            generation_kind=UseLeaseGenerationKind.FENCE,
-        )
         snapshot = LedgerSnapshot(
             "revision",
             1,
             (active,),
             attempts=(AttemptRecord("target-1", "target", AttemptState.REVIEW),),
-            resource_reservations=(reservation, fenced_reservation),
-            resource_use_leases=(historical_grant, historical_fence, current_grant, fenced_grant, later_fence),
         )
 
         completed_action = action(ActionKind.COMPLETE, "target-1")
         completed = decide(snapshot, bind_transition(completed_action, EvidenceInput("review accepted")), NOW)
         self.assertEqual("review accepted", completed.receipt.evidence)
         self.assertEqual("review accepted", completed.item_change.outcome_evidence if completed.item_change else None)
-        self.assertEqual(
-            (
-                (reservation, replace(reservation, state=ReservationState.RELEASED)),
-                (fenced_reservation, replace(fenced_reservation, state=ReservationState.RELEASED)),
-            ),
-            tuple((change.before, change.after) for change in completed.reservation_changes),
-        )
-        self.assertEqual(
-            ((current_grant, replace(current_grant, state=UseLeaseState.RELEASED)),),
-            tuple((change.before, change.after) for change in completed.resource_use_lease_changes),
-        )
 
         rejected = bind_transition_outcome(action(ActionKind.COMPLETE, "target-1"), EmptyInput())
         self.assertIsInstance(rejected, DecisionFailure)
@@ -348,16 +238,6 @@ class LifecycleDecisionTest(unittest.TestCase):
         review = item("target", WorkState.REVIEW, attempt="target-1")
         attempt_active = AttemptRecord("target-1", "target", AttemptState.ACTIVE)
         attempt_review = AttemptRecord("target-1", "target", AttemptState.REVIEW)
-        unresolved = PlanningImpact(
-            "impact-1",
-            "source",
-            None,
-            1,
-            DIGEST_A,
-            "Target changed",
-            "Observed",
-            (PlanningObligation("target", 0, 1, DIGEST_A),),
-        )
         stale_scope = ScopeAnchor("target", 2, DIGEST_B, replace(native_scope(), item_id="target"))
         cases = (
             (
@@ -409,19 +289,6 @@ class LifecycleDecisionTest(unittest.TestCase):
                 "target-1",
                 EvidenceInput("done"),
                 "ACTION_NOT_AVAILABLE",
-            ),
-            (
-                LedgerSnapshot(
-                    "r",
-                    1,
-                    (item("source", WorkState.READY), active),
-                    attempts=(attempt_active,),
-                    planning_impacts=(unresolved,),
-                ),
-                ActionKind.COMPLETE,
-                "target-1",
-                EvidenceInput("done"),
-                "PLANNING_IMPACT_UNRESOLVED",
             ),
             (
                 LedgerSnapshot(
@@ -486,19 +353,6 @@ class LifecycleDecisionTest(unittest.TestCase):
                 "target-1",
                 SubmitReviewInput(CandidateId("candidate")),
                 "ACTION_NOT_AVAILABLE",
-            ),
-            (
-                LedgerSnapshot(
-                    "r",
-                    1,
-                    (item("source", WorkState.READY), active),
-                    attempts=(attempt_active,),
-                    planning_impacts=(unresolved,),
-                ),
-                ActionKind.SUBMIT_REVIEW,
-                "target-1",
-                SubmitReviewInput(CandidateId("candidate")),
-                "PLANNING_IMPACT_UNRESOLVED",
             ),
             (
                 LedgerSnapshot(
@@ -612,7 +466,7 @@ class LifecycleDecisionTest(unittest.TestCase):
                 self.assertEqual(DecisionFailureCode(code), rejected.code)
 
 
-class ScopeAndPlanningContractTest(unittest.TestCase):
+class ScopeContractTest(unittest.TestCase):
     def test_scope_has_frozen_canonical_bytes_and_evidence_is_operational(self) -> None:
         scope = native_scope()
         expected = (
@@ -624,7 +478,7 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
             b'"key":"route-needs","kind":"requirements","position":0,"revision":1,"role":"requirements",'
             b'"selector":"artifacts/requirements/route-needs/1.md"}],"dependencies":[{"dependency_id":"survey-west","position":0},'
             b'{"dependency_id":"survey-east","position":1}],"effect":"Add navigable routes","item_id":"build-map",'
-            b'"resource_requirements":[{"position":0,"resource_id":"checkout-main"}],"schema":"item-scope/v1",'
+            b'"schema":"item-scope/v2",'
             b'"trigger":"A route is missing","unlock":"Reach the next area","user_label":"Build the map",'
             b'"why_it_matters":"The party cannot travel"}\n'
         )
@@ -641,7 +495,7 @@ class ScopeAndPlanningContractTest(unittest.TestCase):
         legacy = make_item_scope("legacy-item", "Legacy item", None, None, None, None)
         self.assertEqual(
             b'{"artifacts":[],"dependencies":[],"effect":null,"item_id":"legacy-item",'
-            b'"resource_requirements":[],"schema":"item-scope/v1","trigger":null,"unlock":null,'
+            b'"schema":"item-scope/v2","trigger":null,"unlock":null,'
             b'"user_label":"Legacy item","why_it_matters":null}\n',
             item_scope_bytes(legacy),
         )

@@ -10,7 +10,7 @@ One work root has three durable roles:
 
 ```text
 .codex/work/
-  state.sqlite3   # authoritative lifecycle, planning, authority, and history state
+  state.sqlite3   # authoritative lifecycle, dependency, authority, and history state
   artifacts/      # immutable long-form bytes referenced by SQLite
   views/          # repairable Markdown projections generated from SQLite
 ```
@@ -50,10 +50,9 @@ Only distribution identity and command composition live at the package root.
 | Owner group | Responsibility |
 | --- | --- |
 | `model.py`, `identifiers.py`, `errors.py` | Closed domain values, opaque identifiers, and expected decision failures |
-| `decisions.py` | Item and attempt lifecycle, focus, dependency, requirement, planning-boundary, and resource-release legality |
+| `decisions.py` | Item and attempt lifecycle, focus, dependency, requirement, and review legality |
 | `authority_decisions.py` | Coordination and attempt authority lifecycle and fencing |
 | `proposal_decisions.py` | Immutable inbox intake |
-| `resource_decisions.py` | Resource tokens, lifecycle resource-change records, and current-use lookup |
 | `history.py` | Exact history scope records, canonical codecs, digests, and receipt relationships |
 
 Expected rejection over constructed domain values is returned as a typed `DecisionFailure`. Boundary decoding and infrastructure failures remain typed exceptions until input has become a valid domain value.
@@ -66,7 +65,7 @@ Expected rejection over constructed domain values is returned as a typed `Decisi
 | --- | --- |
 | `stored_state.py`, `mutations.py`, `ports.py` | Complete persistence aggregate, closed mutation family, and transactional store capabilities |
 | `decision_projection.py`, `service.py` | Projection into domain decisions and locked mutation orchestration |
-| `actions.py`, `queries.py`, `diagnostics.py` | Legal-action discovery plus current overview, parallel-preview, resource-conflict, and diagnostic read models |
+| `actions.py`, `queries.py`, `diagnostics.py` | Legal-action discovery plus current overview, parallel-preview, and diagnostic read models |
 | `artifacts.py`, `dispatch.py` | Immutable artifact references, accepted evidence publication, dispatch eligibility, and prompt preparation |
 | `registration.py`, `validation.py`, `transfer.py` | Initialization results, whole-work-root validation, and portable-copy workflow |
 
@@ -101,7 +100,7 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 
 ### Authoritative SQLite state
 
-`.codex/work/state.sqlite3` owns project revision and host epoch; item, attempt, focus, dependency, requirement, and proposal state; coordination, attempt, task-use, and resource authority; accepted artifact references; and transition history. A mutation opens a write transaction, reselects current state and authority, applies one accepted closed mutation, and advances the revision with its history receipt. A rejected or failed transition leaves the previous valid ledger intact, and stale actions or fencing tokens are rejected.
+`.codex/work/state.sqlite3` owns project revision and host epoch; item, attempt, focus, dependency, requirement, and proposal state; coordination and attempt authority; accepted artifact references; and transition history. A mutation opens a write transaction, reselects current state and authority, applies one accepted closed mutation, and advances the revision with its history receipt. A rejected or failed transition leaves the previous valid ledger intact, and stale actions or fencing tokens are rejected.
 
 ### Immutable artifacts
 
@@ -123,7 +122,7 @@ Accepted requirements, briefs, results, reviews, and other evidence are immutabl
 
 ### Reads and validation
 
-Status, overview, action discovery, parallel preview, and resource-conflict inspection open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. They never parse generated Markdown. Validation verifies the database and every accepted artifact reference, then reports generated-view drift separately.
+Status, overview, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. They never parse generated Markdown. Validation verifies the database and every accepted artifact reference, then reports generated-view drift separately.
 
 ### Mutations and proposal intake
 
@@ -137,11 +136,11 @@ Review evidence is published as an immutable artifact and accepted through the a
 
 ### Checkpoint and terminal acceptance
 
-An accepted nonterminal checkpoint preserves exact result and review evidence, pauses the same attempt, fences its worker authority, and retains eligible resource reservations for resumption. Terminal completion records accepted evidence and removes the item from live work in the same SQLite transition. Review return keeps the same attempt and evidence while fencing the rejected worker lease.
+An accepted nonterminal checkpoint preserves exact result and review evidence, pauses the same attempt, and fences its worker authority. Terminal completion records accepted evidence and removes the item from live work in the same SQLite transition. Review return keeps the same attempt and evidence while fencing the rejected worker lease.
 
 ### Portable copy
 
-Portable copy requires a quiescent source. It backs up `state.sqlite3`, copies and verifies every referenced artifact, advances the destination revision and host epoch, neutralizes host-local leases and resource state, rebuilds views, synchronizes the staged tree, and atomically publishes the relocated work root. The source remains unchanged. Project-local source authorities named by accepted briefs are outside the portable work root and must be supplied by the relocated project when dispatch needs them.
+Portable copy requires a quiescent source. It backs up `state.sqlite3`, copies and verifies every referenced artifact, advances the destination revision and host epoch, neutralizes host-local leases, rebuilds views, synchronizes the staged tree, and atomically publishes the relocated work root. The source remains unchanged. Project-local source authorities named by accepted briefs are outside the portable work root and must be supplied by the relocated project when dispatch needs them.
 
 ## Stored formats
 
@@ -151,4 +150,4 @@ The `.codex/work` path is current. Proposal JSON uses `pinboard-proposal/v1`; ac
 
 This document describes implemented ownership and dependency direction. Every implementation checkpoint declares its architecture impact before dispatch. A checkpoint that changes an owner or dependency direction names this file as `update-required` and includes the coherent documentation change in the same candidate. A `read-only` checkpoint names the authority it must conform to; `none` records why no architecture change occurs. Parser validation enforces the declaration shape, while brief and implementation review verify that the declaration is true for the sources and final diff.
 
-Future behavior belongs here only when its implementation is present. Delivery history, speculative modules, and deferred redesigns remain in private planning evidence until they change the current architecture. Maintained design probes under `tests/prototypes/` are excluded from the installed package and are not runtime owners or supported entry points.
+Future behavior belongs here only when its implementation is present. Delivery history, speculative modules, and deferred redesigns remain in private planning evidence until they change the current architecture.

@@ -171,7 +171,7 @@ def _review_publisher(
     return publish
 
 
-def prepare_sqlite_dispatch(
+def prepare_dispatch(
     store: DispatchStore,
     artifacts: DispatchArtifactPort,
     prepare_brief: DispatchBriefPreparer,
@@ -189,9 +189,6 @@ def prepare_sqlite_dispatch(
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
     if attempt is None or attempt.state != AttemptState.ACTIVE:
         raise DispatchError("DISPATCH_ATTEMPT_NOT_ACTIVE", f"Attempt '{attempt_id}' is not active.")
-    resource_backed_mutating = DispatchPermission.REPOSITORY_WRITE in environment.permissions and any(
-        value.item_id == attempt.item_id for value in state.resources.requirements
-    )
     reference = next(
         (
             value
@@ -213,24 +210,6 @@ def prepare_sqlite_dispatch(
         publication_revisions,
     )
 
-    def validate_without_publication(
-        checkpoint_sha256: str,
-        candidate: bytes | None,
-        candidate_review_id: str | None,
-    ) -> tuple[bytes, str]:
-        if candidate is None:
-            return publisher(checkpoint_sha256, None, candidate_review_id)
-        if (
-            candidate_review_id is None
-            or not candidate_review_id
-            or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in candidate_review_id)
-        ):
-            raise DispatchError(
-                "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
-                "--brief-review requires one kebab-case --review-id.",
-            )
-        return candidate, "--brief-review"
-
     prompt = prepare_brief(
         attempt_path,
         str(attempt.attempt_id),
@@ -241,13 +220,8 @@ def prepare_sqlite_dispatch(
         supplied_prompt,
         brief_review,
         review_id,
-        validate_without_publication if resource_backed_mutating else publisher,
+        publisher,
     )
-    if resource_backed_mutating:
-        raise DispatchError(
-            "RESOURCE_BACKED_MUTATING_DISPATCH_UNSUPPORTED",
-            "Resource-backed mutating dispatch cannot publish review evidence safely.",
-        )
     current = next(
         (
             value

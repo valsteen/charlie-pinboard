@@ -1,7 +1,7 @@
 import unittest
 from dataclasses import replace
-from datetime import datetime, timedelta
-from typing import cast, override
+from datetime import datetime
+from typing import cast
 
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.domain.decisions import (
@@ -38,15 +38,11 @@ from charlie_pinboard.domain.model import (
     ArtifactRecord,
     AttemptRecord,
     AttemptState,
-    BlockInput,
     EmptyInput,
-    EvidenceInput,
     LedgerSnapshot,
-    ReasonInput,
     ResumeInput,
     SubmitReviewInput,
     TransitionInput,
-    UseLeaseState,
     WorkItem,
     WorkState,
 )
@@ -92,9 +88,7 @@ def _stored_action(snapshot: LedgerSnapshot) -> Action:
 
 class TypedTransitionContractTest(unittest.TestCase):
     def test_submit_review_candidate_is_required_typed_and_preserved(self) -> None:
-        state = complete_sqlite_state()
-        state = replace(state, resources=replace(state.resources, mutation_intents=()))
-        snapshot = project_decision_snapshot(state)
+        snapshot = project_decision_snapshot(complete_sqlite_state())
         submit = _stored_action(snapshot)
 
         rejected = bind_transition_outcome(submit, EmptyInput())
@@ -220,7 +214,6 @@ class ExactMutationAuthorityTest(unittest.TestCase):
         selected = _stored_action(snapshot)
         authority = selected.command_authority
         self.assertIsNotNone(authority)
-        self.assertEqual((), selected.resource_claims)
         assert authority is not None
         self.assertEqual(
             (2, "work-a", "7", "work-a-1", "8", "worker", "host-a", "attempt-lease-a", 3),
@@ -259,72 +252,6 @@ class ExactMutationAuthorityTest(unittest.TestCase):
         )
         rediscovered = rediscover_action(project_decision_snapshot(advanced_state), _worker_actor(), selected)
         self.assertEqual(selected.action_id, rediscovered.action_id)
-
-
-class ResourceLifecycleBoundaryTest(unittest.TestCase):
-    @override
-    def setUp(self) -> None:
-        state = complete_sqlite_state()
-        self.with_intent = project_decision_snapshot(state)
-        without_intent = replace(state, resources=replace(state.resources, mutation_intents=()))
-        self.snapshot = project_decision_snapshot(without_intent)
-        self.action = _stored_action(self.snapshot)
-
-    def test_planned_intent_blocks_every_attempt_lifecycle_boundary(self) -> None:
-        coordination = self.with_intent.coordination_authority
-        assert coordination is not None
-        coordinator = ActorAuthority(
-            Role.COORDINATOR,
-            AuthorizationKind.COORDINATION,
-            coordination.generation,
-            coordination.lease_id,
-        )
-        coordinator_actions = available_actions(self.with_intent, coordinator)
-        values: tuple[tuple[ActionKind, TransitionInput], ...] = (
-            (ActionKind.PAUSE, ReasonInput("Pause.")),
-            (ActionKind.BLOCK, BlockInput("Block.", ())),
-            (ActionKind.COMPLETE, EvidenceInput("Complete.")),
-        )
-        commands = [
-            bind_transition(next(action for action in coordinator_actions if action.kind == kind), value)
-            for kind, value in values
-        ]
-        commands.append(bind_transition(self.action, SubmitReviewInput(CandidateId("candidate"))))
-
-        for command in commands:
-            with self.subTest(command=type(command).__name__):
-                result = decision_outcome(self.with_intent, command, SQLITE_NOW + timedelta(seconds=1))
-                self.assertIsInstance(result, DecisionFailure)
-                self.assertEqual(DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED, result.code)
-
-    def test_attempt_lifecycle_boundaries_fence_every_current_task_use_grant(self) -> None:
-        coordination = self.snapshot.coordination_authority
-        assert coordination is not None
-        coordinator = ActorAuthority(
-            Role.COORDINATOR,
-            AuthorizationKind.COORDINATION,
-            coordination.generation,
-            coordination.lease_id,
-        )
-        coordinator_actions = available_actions(self.snapshot, coordinator)
-        commands = (
-            bind_transition(
-                next(action for action in coordinator_actions if action.kind == ActionKind.PAUSE),
-                ReasonInput("Pause."),
-            ),
-            bind_transition(
-                next(action for action in coordinator_actions if action.kind == ActionKind.BLOCK),
-                BlockInput("Block.", ()),
-            ),
-            bind_transition(self.action, SubmitReviewInput(CandidateId("candidate"))),
-        )
-
-        for command in commands:
-            with self.subTest(command=type(command).__name__):
-                result = decision_outcome(self.snapshot, command, SQLITE_NOW + timedelta(seconds=1))
-                self.assertNotIsInstance(result, DecisionFailure)
-                self.assertEqual(1, len(result.resource_use_lease_changes))
-                self.assertEqual(UseLeaseState.REVOKED, result.resource_use_lease_changes[0].after.state)
 
 
 if __name__ == "__main__":

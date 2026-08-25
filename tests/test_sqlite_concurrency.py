@@ -3,7 +3,6 @@ from __future__ import annotations
 import multiprocessing
 import tempfile
 import unittest
-from dataclasses import replace
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
 from typing import cast
@@ -60,7 +59,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
         state = complete_sqlite_state()
-        store.initialize_state(replace(state, resources=replace(state.resources, mutation_intents=())))
+        store.initialize_state(state)
 
         context = multiprocessing.get_context("spawn")
         barrier = context.Barrier(2)

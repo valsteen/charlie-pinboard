@@ -6,13 +6,10 @@ from typing import assert_never
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import AttemptId, HostId, ItemId, LeaseId, TaskId
 from charlie_pinboard.domain.model import (
-    AttemptTaskUse,
     CommandAttemptAuthority,
     CoordinationCommandAuthority,
     CoordinationLeaseAuthority,
     CoordinationLeaseStatus,
-    UseLeaseGenerationKind,
-    UseLeaseState,
 )
 
 
@@ -264,7 +261,6 @@ class AttemptAuthorityDecision:
     counter_after: int
     current_before: AttemptLeaseAuthority | None
     current_after: AttemptLeaseAuthority
-    fenced_task_uses: tuple[AttemptTaskUse, ...]
 
 
 def _attempt_token(value: AttemptLeaseAuthority) -> CommandAttemptAuthority:
@@ -305,39 +301,15 @@ def _same_attempt_token(retained: AttemptLeaseAuthority, supplied: CommandAttemp
     )
 
 
-def _fenced_task_uses(
-    uses: tuple[AttemptTaskUse, ...],
-    attempt: AttemptId,
-) -> tuple[AttemptTaskUse, ...]:
-    current = tuple(
-        value
-        for value in uses
-        if value.attempt_id == attempt
-        and value.state == UseLeaseState.ACTIVE
-        and value.generation_kind == UseLeaseGenerationKind.GRANT
-        and not any(
-            later.reservation_id == value.reservation_id and later.generation > value.generation for later in uses
-        )
-    )
-    return tuple(sorted(current, key=_task_use_key))
-
-
-def _task_use_key(value: AttemptTaskUse) -> tuple[str, int]:
-    return str(value.reservation_id), value.generation
-
-
 def decide_attempt_authority(  # noqa: C901, PLR0912
     retained: AttemptLeaseAuthority | None,
     counter: int,
-    task_uses: tuple[AttemptTaskUse, ...],
     operation: AttemptAuthorityOperation,
     coordination: CoordinationLeaseAuthority | None,
-    planned_intent_attempts: tuple[AttemptId, ...] = (),
     *,
     live_attempt: tuple[AttemptId, ItemId] | None = None,
     transferable_attempt: tuple[AttemptId, ItemId] | None = None,
     project_host_epoch: int | None = None,
-    recovery_pending_attempts: tuple[AttemptId, ...] = (),
 ) -> AttemptAuthorityDecision | DecisionFailure:
     match operation:
         case AcquireInitialAttemptAuthority(
@@ -378,7 +350,7 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                 expires_at,
                 AttemptLeaseStatus.ACTIVE,
             )
-            return AttemptAuthorityDecision(attempt, 0, 1, retained, after, ())
+            return AttemptAuthorityDecision(attempt, 0, 1, retained, after)
         case TransferAttemptAuthority(
             current=current,
             coordination=supplied_coordination,
@@ -395,18 +367,6 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                 )
             if (failure := _validate_attempt_transfer(retained, current, acquired_at)) is not None:
                 return failure
-            if retained is not None and retained.attempt in planned_intent_attempts:
-                return DecisionFailure(
-                    DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED,
-                    "Attempt authority cannot transfer with a planned mutation intent.",
-                )
-            if retained is not None and (
-                retained.attempt in recovery_pending_attempts or _fenced_task_uses(task_uses, retained.attempt)
-            ):
-                return DecisionFailure(
-                    DecisionFailureCode.ATTEMPT_LEASE_REQUIRED,
-                    "Attempt transfer requires completed ordinary authority and resource recovery.",
-                )
             if (failure := _validate_coordination(coordination, supplied_coordination, acquired_at)) is not None:
                 return failure
             assert retained is not None
@@ -431,7 +391,6 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                 counter + 1,
                 retained,
                 after,
-                _fenced_task_uses(task_uses, retained.attempt),
             )
         case RenewAttemptAuthority(current=current, renewed_at=renewed_at, expires_at=expires_at):
             if (failure := _validate_attempt_change(retained, current, renewed_at)) is not None:
@@ -448,17 +407,11 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                 counter,
                 retained,
                 replace(retained, expires_at=expires_at),
-                (),
             )
         case ReleaseAttemptAuthority(current=current, released_at=released_at):
             if (failure := _validate_attempt_change(retained, current, released_at)) is not None:
                 return failure
             assert retained is not None
-            if retained.attempt in planned_intent_attempts:
-                return DecisionFailure(
-                    DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED,
-                    "Attempt authority cannot release with a planned mutation intent.",
-                )
             after = replace(
                 retained,
                 generation=counter + 1,
@@ -471,7 +424,6 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                 counter + 1,
                 retained,
                 after,
-                _fenced_task_uses(task_uses, retained.attempt),
             )
         case RevokeAttemptAuthority(
             attempt=attempt,
@@ -500,7 +452,6 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                 counter + 1,
                 retained,
                 after,
-                _fenced_task_uses(task_uses, attempt),
             )
         case _ as unreachable:
             assert_never(unreachable)

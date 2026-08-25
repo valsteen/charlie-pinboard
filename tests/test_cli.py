@@ -69,20 +69,6 @@ class CliTest(unittest.TestCase):
         lease_id = action.get("lease_id")
         if lease_id:
             arguments.extend(("--lease-id", str(lease_id)))
-        claims = action.get("resource_claims", [])
-        if not isinstance(claims, list):
-            self.fail("resource_claims must be a list")
-        for raw_claim in claims:
-            claim = self.json_object(raw_claim)
-            arguments.extend(
-                (
-                    "--resource-claim",
-                    str(claim["resource_id"]),
-                    str(claim["host_id"]),
-                    str(claim["lease_id"]),
-                    str(claim["generation"]),
-                )
-            )
         arguments.extend(("--payload", str(payload)))
         return self.run_cli(*arguments)
 
@@ -111,12 +97,11 @@ class CliTest(unittest.TestCase):
             "dispatch",
             "coordination",
             "attempt",
-            "resource",
             "parallel",
             "views",
         ):
             self.assertIn(retained, help_text)
-        for removed in ("recover", "migrate", "legacy-import", "legacy-cleanup"):
+        for removed in ("recover", "migrate", "legacy-import", "legacy-cleanup", "resource"):
             self.assertNotIn(removed, help_text)
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
                 main((removed,))
@@ -153,7 +138,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(["inspect:ledger"], action_ids)
         self.assertEqual(
             "pinboard-parallel-preview/v1",
-            self.run_json_cli(*common, "parallel", "preview", "--host-id", "studio")["schema"],
+            self.run_json_cli(*common, "parallel", "preview")["schema"],
         )
 
         coordination = self.run_json_cli(*common, "coordination", "status")
@@ -195,7 +180,6 @@ class CliTest(unittest.TestCase):
                 attempt_generations=(),
                 attempt_leases=(),
             ),
-            resources=replace(state.resources, reservations=(), use_leases=(), mutation_intents=()),
         )
         work.unlink(missing_ok=True) if work.is_file() else None
         database = work / "state.sqlite3"
@@ -394,23 +378,8 @@ class CliTest(unittest.TestCase):
             "active", self.run_json_cli(*common, "attempt", "status", "--attempt-id", "work-a-1")["status"]
         )
         self.assertEqual(
-            "workspace", self.run_json_cli(*common, "resource", "status", "--resource-id", "workspace")["resource_id"]
-        )
-        conflict = self.run_json_cli(
-            *common,
-            "resource",
-            "status",
-            "--resource-id",
-            "workspace",
-            "--host-id",
-            "host-a",
-            "--detail",
-            "detailed",
-        )
-        self.assertEqual("workspace-on-host", conflict["instance_id"])
-        self.assertEqual(
             "pinboard-parallel-preview/v1",
-            self.run_json_cli(*common, "parallel", "preview", "--host-id", "host-a")["schema"],
+            self.run_json_cli(*common, "parallel", "preview")["schema"],
         )
         self.assertIn("payload_schema", self.run_json_cli(*common, "input-contract", "activate"))
 
@@ -421,9 +390,7 @@ class CliTest(unittest.TestCase):
             ("actions", "--role", "observer"),
             ("input-contract", "activate"),
             ("attempt", "status", "--attempt-id", "work-a-1"),
-            ("resource", "status", "--resource-id", "workspace"),
-            ("resource", "status", "--resource-id", "workspace", "--host-id", "host-a"),
-            ("parallel", "preview", "--host-id", "host-a"),
+            ("parallel", "preview"),
             ("views", "rebuild"),
         )
         for command in human_commands:
@@ -439,11 +406,6 @@ class CliTest(unittest.TestCase):
         invalid.write_text("[]", encoding="utf-8")
         cases = (
             (("proposal", "--file", str(invalid)), "PROPOSAL_INVALID"),
-            (("resource", "status", "--resource-id", "missing"), "RESOURCE_INSTANCE_REQUIRED"),
-            (
-                ("resource", "status", "--resource-id", "workspace", "--detail", "detailed"),
-                "RESOURCE_INSTANCE_REQUIRED",
-            ),
             (("attempt", "status", "--attempt-id", "missing"), "ATTEMPT_LEASE_REQUIRED"),
             (
                 ("coordination", "renew", "--lease-id", "wrong", "--generation", "9", "--ttl-seconds", "60"),
@@ -470,24 +432,6 @@ class CliTest(unittest.TestCase):
         self.assertEqual(11, identifier_result)
         self.assertIn("IDENTITY_INVALID", identifier_stderr)
 
-        unsupported_resource, _resource_stdout, resource_stderr = self.run_cli(
-            *common,
-            "resource",
-            "declare",
-            "--resource-id",
-            "new-resource",
-            "--label",
-            "New resource",
-            "--scope",
-            "host-local",
-            "--coordination-lease-id",
-            "coordination-a",
-            "--coordination-generation",
-            "9",
-        )
-        self.assertEqual(11, unsupported_resource)
-        self.assertIn("ACTION_NOT_AVAILABLE", resource_stderr)
-
     def test_direct_transition_reselects_exact_worker_capability(self) -> None:
         state = complete_sqlite_state()
         now = datetime.now(UTC)
@@ -499,7 +443,6 @@ class CliTest(unittest.TestCase):
                     replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
                 ),
             ),
-            resources=replace(state.resources, mutation_intents=()),
         )
         project, work, _store = self.initialized_state(state)
         common = ("--project-root", str(project), "--work-root", str(work))
@@ -534,7 +477,6 @@ class CliTest(unittest.TestCase):
                 ),
                 "ACTION_ID_INVALID",
             ),
-            (("--resource-claim", "workspace", "host-a", "lease", "not-an-int"), "RESOURCE_CLAIM_INVALID"),
         )
         for replacement, code in invalid_cases:
             arguments = [
@@ -694,7 +636,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual("12", status["revision"])
         self.assertEqual(1, calls)
 
-        result, _, stderr = self.run_cli(*common, "parallel", "preview", "--host-id", "host-a", "--item", "missing")
+        result, _, stderr = self.run_cli(*common, "parallel", "preview", "--item", "missing")
         self.assertEqual(11, result)
         self.assertIn("PARALLEL_SELECTION_INVALID", stderr)
 

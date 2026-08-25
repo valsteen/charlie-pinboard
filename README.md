@@ -39,9 +39,9 @@ If the ledger changes while the finding is being saved, the task retries that ex
 
 <img align="right" width="360" src="assets/party-crossroads.png" alt="Pixel-art adventurers taking routes toward a river village, the dragon keep, and a crystal cave">
 
-![Pixel-art forked trail with two adventurers](assets/split-party.png) **The party can split up without walking into the same trap.** Before launching anything, you ask which quests can move together. The preview puts save-game animation research and controller-remapping research in the safe group, explains that a dragon-arena integration still depends on the boss work, and keeps two experiments that need the same capture rig in a “choose one” group. Merely looking at that map creates no new tasks.
+![Pixel-art forked trail with two adventurers](assets/split-party.png) **The party can split up without walking into the same trap.** Before launching anything, you ask which quests can move together. The preview puts save-game animation research and controller-remapping research in the safe group, and explains that a dragon-arena integration still depends on the boss work. Merely looking at that map creates no new tasks.
 
-You can select a few quests or say, “Launch all safe work.” The animation question still needs design choices, so it opens as a visible task where you can inspect the work and answer questions. The controller investigation already has a complete autonomous brief, so a subagent can scout it quietly and return evidence. Before each launch, the remaining group is checked again; if another task claims the capture rig or changes a dependency, the rest stop with a precise partial result instead of pretending the whole party departed.
+You can select a few quests or say, “Launch all safe work.” The animation question still needs design choices, so it opens as a visible task where you can inspect the work and answer questions. The controller investigation already has a complete autonomous brief, so a subagent can scout it quietly and return evidence. Before each launch, the remaining group is checked again; if another task takes ownership of an attempt or changes a dependency, the rest stop with a precise partial result instead of pretending the whole party departed.
 
 ![Pixel-art campfire checkpoint](assets/safe-camp.png) **The party makes camp.** The chat making the scheduling change briefly acquires coordination, records that stable ability IDs come first, then releases it. The dragon task notes exactly where it stopped and what needs to happen before it can pick the feature back up.
 
@@ -97,8 +97,6 @@ There is no master chat to keep alive. The single-chat workflow remains the simp
 
 For concurrent work, open one chat per distinct outcome. Each chat claims only its own attempt, so unrelated item changes do not invalidate its local actions. A chat that needs to admit work, change dependencies, activate an attempt, or accept a result briefly acquires the exclusive coordination lease and releases it after that atomic change. If another chat already holds coordination, the command identifies that chat and the lease expiry so the current chat can wait or ask you about revocation.
 
-Projects may declare host-local exclusive resources such as `capture-rig`. A chat that owns an attempt must also claim each resource named by that item before live use. A conflict identifies the holding attempt, chat, host, and expiry. Offline work with no declared scarce resource remains available concurrently.
-
 ## Core model
 
 Three ideas keep responsibilities clear:
@@ -111,7 +109,7 @@ The project stores its private working state in ignored local files:
 
 ```text
 .codex/work/
-  state.sqlite3               # authoritative lifecycle, planning, leases, and history
+  state.sqlite3               # authoritative lifecycle, dependencies, leases, and history
   artifacts/                  # immutable briefs, evidence, proposals, and reviews
   views/                      # generated human-readable projections
 .codex/topics/

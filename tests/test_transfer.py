@@ -20,7 +20,7 @@ from charlie_pinboard.domain.authority_decisions import (
     RenewAttemptAuthority,
 )
 from charlie_pinboard.domain.errors import DecisionFailure
-from charlie_pinboard.domain.model import CommandAttemptAuthority, UseLeaseState
+from charlie_pinboard.domain.model import CommandAttemptAuthority
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -59,12 +59,6 @@ class PortableCopyTest(unittest.TestCase):
                         replace(lease, state=AttemptLeaseState.RELEASED) for lease in state.authority.attempt_leases
                     ),
                 ),
-                resources=replace(
-                    state.resources,
-                    use_leases=tuple(
-                        replace(lease, state=UseLeaseState.REVOKED) for lease in state.resources.use_leases[:2]
-                    ),
-                ),
             )
         state = replace(state, artifacts=replace(state.artifacts, references=tuple(references)))
         store = SQLiteWorkStore(roots.database_path)
@@ -94,16 +88,7 @@ class PortableCopyTest(unittest.TestCase):
         self.assertEqual(source_state.lifecycle.item_artifacts, copied.lifecycle.item_artifacts)
         self.assertEqual(source_state.lifecycle.attempts, copied.lifecycle.attempts)
         self.assertEqual(source_state.proposals, copied.proposals)
-        self.assertEqual(source_state.planning, copied.planning)
         self.assertEqual(source_state.artifacts, copied.artifacts)
-        self.assertEqual(source_state.resources.definitions, copied.resources.definitions)
-        self.assertEqual(source_state.resources.requirements, copied.resources.requirements)
-        self.assertEqual((), copied.resources.instances)
-        self.assertEqual((), copied.resources.locators)
-        self.assertEqual((), copied.resources.reservation_counters)
-        self.assertEqual((), copied.resources.reservations)
-        self.assertEqual((), copied.resources.use_leases)
-        self.assertEqual((), copied.resources.mutation_intents)
         self.assertTrue(
             copied.authority.coordination is None
             or copied.authority.coordination.state != CoordinationLeaseState.ACTIVE

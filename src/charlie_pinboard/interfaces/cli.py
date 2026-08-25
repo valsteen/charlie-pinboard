@@ -26,42 +26,25 @@ from charlie_pinboard.application.decision_projection import (
     project_decision_snapshot,
     project_inactive_attempt_authority,
 )
-from charlie_pinboard.application.dispatch import DispatchError, prepare_sqlite_dispatch
+from charlie_pinboard.application.dispatch import DispatchError, prepare_dispatch
 from charlie_pinboard.application.queries import (
-    DetailLevel,
+    OverviewItem,
+    ParallelItem,
+    ParallelPreview,
     QueryError,
+    WorkOverview,
     overview_from_state,
-    read_resource_conflict,
-)
-from charlie_pinboard.application.queries import (
-    OverviewItem as SQLiteOverviewItem,
-)
-from charlie_pinboard.application.queries import (
-    ParallelItem as SQLiteParallelItem,
-)
-from charlie_pinboard.application.queries import (
-    ParallelPreview as SQLiteParallelPreview,
-)
-from charlie_pinboard.application.queries import (
-    WorkOverview as SQLiteWorkOverview,
-)
-from charlie_pinboard.application.queries import (
-    preview_parallel as preview_sqlite_parallel,
-)
-from charlie_pinboard.application.queries import (
-    read_overview as read_sqlite_overview,
+    preview_parallel,
+    read_overview,
 )
 from charlie_pinboard.application.registration import InitializationError
 from charlie_pinboard.application.service import (
     change_attempt_authority,
     change_coordination_authority,
+    create_proposal,
+    execute,
 )
-from charlie_pinboard.application.service import create_proposal as create_sqlite_proposal
-from charlie_pinboard.application.service import (
-    execute as execute_sqlite_transition,
-)
-from charlie_pinboard.application.stored_state import ResourceInstanceState
-from charlie_pinboard.application.validation import ValidationReport, validate_sqlite_work_state
+from charlie_pinboard.application.validation import ValidationReport, validate_work_state
 from charlie_pinboard.domain.authority_decisions import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
@@ -83,16 +66,14 @@ from charlie_pinboard.domain.identifiers import (
     LeaseId,
     LedgerId,
     ProposalId,
-    ResourceId,
     SubjectId,
     TaskId,
 )
 from charlie_pinboard.domain.model import CoordinationCommandAuthority, ProposalRelationKind
 from charlie_pinboard.domain.proposal_decisions import CreateProposalOperation, ProposalIntake
-from charlie_pinboard.domain.resource_decisions import ResourceToken
 from charlie_pinboard.identity import PROGRAM_NAME
 from charlie_pinboard.interfaces.dispatch_brief import prepare_dispatch_from_artifact, read_dispatch_environment
-from charlie_pinboard.interfaces.errors import ActionError, LeaseError, ProposalError, ResourceError, TransitionError
+from charlie_pinboard.interfaces.errors import ActionError, LeaseError, ProposalError, TransitionError
 from charlie_pinboard.interfaces.proposals import parse_proposal
 from charlie_pinboard.interfaces.transition_input import (
     TRANSITION_ACTION_KINDS,
@@ -117,7 +98,6 @@ class CommandName(Enum):
     DISPATCH = "dispatch"
     COORDINATION = "coordination"
     ATTEMPT = "attempt"
-    RESOURCE = "resource"
     PARALLEL = "parallel"
     VIEWS = "views"
 
@@ -133,15 +113,6 @@ class CoordinationOperation(Enum):
 
 class AttemptOperation(Enum):
     ACQUIRE = "acquire"
-    RENEW = "renew"
-    RELEASE = "release"
-    REVOKE = "revoke"
-    STATUS = "status"
-
-
-class ResourceOperation(Enum):
-    DECLARE = "declare"
-    CLAIM = "claim"
     RENEW = "renew"
     RELEASE = "release"
     REVOKE = "revoke"
@@ -181,20 +152,12 @@ class CliArguments(argparse.Namespace):
     task_id: str
     ttl_seconds: int
     attempt_id: str
-    attempt_lease_id: str
-    attempt_generation: int
     coordination_lease_id: str
     coordination_generation: int
-    resource_id: str
-    resource_claim: list[list[str]] | None
-    label: str
-    scope: str
-    to: str
     item: list[str]
     item_id: str
     outcome: str
     reason: str
-    detail: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,7 +220,7 @@ class OverviewItemView(msgspec.Struct, frozen=True):
     notes: str
 
     @classmethod
-    def from_item(cls, item: SQLiteOverviewItem) -> OverviewItemView:
+    def from_item(cls, item: OverviewItem) -> OverviewItemView:
         return cls(
             item.item_id,
             item.label,
@@ -282,7 +245,7 @@ class OverviewView(msgspec.Struct, frozen=True):
     immediate_options: tuple[str, ...]
 
     @classmethod
-    def from_overview(cls, overview: SQLiteWorkOverview) -> OverviewView:
+    def from_overview(cls, overview: WorkOverview) -> OverviewView:
         return cls(
             overview.schema,
             overview.authority,
@@ -322,7 +285,6 @@ class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
     subject_revision: str
     authorization: str
     lease_id: str
-    resource_claims: tuple[ResourceToken, ...]
     input_contract: InputContractView | None = None
 
     @classmethod
@@ -349,7 +311,6 @@ class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
             subject_revision=action.subject_revision or "",
             authorization=action.authorization.value,
             lease_id=action.lease_id or "",
-            resource_claims=action.resource_claims,
             input_contract=input_contract,
         )
 
@@ -373,18 +334,16 @@ class ParallelItemView(msgspec.Struct, frozen=True):
     label: str
     state: str
     attempt_id: str | None
-    resources: tuple[str, ...]
     outcome: str
     reasons: tuple[ParallelReasonView, ...]
 
     @classmethod
-    def from_item(cls, item: SQLiteParallelItem) -> ParallelItemView:
+    def from_item(cls, item: ParallelItem) -> ParallelItemView:
         return cls(
             item.item_id,
             item.label,
             item.state.value,
             item.attempt_id,
-            item.resources,
             item.outcome.value,
             tuple(ParallelReasonView(reason.code.value, reason.message) for reason in item.reasons),
         )
@@ -393,23 +352,19 @@ class ParallelItemView(msgspec.Struct, frozen=True):
 class ParallelPreviewView(msgspec.Struct, frozen=True):
     schema: str
     revision: str
-    host_id: str
     selection: str
     safe: bool
     launchable: tuple[ParallelItemView, ...]
-    requires_selection: tuple[ParallelItemView, ...]
     excluded: tuple[ParallelItemView, ...]
 
     @classmethod
-    def from_preview(cls, preview: SQLiteParallelPreview) -> ParallelPreviewView:
+    def from_preview(cls, preview: ParallelPreview) -> ParallelPreviewView:
         return cls(
             preview.schema,
             preview.revision,
-            preview.host_id,
             preview.selection.value,
             preview.safe,
             tuple(ParallelItemView.from_item(item) for item in preview.launchable),
-            tuple(ParallelItemView.from_item(item) for item in preview.requires_selection),
             tuple(ParallelItemView.from_item(item) for item in preview.excluded),
         )
 
@@ -476,54 +431,10 @@ def _add_attempt_parser(commands: argparse._SubParsersAction[argparse.ArgumentPa
     status.add_argument("--json", action="store_true")
 
 
-def _add_resource_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    resource = commands.add_parser("resource", help="Declare and manage host-local exclusive resources.")
-    operations = resource.add_subparsers(dest="operation", required=True)
-    declare = operations.add_parser("declare")
-    declare.add_argument("--resource-id", required=True)
-    declare.add_argument("--label", required=True)
-    declare.add_argument("--scope", choices=("host-local",), required=True)
-    declare.add_argument("--coordination-lease-id", required=True)
-    declare.add_argument("--coordination-generation", required=True, type=int)
-    declare.add_argument("--json", action="store_true")
-    claim = operations.add_parser("claim")
-    claim.add_argument("--resource-id", required=True)
-    claim.add_argument("--attempt-id", required=True)
-    claim.add_argument("--task-id", required=True)
-    claim.add_argument("--host-id", required=True)
-    claim.add_argument("--ttl-seconds", required=True, type=int)
-    claim.add_argument("--attempt-lease-id", required=True)
-    claim.add_argument("--attempt-generation", required=True, type=int)
-    claim.add_argument("--json", action="store_true")
-    for operation in ("renew", "release"):
-        command = operations.add_parser(operation)
-        command.add_argument("--resource-id", required=True)
-        command.add_argument("--host-id", required=True)
-        command.add_argument("--lease-id", required=True)
-        command.add_argument("--generation", required=True, type=int)
-        if operation == "renew":
-            command.add_argument("--ttl-seconds", required=True, type=int)
-        command.add_argument("--json", action="store_true")
-    revoke = operations.add_parser("revoke")
-    revoke.add_argument("--resource-id", required=True)
-    revoke.add_argument("--host-id", required=True)
-    revoke.add_argument("--coordination-lease-id", required=True)
-    revoke.add_argument("--coordination-generation", required=True, type=int)
-    revoke.add_argument("--json", action="store_true")
-    status = operations.add_parser("status")
-    status.add_argument("--resource-id", required=True)
-    status.add_argument("--host-id")
-    status.add_argument(
-        "--detail", choices=tuple(value.value for value in DetailLevel), default=DetailLevel.COMPACT.value
-    )
-    status.add_argument("--json", action="store_true")
-
-
 def _add_parallel_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parallel = commands.add_parser("parallel", help="Preview structurally independent work without launching it.")
     operations = parallel.add_subparsers(dest="operation", required=True)
     preview = operations.add_parser("preview")
-    preview.add_argument("--host-id", required=True)
     preview.add_argument("--item", action="append", default=[])
     preview.add_argument("--json", action="store_true")
 
@@ -578,13 +489,6 @@ def build_parser() -> argparse.ArgumentParser:
     transition.add_argument("--subject-revision")
     transition.add_argument("--lease-id")
     transition.add_argument(
-        "--resource-claim",
-        action="append",
-        nargs=4,
-        metavar=("RESOURCE_ID", "HOST_ID", "LEASE_ID", "GENERATION"),
-        help="Exact resource claim token returned by actions; repeat for each required resource.",
-    )
-    transition.add_argument(
         "--authorization", choices=("coordinator", "coordination", "attempt"), default="coordinator"
     )
     transition.add_argument("--payload", required=True, type=Path)
@@ -618,7 +522,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_coordination_parser(commands)
     _add_attempt_parser(commands)
-    _add_resource_parser(commands)
     _add_parallel_parser(commands)
     views = commands.add_parser("views", help="Repair generated human-readable views.")
     views.add_subparsers(dest="operation", required=True).add_parser("rebuild")
@@ -693,7 +596,6 @@ def _action_from_values(
     subject_revision: str | None,
     authorization: str = "coordinator",
     lease_id: str | None = None,
-    resource_claim_values: list[list[str]] | None = None,
 ) -> Action:
     if ":" not in action_id:
         raise TransitionError("ACTION_ID_INVALID", "Action identity must be 'kind:subject'.")
@@ -703,17 +605,6 @@ def _action_from_values(
         authorization_kind = AuthorizationKind(authorization)
     except ValueError as error:
         raise TransitionError("ACTION_ID_INVALID", f"Unknown action or authorization kind: {error}.") from error
-    resource_claims: list[ResourceToken] = []
-    for resource_id, host_id, resource_lease_id, resource_generation in resource_claim_values or []:
-        try:
-            parsed_generation = int(resource_generation)
-        except ValueError as error:
-            raise TransitionError(
-                "RESOURCE_CLAIM_INVALID", f"Resource generation '{resource_generation}' is not an integer."
-            ) from error
-        resource_claims.append(
-            ResourceToken(ResourceId(resource_id), HostId(host_id), LeaseId(resource_lease_id), parsed_generation)
-        )
     attempt_kinds = {
         ActionKind.ACCEPT_CHECKPOINT,
         ActionKind.BLOCK,
@@ -750,11 +641,10 @@ def _action_from_values(
         subject_revision=subject_revision,
         authorization=authorization_kind,
         lease_id=LeaseId(lease_id) if lease_id is not None else None,
-        resource_claims=tuple(resource_claims),
     )
 
 
-def _reselect_sqlite_action(context: CommandContext, supplied: Action, role: Role) -> Action:
+def _reselect_action(context: CommandContext, supplied: Action, role: Role) -> Action:
     try:
         available = discover_actions(
             SQLiteWorkStore(context.work / "state.sqlite3"),
@@ -776,7 +666,6 @@ def _reselect_sqlite_action(context: CommandContext, supplied: Action, role: Rol
         supplied.subject_revision,
         supplied.authorization,
         supplied.lease_id,
-        supplied.resource_claims,
     )
     current_capability = (
         current.kind,
@@ -785,7 +674,6 @@ def _reselect_sqlite_action(context: CommandContext, supplied: Action, role: Rol
         current.subject_revision,
         current.authorization,
         current.lease_id,
-        current.resource_claims,
     )
     if current_capability != supplied_capability:
         raise ActionError(
@@ -800,7 +688,7 @@ def _root(context: CommandContext) -> int:
 
 
 def _validate(context: CommandContext) -> int:
-    report = validate_sqlite_work_state(context.work)
+    report = validate_work_state(context.work)
     if context.arguments.json:
         _write_json(_diagnostic_view(report))
     else:
@@ -820,7 +708,7 @@ def _status(context: CommandContext) -> int:
 
 
 def _overview(context: CommandContext) -> int:
-    overview = read_sqlite_overview(SQLiteWorkStore(context.work / "state.sqlite3"))
+    overview = read_overview(SQLiteWorkStore(context.work / "state.sqlite3"))
     if context.arguments.json:
         _write_json(OverviewView.from_overview(overview))
         return 0
@@ -946,7 +834,7 @@ def _proposal(context: CommandContext) -> int:
         proposal.freshness_assumptions,
     )
     store = SQLiteWorkStore(context.work / "state.sqlite3")
-    result = create_sqlite_proposal(store, CreateProposalOperation(intake), datetime.now(UTC))
+    result = create_proposal(store, CreateProposalOperation(intake), datetime.now(UTC))
     if isinstance(result, DecisionFailure):
         raise ProposalError(result.code.value, result.message)
     view_result = refresh_views(store, context.work, AffectedViews(queue=True, history=True))
@@ -965,20 +853,19 @@ def _transition(context: CommandContext) -> int:
         context.arguments.subject_revision,
         context.arguments.authorization,
         context.arguments.lease_id,
-        context.arguments.resource_claim,
     )
     try:
         payload = payload_path.read_bytes()
     except OSError as error:
         raise TransitionError("TRANSITION_INPUT_INVALID", f"Cannot read transition payload: {error}") from error
     role = Role.WORKER if action.authorization == AuthorizationKind.ATTEMPT else Role.COORDINATOR
-    action = _reselect_sqlite_action(context, action, role)
+    action = _reselect_action(context, action, role)
     parsed = parse_transition_input(action.kind.value, payload)
     command = bind_transition(action, parsed)
     if isinstance(command, DecisionFailure):
         raise TransitionError(command.code.value, command.message)
     store = SQLiteWorkStore(context.work / "state.sqlite3")
-    result = execute_sqlite_transition(store, command, datetime.now(UTC))
+    result = execute(store, command, datetime.now(UTC))
     if isinstance(result, DecisionFailure):
         raise TransitionError(result.code.value, result.message)
     state = store.snapshot()
@@ -1027,8 +914,8 @@ def _prepare_dispatch(context: CommandContext) -> int:
         "coordination" if context.arguments.lease_id is not None else "coordinator",
         context.arguments.lease_id,
     )
-    action = _reselect_sqlite_action(context, action, Role.COORDINATOR)
-    prompt = prepare_sqlite_dispatch(
+    action = _reselect_action(context, action, Role.COORDINATOR)
+    prompt = prepare_dispatch(
         SQLiteWorkStore(context.work / "state.sqlite3"),
         ArtifactRepository(resolve_durable_roots(context.project, context.work)),
         prepare_dispatch_from_artifact,
@@ -1047,11 +934,7 @@ def _prepare_dispatch(context: CommandContext) -> int:
     return 0
 
 
-def _coordination(context: CommandContext) -> int:
-    return _sqlite_coordination(context)
-
-
-def _sqlite_coordination_values(context: CommandContext) -> dict[str, str | int] | None:
+def _coordination_values(context: CommandContext) -> dict[str, str | int] | None:
     state = SQLiteWorkStore(context.work / "state.sqlite3").snapshot()
     value = state.authority.coordination
     if value is None:
@@ -1067,8 +950,8 @@ def _sqlite_coordination_values(context: CommandContext) -> dict[str, str | int]
     }
 
 
-def _emit_sqlite_coordination(context: CommandContext) -> int:
-    values = _sqlite_coordination_values(context)
+def _emit_coordination(context: CommandContext) -> int:
+    values = _coordination_values(context)
     if context.arguments.json:
         _write_json({"lease": None} if values is None else values)
     elif values is None:
@@ -1097,12 +980,12 @@ def _current_coordination_token(
     )
 
 
-def _sqlite_coordination(context: CommandContext) -> int:
+def _coordination(context: CommandContext) -> int:
     operation = CoordinationOperation(context.arguments.operation)
     if operation == CoordinationOperation.STATUS:
-        return _emit_sqlite_coordination(context)
+        return _emit_coordination(context)
     if operation == CoordinationOperation.APPLY:
-        return _sqlite_coordinated_transition(context)
+        return _coordinated_transition(context)
     store = SQLiteWorkStore(context.work / "state.sqlite3")
     state = store.snapshot()
     now = datetime.now(UTC)
@@ -1137,10 +1020,10 @@ def _sqlite_coordination(context: CommandContext) -> int:
     view_result = refresh_views(store, context.work, AffectedViews(queue=True, current_focus=True, history=True))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
-    return _emit_sqlite_coordination(context)
+    return _emit_coordination(context)
 
 
-def _sqlite_coordinated_transition(context: CommandContext) -> int:
+def _coordinated_transition(context: CommandContext) -> int:
     payload_path = context.arguments.payload
     try:
         payload = payload_path.read_bytes()
@@ -1191,7 +1074,7 @@ def _execute_borrowed_coordination(context: CommandContext, action_id: str, payl
         command = bind_transition(action, parsed)
         if isinstance(command, DecisionFailure):
             raise TransitionError(command.code.value, command.message)
-        result = execute_sqlite_transition(store, command, datetime.now(UTC))
+        result = execute(store, command, datetime.now(UTC))
         if isinstance(result, DecisionFailure):
             raise TransitionError(result.code.value, result.message)
         transition_revision = str(store.snapshot().lifecycle.project.revision)
@@ -1221,11 +1104,7 @@ def _execute_borrowed_coordination(context: CommandContext, action_id: str, payl
     return transition_revision
 
 
-def _attempt(context: CommandContext) -> int:
-    return _sqlite_attempt(context)
-
-
-def _sqlite_attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR0915 - closed authority lifecycle
+def _attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR0915 - closed authority lifecycle
     attempt_id = AttemptId(_stable_identifier(context.arguments.attempt_id, label="Attempt identity"))
     operation = AttemptOperation(context.arguments.operation)
     store = SQLiteWorkStore(context.work / "state.sqlite3")
@@ -1368,65 +1247,7 @@ def _sqlite_attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR
     return 0
 
 
-def _resource(context: CommandContext) -> int:
-    return _sqlite_resource(context)
-
-
-def _sqlite_resource(context: CommandContext) -> int:
-    operation = ResourceOperation(context.arguments.operation)
-    if operation != ResourceOperation.STATUS:
-        raise ResourceError("ACTION_NOT_AVAILABLE", "SQLite resource changes require a current typed operation.")
-    resource_id = ResourceId(_stable_identifier(context.arguments.resource_id, label="Resource identity"))
-    if context.arguments.host_id is not None:
-        _stable_identifier(context.arguments.host_id, label="Host identity")
-    store = SQLiteWorkStore(context.work / "state.sqlite3")
-    state = store.snapshot()
-    definition = next((value for value in state.resources.definitions if value.resource_id == resource_id), None)
-    if definition is None:
-        raise ResourceError("RESOURCE_INSTANCE_REQUIRED", f"Resource '{resource_id}' is not defined.")
-    values: dict[str, str | int] = {
-        "resource_id": str(resource_id),
-        "label": definition.description,
-        "scope": "host-local",
-    }
-    if context.arguments.host_id is not None:
-        instance = next(
-            (
-                value
-                for value in state.resources.instances
-                if value.resource_id == resource_id
-                and value.host_id == context.arguments.host_id
-                and value.state == ResourceInstanceState.ACTIVE
-            ),
-            None,
-        )
-        if instance is None:
-            raise ResourceError("RESOURCE_INSTANCE_REQUIRED", f"Resource '{resource_id}' has no instance on this host.")
-        conflict = read_resource_conflict(
-            store,
-            instance.instance_id,
-            DetailLevel(context.arguments.detail),
-        )
-        if context.arguments.json:
-            _write_json(conflict)
-        else:
-            print(
-                f"OK RESOURCE_CONFLICT detail={conflict.detail} instance_id={conflict.instance_id} "
-                f"consequence={conflict.consequence}"
-            )
-        return 0
-    if context.arguments.detail == DetailLevel.DETAILED.value:
-        raise ResourceError(
-            "RESOURCE_INSTANCE_REQUIRED", "Detailed resource status requires an explicit host instance."
-        )
-    if context.arguments.json:
-        _write_json(values)
-    else:
-        print("OK " + " ".join(f"{key}={value}" for key, value in values.items()))
-    return 0
-
-
-def _print_parallel_group(title: str, items: tuple[SQLiteParallelItem, ...]) -> None:
+def _print_parallel_group(title: str, items: tuple[ParallelItem, ...]) -> None:
     print(f"{title}:")
     if not items:
         print("- none")
@@ -1442,9 +1263,8 @@ def _parallel(context: CommandContext) -> int:
     operation = ParallelOperation(context.arguments.operation)
     match operation:
         case ParallelOperation.PREVIEW:
-            preview = preview_sqlite_parallel(
+            preview = preview_parallel(
                 SQLiteWorkStore(context.work / "state.sqlite3"),
-                context.arguments.host_id,
                 selected=tuple(context.arguments.item),
             )
         case _ as unreachable:
@@ -1457,7 +1277,6 @@ def _parallel(context: CommandContext) -> int:
             f"safe={'yes' if preview.safe else 'no'}"
         )
         _print_parallel_group("Ready to launch together", preview.launchable)
-        _print_parallel_group("Needs explicit selection", preview.requires_selection)
         _print_parallel_group("Not launchable", preview.excluded)
     return 0
 
@@ -1503,8 +1322,6 @@ def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhausti
             return _coordination(context)
         case CommandName.ATTEMPT:
             return _attempt(context)
-        case CommandName.RESOURCE:
-            return _resource(context)
         case CommandName.PARALLEL:
             return _parallel(context)
         case CommandName.VIEWS:
@@ -1525,7 +1342,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         TransitionError,
         TransitionInputError,
         LeaseError,
-        ResourceError,
         ActionQueryError,
         QueryError,
     ) as error:

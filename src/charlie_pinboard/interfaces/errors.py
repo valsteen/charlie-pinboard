@@ -18,9 +18,5 @@ class ProposalError(InterfaceError):
     pass
 
 
-class ResourceError(InterfaceError):
-    pass
-
-
 class TransitionError(InterfaceError):
     pass

@@ -8,7 +8,6 @@ from charlie_pinboard.application.stored_state import (
     CoordinationLeaseState,
     HistoryRecords,
     ItemDependency,
-    ItemResourceRequirement,
     ItemScopeRevision,
     LifecycleRecords,
     OriginKind,
@@ -20,8 +19,6 @@ from charlie_pinboard.application.stored_state import (
     StoredAttemptLease,
     StoredFocus,
     StoredProposal,
-    StoredResourceReservation,
-    StoredResourceUseLease,
     StoredTransitionReceipt,
     StoredWorkItem,
     StoredWorkItemState,
@@ -45,12 +42,7 @@ from charlie_pinboard.domain.identifiers import (
     HostId,
     TaskId,
 )
-from charlie_pinboard.domain.model import (
-    CanonicalJson,
-    ReservationState,
-    UseLeaseGenerationKind,
-    UseLeaseState,
-)
+from charlie_pinboard.domain.model import CanonicalJson
 from charlie_pinboard.domain.proposal_decisions import ProposalCreationDecision
 
 
@@ -70,10 +62,6 @@ def _dependency_key(value: ItemDependency) -> tuple[str, int]:
     return str(value.item_id), value.position
 
 
-def _requirement_key(value: ItemResourceRequirement) -> tuple[str, int]:
-    return str(value.item_id), value.position
-
-
 def _attempt_key(value: StoredAttempt) -> str:
     return str(value.attempt_id)
 
@@ -88,14 +76,6 @@ def _attempt_counter_key(value: AttemptLeaseCounter) -> str:
 
 def _stored_attempt_lease_key(value: StoredAttemptLease) -> str:
     return str(value.attempt_id)
-
-
-def _reservation_key(value: StoredResourceReservation) -> str:
-    return str(value.reservation_id)
-
-
-def _use_lease_key(value: StoredResourceUseLease) -> tuple[str, int]:
-    return str(value.reservation_id), value.generation
 
 
 @dataclass(frozen=True, slots=True)
@@ -654,37 +634,6 @@ def _attempt_authority_carrier_after(
             *generations,
             AttemptLeaseGeneration(after.attempt, after.generation, after.lease_id, after.task_id, after.host_id),
         )
-    use_leases = list(common.resources.use_leases)
-    for fenced in decision.fenced_task_uses:
-        index = next(
-            (
-                position
-                for position, value in enumerate(use_leases)
-                if value.reservation_id == fenced.reservation_id
-                and value.generation == fenced.generation
-                and value.generation_kind == fenced.generation_kind
-                and value.state == UseLeaseState.ACTIVE
-            ),
-            None,
-        )
-        if index is None:
-            raise MutationContractError("The attempt-authority task-use fence is stale.")
-        retained = use_leases[index]
-        use_leases[index] = replace(
-            retained,
-            expires_at=mutation.receipt.transition.decided_at,
-            state=UseLeaseState.REVOKED,
-        )
-        use_leases.append(
-            replace(
-                retained,
-                generation=retained.generation + 1,
-                generation_kind=UseLeaseGenerationKind.FENCE,
-                acquired_at=mutation.receipt.transition.decided_at,
-                expires_at=mutation.receipt.transition.decided_at,
-                state=UseLeaseState.REVOKED,
-            )
-        )
     return replace(
         common,
         authority=replace(
@@ -692,98 +641,6 @@ def _attempt_authority_carrier_after(
             attempt_counters=tuple(sorted(counters, key=_attempt_counter_key)),
             attempt_generations=tuple(sorted(generations, key=_attempt_generation_key)),
             attempt_leases=tuple(sorted(leases, key=_stored_attempt_lease_key)),
-        ),
-        resources=replace(common.resources, use_leases=tuple(sorted(use_leases, key=_use_lease_key))),
-    )
-
-
-def _transition_resources_after(mutation: TransitionMutation, common: StoredWorkState) -> StoredWorkState:
-    decision = mutation.decision
-    resources = common.resources
-    reservations = list(resources.reservations)
-    for change in decision.reservation_changes:
-        if change.before is None:
-            instance = next(
-                (value for value in resources.instances if value.instance_id == change.after.instance_id), None
-            )
-            attempt = next(
-                (value for value in common.lifecycle.attempts if value.attempt_id == change.after.attempt), None
-            )
-            if instance is None or attempt is None or instance.resource_id != change.after.resource_id:
-                raise MutationContractError("Reservation assignment requires its current instance and attempt.")
-            reservations.append(
-                StoredResourceReservation(
-                    change.after.reservation_id,
-                    change.after.instance_id,
-                    change.after.resource_id,
-                    instance.host_id,
-                    change.after.generation,
-                    change.after.attempt,
-                    attempt.item_id,
-                    change.after.state,
-                    mutation.receipt.project_revision,
-                    decision.receipt.decided_at,
-                    None,
-                )
-            )
-            continue
-        index = next(
-            (
-                position
-                for position, value in enumerate(reservations)
-                if value.reservation_id == change.before.reservation_id
-                and value.acquisition_generation == change.before.generation
-                and value.state == change.before.state
-            ),
-            None,
-        )
-        if index is None:
-            raise MutationContractError("The reservation change is stale.")
-        ended_at = (
-            None
-            if change.after.state in {ReservationState.ACTIVE, ReservationState.REVOKED_PENDING_RECOVERY}
-            else decision.receipt.decided_at
-        )
-        reservations[index] = replace(
-            reservations[index],
-            state=change.after.state,
-            subject_revision=mutation.receipt.project_revision,
-            ended_at=ended_at,
-        )
-    use_leases = list(resources.use_leases)
-    for change in decision.resource_use_lease_changes:
-        index = next(
-            (
-                position
-                for position, value in enumerate(use_leases)
-                if value.reservation_id == change.before.reservation_id
-                and value.generation == change.before.generation
-                and value.generation_kind == change.before.generation_kind
-                and value.state == change.before.state
-            ),
-            None,
-        )
-        if index is None:
-            raise MutationContractError("The task-use change is stale.")
-        before = use_leases[index]
-        use_leases[index] = replace(before, state=change.after.state, expires_at=decision.receipt.decided_at)
-        if change.before.state == UseLeaseState.ACTIVE and change.after.state == UseLeaseState.REVOKED:
-            use_leases.append(
-                replace(
-                    before,
-                    generation=before.generation + 1,
-                    generation_kind=UseLeaseGenerationKind.FENCE,
-                    acquired_at=decision.receipt.decided_at,
-                    expires_at=decision.receipt.decided_at,
-                    state=UseLeaseState.REVOKED,
-                )
-            )
-    return replace(
-        common,
-        resources=replace(
-            resources,
-            reservations=tuple(sorted(reservations, key=_reservation_key)),
-            use_leases=tuple(sorted(use_leases, key=_use_lease_key)),
         ),
     )
 
@@ -821,27 +678,9 @@ def _transition_after(mutation: TransitionMutation, common: StoredWorkState) -> 
     lifecycle = _transition_item_after(mutation, common.lifecycle)
     lifecycle = _transition_attempt_after(mutation, lifecycle)
     result = replace(common, lifecycle=lifecycle)
-    proposal_change = mutation.decision.proposal_change
-    accepted = None if proposal_change is None else proposal_change.accepted_item
-    if accepted is not None:
-        requirements = (
-            *result.resources.requirements,
-            *(
-                ItemResourceRequirement(accepted.item, resource_id, position)
-                for position, resource_id in enumerate(accepted.resource_requirements)
-            ),
-        )
-        result = replace(
-            result,
-            resources=replace(
-                result.resources,
-                requirements=tuple(sorted(requirements, key=_requirement_key)),
-            ),
-        )
     result = _transition_proposals_after(mutation, result)
     result = _transition_coordinator_after(mutation, result)
     result = _transition_attempt_authority_after(mutation, result)
-    result = _transition_resources_after(mutation, result)
     return _transition_focus_after(mutation, result)
 
 

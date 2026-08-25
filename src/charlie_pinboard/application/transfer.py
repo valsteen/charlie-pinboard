@@ -124,15 +124,6 @@ def _neutralize(database: Path, now: datetime) -> tuple[int, int, int, int]:
         with write_transaction(connection):
             connection.execute("UPDATE coordination_lease SET status = 'released' WHERE status = 'active'")
             connection.execute("UPDATE attempt_leases SET status = 'released' WHERE status = 'active'")
-            for table in (
-                "resource_mutation_intents",
-                "resource_use_leases",
-                "resource_reservations",
-                "resource_instance_locators",
-                "resource_reservation_counters",
-                "resource_instances",
-            ):
-                connection.execute(f"DELETE FROM {table}")
             connection.execute(
                 "UPDATE project_meta SET revision = ?, host_epoch = ?, updated_at = ? WHERE singleton = 1",
                 (destination_revision, destination_host_epoch, now.isoformat()),

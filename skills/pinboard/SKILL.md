@@ -16,7 +16,7 @@ Coordinate shared work through one project-local ledger while keeping knowledge 
 5. Inspecting SQLite state needs no lease. For one graph-wide transition, prepare its semantic payload first, using `pinboard input-contract <action-kind> --json` when the fields are not already known. Then use `pinboard coordination apply --task-id <current-task> --host-id <current-host> --action-id <kind:subject> --payload <file>`; it validates the payload before borrowing coordination, uses a 60-second lease by default, applies one exact legal action, and releases authority before returning. The `close` convenience command has the same borrow-and-release shape for terminal human decisions.
 6. Acquire coordination manually only when an immediate sequence genuinely requires the same authority. Prepare every input first, perform no exploratory reads while holding the lease, query only the needed action with `pinboard actions --role coordinator --lease-id <coordination-lease> --generation <generation> --action-id <kind:subject>`, and release immediately after the atomic change. Before an attempt-local change, use that attempt's lease instead.
 
-Tell the user how to proceed from the chat they are using. In one-chat use, that chat borrows coordination and owns its attempt. In multi-chat use, recommend one chat per distinct outcome. If coordination or a resource is busy, name the current holder and expiry, explain what can continue offline, and ask about revocation only when waiting is unsuitable.
+Tell the user how to proceed from the chat they are using. In one-chat use, that chat borrows coordination and owns its attempt. In multi-chat use, recommend one chat per distinct outcome. If coordination or an attempt is busy, name the current holder and expiry, explain what can continue offline, and ask about revocation only when waiting is unsuitable.
 
 Do not infer work from arbitrary Markdown, historical plans, topic folders, unchecked boxes, branch names, or transcript memory. Do not directly edit canonical lifecycle fields when the executable can perform the transition.
 
@@ -41,7 +41,7 @@ This proportional behavior applies to mutation as well as status. After a succes
 
 ## Ownership
 
-- Let `state.sqlite3` own lifecycle, focus, dependencies, attempts, leases, resources, proposals, history, and accepted artifact references.
+- Let `state.sqlite3` own lifecycle, focus, dependencies, attempts, leases, proposals, history, and accepted artifact references.
 - Let `views/` remain generated human-readable output. Never edit it as authority.
 - Let accepted brief and evidence artifacts own execution semantics and review receipts; resolve them through their SQLite artifact references.
 - Let immutable inbox rows hold proposals that have been delivered but not admitted.
@@ -68,7 +68,7 @@ The dispatch prompt identifies the canonical brief, checkpoint, and execution en
 
 Do not end the coordinating turn merely because implementation started. End with a running worker only when the user explicitly requested background execution; report that independent review remains pending and perform it before any acceptance transition.
 
-The chat performing acceptance reviews the frozen candidate without coordination. Only after reaching a complete verdict does it use one-shot coordination for the review outcome. Use `complete:<attempt>` only when the entire work-item outcome is accepted. When an independently buildable checkpoint is accepted and the canonical brief records remaining work, use `accept-checkpoint:<attempt>` with the nominal checkpoint ID, exact candidate identity, and nonempty review evidence. That transition archives the exact current `result.md` and `review.md`, pauses the same item and attempt, fences worker and task-use authority, and retains host-local reservations. Replace the canonical checkpoint section in `attempt.md`, validate it, and only then use the ordinary `resume:<item>` and dispatch flow. When review finds an actionable defect, use `return-for-correction:<attempt>` with one concise reason that identifies the durable review evidence. The transition preserves the same attempt and evidence, fences its previous worker and resource authority, and leaves it ready for an explicitly selected worker to reacquire. If an additional reviewer is useful, launch it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
+The chat performing acceptance reviews the frozen candidate without coordination. Only after reaching a complete verdict does it use one-shot coordination for the review outcome. Use `complete:<attempt>` only when the entire work-item outcome is accepted. When an independently buildable checkpoint is accepted and the canonical brief records remaining work, use `accept-checkpoint:<attempt>` with the nominal checkpoint ID, exact candidate identity, and nonempty review evidence. That transition archives the exact current `result.md` and `review.md`, pauses the same item and attempt, and fences worker authority. Replace the canonical checkpoint section in `attempt.md`, validate it, and only then use the ordinary `resume:<item>` and dispatch flow. When review finds an actionable defect, use `return-for-correction:<attempt>` with one concise reason that identifies the durable review evidence. The transition preserves the same attempt and evidence, fences its previous worker authority, and leaves it ready for an explicitly selected worker to reacquire. If an additional reviewer is useful, launch it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
 
 ## Interpret the available actions
 
@@ -98,11 +98,10 @@ Do not turn that ordering into a score. A recommendation remains an explanation,
 
 When the user asks what can run in parallel, asks to choose a batch, or explicitly asks to launch independent work, read `references/parallel-work.md` and follow it completely.
 
-Use `pinboard parallel preview` as read-only structural evidence. It does not authorize task creation, decide product priority, or select among items that share a host-local resource. Keep these outcomes distinct:
+Use `pinboard parallel preview` as read-only structural evidence. It does not authorize task creation or decide product priority. Keep these outcomes distinct:
 
 - listing or previewing creates no tasks;
 - an exact selected subset or “all safe work” is launch authority for that batch only;
-- items marked `requires-selection` stay out of an all-safe launch until the user chooses among them;
 - each external creation receives a fresh structural check and an explainable visible-task or subagent recommendation.
 
 Never describe a partial external launch as complete. Report one result per requested item and retain the current repository work as the main topic.
@@ -111,13 +110,13 @@ Never describe a partial external launch as complete. Report one result per requ
 
 1. Identify one action as `<kind>:<subject>`. When its semantic input is not already settled, run `pinboard input-contract <kind> --json` and prepare the payload before borrowing authority.
 2. For one graph-wide change, prefer `pinboard coordination apply`. Its revision-stamped result records the exact post-commit SQLite revision; coordination is then released before the receipt returns. Do not add an action-list preflight or a confirming overview.
-3. For an attempt-local change or an exceptional manual coordination sequence, query only the exact action with `pinboard actions --role <role> --lease-id <lease> --generation <generation> --action-id <kind:subject> --json`. Treat the returned action record as one opaque capability receipt. Forward its `action_id`, `expected_revision`, `coordinator_generation`, `authorization`, and every non-empty `subject_revision`, `lease_id`, and `resource_claims` value verbatim. Do not infer authorization from the current role, reuse fields from another action, or reconstruct a partial token from prose.
-4. Run `pinboard transition` with those exact token fields and the prepared payload file. Repeat `--resource-claim` once for every returned claim, preserving its resource, host, lease, and generation.
+3. For an attempt-local change or an exceptional manual coordination sequence, query only the exact action with `pinboard actions --role <role> --lease-id <lease> --generation <generation> --action-id <kind:subject> --json`. Treat the returned action record as one opaque capability receipt. Forward its `action_id`, `expected_revision`, `coordinator_generation`, `authorization`, and every non-empty `subject_revision` and `lease_id` value verbatim. Do not infer authorization from the current role, reuse fields from another action, or reconstruct a partial token from prose.
+4. Run `pinboard transition` with those exact token fields and the prepared payload file.
 5. If either path returns `ACTION_NOT_AVAILABLE`, do not retry the same command, switch roles, or skip to another lifecycle state. Validate once and refresh only the same exact action under fresh authority. If it disappeared, explain the intervening state change. If it remains available with fresh tokens, report an executable contradiction, preserve current attempt evidence, and stop transition work until the command is corrected.
 6. If a task is interrupted before a receipt is visible, never replay its retained action. Follow the interrupted-transition recovery in `references/state-and-recovery.md`; authoritative state distinguishes no change from one complete committed transition, and a fresh lease generation fences the abandoned action.
 7. Report the returned transition result. Run `pinboard validate` immediately after any non-tool edit to supporting topic or attempt artifacts.
 
-The executable rejects stale subject scopes, expired or replaced lease holders, illegal states, invalid dependencies, missing resource claims, and inconsistent references. It does not decide whether evidence is true, whether work is valuable, or what product behavior should mean.
+The executable rejects stale subject scopes, expired or replaced lease holders, illegal states, invalid dependencies, and inconsistent references. It does not decide whether evidence is true, whether work is valuable, or what product behavior should mean.
 
 For an explicit terminal human decision about non-active live work, use one `pinboard close <item> --outcome <done|dropped> --reason <text> --task-id <current-task> --host-id <current-host>` invocation instead of manufacturing intake, ready, active, or attempt states. The command borrows and releases SQLite coordination internally. Do not precede this exact command with overview or action-list reads. Use `done` when the recorded decision or outcome is complete and may satisfy dependents. Use `dropped` only when the work is intentionally abandoned and has no live dependents. Never use `close` to bypass review for active or review work; keep the normal evidence-backed completion transition there. The returned revision is the durable receipt, so do not create a temporary payload file or re-read status after success.
 

@@ -19,7 +19,7 @@ from charlie_pinboard.application.dispatch import (
     DispatchEnvironment,
     DispatchError,
     DispatchPermission,
-    prepare_sqlite_dispatch,
+    prepare_dispatch,
 )
 from charlie_pinboard.application.stored_state import ArtifactKind
 from charlie_pinboard.domain.decisions import Action, ActionKind, Role
@@ -291,7 +291,7 @@ Checkpoint outcome: independently-buildable
 Architecture impact: none — This checkpoint changes no ownership or dependency direction.
 """.encode()
         project, roots, store, action, environment = self._initialized(brief)
-        prompt = prepare_sqlite_dispatch(
+        prompt = prepare_dispatch(
             store,
             ArtifactRepository(roots),
             prepare_dispatch_from_artifact,
@@ -310,7 +310,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
             (replace(current, lease_id=LeaseId("wrong")), "COORDINATION_LEASE_REQUIRED"),
         ):
             with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
-                prepare_sqlite_dispatch(
+                prepare_dispatch(
                     store,
                     ArtifactRepository(roots),
                     prepare_dispatch_from_artifact,
@@ -325,17 +325,16 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
             environment,
             permissions=(DispatchPermission.REPOSITORY_READ, DispatchPermission.REPOSITORY_WRITE),
         )
-        with self.assertRaises(DispatchError) as unsupported:
-            prepare_sqlite_dispatch(
-                store,
-                ArtifactRepository(roots),
-                prepare_dispatch_from_artifact,
-                project,
-                action(),
-                "Local implementation",
-                mutating,
-            )
-        self.assertEqual("RESOURCE_BACKED_MUTATING_DISPATCH_UNSUPPORTED", unsupported.exception.code)
+        mutating_prompt = prepare_dispatch(
+            store,
+            ArtifactRepository(roots),
+            prepare_dispatch_from_artifact,
+            project,
+            action(),
+            "Local implementation",
+            mutating,
+        )
+        self.assertIn("Canonical brief:", mutating_prompt)
 
     def test_current_brief_parser_rejects_neighboring_invalid_launches(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
@@ -902,7 +901,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
         project, roots, store, action, environment = self._initialized(brief, project)
 
         with self.assertRaises(DispatchError) as missing:
-            prepare_sqlite_dispatch(
+            prepare_dispatch(
                 store,
                 ArtifactRepository(roots),
                 prepare_dispatch_from_artifact,
@@ -913,7 +912,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
             )
         self.assertEqual("DISPATCH_BRIEF_REVIEW_MISSING", missing.exception.code)
 
-        prompt = prepare_sqlite_dispatch(
+        prompt = prepare_dispatch(
             store,
             ArtifactRepository(roots),
             prepare_dispatch_from_artifact,
@@ -928,7 +927,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
         current = action()
         self.assertEqual(
             prompt,
-            prepare_sqlite_dispatch(
+            prepare_dispatch(
                 store,
                 ArtifactRepository(roots),
                 prepare_dispatch_from_artifact,
@@ -939,7 +938,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
             ),
         )
         with self.assertRaises(DispatchError) as collision:
-            prepare_sqlite_dispatch(
+            prepare_dispatch(
                 store,
                 ArtifactRepository(roots),
                 prepare_dispatch_from_artifact,

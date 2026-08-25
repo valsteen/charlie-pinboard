@@ -25,7 +25,6 @@ from charlie_pinboard.domain.authority_decisions import (
 )
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import HostId, LeaseId, TaskId
-from charlie_pinboard.domain.model import UseLeaseState
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -33,7 +32,7 @@ class AuthorityDecisionTest(unittest.TestCase):
     def assert_failure(self, value: object) -> None:
         self.assertIsInstance(value, DecisionFailure)
 
-    def test_inactive_attempt_proof_requires_recovered_retained_authority(self) -> None:
+    def test_inactive_attempt_proof_requires_inactive_retained_authority(self) -> None:
         state = complete_sqlite_state()
         attempt = state.lifecycle.attempts[0].attempt_id
         self.assertIsInstance(
@@ -47,11 +46,6 @@ class AuthorityDecisionTest(unittest.TestCase):
                 attempt_leases=tuple(
                     replace(value, state=AttemptLeaseState.RELEASED) for value in state.authority.attempt_leases
                 ),
-            ),
-            resources=replace(
-                state.resources,
-                use_leases=tuple(replace(value, state=UseLeaseState.RELEASED) for value in state.resources.use_leases),
-                mutation_intents=(),
             ),
         )
         proof = project_inactive_attempt_authority(recovered, attempt, SQLITE_NOW + timedelta(seconds=1))
@@ -205,7 +199,6 @@ class AuthorityDecisionTest(unittest.TestCase):
         initial = decide_attempt_authority(
             None,
             0,
-            (),
             AcquireInitialAttemptAuthority(
                 command.host_epoch,
                 command.attempt,
@@ -240,7 +233,6 @@ class AuthorityDecisionTest(unittest.TestCase):
         transfer = decide_attempt_authority(
             released_retained,
             command.generation,
-            (),
             TransferAttemptAuthority(
                 inactive,
                 coordination,
@@ -257,7 +249,6 @@ class AuthorityDecisionTest(unittest.TestCase):
         renewed = decide_attempt_authority(
             retained,
             command.generation,
-            snapshot.attempt_task_uses,
             RenewAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)),
             snapshot.coordination_lease,
         )
@@ -265,7 +256,6 @@ class AuthorityDecisionTest(unittest.TestCase):
         released = decide_attempt_authority(
             retained,
             command.generation,
-            snapshot.attempt_task_uses,
             ReleaseAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1)),
             snapshot.coordination_lease,
         )
@@ -273,7 +263,6 @@ class AuthorityDecisionTest(unittest.TestCase):
         revoked = decide_attempt_authority(
             retained,
             command.generation,
-            snapshot.attempt_task_uses,
             RevokeAttemptAuthority(
                 command.attempt,
                 command.lease_id,
@@ -314,9 +303,9 @@ class AuthorityDecisionTest(unittest.TestCase):
             SQLITE_NOW,
             SQLITE_NOW + timedelta(minutes=1),
         )
-        self.assert_failure(decide_attempt_authority(retained, command.generation, (), initial, retained_coordination))
+        self.assert_failure(decide_attempt_authority(retained, command.generation, initial, retained_coordination))
         self.assert_failure(
-            decide_attempt_authority(None, 0, (), replace(initial, expires_at=SQLITE_NOW), retained_coordination)
+            decide_attempt_authority(None, 0, replace(initial, expires_at=SQLITE_NOW), retained_coordination)
         )
         transfer = TransferAttemptAuthority(
             InactiveAttemptAuthority(
@@ -337,21 +326,10 @@ class AuthorityDecisionTest(unittest.TestCase):
             SQLITE_NOW + timedelta(seconds=1),
             SQLITE_NOW + timedelta(minutes=2),
         )
-        self.assert_failure(
-            decide_attempt_authority(
-                retained,
-                command.generation,
-                (),
-                transfer,
-                retained_coordination,
-                (command.attempt,),
-            )
-        )
-        self.assert_failure(decide_attempt_authority(retained, command.generation, (), transfer, None))
+        self.assert_failure(decide_attempt_authority(retained, command.generation, transfer, None))
         active_transfer = decide_attempt_authority(
             retained,
             command.generation,
-            (),
             transfer,
             retained_coordination,
         )
@@ -362,7 +340,6 @@ class AuthorityDecisionTest(unittest.TestCase):
             decide_attempt_authority(
                 retained,
                 command.generation,
-                (),
                 replace(transfer, expires_at=transfer.acquired_at),
                 retained_coordination,
             )
@@ -371,7 +348,6 @@ class AuthorityDecisionTest(unittest.TestCase):
             decide_attempt_authority(
                 None,
                 command.generation,
-                (),
                 RenewAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)),
                 retained_coordination,
             )
@@ -380,7 +356,6 @@ class AuthorityDecisionTest(unittest.TestCase):
             decide_attempt_authority(
                 replace(retained, state=AttemptLeaseStatus.RELEASED),
                 command.generation,
-                (),
                 RenewAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)),
                 retained_coordination,
             )
@@ -390,7 +365,6 @@ class AuthorityDecisionTest(unittest.TestCase):
             decide_attempt_authority(
                 expired,
                 command.generation,
-                (),
                 RenewAttemptAuthority(
                     replace(command, expires_at=SQLITE_NOW), SQLITE_NOW, SQLITE_NOW + timedelta(minutes=6)
                 ),
@@ -401,19 +375,8 @@ class AuthorityDecisionTest(unittest.TestCase):
             decide_attempt_authority(
                 retained,
                 command.generation,
-                (),
                 RenewAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1), command.expires_at),
                 retained_coordination,
-            )
-        )
-        self.assert_failure(
-            decide_attempt_authority(
-                retained,
-                command.generation,
-                (),
-                ReleaseAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1)),
-                retained_coordination,
-                (command.attempt,),
             )
         )
         revoke = RevokeAttemptAuthority(
@@ -423,12 +386,11 @@ class AuthorityDecisionTest(unittest.TestCase):
             coordination,
             SQLITE_NOW + timedelta(seconds=1),
         )
-        self.assert_failure(decide_attempt_authority(retained, command.generation, (), revoke, None))
+        self.assert_failure(decide_attempt_authority(retained, command.generation, revoke, None))
         self.assert_failure(
             decide_attempt_authority(
                 retained,
                 command.generation,
-                (),
                 replace(revoke, generation=command.generation + 1),
                 retained_coordination,
             )

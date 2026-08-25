@@ -26,7 +26,7 @@ def _error(code: str, path: Path, message: str, hint: str | None = None) -> Diag
     return Diagnostic(code=code, severity=Severity.ERROR, path=path, message=message, hint=hint)
 
 
-def validate_sqlite_work_state(work_root: Path) -> ValidationReport:
+def validate_work_state(work_root: Path) -> ValidationReport:
     """Validate current SQLite authority and immutable artifacts without consulting generated views."""
 
     database = work_root / "state.sqlite3"

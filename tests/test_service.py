@@ -19,7 +19,6 @@ from charlie_pinboard.application.service import (
 )
 from charlie_pinboard.application.stored_state import (
     AttemptLeaseState,
-    PlanningObligationState,
     StoredWorkState,
 )
 from charlie_pinboard.domain.authority_decisions import (
@@ -62,7 +61,6 @@ from charlie_pinboard.domain.model import (
     SubmitReviewInput,
     Timing,
     TransferCoordinatorInput,
-    UseLeaseGenerationKind,
 )
 from charlie_pinboard.domain.proposal_decisions import CreateProposalOperation, ProposalIntake
 from tests.support import SQLITE_NOW, complete_sqlite_state
@@ -74,8 +72,7 @@ class ServiceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        state = complete_sqlite_state()
-        store.initialize_state(replace(state, resources=replace(state.resources, mutation_intents=())))
+        store.initialize_state(complete_sqlite_state())
         return store
 
     def _store_with_state(self, state: StoredWorkState) -> tuple[SQLiteWorkStore, Path]:
@@ -140,7 +137,6 @@ class ServiceTest(unittest.TestCase):
         state = replace(
             state,
             authority=replace(state.authority, coordination=None),
-            resources=replace(state.resources, mutation_intents=()),
         )
         store, _database_path = self._store_with_state(state)
         acquired_at = SQLITE_NOW + timedelta(seconds=1)
@@ -213,9 +209,8 @@ class ServiceTest(unittest.TestCase):
         assert revoked_authority is not None
         self.assertEqual("revoked", revoked_authority.state.value)
 
-    def test_attempt_authority_renewal_and_release_fence_every_current_task_use(self) -> None:
+    def test_attempt_authority_renewal_and_release_persist_exact_generation(self) -> None:
         state = complete_sqlite_state()
-        state = replace(state, resources=replace(state.resources, mutation_intents=()))
         store, _database_path = self._store_with_state(state)
         current = project_decision_snapshot(store.snapshot()).command_attempt_authorities[0]
         renewed = change_attempt_authority(
@@ -238,14 +233,6 @@ class ServiceTest(unittest.TestCase):
         after = store.snapshot()
         self.assertEqual(4, after.authority.attempt_counters[0].generation_high_water)
         self.assertEqual(AttemptLeaseState.RELEASED, after.authority.attempt_leases[0].state)
-        self.assertEqual(
-            ((3, "grant", "revoked"), (4, "fence", "revoked")),
-            tuple(
-                (value.generation, value.generation_kind.value, value.state.value)
-                for value in after.resources.use_leases[-2:]
-            ),
-        )
-        self.assertEqual("active", after.resources.reservations[0].state.value)
 
     def test_attempt_authority_initial_acquire_transfer_and_revoke_persist_exact_generations(self) -> None:
         state = complete_sqlite_state()
@@ -257,7 +244,6 @@ class ServiceTest(unittest.TestCase):
                 attempt_generations=(),
                 attempt_leases=(),
             ),
-            resources=replace(state.resources, use_leases=(), mutation_intents=()),
         )
         store, _database_path = self._store_with_state(state)
         attempt = state.lifecycle.attempts[0]
@@ -277,7 +263,6 @@ class ServiceTest(unittest.TestCase):
         self.assertNotIsInstance(acquired, DecisionFailure)
 
         normal_state = complete_sqlite_state()
-        normal_state = replace(normal_state, resources=replace(normal_state.resources, mutation_intents=()))
         normal_store, _normal_database_path = self._store_with_state(normal_state)
         snapshot = project_decision_snapshot(normal_store.snapshot())
         current = snapshot.command_attempt_authorities[0]
@@ -359,7 +344,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(prior.generation + 1, current.generation)
         self.assertEqual((TaskId("next-task"), HostId("next-host")), (current.task_id, current.host_id))
 
-    def test_completion_fences_attempt_authority_and_releases_all_resource_authority_atomically(self) -> None:
+    def test_completion_fences_attempt_authority_atomically(self) -> None:
         store = self._store()
         before = store.snapshot()
         prior_attempt = before.authority.attempt_leases[0]
@@ -374,14 +359,6 @@ class ServiceTest(unittest.TestCase):
         current_attempt = after.authority.attempt_leases[0]
         self.assertEqual(prior_attempt.generation + 1, current_attempt.generation)
         self.assertEqual(AttemptLeaseState.REVOKED, current_attempt.state)
-        self.assertTrue(all(value.state.value == "released" for value in after.resources.reservations))
-        self.assertTrue(
-            all(
-                value.state.value != "active"
-                for value in after.resources.use_leases
-                if value.generation_kind == UseLeaseGenerationKind.GRANT
-            )
-        )
 
     def test_sqlite_proposal_intake_is_immutable_and_does_not_require_a_coordination_lease(self) -> None:
         state = complete_sqlite_state()
@@ -525,46 +502,6 @@ class ServiceTest(unittest.TestCase):
         assert isinstance(rejected, DecisionFailure)
         self.assertEqual(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, rejected.code)
         self.assertEqual(terminal, store.snapshot())
-
-    def test_completion_rejects_a_stored_unresolved_planning_impact(self) -> None:
-        complete_state = complete_sqlite_state()
-        complete_state = replace(
-            complete_state,
-            resources=replace(complete_state.resources, mutation_intents=()),
-        )
-        obligation = replace(
-            complete_state.planning.obligations[0],
-            state=PlanningObligationState.UNRESOLVED,
-            disposition=None,
-            evaluated_scope_revision=None,
-            evaluated_scope_digest=None,
-            resulting_scope_revision=None,
-            resulting_scope_digest=None,
-            primary_replacement_item_id=None,
-            outcome_evidence=None,
-            reason=None,
-            resolved_project_revision=None,
-            resolved_at=None,
-        )
-        base_state = replace(
-            complete_state,
-            planning=replace(complete_state.planning, impacts=(), obligations=(), replacements=()),
-        )
-        action_store, _action_database = self._store_with_state(base_state)
-        action = self._coordinator_action(action_store, ActionKind.COMPLETE)
-        command = bind_transition(action, EvidenceInput("The accepted outcome is complete."))
-        self.assertNotIsInstance(command, DecisionFailure)
-        impacted_state = replace(
-            complete_state,
-            planning=replace(complete_state.planning, obligations=(obligation,), replacements=()),
-        )
-        impacted_store, _impacted_database = self._store_with_state(impacted_state)
-
-        rejected_completion = execute(impacted_store, command, SQLITE_NOW + timedelta(seconds=1))
-
-        self.assertIsInstance(rejected_completion, DecisionFailure)
-        self.assertEqual(DecisionFailureCode.PLANNING_IMPACT_UNRESOLVED, rejected_completion.code)
-        self.assertEqual(impacted_state, impacted_store.snapshot())
 
 
 if __name__ == "__main__":

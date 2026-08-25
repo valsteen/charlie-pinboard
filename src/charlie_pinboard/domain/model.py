@@ -11,11 +11,7 @@ from charlie_pinboard.domain.identifiers import (
     HostId,
     ItemId,
     LeaseId,
-    PlanningImpactId,
     ProposalId,
-    ReservationId,
-    ResourceId,
-    ResourceInstanceId,
     TaskId,
 )
 
@@ -146,7 +142,6 @@ class AcceptProposalInput:
     next_action: str
     timing: Timing | None = None
     depends_on: tuple[ItemId, ...] = ()
-    resource_requirements: tuple[ResourceId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,12 +203,6 @@ class ScopeDependency:
 
 
 @dataclass(frozen=True, slots=True)
-class ResourceRequirement:
-    position: int
-    resource_id: ResourceId
-
-
-@dataclass(frozen=True, slots=True)
 class ItemScope:
     item_id: ItemId
     user_label: str
@@ -222,7 +211,6 @@ class ItemScope:
     effect: str | None
     unlock: str | None
     dependencies: tuple[ScopeDependency, ...] = ()
-    resource_requirements: tuple[ResourceRequirement, ...] = ()
     artifacts: tuple[ScopeArtifact, ...] = ()
 
 
@@ -234,87 +222,10 @@ class ScopeAnchor:
     scope: ItemScope
 
 
-class PlanningDisposition(Enum):
-    UNCHANGED = "unchanged"
-    REVISED = "revised"
-    BLOCKED = "blocked"
-    DEFERRED = "deferred"
-    DROPPED = "dropped"
-    SUPERSEDED = "superseded"
-
-
-@dataclass(frozen=True, slots=True)
-class PlanningObligation:
-    target: ItemId
-    position: int
-    observed_scope_revision: int
-    observed_scope_digest: str = ""
-    disposition: PlanningDisposition | None = None
-    evaluated_scope_revision: int | None = None
-    evaluated_scope_digest: str | None = None
-    resulting_scope_revision: int | None = None
-    resulting_scope_digest: str | None = None
-    replacements: tuple[ItemId, ...] = ()
-    outcome_evidence: str | None = None
-    reason: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class PlanningImpact:
-    impact_id: PlanningImpactId
-    source_item: ItemId
-    source_attempt: AttemptId | None
-    source_scope_revision: int
-    source_scope_digest: str
-    summary: str
-    evidence: str
-    obligations: tuple[PlanningObligation, ...]
-
-
-class ReservationState(Enum):
-    ACTIVE = "active"
-    RELEASED = "released"
-    REVOKED = "revoked"
-    REVOKED_PENDING_RECOVERY = "revoked-pending-recovery"
-
-
-class UseLeaseState(Enum):
-    ACTIVE = "active"
-    RELEASED = "released"
-    REVOKED = "revoked"
-    EXPIRED = "expired"
-
-
 class CoordinationLeaseStatus(Enum):
     ACTIVE = "active"
     RELEASED = "released"
     REVOKED = "revoked"
-
-
-class UseLeaseGenerationKind(Enum):
-    GRANT = "grant"
-    FENCE = "fence"
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceReservation:
-    reservation_id: ReservationId
-    resource_id: ResourceId
-    instance_id: ResourceInstanceId
-    attempt: AttemptId
-    generation: int
-    state: ReservationState
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceUseLease:
-    lease_id: LeaseId
-    reservation_id: ReservationId
-    attempt_lease_id: LeaseId
-    attempt_generation: int
-    generation: int
-    state: UseLeaseState
-    generation_kind: UseLeaseGenerationKind = UseLeaseGenerationKind.GRANT
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,38 +264,12 @@ class CoordinationLeaseAuthority:
     state: CoordinationLeaseStatus
 
 
-class MutationIntentState(Enum):
-    PLANNED = "planned"
-    ACCEPTED = "accepted"
-    RECONCILED = "reconciled"
-    HUMAN_PRESERVED = "human-preserved"
-    ABANDONED = "abandoned"
-
-
-@dataclass(frozen=True, slots=True)
-class AttemptTaskUse:
-    reservation_id: ReservationId
-    attempt_id: AttemptId
-    generation: int
-    generation_kind: UseLeaseGenerationKind
-    state: UseLeaseState
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceAuthority:
-    resource_id: ResourceId
-    host_id: HostId
-    lease_id: LeaseId
-    generation: int
-
-
 @dataclass(frozen=True, slots=True)
 class AttemptAuthority:
     attempt: AttemptId
     item: ItemId
     lease_id: LeaseId | None
     generation: int
-    resources: tuple[ResourceAuthority, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -436,12 +321,6 @@ class LedgerSnapshot:
     coordination_authority: CoordinationCommandAuthority | None = None
     history_items: tuple[ItemId, ...] = ()
     scopes: tuple[ScopeAnchor, ...] = ()
-    planning_impacts: tuple[PlanningImpact, ...] = ()
-    declared_resources: tuple[ResourceId, ...] = ()
-    resource_reservations: tuple[ResourceReservation, ...] = ()
-    resource_use_leases: tuple[ResourceUseLease, ...] = ()
-    attempt_task_uses: tuple[AttemptTaskUse, ...] = ()
-    planned_mutation_attempts: tuple[AttemptId, ...] = ()
     host_epoch: int = 0
     focus_item: ItemId | None = None
     focus_attempt: AttemptId | None = None

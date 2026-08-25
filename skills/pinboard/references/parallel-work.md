@@ -10,11 +10,10 @@ Do not use it merely because more than one item exists. Ordinary next-work selec
 
 ## Build the preview
 
-1. Require authority `sqlite-v1` and identify the host on which host-local resources would be used.
-2. Run `pinboard parallel preview --host-id <host> --json` without a coordination lease.
-3. Present the result in three compact groups:
+1. Require authority `sqlite-v1`.
+2. Run `pinboard parallel preview --json` without a coordination lease.
+3. Present the result in two compact groups:
    - **Ready together:** the unambiguous all-safe set.
-   - **Choose one:** candidates that structurally qualify alone but conflict over a host-local resource.
    - **Not ready:** excluded items with the command's exact reason translated into ordinary language.
 4. Add one execution-form recommendation to every launchable item:
    - **Visible task** when the item is ready but has no accepted attempt, its brief is incomplete, or design, refinement, new authority, live-application work, external writes, or likely user input remain.
@@ -30,12 +29,12 @@ Treat either of these as explicit launch authority:
 - the user names an exact subset from the preview;
 - the user says to launch all safe work.
 
-“All safe” means only the preview's **Ready together** group. It never includes **Choose one** candidates. Ask one concrete selection question if the all-safe set is empty but resource-conflicting candidates remain.
+“All safe” means the preview's **Ready together** group.
 
 Before creating anything, rerun one selected preview containing every authorized item:
 
 ```text
-pinboard parallel preview --host-id <host> --item <first> --item <second> --json
+pinboard parallel preview --item <first> --item <second> --json
 ```
 
 Proceed only when `safe` is true. Preserve its revision as the batch observation. If it is false, show the changed reason and ask only for the decision that the new state requires.

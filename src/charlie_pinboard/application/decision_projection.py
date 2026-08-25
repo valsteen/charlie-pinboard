@@ -6,11 +6,8 @@ from charlie_pinboard.application.stored_state import (
     CoordinationLeaseState,
     ItemArtifactLink,
     ItemDependency,
-    ItemResourceRequirement,
     ProposalEvidence,
     ProposalFreshness,
-    StoredPlanningObligation,
-    StoredPlanningReplacement,
     StoredWorkItem,
     StoredWorkItemState,
     StoredWorkState,
@@ -22,22 +19,14 @@ from charlie_pinboard.domain.model import (
     ArtifactRecord,
     AttemptAuthority,
     AttemptRecord,
-    AttemptTaskUse,
     CommandAttemptAuthority,
     CoordinationCommandAuthority,
     CoordinationLeaseAuthority,
     CoordinationLeaseStatus,
     ItemScope,
     LedgerSnapshot,
-    MutationIntentState,
-    PlanningImpact,
-    PlanningObligation,
     ProposalRecord,
     ProposalRelationKind,
-    ResourceAuthority,
-    ResourceRequirement,
-    ResourceReservation,
-    ResourceUseLease,
     ScopeAnchor,
     ScopeArtifact,
     ScopeDependency,
@@ -45,7 +34,6 @@ from charlie_pinboard.domain.model import (
     WorkItem,
     WorkState,
 )
-from charlie_pinboard.domain.resource_decisions import current_authorizing_grant
 
 
 def project_inactive_attempt_authority(
@@ -80,28 +68,6 @@ def project_inactive_attempt_authority(
         status = AttemptLeaseStatus(lease.state.value)
     else:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "Attempt authority is not inactive.")
-    later_active_use = any(
-        value.attempt_id == attempt_id
-        and value.state.value == "active"
-        and value.generation_kind.value == "grant"
-        and not any(
-            later.reservation_id == value.reservation_id and later.generation > value.generation
-            for later in state.resources.use_leases
-        )
-        for value in state.resources.use_leases
-    )
-    planned_intent = any(
-        value.attempt_id == attempt_id and value.state.value == "planned" for value in state.resources.mutation_intents
-    )
-    recovery_pending = any(
-        value.attempt_id == attempt_id and value.state.value == "revoked-pending-recovery"
-        for value in state.resources.reservations
-    )
-    if later_active_use or planned_intent or recovery_pending:
-        return DecisionFailure(
-            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
-            "Inactive attempt proof requires completed authority and resource recovery.",
-        )
     return InactiveAttemptAuthority(
         state.lifecycle.project.host_epoch,
         attempt_id,
@@ -119,20 +85,8 @@ def _dependency_position(value: ItemDependency) -> int:
     return value.position
 
 
-def _requirement_position(value: ItemResourceRequirement) -> int:
-    return value.position
-
-
 def _artifact_position(value: ItemArtifactLink) -> tuple[str, int]:
     return value.role.value, value.position
-
-
-def _replacement_position(value: StoredPlanningReplacement) -> int:
-    return value.position
-
-
-def _obligation_position(value: StoredPlanningObligation) -> int:
-    return value.position
 
 
 def _proposal_evidence_position(value: ProposalEvidence) -> int:
@@ -202,16 +156,6 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         )
         for item in state.lifecycle.work_items
     }
-    requirements_by_item = {
-        item.item_id: tuple(
-            ResourceRequirement(link.position, link.resource_id)
-            for link in sorted(
-                (candidate for candidate in state.resources.requirements if candidate.item_id == item.item_id),
-                key=_requirement_position,
-            )
-        )
-        for item in state.lifecycle.work_items
-    }
     artifact_by_id = {artifact.artifact_ref_id: artifact for artifact in state.artifacts.references}
     artifacts_by_item = {
         item.item_id: tuple(
@@ -245,7 +189,6 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
                 item.effect,
                 item.unlock,
                 dependencies_by_item[item.item_id],
-                requirements_by_item[item.item_id],
                 artifacts_by_item[item.item_id],
             ),
         )
@@ -269,69 +212,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         for item in live_items
     )
 
-    planning_impacts = tuple(
-        PlanningImpact(
-            impact.impact_id,
-            impact.source_item_id,
-            impact.source_attempt_id,
-            impact.source_scope_revision,
-            impact.source_scope_digest,
-            impact.summary,
-            impact.evidence,
-            tuple(
-                PlanningObligation(
-                    obligation.target_item_id,
-                    obligation.position,
-                    obligation.observed_scope_revision,
-                    obligation.observed_scope_digest,
-                    obligation.disposition,
-                    obligation.evaluated_scope_revision,
-                    obligation.evaluated_scope_digest,
-                    obligation.resulting_scope_revision,
-                    obligation.resulting_scope_digest,
-                    tuple(
-                        replacement.replacement_item_id
-                        for replacement in sorted(
-                            (
-                                candidate
-                                for candidate in state.planning.replacements
-                                if candidate.impact_id == obligation.impact_id
-                                and candidate.target_item_id == obligation.target_item_id
-                            ),
-                            key=_replacement_position,
-                        )
-                    ),
-                    obligation.outcome_evidence,
-                    obligation.reason,
-                )
-                for obligation in sorted(
-                    (candidate for candidate in state.planning.obligations if candidate.impact_id == impact.impact_id),
-                    key=_obligation_position,
-                )
-            ),
-        )
-        for impact in state.planning.impacts
-    )
-
     attempt_by_id = {attempt.attempt_id: attempt for attempt in state.lifecycle.attempts}
-    reservation_by_id = {reservation.reservation_id: reservation for reservation in state.resources.reservations}
-    projected_use_leases = tuple(
-        ResourceUseLease(
-            use_lease.lease_id,
-            use_lease.reservation_id,
-            use_lease.attempt_lease_id,
-            use_lease.attempt_lease_generation,
-            use_lease.generation,
-            use_lease.state,
-            use_lease.generation_kind,
-        )
-        for use_lease in state.resources.use_leases
-    )
-    active_use_leases = tuple(
-        grant
-        for reservation in state.resources.reservations
-        if (grant := current_authorizing_grant(projected_use_leases, reservation.reservation_id)) is not None
-    )
     attempt_anchors = {(anchor.attempt_id, anchor.generation): anchor for anchor in state.authority.attempt_generations}
     attempt_authorities = tuple(
         AttemptAuthority(
@@ -341,17 +222,6 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             if lease.state == AttemptLeaseState.ACTIVE
             else None,
             lease.generation,
-            tuple(
-                ResourceAuthority(
-                    reservation_by_id[use_lease.reservation_id].resource_id,
-                    reservation_by_id[use_lease.reservation_id].host_id,
-                    use_lease.lease_id,
-                    use_lease.generation,
-                )
-                for use_lease in active_use_leases
-                if reservation_by_id[use_lease.reservation_id].attempt_id == lease.attempt_id
-                and lease.state == AttemptLeaseState.ACTIVE
-            ),
         )
         for lease in state.authority.attempt_leases
     )
@@ -454,35 +324,6 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         coordination_authority=coordination_authority,
         history_items=tuple(item.item_id for item in state.lifecycle.work_items if _live_state(item.state) is None),
         scopes=scopes,
-        planning_impacts=planning_impacts,
-        declared_resources=tuple(definition.resource_id for definition in state.resources.definitions),
-        resource_reservations=tuple(
-            ResourceReservation(
-                reservation.reservation_id,
-                reservation.resource_id,
-                reservation.instance_id,
-                reservation.attempt_id,
-                reservation.acquisition_generation,
-                reservation.state,
-            )
-            for reservation in state.resources.reservations
-        ),
-        resource_use_leases=projected_use_leases,
-        attempt_task_uses=tuple(
-            AttemptTaskUse(
-                use_lease.reservation_id,
-                use_lease.attempt_id,
-                use_lease.generation,
-                use_lease.generation_kind,
-                use_lease.state,
-            )
-            for use_lease in state.resources.use_leases
-        ),
-        planned_mutation_attempts=tuple(
-            intent.attempt_id
-            for intent in state.resources.mutation_intents
-            if intent.state == MutationIntentState.PLANNED
-        ),
         host_epoch=state.lifecycle.project.host_epoch,
         focus_item=state.focus.item_id,
         focus_attempt=state.focus.attempt_id,

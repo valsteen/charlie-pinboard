@@ -10,7 +10,7 @@ _PROPOSAL_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 @dataclass(frozen=True, slots=True)
-class SQLiteLocalIntakeAuthority:
+class LocalIntakeAuthority:
     project_revision: int
     host_epoch: int
 
@@ -49,7 +49,7 @@ def _proposal_text(value: str) -> bool:
 
 
 def decide_proposal_creation(
-    authority: SQLiteLocalIntakeAuthority,
+    authority: LocalIntakeAuthority,
     current_project_revision: int,
     current_host_epoch: int,
     existing: tuple[ProposalId, ...],
@@ -57,8 +57,8 @@ def decide_proposal_creation(
     operation: CreateProposalOperation,
 ) -> ProposalCreationDecision | DecisionFailure:
     intake = operation.intake
-    if authority != SQLiteLocalIntakeAuthority(current_project_revision, current_host_epoch):
-        return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "SQLite intake authority is stale.")
+    if authority != LocalIntakeAuthority(current_project_revision, current_host_epoch):
+        return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Local intake authority is stale.")
     if not _PROPOSAL_ID.fullmatch(str(intake.proposal_id)):
         return DecisionFailure(
             DecisionFailureCode.PROPOSAL_IDENTITY_INVALID,

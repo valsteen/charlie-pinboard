@@ -43,36 +43,20 @@ from charlie_pinboard.application.stored_state import (
     HistoryRecords,
     ItemArtifactLink,
     ItemDependency,
-    ItemResourceRequirement,
     ItemScopeRevision,
     LifecycleRecords,
-    MutationIntentState,
     OriginKind,
-    PlanningObligationState,
-    PlanningRecords,
     ProjectRecord,
     ProposalDisposition,
     ProposalEvidence,
     ProposalFreshness,
     ProposalRecords,
     ProposalRelation,
-    ResourceInstanceLocator,
-    ResourceInstanceState,
-    ResourceMutationIntent,
-    ResourceRecords,
     StoredAttempt,
     StoredAttemptLease,
     StoredCoordinationLease,
     StoredFocus,
-    StoredPlanningImpact,
-    StoredPlanningObligation,
-    StoredPlanningReplacement,
     StoredProposal,
-    StoredReservationCounter,
-    StoredResourceDefinition,
-    StoredResourceInstance,
-    StoredResourceReservation,
-    StoredResourceUseLease,
     StoredTransitionReceipt,
     StoredWorkItem,
     StoredWorkItemState,
@@ -92,22 +76,13 @@ from charlie_pinboard.domain.identifiers import (
     HostId,
     ItemId,
     LeaseId,
-    MutationIntentId,
-    PlanningImpactId,
     ProposalId,
-    ReservationId,
-    ResourceId,
-    ResourceInstanceId,
     TaskId,
 )
 from charlie_pinboard.domain.model import (
     ArtifactRole,
     AttemptState,
-    PlanningDisposition,
-    ReservationState,
     Timing,
-    UseLeaseGenerationKind,
-    UseLeaseState,
 )
 
 
@@ -158,15 +133,6 @@ def _optional_time(row: sqlite3.Row, key: str) -> datetime | None:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has an invalid timestamp.") from error
 
 
-def _canonical_json(row: sqlite3.Row, key: str) -> CanonicalJson:
-    value = _text(row, key)
-    try:
-        decoded = msgspec.json.decode(value, type=msgspec.Raw)
-    except msgspec.DecodeError as error:
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has invalid JSON.") from error
-    return CanonicalJson(bytes(decoded))
-
-
 def _stored_json(row: sqlite3.Row, key: str) -> CanonicalJson:
     """Return JSON bytes whose canonical whitespace is owned by the stored history schema."""
 
@@ -176,17 +142,6 @@ def _stored_json(row: sqlite3.Row, key: str) -> CanonicalJson:
     except msgspec.DecodeError as error:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has invalid JSON.") from error
     return CanonicalJson(encoded)
-
-
-def _optional_canonical_json(row: sqlite3.Row, key: str) -> CanonicalJson | None:
-    value = _optional_text(row, key)
-    if value is None:
-        return None
-    try:
-        decoded = msgspec.json.decode(value, type=msgspec.Raw)
-    except msgspec.DecodeError as error:
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has invalid JSON.") from error
-    return CanonicalJson(bytes(decoded))
 
 
 def _enum_value[EnumValue: Enum](constructor: type[EnumValue], row: sqlite3.Row, key: str) -> EnumValue:
@@ -213,73 +168,8 @@ def _validate_attempt_authority(state: StoredWorkState, error_code: StorageError
             raise StorageError(error_code, "The current attempt lease does not match its retained counter.")
 
 
-def _validate_reservation_authority(state: StoredWorkState, error_code: StorageErrorCode) -> None:
-    reservation_counters = {
-        value.instance_id: value.generation_high_water for value in state.resources.reservation_counters
-    }
-    for reservation in state.resources.reservations:
-        high_water = reservation_counters.get(reservation.instance_id)
-        if high_water is None or reservation.acquisition_generation > high_water:
-            raise StorageError(error_code, "A reservation generation exceeds its retained instance counter.")
-
-
-def _validate_use_authority(state: StoredWorkState, error_code: StorageErrorCode) -> None:
-    instances = {value.instance_id: value for value in state.resources.instances}
-    locators = {value.instance_id: value for value in state.resources.locators}
-    reservations = {value.reservation_id: value for value in state.resources.reservations}
-    attempt_leases = {value.attempt_id: value for value in state.authority.attempt_leases}
-    attempt_anchors = {(value.attempt_id, value.generation): value for value in state.authority.attempt_generations}
-    use_leases_by_reservation: dict[ReservationId, dict[int, StoredResourceUseLease]] = {}
-    for lease in state.resources.use_leases:
-        use_leases_by_reservation.setdefault(lease.reservation_id, {})[lease.generation] = lease
-    for reservation_id, generations in use_leases_by_reservation.items():
-        latest_generation = max(generations)
-        for lease in generations.values():
-            if lease.generation_kind == UseLeaseGenerationKind.GRANT and lease.state == UseLeaseState.REVOKED:
-                fence = generations.get(lease.generation + 1)
-                if (
-                    fence is None
-                    or fence.generation_kind != UseLeaseGenerationKind.FENCE
-                    or fence.state != UseLeaseState.REVOKED
-                ):
-                    raise StorageError(error_code, "A revoked task-use grant has no immediately following fence.")
-            if lease.state != UseLeaseState.ACTIVE:
-                continue
-            reservation = reservations.get(reservation_id)
-            instance = instances.get(lease.instance_id)
-            locator = locators.get(lease.instance_id)
-            attempt_lease = attempt_leases.get(lease.attempt_id)
-            attempt_anchor = (
-                None
-                if attempt_lease is None
-                else attempt_anchors.get((attempt_lease.attempt_id, attempt_lease.generation))
-            )
-            if (
-                lease.generation != latest_generation
-                or lease.generation_kind != UseLeaseGenerationKind.GRANT
-                or reservation is None
-                or reservation.state != ReservationState.ACTIVE
-                or lease.host_epoch != state.lifecycle.project.host_epoch
-                or instance is None
-                or lease.instance_subject_revision != instance.subject_revision
-                or locator is None
-                or lease.observation_generation != locator.observation_generation
-                or lease.observation_digest != locator.observation_digest
-                or attempt_lease is None
-                or attempt_lease.state != AttemptLeaseState.ACTIVE
-                or attempt_anchor is None
-                or lease.attempt_lease_generation != attempt_lease.generation
-                or lease.attempt_lease_id != attempt_anchor.lease_id
-                or lease.task_id != attempt_anchor.task_id
-                or lease.host_id != attempt_anchor.host_id
-            ):
-                raise StorageError(error_code, "An active task-use lease contradicts current resource authority.")
-
-
 def _validate_current_state(state: StoredWorkState, error_code: StorageErrorCode) -> None:
     _validate_attempt_authority(state, error_code)
-    _validate_reservation_authority(state, error_code)
-    _validate_use_authority(state, error_code)
 
 
 class _StoredStateReader:
@@ -293,10 +183,8 @@ class _StoredStateReader:
         state = StoredWorkState(
             self._lifecycle(),
             self._proposals(),
-            self._planning(),
             self._artifacts(),
             self._authority(),
-            self._resources(),
             self._history(),
             self._focus(),
         )
@@ -448,66 +336,6 @@ class _StoredStateReader:
         )
         return ProposalRecords(proposals, evidence, freshness)
 
-    def _planning(self) -> PlanningRecords:
-        impacts: list[StoredPlanningImpact] = []
-        for row in self._rows("SELECT * FROM planning_impacts ORDER BY impact_id"):
-            if _integer(row, "primary_target_position") != 0:
-                raise StorageError(
-                    StorageErrorCode.INVALID_STATE, "Planning impact primary target must be position zero."
-                )
-            impacts.append(
-                StoredPlanningImpact(
-                    PlanningImpactId(_text(row, "impact_id")),
-                    ItemId(_text(row, "source_item_id")),
-                    None if (attempt := _optional_text(row, "source_attempt_id")) is None else AttemptId(attempt),
-                    _integer(row, "source_scope_revision"),
-                    _text(row, "source_scope_digest"),
-                    ItemId(_text(row, "primary_target_item_id")),
-                    _text(row, "summary"),
-                    _text(row, "evidence"),
-                    _integer(row, "recorded_project_revision"),
-                    _time(row, "recorded_at"),
-                )
-            )
-        obligations = tuple(
-            StoredPlanningObligation(
-                PlanningImpactId(_text(row, "impact_id")),
-                ItemId(_text(row, "target_item_id")),
-                _integer(row, "target_position"),
-                _integer(row, "observed_scope_revision"),
-                _text(row, "observed_scope_digest"),
-                _enum_value(PlanningObligationState, row, "status"),
-                None
-                if (disposition := _optional_text(row, "disposition")) is None
-                else PlanningDisposition(disposition),
-                _optional_integer(row, "evaluated_scope_revision"),
-                _optional_text(row, "evaluated_scope_digest"),
-                _optional_integer(row, "resulting_scope_revision"),
-                _optional_text(row, "resulting_scope_digest"),
-                None
-                if (replacement := _optional_text(row, "primary_replacement_item_id")) is None
-                else ItemId(replacement),
-                _optional_text(row, "outcome_evidence"),
-                _optional_text(row, "reason"),
-                _optional_integer(row, "resolved_project_revision"),
-                _time(row, "recorded_at"),
-                _optional_time(row, "resolved_at"),
-            )
-            for row in self._rows("SELECT * FROM planning_impact_obligations ORDER BY impact_id, target_position")
-        )
-        replacements = tuple(
-            StoredPlanningReplacement(
-                PlanningImpactId(_text(row, "impact_id")),
-                ItemId(_text(row, "target_item_id")),
-                ItemId(_text(row, "replacement_item_id")),
-                _integer(row, "position"),
-            )
-            for row in self._rows(
-                "SELECT * FROM planning_impact_replacements ORDER BY impact_id, target_item_id, position"
-            )
-        )
-        return PlanningRecords(tuple(impacts), obligations, replacements)
-
     def _artifacts(self) -> ArtifactRecords:
         return ArtifactRecords(
             tuple(
@@ -567,148 +395,6 @@ class _StoredStateReader:
             for row in self._rows("SELECT * FROM attempt_leases ORDER BY attempt_id")
         )
         return AuthorityRecords(coordination, counters, generations, leases)
-
-    def _resources(self) -> ResourceRecords:
-        definitions: list[StoredResourceDefinition] = []
-        for row in self._rows("SELECT * FROM resources ORDER BY resource_id"):
-            _expect(row, "scope", "portable-definition")
-            _expect(row, "allocation_mode", "exclusive-instance")
-            definitions.append(
-                StoredResourceDefinition(
-                    ResourceId(_text(row, "resource_id")),
-                    _enum_value(OriginKind, row, "origin_kind"),
-                    _text(row, "kind"),
-                    _text(row, "description"),
-                    _integer(row, "subject_revision"),
-                    _optional_time(row, "origin_created_at"),
-                    _optional_time(row, "origin_updated_at"),
-                    _time(row, "recorded_at"),
-                    _time(row, "updated_at"),
-                )
-            )
-        requirements = tuple(
-            ItemResourceRequirement(
-                ItemId(_text(row, "item_id")),
-                ResourceId(_text(row, "resource_id")),
-                _integer(row, "position"),
-            )
-            for row in self._rows("SELECT * FROM item_resources ORDER BY item_id, position")
-        )
-        instances = tuple(
-            StoredResourceInstance(
-                ResourceInstanceId(_text(row, "instance_id")),
-                ResourceId(_text(row, "resource_id")),
-                HostId(_text(row, "host_id")),
-                _text(row, "discovery_kind"),
-                _text(row, "discovery_fingerprint"),
-                _enum_value(ResourceInstanceState, row, "status"),
-                _integer(row, "subject_revision"),
-                _time(row, "recorded_at"),
-                _time(row, "updated_at"),
-            )
-            for row in self._rows("SELECT * FROM resource_instances ORDER BY instance_id")
-        )
-        locators = tuple(
-            ResourceInstanceLocator(
-                ResourceInstanceId(_text(row, "instance_id")),
-                HostId(_text(row, "host_id")),
-                _text(row, "locator_schema"),
-                _canonical_json(row, "locator_json"),
-                _integer(row, "observation_generation"),
-                _text(row, "observation_digest"),
-                _time(row, "observed_at"),
-            )
-            for row in self._rows("SELECT * FROM resource_instance_locators ORDER BY instance_id")
-        )
-        counters = tuple(
-            StoredReservationCounter(
-                ResourceInstanceId(_text(row, "instance_id")), _integer(row, "generation_high_water")
-            )
-            for row in self._rows("SELECT * FROM resource_reservation_counters ORDER BY instance_id")
-        )
-        reservations = tuple(
-            StoredResourceReservation(
-                ReservationId(_text(row, "reservation_id")),
-                ResourceInstanceId(_text(row, "instance_id")),
-                ResourceId(_text(row, "resource_id")),
-                HostId(_text(row, "host_id")),
-                _integer(row, "generation"),
-                AttemptId(_text(row, "attempt_id")),
-                ItemId(_text(row, "item_id")),
-                _enum_value(ReservationState, row, "status"),
-                _integer(row, "subject_revision"),
-                _time(row, "created_at"),
-                _optional_time(row, "ended_at"),
-            )
-            for row in self._rows("SELECT * FROM resource_reservations ORDER BY reservation_id")
-        )
-        use_leases = [
-            StoredResourceUseLease(
-                ReservationId(_text(row, "reservation_id")),
-                ResourceInstanceId(_text(row, "instance_id")),
-                _integer(row, "reservation_generation"),
-                AttemptId(_text(row, "attempt_id")),
-                HostId(_text(row, "host_id")),
-                _integer(row, "instance_subject_revision"),
-                _integer(row, "observation_generation"),
-                _text(row, "observation_digest"),
-                TaskId(_text(row, "task_id")),
-                LeaseId(_text(row, "attempt_lease_id")),
-                _integer(row, "attempt_lease_generation"),
-                LeaseId(_text(row, "lease_id")),
-                _integer(row, "generation"),
-                _enum_value(UseLeaseGenerationKind, row, "generation_kind"),
-                _integer(row, "host_epoch"),
-                _time(row, "acquired_at"),
-                _time(row, "expires_at"),
-                _enum_value(UseLeaseState, row, "status"),
-            )
-            for row in self._rows("SELECT * FROM resource_use_leases ORDER BY reservation_id, generation")
-        ]
-        mutation_intents: list[ResourceMutationIntent] = []
-        for row in self._rows("SELECT * FROM resource_mutation_intents ORDER BY intent_id"):
-            _expect(row, "resource_use_generation_kind", "grant")
-            mutation_intents.append(
-                ResourceMutationIntent(
-                    MutationIntentId(_text(row, "intent_id")),
-                    ReservationId(_text(row, "reservation_id")),
-                    _integer(row, "reservation_generation"),
-                    ResourceInstanceId(_text(row, "instance_id")),
-                    AttemptId(_text(row, "attempt_id")),
-                    HostId(_text(row, "host_id")),
-                    _integer(row, "resource_use_generation"),
-                    LeaseId(_text(row, "resource_use_lease_id")),
-                    TaskId(_text(row, "task_id")),
-                    LeaseId(_text(row, "attempt_lease_id")),
-                    _integer(row, "attempt_lease_generation"),
-                    _integer(row, "start_instance_subject_revision"),
-                    _integer(row, "start_observation_generation"),
-                    _text(row, "start_observation_digest"),
-                    _text(row, "policy_schema"),
-                    _canonical_json(row, "policy_json"),
-                    _text(row, "policy_digest"),
-                    _enum_value(MutationIntentState, row, "status"),
-                    _time(row, "recorded_at"),
-                    _optional_time(row, "resolved_at"),
-                    _optional_integer(row, "result_observation_generation"),
-                    _optional_text(row, "result_observation_digest"),
-                    _optional_text(row, "evidence_schema"),
-                    _optional_canonical_json(row, "evidence_json"),
-                    _optional_text(row, "evidence_digest"),
-                    None if (task := _optional_text(row, "disposition_task_id")) is None else TaskId(task),
-                    _optional_text(row, "disposition_reason"),
-                )
-            )
-        return ResourceRecords(
-            tuple(definitions),
-            requirements,
-            instances,
-            locators,
-            counters,
-            reservations,
-            tuple(use_leases),
-            tuple(mutation_intents),
-        )
 
     def _history(self) -> HistoryRecords:
         receipts: list[StoredTransitionReceipt] = []
@@ -781,24 +467,13 @@ class _StoredStateWriter:
                 "item_dependencies",
                 "item_artifacts",
                 "attempts",
-                "planning_impacts",
-                "planning_impact_obligations",
-                "planning_impact_replacements",
                 "proposals",
                 "proposal_evidence",
                 "proposal_freshness",
-                "resources",
-                "item_resources",
-                "resource_instances",
-                "resource_instance_locators",
-                "resource_reservation_counters",
-                "resource_reservations",
                 "coordination_lease",
                 "attempt_lease_counters",
                 "attempt_lease_generations",
                 "attempt_leases",
-                "resource_use_leases",
-                "resource_mutation_intents",
                 "current_focus",
                 "transition_history",
             )
@@ -810,9 +485,7 @@ class _StoredStateWriter:
         self._connection.execute("PRAGMA defer_foreign_keys = ON")
         self._artifacts(state.artifacts)
         self._lifecycle(state.lifecycle)
-        self._planning(state.planning)
         self._proposals(state.proposals)
-        self._resources(state.resources)
         self._authority(state.authority)
         self._focus(state.focus)
         self._history(state.history)
@@ -830,24 +503,13 @@ class _StoredStateWriter:
         for table in (
             "transition_history",
             "current_focus",
-            "resource_mutation_intents",
-            "resource_use_leases",
             "attempt_leases",
             "attempt_lease_generations",
             "attempt_lease_counters",
             "coordination_lease",
-            "resource_reservations",
-            "resource_reservation_counters",
-            "resource_instance_locators",
-            "resource_instances",
-            "item_resources",
-            "resources",
             "proposal_evidence",
             "proposal_freshness",
             "proposals",
-            "planning_impact_replacements",
-            "planning_impact_obligations",
-            "planning_impacts",
             "attempts",
             "item_artifacts",
             "item_dependencies",
@@ -984,77 +646,6 @@ class _StoredStateWriter:
             ),
         )
 
-    def _planning(self, records: PlanningRecords) -> None:
-        self._connection.executemany(
-            """
-            INSERT INTO planning_impacts (
-                impact_id, source_item_id, source_attempt_id, source_scope_revision, source_scope_digest,
-                primary_target_item_id, primary_target_position, summary, evidence,
-                recorded_project_revision, recorded_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
-            """,
-            tuple(
-                (
-                    value.impact_id,
-                    value.source_item_id,
-                    value.source_attempt_id,
-                    value.source_scope_revision,
-                    value.source_scope_digest,
-                    value.primary_target_item_id,
-                    value.summary,
-                    value.evidence,
-                    value.recorded_project_revision,
-                    value.recorded_at.isoformat(),
-                )
-                for value in records.impacts
-            ),
-        )
-        self._connection.executemany(
-            """
-            INSERT INTO planning_impact_obligations (
-                impact_id, target_item_id, target_position, observed_scope_revision, observed_scope_digest,
-                status, disposition, evaluated_scope_revision, evaluated_scope_digest,
-                resulting_scope_revision, resulting_scope_digest, primary_replacement_item_id,
-                primary_replacement_position, outcome_evidence, reason, resolved_project_revision,
-                recorded_at, resolved_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            tuple(
-                (
-                    value.impact_id,
-                    value.target_item_id,
-                    value.position,
-                    value.observed_scope_revision,
-                    value.observed_scope_digest,
-                    value.state.value,
-                    None if value.disposition is None else value.disposition.value,
-                    value.evaluated_scope_revision,
-                    value.evaluated_scope_digest,
-                    value.resulting_scope_revision,
-                    value.resulting_scope_digest,
-                    value.primary_replacement_item_id,
-                    0 if value.primary_replacement_item_id is not None else None,
-                    value.outcome_evidence,
-                    value.reason,
-                    value.resolved_project_revision,
-                    value.recorded_at.isoformat(),
-                    _timestamp(value.resolved_at),
-                )
-                for value in records.obligations
-            ),
-        )
-        self._connection.executemany(
-            """
-            INSERT INTO planning_impact_replacements (
-                impact_id, target_item_id, disposition, replacement_item_id, position
-            ) VALUES (?, ?, 'superseded', ?, ?)
-            """,
-            tuple(
-                (value.impact_id, value.target_item_id, value.replacement_item_id, value.position)
-                for value in records.replacements
-            ),
-        )
-
     def _proposals(self, records: ProposalRecords) -> None:
         self._connection.executemany(
             """
@@ -1097,182 +688,6 @@ class _StoredStateWriter:
         self._connection.executemany(
             "INSERT INTO proposal_freshness (proposal_id, position, assumption) VALUES (?, ?, ?)",
             tuple((value.proposal_id, value.position, value.assumption) for value in records.freshness),
-        )
-
-    def _resources(self, records: ResourceRecords) -> None:
-        self._connection.executemany(
-            """
-            INSERT INTO resources (
-                resource_id, origin_kind, kind, scope, allocation_mode, description, subject_revision,
-                origin_created_at, origin_updated_at, recorded_at, updated_at
-            ) VALUES (?, ?, ?, 'portable-definition', 'exclusive-instance', ?, ?, ?, ?, ?, ?)
-            """,
-            tuple(
-                (
-                    value.resource_id,
-                    value.origin.value,
-                    value.kind,
-                    value.description,
-                    value.subject_revision,
-                    _timestamp(value.origin_created_at),
-                    _timestamp(value.origin_updated_at),
-                    value.recorded_at.isoformat(),
-                    value.updated_at.isoformat(),
-                )
-                for value in records.definitions
-            ),
-        )
-        self._connection.executemany(
-            "INSERT INTO item_resources (item_id, resource_id, position) VALUES (?, ?, ?)",
-            tuple((value.item_id, value.resource_id, value.position) for value in records.requirements),
-        )
-        self._connection.executemany(
-            """
-            INSERT INTO resource_instances (
-                instance_id, resource_id, host_id, discovery_kind, discovery_fingerprint,
-                status, subject_revision, recorded_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            tuple(
-                (
-                    value.instance_id,
-                    value.resource_id,
-                    value.host_id,
-                    value.discovery_kind,
-                    value.discovery_fingerprint,
-                    value.state.value,
-                    value.subject_revision,
-                    value.recorded_at.isoformat(),
-                    value.updated_at.isoformat(),
-                )
-                for value in records.instances
-            ),
-        )
-        self._connection.executemany(
-            """
-            INSERT INTO resource_instance_locators (
-                instance_id, host_id, locator_schema, locator_json, observation_generation,
-                observation_digest, observed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            tuple(
-                (
-                    value.instance_id,
-                    value.host_id,
-                    value.locator_schema,
-                    _json_text(value.locator),
-                    value.observation_generation,
-                    value.observation_digest,
-                    value.observed_at.isoformat(),
-                )
-                for value in records.locators
-            ),
-        )
-        self._connection.executemany(
-            "INSERT INTO resource_reservation_counters (instance_id, generation_high_water) VALUES (?, ?)",
-            tuple((value.instance_id, value.generation_high_water) for value in records.reservation_counters),
-        )
-        self._connection.executemany(
-            """
-            INSERT INTO resource_reservations (
-                reservation_id, instance_id, resource_id, host_id, generation, attempt_id,
-                item_id, status, subject_revision, created_at, ended_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            tuple(
-                (
-                    value.reservation_id,
-                    value.instance_id,
-                    value.resource_id,
-                    value.host_id,
-                    value.acquisition_generation,
-                    value.attempt_id,
-                    value.item_id,
-                    value.state.value,
-                    value.subject_revision,
-                    value.created_at.isoformat(),
-                    _timestamp(value.ended_at),
-                )
-                for value in records.reservations
-            ),
-        )
-        self._connection.executemany(
-            """
-            INSERT INTO resource_use_leases (
-                reservation_id, instance_id, reservation_generation, attempt_id, host_id,
-                instance_subject_revision, observation_generation, observation_digest, task_id,
-                attempt_lease_id, attempt_lease_generation, lease_id, generation, generation_kind,
-                host_epoch, acquired_at, expires_at, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            tuple(
-                (
-                    value.reservation_id,
-                    value.instance_id,
-                    value.reservation_generation,
-                    value.attempt_id,
-                    value.host_id,
-                    value.instance_subject_revision,
-                    value.observation_generation,
-                    value.observation_digest,
-                    value.task_id,
-                    value.attempt_lease_id,
-                    value.attempt_lease_generation,
-                    value.lease_id,
-                    value.generation,
-                    value.generation_kind.value,
-                    value.host_epoch,
-                    value.acquired_at.isoformat(),
-                    value.expires_at.isoformat(),
-                    value.state.value,
-                )
-                for value in records.use_leases
-            ),
-        )
-        self._connection.executemany(
-            """
-            INSERT INTO resource_mutation_intents (
-                intent_id, reservation_id, reservation_generation, instance_id, attempt_id, host_id,
-                resource_use_generation, resource_use_lease_id, resource_use_generation_kind, task_id,
-                attempt_lease_id, attempt_lease_generation, start_instance_subject_revision,
-                start_observation_generation, start_observation_digest, policy_schema, policy_json,
-                policy_digest, status, recorded_at, resolved_at, result_observation_generation,
-                result_observation_digest, evidence_schema, evidence_json, evidence_digest,
-                disposition_task_id, disposition_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'grant', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            tuple(
-                (
-                    value.intent_id,
-                    value.reservation_id,
-                    value.reservation_generation,
-                    value.instance_id,
-                    value.attempt_id,
-                    value.host_id,
-                    value.resource_use_generation,
-                    value.resource_use_lease_id,
-                    value.task_id,
-                    value.attempt_lease_id,
-                    value.attempt_lease_generation,
-                    value.start_instance_subject_revision,
-                    value.start_observation_generation,
-                    value.start_observation_digest,
-                    value.policy_schema,
-                    _json_text(value.policy),
-                    value.policy_digest,
-                    value.state.value,
-                    value.recorded_at.isoformat(),
-                    _timestamp(value.resolved_at),
-                    value.result_observation_generation,
-                    value.result_observation_digest,
-                    value.evidence_schema,
-                    _json_text(value.evidence),
-                    value.evidence_digest,
-                    value.disposition_task_id,
-                    value.disposition_reason,
-                )
-                for value in records.mutation_intents
-            ),
         )
 
     def _authority(self, records: AuthorityRecords) -> None:

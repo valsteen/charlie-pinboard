@@ -11,12 +11,7 @@ HistorySubjectId = NewType("HistorySubjectId", str)
 ItemId = NewType("ItemId", str)
 LeaseId = NewType("LeaseId", str)
 LedgerId = NewType("LedgerId", str)
-MutationIntentId = NewType("MutationIntentId", str)
-PlanningImpactId = NewType("PlanningImpactId", str)
 ProposalId = NewType("ProposalId", str)
-ReservationId = NewType("ReservationId", str)
-ResourceId = NewType("ResourceId", str)
-ResourceInstanceId = NewType("ResourceInstanceId", str)
 TaskId = NewType("TaskId", str)
 
 type SubjectId = ItemId | AttemptId | ProposalId | LedgerId

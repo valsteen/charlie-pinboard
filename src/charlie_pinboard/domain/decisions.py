@@ -15,7 +15,6 @@ from charlie_pinboard.domain.identifiers import (
     LeaseId,
     LedgerId,
     ProposalId,
-    ResourceId,
     SubjectId,
 )
 from charlie_pinboard.domain.model import (
@@ -36,24 +35,14 @@ from charlie_pinboard.domain.model import (
     LedgerSnapshot,
     MergeProposalInput,
     ReasonInput,
-    ReservationState,
-    ResourceAuthority,
-    ResourceRequirement,
     ResumeInput,
     ScopeDependency,
     SubmitReviewInput,
     Timing,
     TransferCoordinatorInput,
     TransitionInput,
-    UseLeaseState,
     WorkItem,
     WorkState,
-)
-from charlie_pinboard.domain.resource_decisions import (
-    ReservationChange,
-    ResourceToken,
-    ResourceUseLeaseChange,
-    current_authorizing_grant,
 )
 
 
@@ -106,7 +95,6 @@ class Action:
     subject_revision: str | None = None
     authorization: AuthorizationKind = AuthorizationKind.COORDINATOR
     lease_id: LeaseId | None = None
-    resource_claims: tuple[ResourceToken, ...] = ()
     command_authority: CommandAttemptAuthority | None = None
 
 
@@ -119,7 +107,6 @@ class ActionCapability:
     subject_revision: str | None
     authorization: AuthorizationKind
     lease_id: LeaseId | None
-    resource_claims: tuple[ResourceToken, ...]
     command_authority: CommandAttemptAuthority | None
 
 
@@ -262,7 +249,6 @@ def _action_capability(action: Action) -> ActionCapability:
         action.subject_revision,
         action.authorization,
         action.lease_id,
-        action.resource_claims,
         action.command_authority,
     )
 
@@ -319,7 +305,6 @@ def command_action(command: TransitionCommand) -> Action:  # noqa: C901, PLR0912
         capability.subject_revision,
         capability.authorization,
         capability.lease_id,
-        capability.resource_claims,
         capability.command_authority,
     )
 
@@ -424,7 +409,6 @@ class ActionFactory:
         subject: SubjectId,
         label: str,
         subject_revision: str | None = None,
-        resource_claims: tuple[ResourceToken, ...] = (),
         command_authority: CommandAttemptAuthority | None = None,
     ) -> Action:
         return Action(
@@ -437,7 +421,6 @@ class ActionFactory:
             subject_revision=subject_revision,
             authorization=self.actor.authorization,
             lease_id=self.actor.lease_id,
-            resource_claims=resource_claims,
             command_authority=command_authority,
         )
 
@@ -479,7 +462,6 @@ class AcceptedProposalItem:
     timing: Timing | None
     next_action: str
     dependencies: tuple[ItemId, ...]
-    resource_requirements: tuple[ResourceId, ...]
     user_label: str
     source: str
     trigger: str
@@ -537,36 +519,15 @@ class Decision:
     attempt_change: AttemptChange | None
     receipt: TransitionReceipt
     attempt_authority_change: AttemptAuthorityChange | None = None
-    reservation_changes: tuple[ReservationChange, ...] = ()
-    resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = ()
     checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None
     proposal_change: ProposalChange | None = None
     coordinator_authority_change: CoordinatorAuthorityChange | None = None
-
-
-def _resource_token(value: ResourceAuthority) -> ResourceToken:
-    return ResourceToken(value.resource_id, value.host_id, value.lease_id, value.generation)
 
 
 def _authority(snapshot: LedgerSnapshot, actor: ActorAuthority, attempt: AttemptId) -> AttemptAuthority | None:
     if attempt not in actor.attempts:
         return None
     return snapshot.authority_for(attempt, actor.lease_id, actor.generation)
-
-
-def _unresolved_target(snapshot: LedgerSnapshot, item: ItemId) -> bool:
-    return any(
-        obligation.target == item and obligation.disposition is None
-        for impact in snapshot.planning_impacts
-        for obligation in impact.obligations
-    )
-
-
-def _unresolved_source(snapshot: LedgerSnapshot, item: ItemId) -> bool:
-    return any(
-        impact.source_item == item and any(value.disposition is None for value in impact.obligations)
-        for impact in snapshot.planning_impacts
-    )
 
 
 def _scope_stale(snapshot: LedgerSnapshot, item: WorkItem) -> bool:
@@ -586,12 +547,10 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
         authority = _authority(snapshot, factory.actor, attempt)
         if item is None or authority is None or item.state != WorkState.ACTIVE:
             continue
-        claims = tuple(_resource_token(value) for value in authority.resources)
         command_authority = next(
             (value for value in snapshot.command_attempt_authorities if value.attempt == attempt),
             None,
         )
-        direct_claims = claims if command_authority is None else ()
         revision = snapshot.subject_revision(item.item)
         result.extend(
             (
@@ -600,7 +559,6 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
                     attempt,
                     f"Continue {item.item}",
                     revision,
-                    direct_claims,
                     command_authority,
                 ),
                 factory.make(
@@ -608,19 +566,17 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
                     attempt,
                     f"Report a blocker for {item.item}",
                     revision,
-                    direct_claims,
                     command_authority,
                 ),
             )
         )
-        if not _unresolved_target(snapshot, item.item) and not _scope_stale(snapshot, item):
+        if not _scope_stale(snapshot, item):
             result.append(
                 factory.make(
                     ActionKind.SUBMIT_REVIEW,
                     attempt,
                     f"Submit {item.item} for review",
                     revision,
-                    direct_claims,
                     command_authority,
                 )
             )
@@ -634,7 +590,7 @@ def _active_coordinator_actions(snapshot: LedgerSnapshot, factory: ActionFactory
             continue
         if item.state == WorkState.ACTIVE:
             result.append(factory.make(ActionKind.CONTINUE, item.attempt, f"Continue {item.item}"))
-            if not _unresolved_target(snapshot, item.item) and not _scope_stale(snapshot, item):
+            if not _scope_stale(snapshot, item):
                 result.append(
                     factory.make(ActionKind.DISPATCH, item.attempt, f"Prepare a worker launch for {item.item}")
                 )
@@ -644,11 +600,7 @@ def _active_coordinator_actions(snapshot: LedgerSnapshot, factory: ActionFactory
                     factory.make(ActionKind.BLOCK, item.attempt, f"Block {item.item} on a named condition"),
                 )
             )
-        if (
-            not _unresolved_target(snapshot, item.item)
-            and not _unresolved_source(snapshot, item.item)
-            and not _scope_stale(snapshot, item)
-        ):
+        if not _scope_stale(snapshot, item):
             result.append(factory.make(ActionKind.COMPLETE, item.attempt, f"Accept and complete {item.item}"))
         if item.state == WorkState.REVIEW and factory.actor.authorization == AuthorizationKind.COORDINATION:
             result.extend(
@@ -678,10 +630,11 @@ def _item_actions(snapshot: LedgerSnapshot, item: WorkItem, factory: ActionFacto
             close,
         ]
     if item.state == WorkState.READY:
-        actions = [factory.make(ActionKind.DEFER, item.item, f"Defer {item.item} with a reopen condition"), close]
-        if not _unresolved_target(snapshot, item.item):
-            actions.insert(0, factory.make(ActionKind.ACTIVATE, item.item, f"Activate {item.item}"))
-        return actions
+        return [
+            factory.make(ActionKind.ACTIVATE, item.item, f"Activate {item.item}"),
+            factory.make(ActionKind.DEFER, item.item, f"Defer {item.item} with a reopen condition"),
+            close,
+        ]
     dependencies_live = any(dependency in snapshot.items_by_id() for dependency in item.depends_on)
     if item.state in {WorkState.PAUSED, WorkState.BLOCKED} and not dependencies_live:
         result = [factory.make(ActionKind.RESUME, item.item, f"Return {item.item} to ready")]
@@ -777,8 +730,6 @@ def _result(
     item_change: ItemChange | None = None,
     attempt_change: AttemptChange | None = None,
     attempt_authority_change: AttemptAuthorityChange | None = None,
-    reservation_changes: tuple[ReservationChange, ...] = (),
-    resource_use_lease_changes: tuple[ResourceUseLeaseChange, ...] = (),
     checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None,
     proposal_change: ProposalChange | None = None,
     coordinator_authority_change: CoordinatorAuthorityChange | None = None,
@@ -791,8 +742,6 @@ def _result(
         attempt_change,
         _receipt(action, item, outcome or action.kind.value, evidence, now),
         attempt_authority_change,
-        reservation_changes,
-        resource_use_lease_changes,
         checkpoint_acceptance_change,
         proposal_change,
         coordinator_authority_change,
@@ -806,7 +755,7 @@ def _activate(snapshot: LedgerSnapshot, command: ActivateCommand, now: datetime)
     item = snapshot.item(item_id)
     if item is None:
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
-    if item.state != WorkState.READY or _unresolved_target(snapshot, item.item):
+    if item.state != WorkState.READY:
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not ready for activation."
         )
@@ -855,51 +804,13 @@ def _pause_or_block(
         return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
     if item.state != WorkState.ACTIVE:
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "The named attempt is not active.")
-    use_lease_changes = _fence_attempt_task_uses(snapshot, attempt_id)
     return _result(
         action,
         now,
         item=item.item,
         item_change=ItemChange(item.item, item.state, target, item.attempt),
         attempt_change=AttemptChange(attempt_id, AttemptState.ACTIVE, AttemptState(target.value)),
-        resource_use_lease_changes=use_lease_changes,
     )
-
-
-def _fence_attempt_task_uses(
-    snapshot: LedgerSnapshot,
-    attempt: AttemptId,
-) -> tuple[ResourceUseLeaseChange, ...]:
-    return tuple(
-        ResourceUseLeaseChange(use_lease, replace(use_lease, state=UseLeaseState.REVOKED))
-        for reservation in snapshot.resource_reservations
-        if reservation.attempt == attempt
-        if (use_lease := current_authorizing_grant(snapshot.resource_use_leases, reservation.reservation_id))
-        is not None
-    )
-
-
-def _release_attempt_resources(
-    snapshot: LedgerSnapshot,
-    attempt: AttemptId,
-) -> tuple[tuple[ReservationChange, ...], tuple[ResourceUseLeaseChange, ...]]:
-    reservations = tuple(
-        reservation
-        for reservation in snapshot.resource_reservations
-        if reservation.attempt == attempt and reservation.state == ReservationState.ACTIVE
-    )
-    reservation_changes = tuple(
-        ReservationChange(reservation, replace(reservation, state=ReservationState.RELEASED))
-        for reservation in reservations
-    )
-    use_lease_changes = tuple(
-        ResourceUseLeaseChange(use_lease, replace(use_lease, state=UseLeaseState.RELEASED))
-        for reservation in snapshot.resource_reservations
-        if reservation.attempt == attempt
-        if (use_lease := current_authorizing_grant(snapshot.resource_use_leases, reservation.reservation_id))
-        is not None
-    )
-    return reservation_changes, use_lease_changes
 
 
 def _fence_retained_attempt_authority(
@@ -911,7 +822,7 @@ def _fence_retained_attempt_authority(
         return None
     return AttemptAuthorityChange(
         authority,
-        replace(authority, lease_id=None, generation=authority.generation + 1, resources=()),
+        replace(authority, lease_id=None, generation=authority.generation + 1),
     )
 
 
@@ -926,10 +837,6 @@ def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime)
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE, "The named attempt is not active or in review."
         )
-    if _unresolved_target(snapshot, item.item) or _unresolved_source(snapshot, item.item):
-        return DecisionFailure(
-            DecisionFailureCode.PLANNING_IMPACT_UNRESOLVED, "Resolve planning impacts before completion."
-        )
     if _scope_stale(snapshot, item):
         return DecisionFailure(
             DecisionFailureCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
@@ -937,7 +844,6 @@ def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime)
     if item.item in snapshot.history_items:
         return DecisionFailure(DecisionFailureCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     before = AttemptState.REVIEW if item.state == WorkState.REVIEW else AttemptState.ACTIVE
-    reservation_changes, use_lease_changes = _release_attempt_resources(snapshot, attempt_id)
     authority_change = _fence_retained_attempt_authority(snapshot, attempt_id)
     return _result(
         action,
@@ -946,8 +852,6 @@ def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime)
         item_change=ItemChange(item.item, item.state, None, item.attempt, value.evidence),
         attempt_change=AttemptChange(attempt_id, before, AttemptState.DONE),
         attempt_authority_change=authority_change,
-        reservation_changes=reservation_changes,
-        resource_use_lease_changes=use_lease_changes,
         evidence=value.evidence,
     )
 
@@ -968,12 +872,9 @@ def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> De
     if item.item in snapshot.history_items:
         return DecisionFailure(DecisionFailureCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     attempt_change = None
-    reservation_changes: tuple[ReservationChange, ...] = ()
-    use_lease_changes: tuple[ResourceUseLeaseChange, ...] = ()
     if item.attempt is not None:
         attempt = snapshot.attempts_by_id().get(item.attempt)
         attempt_change = AttemptChange(item.attempt, None if attempt is None else attempt.state, AttemptState.DONE)
-        reservation_changes, use_lease_changes = _release_attempt_resources(snapshot, item.attempt)
     authority_change = None if item.attempt is None else _fence_retained_attempt_authority(snapshot, item.attempt)
     return _result(
         action,
@@ -982,8 +883,6 @@ def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> De
         item_change=ItemChange(item.item, item.state, None, item.attempt, value.reason),
         attempt_change=attempt_change,
         attempt_authority_change=authority_change,
-        reservation_changes=reservation_changes,
-        resource_use_lease_changes=use_lease_changes,
         outcome=value.outcome.value,
         evidence=value.reason,
     )
@@ -1049,10 +948,6 @@ def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: 
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE, "Only an active attempt can be submitted for review."
         )
-    if _unresolved_target(snapshot, item.item):
-        return DecisionFailure(
-            DecisionFailureCode.PLANNING_IMPACT_UNRESOLVED, "Resolve target planning impacts before review."
-        )
     if _scope_stale(snapshot, item):
         return DecisionFailure(
             DecisionFailureCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
@@ -1060,7 +955,6 @@ def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: 
     attempt = snapshot.attempt(attempt_id)
     if attempt is None:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
-    use_lease_changes = _fence_attempt_task_uses(snapshot, attempt_id)
     return _result(
         action,
         now,
@@ -1074,7 +968,6 @@ def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: 
             protected_candidate_after=value.candidate,
             candidate_observed_at=now,
         ),
-        resource_use_lease_changes=use_lease_changes,
     )
 
 
@@ -1102,20 +995,7 @@ def _return_for_correction(
     authority = authorities[0]
     authority_change = AttemptAuthorityChange(
         authority,
-        replace(authority, lease_id=None, generation=authority.generation + 1, resources=()),
-    )
-    reservation_ids = tuple(
-        reservation.reservation_id
-        for reservation in snapshot.resource_reservations
-        if reservation.attempt == attempt_id and reservation.state == ReservationState.ACTIVE
-    )
-    use_lease_changes = tuple(
-        ResourceUseLeaseChange(
-            use_lease,
-            replace(use_lease, state=UseLeaseState.REVOKED),
-        )
-        for reservation_id in reservation_ids
-        if (use_lease := current_authorizing_grant(snapshot.resource_use_leases, reservation_id)) is not None
+        replace(authority, lease_id=None, generation=authority.generation + 1),
     )
     return _result(
         action,
@@ -1129,7 +1009,6 @@ def _return_for_correction(
             protected_candidate_before=snapshot.attempts_by_id()[attempt_id].protected_candidate_revision,
         ),
         attempt_authority_change=authority_change,
-        resource_use_lease_changes=use_lease_changes,
         evidence=value.reason,
     )
 
@@ -1159,20 +1038,7 @@ def _accept_checkpoint(
     authority = authorities[0]
     authority_change = AttemptAuthorityChange(
         authority,
-        replace(authority, lease_id=None, generation=authority.generation + 1, resources=()),
-    )
-    reservation_ids = tuple(
-        reservation.reservation_id
-        for reservation in snapshot.resource_reservations
-        if reservation.attempt == attempt_id and reservation.state == ReservationState.ACTIVE
-    )
-    use_lease_changes = tuple(
-        ResourceUseLeaseChange(
-            use_lease,
-            replace(use_lease, state=UseLeaseState.REVOKED),
-        )
-        for reservation_id in reservation_ids
-        if (use_lease := current_authorizing_grant(snapshot.resource_use_leases, reservation_id)) is not None
+        replace(authority, lease_id=None, generation=authority.generation + 1),
     )
     return _result(
         action,
@@ -1181,7 +1047,6 @@ def _accept_checkpoint(
         item_change=ItemChange(item.item, WorkState.REVIEW, WorkState.PAUSED, item.attempt),
         attempt_change=AttemptChange(attempt_id, AttemptState.REVIEW, AttemptState.PAUSED),
         attempt_authority_change=authority_change,
-        resource_use_lease_changes=use_lease_changes,
         evidence=value.evidence,
         checkpoint_acceptance_change=CheckpointAcceptanceChange(
             value.checkpoint,
@@ -1258,14 +1123,6 @@ def _accept_proposal(
             DecisionFailureCode.DEPENDENCY_NOT_SATISFIED,
             "Accepted proposal dependencies must be ordered unique existing identities other than their owner.",
         )
-    declared_resources = set(snapshot.declared_resources)
-    if len(value.resource_requirements) != len(set(value.resource_requirements)) or any(
-        resource_id not in declared_resources for resource_id in value.resource_requirements
-    ):
-        return DecisionFailure(
-            DecisionFailureCode.RESOURCE_REQUIREMENT_INVALID,
-            "Accepted proposal requirements must be ordered unique declared resources.",
-        )
     change = ItemChange(value.item, None, WorkState(value.state.value))
     accepted_item: AcceptedProposalItem | None = None
     if (
@@ -1284,10 +1141,6 @@ def _accept_proposal(
             proposal.effect,
             proposal.unlock,
             tuple(ScopeDependency(position, dependency) for position, dependency in enumerate(value.depends_on)),
-            tuple(
-                ResourceRequirement(position, resource_id)
-                for position, resource_id in enumerate(value.resource_requirements)
-            ),
         )
         result = item_scope_digest(scope)
         match result:
@@ -1301,7 +1154,6 @@ def _accept_proposal(
             value.timing,
             value.next_action,
             value.depends_on,
-            value.resource_requirements,
             proposal.user_label,
             f"proposal:{proposal.proposal}",
             proposal.trigger,
@@ -1402,36 +1254,11 @@ def _transfer(
     )
 
 
-def _planned_intent_boundary(snapshot: LedgerSnapshot, command: TransitionCommand) -> DecisionFailure | None:
-    action = command_action(command)
-    attempt: AttemptId | None
-    if action.kind in {
-        ActionKind.PAUSE,
-        ActionKind.BLOCK,
-        ActionKind.COMPLETE,
-        ActionKind.SUBMIT_REVIEW,
-    }:
-        attempt = AttemptId(action.subject)
-    elif action.kind == ActionKind.CLOSE:
-        item = snapshot.item(ItemId(action.subject))
-        attempt = None if item is None else item.attempt
-    else:
-        return None
-    if attempt is None or attempt not in snapshot.planned_mutation_attempts:
-        return None
-    return DecisionFailure(
-        DecisionFailureCode.RESOURCE_MUTATION_INTENT_UNRESOLVED,
-        f"Attempt '{attempt}' must resolve its planned resource mutation intent first.",
-    )
-
-
 def decide(  # noqa: C901, PLR0912
     snapshot: LedgerSnapshot,
     command: TransitionCommand,
     now: datetime,
 ) -> Decision | DecisionFailure:
-    if (failure := _planned_intent_boundary(snapshot, command)) is not None:
-        return failure
     match command:
         case AcceptCheckpointCommand():
             return _accept_checkpoint(snapshot, command, now)

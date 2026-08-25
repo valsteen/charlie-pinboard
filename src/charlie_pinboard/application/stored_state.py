@@ -12,24 +12,14 @@ from charlie_pinboard.domain.identifiers import (
     HostId,
     ItemId,
     LeaseId,
-    MutationIntentId,
-    PlanningImpactId,
     ProposalId,
-    ReservationId,
-    ResourceId,
-    ResourceInstanceId,
     TaskId,
 )
 from charlie_pinboard.domain.model import (
     ArtifactRole,
     AttemptState,
     CanonicalJson,
-    MutationIntentState,
-    PlanningDisposition,
-    ReservationState,
     Timing,
-    UseLeaseGenerationKind,
-    UseLeaseState,
 )
 
 
@@ -61,11 +51,6 @@ class StoredWorkItemState(Enum):
     DROPPED = "dropped"
 
 
-class PlanningObligationState(Enum):
-    UNRESOLVED = "unresolved"
-    RESOLVED = "resolved"
-
-
 class ProposalRelation(Enum):
     INDEPENDENT = "independent"
     PREREQUISITE = "prerequisite"
@@ -79,11 +64,6 @@ class ProposalDisposition(Enum):
     MERGED = "merged"
     RETURNED = "returned"
     REJECTED = "rejected"
-
-
-class ResourceInstanceState(Enum):
-    ACTIVE = "active"
-    RETIRED = "retired"
 
 
 class CoordinationLeaseState(Enum):
@@ -111,8 +91,6 @@ class TransitionHistoryActionKind(Enum):
     DEFER = "defer"
     DISPATCH = "dispatch"
     INSPECT = "inspect"
-    LEGACY_CLEANUP = "legacy-cleanup"
-    LEGACY_IMPORT = "legacy-import"
     MARK_READY = "mark-ready"
     MERGE_PROPOSAL = "merge-proposal"
     PAUSE = "pause"
@@ -131,7 +109,6 @@ class TransitionHistoryAuthorizationKind(Enum):
     COORDINATOR = "coordinator"
     COORDINATION = "coordination"
     ATTEMPT = "attempt"
-    OBSERVER = "observer"
     MIGRATION = "migration"
 
 
@@ -230,49 +207,6 @@ class StoredAttempt:
 
 
 @dataclass(frozen=True, slots=True)
-class StoredPlanningImpact:
-    impact_id: PlanningImpactId
-    source_item_id: ItemId
-    source_attempt_id: AttemptId | None
-    source_scope_revision: int
-    source_scope_digest: str
-    primary_target_item_id: ItemId
-    summary: str
-    evidence: str
-    recorded_project_revision: int
-    recorded_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class StoredPlanningObligation:
-    impact_id: PlanningImpactId
-    target_item_id: ItemId
-    position: int
-    observed_scope_revision: int
-    observed_scope_digest: str
-    state: PlanningObligationState
-    disposition: PlanningDisposition | None
-    evaluated_scope_revision: int | None
-    evaluated_scope_digest: str | None
-    resulting_scope_revision: int | None
-    resulting_scope_digest: str | None
-    primary_replacement_item_id: ItemId | None
-    outcome_evidence: str | None
-    reason: str | None
-    resolved_project_revision: int | None
-    recorded_at: datetime
-    resolved_at: datetime | None
-
-
-@dataclass(frozen=True, slots=True)
-class StoredPlanningReplacement:
-    impact_id: PlanningImpactId
-    target_item_id: ItemId
-    replacement_item_id: ItemId
-    position: int
-
-
-@dataclass(frozen=True, slots=True)
 class StoredProposal:
     proposal_id: ProposalId
     origin: OriginKind
@@ -310,71 +244,6 @@ class ProposalFreshness:
 
 
 @dataclass(frozen=True, slots=True)
-class StoredResourceDefinition:
-    resource_id: ResourceId
-    origin: OriginKind
-    kind: str
-    description: str
-    subject_revision: int
-    origin_created_at: datetime | None
-    origin_updated_at: datetime | None
-    recorded_at: datetime
-    updated_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class ItemResourceRequirement:
-    item_id: ItemId
-    resource_id: ResourceId
-    position: int
-
-
-@dataclass(frozen=True, slots=True)
-class StoredResourceInstance:
-    instance_id: ResourceInstanceId
-    resource_id: ResourceId
-    host_id: HostId
-    discovery_kind: str
-    discovery_fingerprint: str
-    state: ResourceInstanceState
-    subject_revision: int
-    recorded_at: datetime
-    updated_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceInstanceLocator:
-    instance_id: ResourceInstanceId
-    host_id: HostId
-    locator_schema: str
-    locator: CanonicalJson
-    observation_generation: int
-    observation_digest: str
-    observed_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class StoredReservationCounter:
-    instance_id: ResourceInstanceId
-    generation_high_water: int
-
-
-@dataclass(frozen=True, slots=True)
-class StoredResourceReservation:
-    reservation_id: ReservationId
-    instance_id: ResourceInstanceId
-    resource_id: ResourceId
-    host_id: HostId
-    acquisition_generation: int
-    attempt_id: AttemptId
-    item_id: ItemId
-    state: ReservationState
-    subject_revision: int
-    created_at: datetime
-    ended_at: datetime | None
-
-
-@dataclass(frozen=True, slots=True)
 class StoredCoordinationLease:
     lease_id: LeaseId
     task_id: TaskId
@@ -407,59 +276,6 @@ class StoredAttemptLease:
     acquired_at: datetime
     expires_at: datetime
     state: AttemptLeaseState
-
-
-@dataclass(frozen=True, slots=True)
-class StoredResourceUseLease:
-    reservation_id: ReservationId
-    instance_id: ResourceInstanceId
-    reservation_generation: int
-    attempt_id: AttemptId
-    host_id: HostId
-    instance_subject_revision: int
-    observation_generation: int
-    observation_digest: str
-    task_id: TaskId
-    attempt_lease_id: LeaseId
-    attempt_lease_generation: int
-    lease_id: LeaseId
-    generation: int
-    generation_kind: UseLeaseGenerationKind
-    host_epoch: int
-    acquired_at: datetime
-    expires_at: datetime
-    state: UseLeaseState
-
-
-@dataclass(frozen=True, slots=True)
-class ResourceMutationIntent:
-    intent_id: MutationIntentId
-    reservation_id: ReservationId
-    reservation_generation: int
-    instance_id: ResourceInstanceId
-    attempt_id: AttemptId
-    host_id: HostId
-    resource_use_generation: int
-    resource_use_lease_id: LeaseId
-    task_id: TaskId
-    attempt_lease_id: LeaseId
-    attempt_lease_generation: int
-    start_instance_subject_revision: int
-    start_observation_generation: int
-    start_observation_digest: str
-    policy_schema: str
-    policy: CanonicalJson
-    policy_digest: str
-    state: MutationIntentState
-    recorded_at: datetime
-    resolved_at: datetime | None
-    result_observation_generation: int | None
-    result_observation_digest: str | None
-    evidence_schema: str | None
-    evidence: CanonicalJson | None
-    evidence_digest: str | None
-    disposition_task_id: TaskId | None
-    disposition_reason: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -506,13 +322,6 @@ class ProposalRecords:
 
 
 @dataclass(frozen=True, slots=True)
-class PlanningRecords:
-    impacts: tuple[StoredPlanningImpact, ...] = ()
-    obligations: tuple[StoredPlanningObligation, ...] = ()
-    replacements: tuple[StoredPlanningReplacement, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class ArtifactRecords:
     references: tuple[ArtifactReference, ...] = ()
 
@@ -526,18 +335,6 @@ class AuthorityRecords:
 
 
 @dataclass(frozen=True, slots=True)
-class ResourceRecords:
-    definitions: tuple[StoredResourceDefinition, ...] = ()
-    requirements: tuple[ItemResourceRequirement, ...] = ()
-    instances: tuple[StoredResourceInstance, ...] = ()
-    locators: tuple[ResourceInstanceLocator, ...] = ()
-    reservation_counters: tuple[StoredReservationCounter, ...] = ()
-    reservations: tuple[StoredResourceReservation, ...] = ()
-    use_leases: tuple[StoredResourceUseLease, ...] = ()
-    mutation_intents: tuple[ResourceMutationIntent, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class HistoryRecords:
     receipts: tuple[StoredTransitionReceipt, ...] = ()
 
@@ -546,9 +343,7 @@ class HistoryRecords:
 class StoredWorkState:
     lifecycle: LifecycleRecords
     proposals: ProposalRecords
-    planning: PlanningRecords
     artifacts: ArtifactRecords
     authority: AuthorityRecords
-    resources: ResourceRecords
     history: HistoryRecords
     focus: StoredFocus

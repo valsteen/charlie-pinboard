@@ -13,35 +13,19 @@ from charlie_pinboard.application.stored_state import (
     HistoryRecords,
     ItemArtifactLink,
     ItemDependency,
-    ItemResourceRequirement,
     ItemScopeRevision,
     LifecycleRecords,
-    MutationIntentState,
     OriginKind,
-    PlanningObligationState,
-    PlanningRecords,
     ProjectRecord,
     ProposalEvidence,
     ProposalFreshness,
     ProposalRecords,
     ProposalRelation,
-    ResourceInstanceLocator,
-    ResourceInstanceState,
-    ResourceMutationIntent,
-    ResourceRecords,
     StoredAttempt,
     StoredAttemptLease,
     StoredCoordinationLease,
     StoredFocus,
-    StoredPlanningImpact,
-    StoredPlanningObligation,
-    StoredPlanningReplacement,
     StoredProposal,
-    StoredReservationCounter,
-    StoredResourceDefinition,
-    StoredResourceInstance,
-    StoredResourceReservation,
-    StoredResourceUseLease,
     StoredTransitionReceipt,
     StoredWorkItem,
     StoredWorkItemState,
@@ -58,22 +42,13 @@ from charlie_pinboard.domain.identifiers import (
     HostId,
     ItemId,
     LeaseId,
-    MutationIntentId,
-    PlanningImpactId,
     ProposalId,
-    ReservationId,
-    ResourceId,
-    ResourceInstanceId,
     TaskId,
 )
 from charlie_pinboard.domain.model import (
     ArtifactRole,
     AttemptState,
-    PlanningDisposition,
-    ReservationState,
     Timing,
-    UseLeaseGenerationKind,
-    UseLeaseState,
 )
 
 type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
@@ -120,13 +95,7 @@ def complete_sqlite_state() -> StoredWorkState:
     item_c = ItemId("work-c")
     legacy_item = ItemId("legacy-work")
     attempt_id = AttemptId("work-a-1")
-    impact_id = PlanningImpactId("impact-a")
-    resource_id = ResourceId("workspace")
-    instance_id = ResourceInstanceId("workspace-on-host")
-    retired_instance_id = ResourceInstanceId("retired-workspace-on-host")
-    reservation_id = ReservationId("reservation-a")
     attempt_lease_id = LeaseId("attempt-lease-a")
-    grant_lease_id = LeaseId("use-grant")
     brief = ArtifactReference(
         ArtifactRefId(1), "work-a-brief", 1, ArtifactKind.BRIEF, "artifacts/brief.md", SQLITE_DIGEST, 100, 3, SQLITE_NOW
     )
@@ -217,35 +186,6 @@ def complete_sqlite_state() -> StoredWorkState:
         (ProposalEvidence(proposal_id, 0, "evidence:observation"),),
         (ProposalFreshness(proposal_id, 0, "Work C remains live."),),
     )
-    planning = PlanningRecords(
-        (
-            StoredPlanningImpact(
-                impact_id, item_a, attempt_id, 1, SQLITE_DIGEST, item_b, "Impact", "Evidence", 6, SQLITE_NOW
-            ),
-        ),
-        (
-            StoredPlanningObligation(
-                impact_id,
-                item_b,
-                0,
-                1,
-                SQLITE_DIGEST,
-                PlanningObligationState.RESOLVED,
-                PlanningDisposition.SUPERSEDED,
-                1,
-                SQLITE_DIGEST,
-                None,
-                None,
-                item_c,
-                "work-b superseded",
-                "The accepted replacement owns the outcome.",
-                7,
-                SQLITE_NOW,
-                SQLITE_NOW,
-            ),
-        ),
-        (StoredPlanningReplacement(impact_id, item_b, item_c, 0),),
-    )
     authority = AuthorityRecords(
         StoredCoordinationLease(
             LeaseId("coordination-a"),
@@ -259,168 +199,6 @@ def complete_sqlite_state() -> StoredWorkState:
         (AttemptLeaseCounter(attempt_id, 3),),
         (AttemptLeaseGeneration(attempt_id, 3, attempt_lease_id, TaskId("worker"), HostId("host-a")),),
         (StoredAttemptLease(attempt_id, 3, SQLITE_NOW, SQLITE_NOW + timedelta(minutes=5), AttemptLeaseState.ACTIVE),),
-    )
-    grant = StoredResourceUseLease(
-        reservation_id,
-        instance_id,
-        1,
-        attempt_id,
-        HostId("host-a"),
-        4,
-        2,
-        SQLITE_DIGEST,
-        TaskId("worker"),
-        attempt_lease_id,
-        3,
-        grant_lease_id,
-        1,
-        UseLeaseGenerationKind.GRANT,
-        2,
-        SQLITE_NOW,
-        SQLITE_NOW + timedelta(minutes=5),
-        UseLeaseState.REVOKED,
-    )
-    fence = StoredResourceUseLease(
-        reservation_id,
-        instance_id,
-        1,
-        attempt_id,
-        HostId("host-a"),
-        4,
-        2,
-        SQLITE_DIGEST,
-        TaskId("worker"),
-        attempt_lease_id,
-        3,
-        LeaseId("use-fence"),
-        2,
-        UseLeaseGenerationKind.FENCE,
-        2,
-        SQLITE_NOW,
-        SQLITE_NOW + timedelta(minutes=5),
-        UseLeaseState.REVOKED,
-    )
-    successor = StoredResourceUseLease(
-        reservation_id,
-        instance_id,
-        1,
-        attempt_id,
-        HostId("host-a"),
-        4,
-        2,
-        SQLITE_DIGEST,
-        TaskId("worker"),
-        attempt_lease_id,
-        3,
-        LeaseId("use-successor"),
-        3,
-        UseLeaseGenerationKind.GRANT,
-        2,
-        SQLITE_NOW,
-        SQLITE_NOW + timedelta(minutes=5),
-        UseLeaseState.ACTIVE,
-    )
-    resources = ResourceRecords(
-        (
-            StoredResourceDefinition(
-                resource_id,
-                OriginKind.NATIVE,
-                "workspace",
-                "One exclusive workspace",
-                3,
-                SQLITE_NOW,
-                SQLITE_NOW,
-                SQLITE_NOW,
-                SQLITE_NOW,
-            ),
-        ),
-        (ItemResourceRequirement(item_a, resource_id, 0),),
-        (
-            StoredResourceInstance(
-                retired_instance_id,
-                resource_id,
-                HostId("host-a"),
-                "workspace",
-                "retired-fingerprint",
-                ResourceInstanceState.RETIRED,
-                3,
-                SQLITE_NOW,
-                SQLITE_NOW,
-            ),
-            StoredResourceInstance(
-                instance_id,
-                resource_id,
-                HostId("host-a"),
-                "workspace",
-                "fingerprint",
-                ResourceInstanceState.ACTIVE,
-                4,
-                SQLITE_NOW,
-                SQLITE_NOW,
-            ),
-        ),
-        (
-            ResourceInstanceLocator(
-                retired_instance_id,
-                HostId("host-a"),
-                "workspace/v1",
-                CanonicalJson(b"{}"),
-                1,
-                SQLITE_DIGEST,
-                SQLITE_NOW,
-            ),
-            ResourceInstanceLocator(
-                instance_id, HostId("host-a"), "workspace/v1", CanonicalJson(b"{}"), 2, SQLITE_DIGEST, SQLITE_NOW
-            ),
-        ),
-        (StoredReservationCounter(retired_instance_id, 0), StoredReservationCounter(instance_id, 1)),
-        (
-            StoredResourceReservation(
-                reservation_id,
-                instance_id,
-                resource_id,
-                HostId("host-a"),
-                1,
-                attempt_id,
-                item_a,
-                ReservationState.ACTIVE,
-                5,
-                SQLITE_NOW,
-                None,
-            ),
-        ),
-        (grant, fence, successor),
-        (
-            ResourceMutationIntent(
-                MutationIntentId("intent-a"),
-                reservation_id,
-                1,
-                instance_id,
-                attempt_id,
-                HostId("host-a"),
-                1,
-                grant_lease_id,
-                TaskId("worker"),
-                attempt_lease_id,
-                3,
-                4,
-                2,
-                SQLITE_DIGEST,
-                "mutation-policy/v1",
-                CanonicalJson(b"{}"),
-                SQLITE_DIGEST,
-                MutationIntentState.PLANNED,
-                SQLITE_NOW,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ),
-        ),
     )
     history = HistoryRecords(
         (
@@ -445,10 +223,8 @@ def complete_sqlite_state() -> StoredWorkState:
     return StoredWorkState(
         lifecycle,
         proposals,
-        planning,
         ArtifactRecords((brief, design, evidence)),
         authority,
-        resources,
         history,
         StoredFocus(item_a, attempt_id, "continue", 6),
     )

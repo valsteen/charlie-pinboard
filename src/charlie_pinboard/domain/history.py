@@ -8,7 +8,6 @@ from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.model import (
     ArtifactRole,
     ItemScope,
-    ResourceRequirement,
     ScopeArtifact,
     ScopeDependency,
 )
@@ -38,11 +37,6 @@ class ScopeDependencyRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=T
     position: NonNegativeInteger
 
 
-class ScopeResourceRequirementRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    position: NonNegativeInteger
-    resource_id: NonEmptyString
-
-
 class ScopeArtifactRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     content_sha256: Sha256
     key: NonEmptyString
@@ -64,8 +58,7 @@ class ItemScopeRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     dependencies: tuple[ScopeDependencyRecord, ...]
     effect: NonEmptyString | None
     item_id: NonEmptyString
-    resource_requirements: tuple[ScopeResourceRequirementRecord, ...]
-    schema: Literal["item-scope/v1"]
+    schema: Literal["item-scope/v2"]
     trigger: NonEmptyString | None
     unlock: NonEmptyString | None
     user_label: NonEmptyString
@@ -76,10 +69,6 @@ class ItemScopeRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         dependency_ids = tuple(value.dependency_id for value in self.dependencies)
         if not _canonical_positions(dependency_positions, dependency_ids):
             raise ValueError("Dependency positions or identities are not canonical.")
-        requirement_positions = tuple(value.position for value in self.resource_requirements)
-        resource_ids = tuple(value.resource_id for value in self.resource_requirements)
-        if not _canonical_positions(requirement_positions, resource_ids):
-            raise ValueError("Resource requirement positions or identities are not canonical.")
         artifact_positions: dict[SemanticArtifactRole, list[int]] = {}
         artifact_identities: set[tuple[str, str, int]] = set()
         artifact_order: list[tuple[str, int, str, str, int]] = []
@@ -148,10 +137,6 @@ def _artifact_sort_key(artifact: ScopeArtifact) -> tuple[str, int, str, str, int
 
 def _dependency_sort_key(value: ScopeDependency) -> tuple[int, str]:
     return (value.position, value.dependency_id)
-
-
-def _requirement_sort_key(value: ResourceRequirement) -> tuple[int, str]:
-    return (value.position, value.resource_id)
 
 
 def _semantic_role(role: ArtifactRole) -> SemanticArtifactRole | None:
@@ -255,14 +240,6 @@ def _item_scope_record(scope: ItemScope) -> ItemScopeRecord | DecisionFailure:
         )
     ) is not None:
         return failure
-    if (
-        failure := _positioned(
-            [value.position for value in scope.resource_requirements],
-            [value.resource_id for value in scope.resource_requirements],
-            "Resource requirement",
-        )
-    ) is not None:
-        return failure
     result = _semantic_artifacts(scope)
     match result:
         case DecisionFailure():
@@ -277,11 +254,7 @@ def _item_scope_record(scope: ItemScope) -> ItemScopeRecord | DecisionFailure:
         ),
         scope.effect,
         scope.item_id,
-        tuple(
-            ScopeResourceRequirementRecord(requirement.position, requirement.resource_id)
-            for requirement in sorted(scope.resource_requirements, key=_requirement_sort_key)
-        ),
-        "item-scope/v1",
+        "item-scope/v2",
         scope.trigger,
         scope.unlock,
         scope.user_label,

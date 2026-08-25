@@ -27,7 +27,6 @@ When reacquiring an attempt returned from review, read the durable correction re
 - Follow the repository's own testing, formatting, lint, documentation, and safety guidance.
 - Treat a stale instruction as an instruction defect before reshaping working code around it.
 - Do not edit generated views, SQLite authority, coordination leases, or another item's lifecycle state outside the executable workflow.
-- Before live use, claim every scarce resource named by the item with the current attempt-lease token. If a resource is busy, report its holder and expiry; continue only work that does not use it.
 - Do not accept or complete your own item.
 - Prepare the stable candidate for independent review, then return it using the confirmed-delivery rules below. A later chat may borrow coordination to review and accept it; no permanent coordinator chat is required. Do not invoke a generic reviewer-dispatch workflow or launch another reviewer from the worker role.
 

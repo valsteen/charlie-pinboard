@@ -42,7 +42,6 @@ from charlie_pinboard.domain.decisions import (
     Action,
     ActorAuthority,
     AuthorizationKind,
-    Decision,
     Role,
     TransitionCommand,
     TransitionReceipt,
@@ -60,15 +59,10 @@ from charlie_pinboard.domain.identifiers import (
     LeaseId,
     TaskId,
 )
-from charlie_pinboard.domain.model import (
-    AttemptState,
-    CanonicalJson,
-    LedgerSnapshot,
-    ReservationState,
-)
+from charlie_pinboard.domain.model import AttemptState, CanonicalJson, LedgerSnapshot
 from charlie_pinboard.domain.proposal_decisions import (
     CreateProposalOperation,
-    SQLiteLocalIntakeAuthority,
+    LocalIntakeAuthority,
     decide_proposal_creation,
 )
 
@@ -186,7 +180,7 @@ def change_attempt_authority(
     store: WorkStore,
     operation: AttemptAuthorityOperation,
 ) -> TransitionReceipt | DecisionFailure:
-    """Decide and persist one exact attempt-authority mutation and all task-use fences."""
+    """Decide and persist one exact attempt-authority mutation."""
 
     match operation:
         case AcquireInitialAttemptAuthority(attempt=attempt_id, acquired_at=decided_at):
@@ -224,10 +218,8 @@ def change_attempt_authority(
         result = decide_attempt_authority(
             retained,
             counter,
-            snapshot.attempt_task_uses,
             operation,
             snapshot.coordination_lease,
-            snapshot.planned_mutation_attempts,
             live_attempt=(
                 (attempt_id, attempt.item)
                 if (attempt := snapshot.attempt(attempt_id)) is not None and attempt.state == AttemptState.ACTIVE
@@ -240,11 +232,6 @@ def change_attempt_authority(
                 else None
             ),
             project_host_epoch=snapshot.host_epoch,
-            recovery_pending_attempts=tuple(
-                value.attempt_id
-                for value in before.resources.reservations
-                if value.state == ReservationState.REVOKED_PENDING_RECOVERY
-            ),
         )
         match result:
             case DecisionFailure():
@@ -290,7 +277,7 @@ def create_proposal(
     with store.write() as transaction:
         before = transaction.snapshot()
         project = before.lifecycle.project
-        authority = SQLiteLocalIntakeAuthority(project.revision, project.host_epoch)
+        authority = LocalIntakeAuthority(project.revision, project.host_epoch)
         result = decide_proposal_creation(
             authority,
             project.revision,
@@ -406,12 +393,7 @@ def execute(
         result = rediscover_action(snapshot, actor, supplied)
         match result:
             case DecisionFailure() as unavailable:
-                semantic_result = decide(snapshot, command, now)
-                match semantic_result:
-                    case DecisionFailure(code=DecisionFailureCode.PLANNING_IMPACT_UNRESOLVED):
-                        return semantic_result
-                    case DecisionFailure() | Decision():
-                        return unavailable
+                return unavailable
             case Action():
                 pass
         result = decide(snapshot, command, now)

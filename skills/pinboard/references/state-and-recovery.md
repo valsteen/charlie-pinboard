@@ -21,7 +21,7 @@ The project-local work root contains one SQLite authority and generated or immut
 
 Resolve the project through Git's shared common directory. A linked worktree therefore uses the primary checkout's `.codex/work`, not a competing ignored root.
 
-Require `authority: sqlite-v1` from the executable. `state.sqlite3` owns lifecycle, focus, attempts, leases, resources, proposals, history, and accepted artifact references. `views/` is replaceable output and never a fallback authority. Do not reconstruct state from other files.
+Require `authority: sqlite-v1` from the executable. `state.sqlite3` owns lifecycle, focus, dependencies, attempts, leases, proposals, history, and accepted artifact references. `views/` is replaceable output and never a fallback authority. Do not reconstruct state from other files.
 
 Use these nonterminal states:
 
@@ -39,7 +39,7 @@ Terminal state remains queryable as history and does not appear as live work.
 
 Coordination is a short-lived exclusive SQLite lease, not a permanent task role. Acquire it only for a graph-wide atomic change, use its lease identity and generation in the action, then release it. Another chat may acquire it after release or expiry.
 
-Attempt ownership is renewable and fenced. A worker presents its current attempt lease for item-local transitions. A resource capability binds the exact attempt-lease identity and generation, so replacing the attempt owner also fences retained mutation authority.
+Attempt ownership is renewable and fenced. A worker presents its current attempt lease for item-local transitions. Replacing the attempt owner fences actions retained by the previous owner.
 
 Use forced revocation only with explicit user authority when the recorded holder cannot release or has demonstrably abandoned the lease. Revocation increments the fencing generation. Never infer ownership from task titles, pinning, recency, or semantic similarity.
 

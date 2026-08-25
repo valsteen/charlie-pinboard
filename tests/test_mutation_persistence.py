@@ -68,7 +68,6 @@ from charlie_pinboard.domain.identifiers import (
     ItemId,
     LeaseId,
     ProposalId,
-    ResourceId,
     TaskId,
 )
 from charlie_pinboard.domain.model import (
@@ -200,7 +199,6 @@ class MutationPersistenceTest(unittest.TestCase):
             command.generation,
             retained,
             replace(retained, expires_at=retained.expires_at + timedelta(minutes=1)),
-            (),
         )
 
     def _receipt_state(self, before: StoredWorkState, action: str) -> tuple[TransitionReceipt, StoredWorkState]:
@@ -369,7 +367,6 @@ class MutationPersistenceTest(unittest.TestCase):
                     "activate",
                     timing=None,
                     depends_on=(ItemId("work-c"), ItemId("legacy-work")),
-                    resource_requirements=(ResourceId("workspace"),),
                 ),
             ),
             SQLITE_NOW + timedelta(seconds=1),
@@ -390,10 +387,6 @@ class MutationPersistenceTest(unittest.TestCase):
         self.assertEqual(
             (ItemId("work-c"), ItemId("legacy-work")),
             tuple(value.dependency_id for value in reopened.lifecycle.dependencies if value.item_id == item.item_id),
-        )
-        self.assertEqual(
-            (ResourceId("workspace"),),
-            tuple(value.resource_id for value in reopened.resources.requirements if value.item_id == item.item_id),
         )
         self.assertEqual(ProposalDisposition.ACCEPTED, proposal.disposition)
         self.assertEqual(ItemId("accepted-proposal"), proposal.disposition_target_item_id)
@@ -631,7 +624,7 @@ class MutationPersistenceTest(unittest.TestCase):
 
         pause_action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.PAUSE)
         pause = decide(
-            replace(snapshot, planned_mutation_attempts=()),
+            snapshot,
             bind_transition(pause_action, ReasonInput("Pause for an invalid-attempt-shape probe.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
@@ -653,7 +646,7 @@ class MutationPersistenceTest(unittest.TestCase):
             value for value in available_actions(snapshot, worker) if value.kind == ActionKind.SUBMIT_REVIEW
         )
         review = decide(
-            replace(snapshot, planned_mutation_attempts=()),
+            snapshot,
             bind_transition(review_action, SubmitReviewInput(CandidateId("candidate"))),
             SQLITE_NOW + timedelta(seconds=1),
         )
@@ -725,7 +718,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
                 action = next(value for value in available_actions(snapshot, actor) if value.kind == kind)
                 decision = decide(
-                    replace(snapshot, planned_mutation_attempts=()),
+                    snapshot,
                     bind_transition(action, payload),
                     SQLITE_NOW + timedelta(seconds=1),
                 )

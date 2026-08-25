@@ -1,1 +1,1 @@
-"""Pure lifecycle, planning, resource, and history rules."""
+"""Pure lifecycle, authority, proposal, and history rules."""
