@@ -254,6 +254,12 @@ malformed_quote: "unterminated
             _parse_header_text("kind: value\n")
         with self.assertRaisesRegex(ValueError, "HEADER_UNTERMINATED"):
             _parse_header_text("---\nkind: value\n")
+        with self.assertRaisesRegex(ValueError, "HEADER_FIELD_INVALID.*line 2"):
+            _parse_header_text("---\nnot-a-field\n---\n")
+        with self.assertRaisesRegex(ValueError, "HEADER_FIELD_INVALID.*line 2"):
+            _parse_header_text("---\n: value\n---\n")
+        with self.assertRaisesRegex(ValueError, "HEADER_FIELD_DUPLICATE.*owner_task_id.*line 3"):
+            _parse_header_text("---\nowner_task_id: first\nowner_task_id: second\n---\n")
 
         path = Path(tempfile.mkdtemp()) / "brief.md"
         path.write_text("# Attempt\n\n## Same\n\nOne.\n\n## Same\n\nTwo.\n", encoding="utf-8")
@@ -702,6 +708,18 @@ Checkpoint outcome: independently-buildable
             (
                 brief.replace(b"| acceptance | `criterion:1` |", b"| invented | `criterion:1` |"),
                 "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            ),
+            (
+                brief.replace(b"owner_task_id: worker", b"owner_task_id: worker\nowner_task_id: brief-reviewer-task"),
+                "DISPATCH_BRIEF_REVIEW_INVALID",
+            ),
+            (
+                brief.replace(b"owner_task_id: worker", b": worker"),
+                "DISPATCH_BRIEF_REVIEW_INVALID",
+            ),
+            (
+                brief.replace(b"owner_task_id: worker", b"owner_task_id: worker\nmalformed-header-field"),
+                "DISPATCH_BRIEF_REVIEW_INVALID",
             ),
         )
         for candidate, code in brief_cases:

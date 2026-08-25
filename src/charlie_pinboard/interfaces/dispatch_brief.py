@@ -188,10 +188,18 @@ def _parse_header_text(text: str) -> Header:
     except ValueError as error:
         raise ValueError("HEADER_UNTERMINATED: cannot parse fields") from error
     result: Header = {}
-    for line in lines[1:end]:
-        if ":" in line:
-            key, raw = line.split(":", 1)
-            result[key.strip()] = _scalar(raw)
+    for line_number, line in enumerate(lines[1:end], start=2):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if ":" not in line:
+            raise ValueError(f"HEADER_FIELD_INVALID: expected 'name: value' at line {line_number}")
+        key, raw = line.split(":", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"HEADER_FIELD_INVALID: header key is empty at line {line_number}")
+        if key in result:
+            raise ValueError(f"HEADER_FIELD_DUPLICATE: duplicate header field '{key}' at line {line_number}")
+        result[key] = _scalar(raw)
     return result
 
 
