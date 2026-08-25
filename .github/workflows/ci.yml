@@ -49,4 +49,3 @@ jobs:
         run: |
           uv run --isolated --no-project --with ./dist/*.whl pinboard --version
           uv run --isolated --no-project --with ./dist/*.whl pinboard --help
-          uv run --isolated --no-project --with ./dist/*.whl repo-work --version

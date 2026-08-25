@@ -12,7 +12,6 @@ PLUGIN_NAME: Final = "charlie-pinboard"
 EXPECTED_SKILLS: Final = frozenset({"pinboard", "pinboard-deliver", "pinboard-intake"})
 EXPECTED_ENTRY_POINTS: Final = {
     "pinboard": "charlie_pinboard.interfaces.cli:main",
-    "repo-work": "charlie_pinboard.interfaces.cli:main",
 }
 
 type YamlScalar = str | int | float | bool | None
@@ -145,7 +144,7 @@ def validate_project_metadata() -> None:
     if project.name != PLUGIN_NAME:
         raise ValueError("distribution and plugin identities must match")
     if project.scripts != EXPECTED_ENTRY_POINTS:
-        raise ValueError("pinboard must be primary and repo-work must remain an alias to the same engine")
+        raise ValueError("pinboard must be the only project entry point to the current engine")
 
 
 def validate_marketplace() -> None:

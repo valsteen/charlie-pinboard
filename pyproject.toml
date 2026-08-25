@@ -14,7 +14,6 @@ dependencies = [
 
 [project.scripts]
 pinboard = "charlie_pinboard.interfaces.cli:main"
-repo-work = "charlie_pinboard.interfaces.cli:main"
 
 [tool.uv.build-backend]
 module-name = "charlie_pinboard"
