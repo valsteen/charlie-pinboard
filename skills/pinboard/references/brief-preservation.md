@@ -5,14 +5,15 @@ Use this procedure only for a checkpoint declared `Checkpoint boundary: cross-bo
 ## Compile the brief
 
 1. Read the exact sources that own the checkpoint's relevant semantics. Keep semantic truth in those sources; the brief records durable selectors and the executable subset rather than copying source prose.
-2. Record `Checkpoint outcome: independently-buildable` and the existing six-column `Contract table`.
-3. Add one `Reviewed authorities` table:
+2. Verify the checkpoint's one architecture declaration against those sources. `none` must explain why ownership and dependency direction are unchanged. `read-only` names the project-relative architecture authority implementation must conform to. `update-required` names the authority that must change in the same candidate; a later documentation task is not a valid substitute.
+3. Record `Checkpoint outcome: independently-buildable` and the existing six-column `Contract table`.
+4. Add one `Reviewed authorities` table:
 
    | Authority ID | Selector | Reviewed SHA-256 | In-scope families |
    | --- | --- | --- | --- |
 
    Use a unique kebab-case authority ID. A selector is a project-relative file, optionally followed by `#` and one literal unique Markdown H1–H6 heading. The first `#` separates the path; later `#` characters are literal heading text. Hash whole-file bytes unchanged. For a heading selector, hash the heading through the line before the next heading of equal or higher level, serialized with LF line endings and one final LF. List one or more unique comma-separated kebab-case families per authority.
-4. Add one `Authoritative coverage` table:
+5. Add one `Authoritative coverage` table:
 
    | Authority / invariant family | Required distinction | Required consumer / production observation | Disposition | Brief owner | Cheapest counterexample |
    | --- | --- | --- | --- | --- | --- |
@@ -25,7 +26,7 @@ Use this procedure only for a checkpoint declared `Checkpoint boundary: cross-bo
    - `not-applicable` with `reason:<nonempty explanation>`.
 
    Do not defer or mark an in-scope prohibition not applicable.
-5. Declare the lifecycle partition exactly once. Use `Lifecycle partition: not-applicable — <reason>` when the checkpoint does not add or change related lifecycle operations. When adjacent operations consume related states, use `Lifecycle partition: required` and add this table:
+6. Declare the lifecycle partition exactly once. Use `Lifecycle partition: not-applicable — <reason>` when the checkpoint does not add or change related lifecycle operations. When adjacent operations consume related states, use `Lifecycle partition: required` and add this table:
 
    | Operation | Allowed source state | Required authority | Required observation / evidence | State and fencing effects | Nearest illegal sibling / stable rejection |
    | --- | --- | --- | --- | --- | --- |
@@ -40,6 +41,7 @@ Give the reviewer the canonical checkpoint and its selectors. The reviewer must:
 
 - recompute every selected-source digest;
 - compare each coverage distinction and owner with its named source;
+- test the architecture declaration against the named authority and reject any hidden ownership or dependency-direction change;
 - test the cheapest counterexample for every coverage row;
 - verify a required lifecycle table partitions every relevant source-state class and rejects its nearest sibling;
 - return one complete correction package rather than stopping after the first missing or ambiguous row.
@@ -85,4 +87,4 @@ Preserve incomplete or rejected work directly under the rejected directory; neve
 
 ## Reuse during implementation review
 
-Use the compiled map again when reviewing the frozen implementation. Account for every acceptance criterion, Contract row, coverage row, and lifecycle sibling row. Reuse exact unchanged selector hashes across correction rounds; re-read changed owners and sweep their neighboring rows. This review checks implementation against the already-compiled contract instead of rediscovering requirements from architecture.
+Use the compiled map again when reviewing the frozen implementation. Account for every acceptance criterion, Contract row, coverage row, and lifecycle sibling row. Compare the architecture declaration with the final diff, and require the named authority change in the same candidate when the declaration is `update-required`. Reuse exact unchanged selector hashes across correction rounds; re-read changed owners and sweep their neighboring rows. This review checks implementation against the already-compiled contract instead of rediscovering requirements from architecture.

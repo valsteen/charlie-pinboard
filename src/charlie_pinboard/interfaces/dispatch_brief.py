@@ -95,6 +95,19 @@ class AuthoritySelector:
     heading: str | None
 
 
+class ArchitectureImpactKind(Enum):
+    NONE = "none"
+    READ_ONLY = "read-only"
+    UPDATE_REQUIRED = "update-required"
+
+
+@dataclass(frozen=True, slots=True)
+class ArchitectureImpact:
+    kind: ArchitectureImpactKind
+    selector: AuthoritySelector | None
+    reason: str
+
+
 @dataclass(frozen=True, slots=True)
 class ReviewedAuthority:
     authority_id: AuthorityId
@@ -351,6 +364,49 @@ def _authority_selector(cell: str) -> AuthoritySelector:
             f"Authority selector '{value}' must name one project-relative file and optional literal heading.",
         )
     return AuthoritySelector(relative_path, heading if separator else None)
+
+
+def _architecture_impact(section: tuple[str, ...]) -> ArchitectureImpact:
+    declarations = tuple(line for line in section if line.startswith("Architecture impact:"))
+    if len(declarations) != 1:
+        raise DispatchError(
+            "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+            "The checkpoint must declare exactly one architecture impact.",
+        )
+    kind_value, separator, details = declarations[0].removeprefix("Architecture impact:").strip().partition(" — ")
+    try:
+        kind = ArchitectureImpactKind(kind_value)
+    except ValueError as error:
+        raise DispatchError(
+            "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+            f"Architecture impact '{kind_value}' is not 'none', 'read-only', or 'update-required'.",
+        ) from error
+    if not separator:
+        raise DispatchError(
+            "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+            "The architecture impact must include a nonempty reason.",
+        )
+    if kind == ArchitectureImpactKind.NONE:
+        if details.casefold() in EMPTY_CONTRACT_CELLS or " — " in details:
+            raise DispatchError(
+                "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+                "Architecture impact 'none' must contain only a nonempty reason.",
+            )
+        return ArchitectureImpact(kind, None, details)
+    selector_value, selector_separator, reason = details.partition(" — ")
+    if not selector_separator or reason.casefold() in EMPTY_CONTRACT_CELLS:
+        raise DispatchError(
+            "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+            f"Architecture impact '{kind.value}' must name a project-relative authority selector and nonempty reason.",
+        )
+    try:
+        selector = _authority_selector(selector_value)
+    except DispatchError as error:
+        raise DispatchError(
+            "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+            f"Architecture impact '{kind.value}' has an invalid authority selector.",
+        ) from error
+    return ArchitectureImpact(kind, selector, reason)
 
 
 def _reviewed_authorities(section: tuple[str, ...]) -> tuple[tuple[ReviewedAuthority, ...], bytes]:
@@ -837,6 +893,7 @@ def prepare_dispatch_from_artifact(
     if not checkout.is_dir():
         raise DispatchError("DISPATCH_CHECKOUT_MISSING", f"Checkout '{checkout}' is not a directory.")
     section = _checkpoint_section(attempt_path, checkpoint)
+    _architecture_impact(section)
     boundary = _checkpoint_boundary(section)
     match boundary:
         case CheckpointBoundary.LOCAL:

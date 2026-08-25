@@ -139,7 +139,7 @@ The plugin contains:
 
 The package targets Python 3.14 only. msgspec provides the immutable records and strict JSON decoding used at repository boundaries. `.python-version` pins the current stable 3.14 patch release. uv manages Python installation, the project environment, dependencies, the checked-in lockfile, and command execution.
 
-The [architecture map](ARCHITECTURE.md) explains the current package layers, representative command flows, and the temporary Markdown boundary without requiring readers to reconstruct ownership from imports.
+The [architecture map](ARCHITECTURE.md) explains the current SQLite-only package layers, storage boundaries, and representative command flows without requiring readers to reconstruct ownership from imports.
 
 ```sh
 uv sync --locked

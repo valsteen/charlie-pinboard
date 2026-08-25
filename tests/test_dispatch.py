@@ -95,6 +95,7 @@ updated: "2026-08-25"
 
 Checkpoint boundary: cross-boundary
 Checkpoint outcome: independently-buildable
+Architecture impact: update-required — `architecture.md` — This checkpoint changes the shared protocol architecture.
 
 #### Reviewed authorities
 
@@ -268,7 +269,7 @@ malformed_quote: "unterminated
         self.assertEqual("DISPATCH_CHECKPOINT_AMBIGUOUS", ambiguous.exception.code)
 
     def test_sqlite_dispatch_reads_accepted_brief_and_rejects_stale_authority(self) -> None:
-        brief = b"""---
+        brief = """---
 kind: work-attempt
 schema: repo-work/v2
 attempt: work-a-1
@@ -286,7 +287,8 @@ updated: "2026-08-25"
 
 Checkpoint boundary: local
 Checkpoint outcome: independently-buildable
-"""
+Architecture impact: none — This checkpoint changes no ownership or dependency direction.
+""".encode()
         project, roots, store, action, environment = self._initialized(brief)
         prompt = prepare_sqlite_dispatch(
             store,
@@ -355,6 +357,7 @@ updated: "2026-08-25"
 
 Checkpoint boundary: local
 Checkpoint outcome: independently-buildable
+Architecture impact: none — This checkpoint changes no ownership or dependency direction.
 """
         brief_path.write_text(local, encoding="utf-8")
         environment = DispatchEnvironment(
@@ -374,6 +377,76 @@ Checkpoint outcome: independently-buildable
             environment,
         )
         self.assertIn("Attempt: work-a-1", prompt)
+
+        for declaration in (
+            "Architecture impact: none — This checkpoint changes no ownership or dependency direction.",
+            "Architecture impact: read-only — `ARCHITECTURE.md` — This checkpoint conforms to the current architecture.",
+            "Architecture impact: update-required — `ARCHITECTURE.md` — This candidate updates the architecture authority.",
+        ):
+            brief_path.write_text(
+                local.replace(
+                    "Architecture impact: none — This checkpoint changes no ownership or dependency direction.",
+                    declaration,
+                ),
+                encoding="utf-8",
+            )
+            with self.subTest(declaration=declaration):
+                self.assertIn(
+                    "Attempt: work-a-1",
+                    prepare_dispatch_from_artifact(
+                        brief_path,
+                        "work-a-1",
+                        "codex/work-a",
+                        project,
+                        "Local implementation",
+                        environment,
+                    ),
+                )
+
+        invalid_architecture_impacts = (
+            local.replace(
+                "Architecture impact: none — This checkpoint changes no ownership or dependency direction.\n", ""
+            ),
+            local.replace(
+                "Architecture impact: none — This checkpoint changes no ownership or dependency direction.",
+                "Architecture impact: none — First reason.\nArchitecture impact: none — Second reason.",
+            ),
+            local.replace("Architecture impact: none", "Architecture impact: invented"),
+            local.replace(
+                "Architecture impact: none — This checkpoint changes no ownership or dependency direction.",
+                "Architecture impact: none — `ARCHITECTURE.md` — Reason.",
+            ),
+            local.replace(
+                "Architecture impact: none — This checkpoint changes no ownership or dependency direction.",
+                "Architecture impact: read-only — Reason without a selector.",
+            ),
+            local.replace(
+                "Architecture impact: none — This checkpoint changes no ownership or dependency direction.",
+                "Architecture impact: read-only — `../ARCHITECTURE.md` — Reason.",
+            ),
+            local.replace(
+                "Architecture impact: none — This checkpoint changes no ownership or dependency direction.",
+                "Architecture impact: update-required — `/tmp/ARCHITECTURE.md` — Reason.",
+            ),
+            local.replace(
+                "Architecture impact: none — This checkpoint changes no ownership or dependency direction.",
+                "Architecture impact: update-required — `ARCHITECTURE.md` —",
+            ),
+        )
+        for text in invalid_architecture_impacts:
+            brief_path.write_text(text, encoding="utf-8")
+            with self.subTest(text=text):
+                with self.assertRaises(DispatchError) as rejected:
+                    prepare_dispatch_from_artifact(
+                        brief_path,
+                        "work-a-1",
+                        "codex/work-a",
+                        project,
+                        "Local implementation",
+                        environment,
+                    )
+                self.assertEqual("DISPATCH_ARCHITECTURE_IMPACT_INVALID", rejected.exception.code)
+
         cases = (
             (
                 msgspec.structs.replace(environment, branch="codex/other"),
@@ -485,6 +558,42 @@ Checkpoint outcome: independently-buildable
                     review_publisher=lambda _digest, _candidate, _review_id, value=value: (_review(value), "review"),
                 )
             self.assertEqual(code, rejected.exception.code)
+
+    def test_invalid_architecture_impact_rejects_before_review_publication(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief = _reviewed_brief(project).replace(
+            b"Architecture impact: update-required \xe2\x80\x94 `architecture.md` "
+            b"\xe2\x80\x94 This checkpoint changes the shared protocol architecture.\n",
+            b"",
+        )
+        brief_path = project / "brief.md"
+        brief_path.write_bytes(brief)
+        environment = DispatchEnvironment(
+            "repo-work-dispatch/v1",
+            str(project),
+            "codex/work-a",
+            "base-revision",
+            (DispatchPermission.REPOSITORY_READ,),
+        )
+        publication_attempts: list[str] = []
+
+        with self.assertRaises(DispatchError) as rejected:
+            prepare_dispatch_from_artifact(
+                brief_path,
+                "work-a-1",
+                "codex/work-a",
+                project,
+                CHECKPOINT,
+                environment,
+                brief_review=_review(brief),
+                review_id="review-id",
+                review_publisher=lambda _digest, value, _review_id: (
+                    publication_attempts.append("published") or value or b"",
+                    "review",
+                ),
+            )
+        self.assertEqual("DISPATCH_ARCHITECTURE_IMPACT_INVALID", rejected.exception.code)
+        self.assertEqual([], publication_attempts)
 
     def test_cross_boundary_contract_and_coverage_counterexamples_are_rejected(self) -> None:
         cases: tuple[tuple[Callable[[bytes], bytes], str], ...] = (
