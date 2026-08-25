@@ -145,7 +145,7 @@ Portable copy requires a quiescent source. It backs up `state.sqlite3`, copies a
 
 ## Historical vocabulary and retired runtime
 
-The stable `.codex/work` path and stored `repo-work/*` schema strings remain serialized protocol vocabulary in current state, history, artifacts, and boundary tests. They are data compatibility identifiers, not a Python package, command alias, Markdown authority, or executable predecessor route.
+The `.codex/work` path is current. Some current wire-format tags deliberately retain the historical `repo-work` prefix, including `repo-work/v2`, `repo-work-dispatch/v1`, `repo-work-overview/v1`, and `repo-work-parallel-preview/v1`; atomic file publication also uses private `.repo-work-stage-*` names. These are serialized schema and storage tags, not a Python package, command alias, Markdown authority, or executable predecessor route.
 
 Retired selectors such as `authority.json`, `queue.md`, `current.md`, `v2/`, `legacy-v1/`, and `legacy-v2/` are recognized only so fresh SQLite initialization can refuse conflicting predecessor state. The supported current states are an absent work database with no predecessor authority, or an exact current `state.sqlite3`. The package contains no executable predecessor package, import or cleanup utility, migration or recovery route, or compatibility entry point.
 
