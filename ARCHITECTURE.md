@@ -66,7 +66,7 @@ Expected rejection over constructed domain values is returned as a typed `Decisi
 | --- | --- |
 | `stored_state.py`, `mutations.py`, `ports.py` | Complete persistence aggregate, closed mutation family, and transactional store capabilities |
 | `decision_projection.py`, `service.py` | Projection into domain decisions and locked mutation orchestration |
-| `actions.py`, `queries.py`, `diagnostics.py` | Legal-action discovery and SQLite-independent read models |
+| `actions.py`, `queries.py`, `diagnostics.py` | Legal-action discovery plus current overview, parallel-preview, resource-conflict, and diagnostic read models |
 | `artifacts.py`, `dispatch.py` | Immutable artifact references, accepted evidence publication, dispatch eligibility, and prompt preparation |
 | `registration.py`, `validation.py`, `transfer.py` | Initialization results, whole-work-root validation, and portable-copy workflow |
 
@@ -123,7 +123,7 @@ Accepted requirements, briefs, results, reviews, and other evidence are immutabl
 
 ### Reads and validation
 
-Status, overview, action discovery, parallel preview, and plan comparison open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. They never parse generated Markdown. Validation verifies the database and every accepted artifact reference, then reports generated-view drift separately.
+Status, overview, action discovery, parallel preview, and resource-conflict inspection open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. They never parse generated Markdown. Validation verifies the database and every accepted artifact reference, then reports generated-view drift separately.
 
 ### Mutations and proposal intake
 
@@ -151,4 +151,4 @@ The `.codex/work` path is current. Proposal JSON uses `pinboard-proposal/v1`; ac
 
 This document describes implemented ownership and dependency direction. Every implementation checkpoint declares its architecture impact before dispatch. A checkpoint that changes an owner or dependency direction names this file as `update-required` and includes the coherent documentation change in the same candidate. A `read-only` checkpoint names the authority it must conform to; `none` records why no architecture change occurs. Parser validation enforces the declaration shape, while brief and implementation review verify that the declaration is true for the sources and final diff.
 
-Future behavior belongs here only when its implementation is present. Delivery history, speculative modules, and deferred redesigns remain in private planning evidence until they change the current architecture.
+Future behavior belongs here only when its implementation is present. Delivery history, speculative modules, and deferred redesigns remain in private planning evidence until they change the current architecture. Maintained design probes under `tests/prototypes/` are excluded from the installed package and are not runtime owners or supported entry points.
