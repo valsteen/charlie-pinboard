@@ -1,13 +1,11 @@
 import json
-import tempfile
 import unittest
-from pathlib import Path
 
 import msgspec
 
 from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId
 from charlie_pinboard.domain.model import AcceptCheckpointInput, ActivateInput, ResumeInput
-from charlie_pinboard.interfaces.proposals import ProposalError, parse_proposal, read_proposal
+from charlie_pinboard.interfaces.proposals import ProposalError, parse_proposal
 from charlie_pinboard.interfaces.transition_input import (
     TRANSITION_ACTION_KINDS,
     TransitionInputError,
@@ -82,15 +80,6 @@ class JsonBoundaryTest(unittest.TestCase):
                 parse_proposal(json.dumps(value))
             self.assertIsInstance(caught.exception.__cause__, msgspec.ValidationError)
             self.assertIn(field, str(caught.exception.__cause__))
-
-        path = Path(tempfile.mkdtemp()) / "proposal.json"
-        path.write_text("[]", encoding="utf-8")
-        with self.assertRaisesRegex(ProposalError, "PROPOSAL_INVALID"):
-            read_proposal(path)
-        path.write_text(json.dumps(valid), encoding="utf-8")
-        self.assertEqual("finding-1", read_proposal(path).proposal_id)
-        with self.assertRaisesRegex(ProposalError, "PROPOSAL_INVALID"):
-            read_proposal(path.parent / "missing.json")
 
     def test_transition_input_rejects_invalid_closed_choices_with_native_paths(self) -> None:
         cases: tuple[tuple[str, JsonObject], ...] = (

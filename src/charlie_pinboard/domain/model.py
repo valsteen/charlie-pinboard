@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Final, NewType
+from typing import NewType
 
 from charlie_pinboard.domain.identifiers import (
     ArtifactRefId,
@@ -66,9 +66,6 @@ class ProposalRelationKind(Enum):
     FOLLOW_UP = "follow-up"
     DUPLICATE = "duplicate"
     CONTRADICTION = "contradiction"
-
-
-TERMINAL_STATES: Final = frozenset({"done", "superseded", "dropped"})
 
 
 @dataclass(frozen=True, slots=True)

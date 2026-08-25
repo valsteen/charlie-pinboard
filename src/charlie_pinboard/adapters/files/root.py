@@ -30,7 +30,3 @@ def resolve_project_root(cwd: Path) -> Path:
             f"Expected the shared Git directory to end in '.git', found '{common_directory}'.",
         )
     return common_directory.parent
-
-
-def resolve_work_root(cwd: Path) -> Path:
-    return resolve_project_root(cwd) / ".codex" / "work"

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from charlie_pinboard.adapters.files.root import RootError, resolve_project_root, resolve_work_root
+from charlie_pinboard.adapters.files.root import RootError, resolve_project_root
 
 
 class RootResolutionTest(unittest.TestCase):
@@ -38,7 +38,6 @@ class RootResolutionTest(unittest.TestCase):
 
         self.assertEqual(repository.resolve(), resolve_project_root(repository))
         self.assertEqual(repository.resolve(), resolve_project_root(linked))
-        self.assertEqual(repository.resolve() / ".codex" / "work", resolve_work_root(linked))
 
     def test_rejects_non_git_directory(self) -> None:
         directory = Path(tempfile.mkdtemp())

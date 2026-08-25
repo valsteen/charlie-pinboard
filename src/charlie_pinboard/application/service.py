@@ -253,9 +253,6 @@ def change_coordination_authority(
         return transaction.commit(mutation)
 
 
-execute_coordination_authority_operation = change_coordination_authority
-
-
 def _retained_attempt_authority(
     state: StoredWorkState,
     attempt_id: AttemptId,
@@ -396,9 +393,6 @@ def change_attempt_authority(
         return transaction.commit(mutation)
 
 
-execute_attempt_authority_operation = change_attempt_authority
-
-
 def _task_use_generation(value: MutationUseLease) -> int:
     return value.generation
 
@@ -482,9 +476,6 @@ def change_task_use_authority(
         draft = ReservationTaskUseMutation(before, before, receipt, decision)
         mutation = replace(draft, after=expected_stored_state(draft))
         return transaction.commit(mutation)
-
-
-execute_task_use_authority_operation = change_task_use_authority
 
 
 def create_proposal(

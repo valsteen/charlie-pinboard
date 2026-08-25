@@ -1,5 +1,4 @@
 from enum import Enum
-from pathlib import Path
 from typing import Annotated, Literal
 
 import msgspec
@@ -50,11 +49,3 @@ def parse_proposal(data: bytes | str) -> Proposal:
         return msgspec.json.decode(data, type=Proposal)
     except msgspec.DecodeError as error:
         raise ProposalError("PROPOSAL_INVALID", f"Cannot decode proposal JSON: {error}") from error
-
-
-def read_proposal(path: Path) -> Proposal:
-    try:
-        data = path.read_bytes()
-    except OSError as error:
-        raise ProposalError("PROPOSAL_INVALID", f"Cannot read JSON at '{path}': {error}") from error
-    return parse_proposal(data)
