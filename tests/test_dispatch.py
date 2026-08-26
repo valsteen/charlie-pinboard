@@ -134,6 +134,8 @@ Lifecycle partition: not-applicable — this protocol change has no lifecycle op
 #### Verification
 
 {VERIFICATION_ENTRY}
+
+Deferral: later-check — The current checkpoint does not need another check. Reopen when: accepted scope requires it.
 """.encode()
 
 
@@ -795,6 +797,13 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
             (
                 lambda value: value.replace(b"`uv run --locked python -m unittest tests.test_dispatch`", b"``", 1),
                 DispatchErrorCode.DISPATCH_VERIFICATION_INCOMPLETE,
+            ),
+            (
+                lambda value: value.replace(
+                    b"Deferral: later-check \xe2\x80\x94 The current checkpoint does not need another check. Reopen when: accepted scope requires it.",
+                    b"Deferral: malformed",
+                ),
+                DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
             ),
         )
         for mutate, code in cases:

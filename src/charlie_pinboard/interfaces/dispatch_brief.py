@@ -378,6 +378,9 @@ def _verification_records(
     start, level = starts[0]
     end = len(section)
     for index in range(start + 1, len(section)):
+        if DEFERRAL.fullmatch(section[index]) is not None:
+            end = index
+            break
         match = HEADING.fullmatch(section[index])
         if match is not None and len(match.group(1)) <= level:
             end = index
