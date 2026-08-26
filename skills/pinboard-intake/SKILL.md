@@ -47,21 +47,21 @@ Before creating a proposal, distinguish exact prior coverage from a merely relat
 3. Treat `OK PROPOSAL_CREATED` as persistence only.
 4. Read `references/codex-transport.md` only when Codex task messaging is available and a useful active coordination holder exists.
 5. Optionally notify that holder with the proposal ID and shared work root. Repository persistence, not messaging, is the correctness boundary.
-6. Report persistence and delivery separately.
+6. Report delivery only when the user requested it or when its outcome changes confidence, current work, or the next action.
 
 For embedded intake, resume the invoking coordinator before the surrounding turn ends. If context compaction obscured the conversation, re-read the anchor's active or paused item, attempt, proposal, or exact selector rather than inventing continuation state. Complete the promised action when it remains in scope; otherwise surface its exact blocker or durably defer it at an exact owner.
 
-If transport is unavailable, no coordination lease exists, or delivery fails, retain the validated proposal in the inbox. Report notification as unavailable without treating that as a persistence failure. Any later chat can discover it through status, so never ask the human to relay the proposal or authorize lease revocation merely to deliver an optional notification.
+If transport is unavailable, no coordination lease exists, or delivery fails, retain the validated proposal in the inbox. Keep optional delivery state silent by default. Any later chat can discover the proposal through status, so never ask the human to relay it or authorize lease revocation merely to reduce notification latency.
 
 ## Result language
 
 Keep the active work as the main topic and lead with the practical outcome:
 
-- After `OK PROPOSAL_CREATED`, say `Saved for later — <finding> was recorded now as <proposal in inbox>; notification <delivered | unavailable>; current work <continues | is blocked by it>.` When notification is unavailable, add `No action needed; the inbox is authoritative.`
+- After `OK PROPOSAL_CREATED`, say `Saved for later — <finding> is now in <proposal in inbox>; current work <continues | is blocked by it>.`
 - For exact prior coverage, say `Saved for later — <finding> was already recorded at <selector and state>; current work <continues | is blocked by it>.`
 - When the user explicitly dismisses the finding, say `Finding dismissed — <finding> was not saved at your request; no follow-up remains.`
 
-Use `recorded now` only after `OK PROPOSAL_CREATED`; it means this turn before the update. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact finding was present earlier.
+Use `now` only after `OK PROPOSAL_CREATED`; it means this turn before the update. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact finding was present earlier. When delivery is user-requested or materially affects the result, report it after the durable outcome without implying that optional transport changes persistence.
 
 When proposal creation fails, `not recorded` is an unresolved state, not a terminal receipt. Give one compact formal announcement containing:
 
@@ -72,7 +72,7 @@ When proposal creation fails, `not recorded` is an unresolved state, not a termi
 
 Treat a stale proposal view or a coordination-holder change during optional delivery as expected concurrency. Retry once when doing so needs no new authority. If delivery remains unavailable after persistence, stop notification work with no human action because the inbox is authoritative; this does not end an embedded caller's surrounding turn. If retry needs new authority, changes scope, or overrides another owner, ask exactly one concrete approval question. If persistence was never authorized, ask whether to preserve or dismiss the finding. Never tell the human to contact or notify the coordinating chat.
 
-Then use one of these precise lifecycle outcomes:
+When transport detail is material, distinguish these precise lifecycle outcomes:
 
 - proposal prepared but not persisted;
 - proposal persisted, delivery unavailable;

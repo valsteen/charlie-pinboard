@@ -148,7 +148,7 @@ When the finding belongs to an existing admitted item but its semantic context i
 
 Keep current work as the main topic and lead the receipt with its practical outcome, not the internal disposition name:
 
-- For `already recorded` or `recorded now`, say `Saved for later — <finding> <was already recorded at selector | was recorded now> in <exact owner and state>; current work <continues | is blocked by it>.`
+- For `already recorded`, say `Saved for later — <finding> is already in <exact owner and state>; current work <continues | is blocked by it>.` For `recorded now`, say `Saved for later — <finding> is now in <exact owner and state>; current work <continues | is blocked by it>.`
 - For an explicit dismissal, say `Finding dismissed — <finding> was not saved at your request; no follow-up remains.`
 - For completed work, say `Completed — <result>; no follow-up needed.` Do not introduce completed or dismissed work as a durable finding or saved follow-up.
 
