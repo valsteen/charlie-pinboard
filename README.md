@@ -122,7 +122,8 @@ The plugin contains:
 - `pinboard`, the primary command that checks and updates the shared state;
 - `$pinboard`, which helps any chat explain the current picture, borrow coordination when needed, and choose what happens next;
 - `$pinboard-intake`, which lets any task leave a finding for later review;
-- `$pinboard-deliver`, which follows one accepted brief and returns evidence for independent review.
+- `$pinboard-deliver`, which follows one accepted brief and returns evidence for independent review;
+- `$slop-cleanup`, a shareable repository-cleanup workflow that traces provenance and recurses to no new findings, with optional Pinboard planning support.
 
 ## Runtime and development
 
