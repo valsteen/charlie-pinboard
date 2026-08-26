@@ -1,7 +1,6 @@
 import unittest
 from dataclasses import replace
 from datetime import datetime
-from typing import cast
 
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.domain.decision_models import (
@@ -39,7 +38,7 @@ from charlie_pinboard.domain.work_models import (
     WorkState,
 )
 from charlie_pinboard.interfaces.transition_input import parse_transition_input
-from tests.domain_support import action
+from tests.domain_support import action, expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -55,19 +54,19 @@ def _worker_actor() -> ActorAuthority:
 
 
 def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
-    return cast(tuple[Action, ...], available_actions_outcome(snapshot, actor))
+    return expect_success(available_actions_outcome(snapshot, actor))
 
 
 def bind_transition(action_value: Action, value: TransitionInput) -> TransitionCommand:
-    return cast(TransitionCommand, bind_transition_outcome(action_value, value))
+    return expect_success(bind_transition_outcome(action_value, value))
 
 
 def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:
-    return cast(Decision, decision_outcome(snapshot, command, now))
+    return expect_success(decision_outcome(snapshot, command, now))
 
 
 def rediscover_action(snapshot: LedgerSnapshot, actor: ActorAuthority, supplied: Action) -> Action:
-    return cast(Action, rediscover_action_outcome(snapshot, actor, supplied))
+    return expect_success(rediscover_action_outcome(snapshot, actor, supplied))
 
 
 def _stored_action(snapshot: LedgerSnapshot) -> Action:

@@ -14,7 +14,7 @@ from charlie_pinboard.domain.authority_models import (
     AttemptLeaseStatus,
     InactiveAttemptAuthority,
 )
-from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, ItemId
 from charlie_pinboard.domain.ledger import LedgerSnapshot
 from charlie_pinboard.domain.work_models import (
@@ -41,7 +41,7 @@ def project_inactive_attempt_authority(
     state: StoredWorkState,
     attempt_id: AttemptId,
     now: datetime,
-) -> InactiveAttemptAuthority | DecisionFailure:
+) -> DecisionResult[InactiveAttemptAuthority]:
     """Select exact retained inactive authority after ordinary interruption recovery."""
 
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)

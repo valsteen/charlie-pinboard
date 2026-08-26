@@ -38,7 +38,7 @@ from charlie_pinboard.domain.decision_models import (
     TransitionCommand,
     TransitionReceipt,
 )
-from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from charlie_pinboard.domain.history import item_scope_digest
 from charlie_pinboard.domain.identifiers import (
     ActionId,
@@ -148,7 +148,7 @@ def command_action(command: TransitionCommand) -> Action:  # noqa: C901, PLR0912
 def bind_transition(  # noqa: C901, PLR0912
     action: Action,
     value: TransitionInput,
-) -> TransitionCommand | DecisionFailure:
+) -> DecisionResult[TransitionCommand]:
     """Bind an external action discriminator and decoded payload into one closed command variant."""
 
     capability = _action_capability(action)
@@ -375,7 +375,7 @@ def _item_actions(snapshot: LedgerSnapshot, item: WorkItem, factory: ActionFacto
     return []
 
 
-def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...] | DecisionFailure:
+def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> DecisionResult[tuple[Action, ...]]:
     revision = snapshot.revision if actor.revision_scoped else ""
     factory = ActionFactory(revision, actor)
     match actor.role:
@@ -412,18 +412,16 @@ def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[
             assert_never(unreachable)
 
 
-def rediscover_action(snapshot: LedgerSnapshot, actor: ActorAuthority, supplied: Action) -> Action | DecisionFailure:
+def rediscover_action(snapshot: LedgerSnapshot, actor: ActorAuthority, supplied: Action) -> DecisionResult[Action]:
     """Reselect one action and compare its complete subject-scoped mutation authority."""
 
-    result = available_actions(snapshot, actor)
-    match result:
-        case DecisionFailure():
-            return result
-        case available:
-            current = next(
-                (candidate for candidate in available if candidate.action_id == supplied.action_id),
-                None,
-            )
+    available = available_actions(snapshot, actor)
+    if isinstance(available, DecisionFailure):
+        return available
+    current = next(
+        (candidate for candidate in available if candidate.action_id == supplied.action_id),
+        None,
+    )
     if current is None:
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Action '{supplied.action_id}' is no longer legal."
@@ -475,7 +473,7 @@ def _result(
     )
 
 
-def _activate(snapshot: LedgerSnapshot, command: ActivateCommand, now: datetime) -> Decision | DecisionFailure:
+def _activate(snapshot: LedgerSnapshot, command: ActivateCommand, now: datetime) -> DecisionResult[Decision]:
     action = command_action(command)
     value = command.value
     item_id = ItemId(action.subject)
@@ -516,7 +514,7 @@ def _pause_or_block(
     snapshot: LedgerSnapshot,
     command: PauseCommand | BlockCommand,
     now: datetime,
-) -> Decision | DecisionFailure:
+) -> DecisionResult[Decision]:
     action = command_action(command)
     match command:
         case PauseCommand():
@@ -553,7 +551,7 @@ def _fence_retained_attempt_authority(
     )
 
 
-def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime) -> Decision | DecisionFailure:
+def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime) -> DecisionResult[Decision]:
     action = command_action(command)
     value = command.value
     attempt_id = AttemptId(action.subject)
@@ -583,7 +581,7 @@ def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime)
     )
 
 
-def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> Decision | DecisionFailure:
+def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> DecisionResult[Decision]:
     action = command_action(command)
     value = command.value
     item_id = ItemId(action.subject)
@@ -615,7 +613,7 @@ def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> De
     )
 
 
-def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> Decision | DecisionFailure:
+def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> DecisionResult[Decision]:
     action = command_action(command)
     value = command.value
     item_id = ItemId(action.subject)
@@ -664,7 +662,7 @@ def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> 
     )
 
 
-def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: datetime) -> Decision | DecisionFailure:
+def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: datetime) -> DecisionResult[Decision]:
     action = command_action(command)
     value = command.value
     attempt_id = AttemptId(action.subject)
@@ -702,7 +700,7 @@ def _return_for_correction(
     snapshot: LedgerSnapshot,
     command: ReturnForCorrectionCommand,
     now: datetime,
-) -> Decision | DecisionFailure:
+) -> DecisionResult[Decision]:
     action = command_action(command)
     value = command.value
     attempt_id = AttemptId(action.subject)
@@ -744,7 +742,7 @@ def _accept_checkpoint(
     snapshot: LedgerSnapshot,
     command: AcceptCheckpointCommand,
     now: datetime,
-) -> Decision | DecisionFailure:
+) -> DecisionResult[Decision]:
     action = command_action(command)
     value = command.value
     attempt_id = AttemptId(action.subject)
@@ -789,7 +787,7 @@ def _simple_item_transition(
     snapshot: LedgerSnapshot,
     command: ReopenCommand | MarkReadyCommand | BlockItemCommand,
     now: datetime,
-) -> Decision | DecisionFailure:
+) -> DecisionResult[Decision]:
     action = command_action(command)
     match command:
         case ReopenCommand():
@@ -814,7 +812,7 @@ def _simple_item_transition(
     return _result(action, now, item=item.item, item_change=ItemChange(item.item, item.state, target))
 
 
-def _defer(snapshot: LedgerSnapshot, command: DeferCommand, now: datetime) -> Decision | DecisionFailure:
+def _defer(snapshot: LedgerSnapshot, command: DeferCommand, now: datetime) -> DecisionResult[Decision]:
     action = command_action(command)
     item_id = ItemId(action.subject)
     item = snapshot.item(item_id)
@@ -829,7 +827,7 @@ def _accept_proposal(
     snapshot: LedgerSnapshot,
     command: AcceptProposalCommand,
     now: datetime,
-) -> Decision | DecisionFailure:
+) -> DecisionResult[Decision]:
     action = command_action(command)
     value = command.value
     proposal_id = ProposalId(action.subject)
@@ -869,12 +867,9 @@ def _accept_proposal(
             proposal.unlock,
             tuple(ScopeDependency(position, dependency) for position, dependency in enumerate(value.depends_on)),
         )
-        result = item_scope_digest(scope)
-        match result:
-            case DecisionFailure():
-                return result
-            case scope_digest:
-                pass
+        scope_digest = item_scope_digest(scope)
+        if isinstance(scope_digest, DecisionFailure):
+            return scope_digest
         accepted_item = AcceptedProposalItem(
             value.item,
             WorkState(value.state.value),
@@ -910,7 +905,7 @@ def _merge_proposal(
     snapshot: LedgerSnapshot,
     command: MergeProposalCommand,
     now: datetime,
-) -> Decision | DecisionFailure:
+) -> DecisionResult[Decision]:
     action = command_action(command)
     value = command.value
     proposal_id = ProposalId(action.subject)
@@ -936,7 +931,7 @@ def _dispose_proposal(
     snapshot: LedgerSnapshot,
     command: ReturnProposalCommand | RejectProposalCommand,
     now: datetime,
-) -> Decision | DecisionFailure:
+) -> DecisionResult[Decision]:
     action = command_action(command)
     match command:
         case ReturnProposalCommand(value=value):
@@ -957,9 +952,7 @@ def _dispose_proposal(
     )
 
 
-def _transfer(
-    snapshot: LedgerSnapshot, command: TransferCoordinatorCommand, now: datetime
-) -> Decision | DecisionFailure:
+def _transfer(snapshot: LedgerSnapshot, command: TransferCoordinatorCommand, now: datetime) -> DecisionResult[Decision]:
     action = command_action(command)
     if not snapshot.can_transfer_coordinator:
         return DecisionFailure(
@@ -985,7 +978,7 @@ def decide(  # noqa: C901, PLR0912
     snapshot: LedgerSnapshot,
     command: TransitionCommand,
     now: datetime,
-) -> Decision | DecisionFailure:
+) -> DecisionResult[Decision]:
     match command:
         case AcceptCheckpointCommand():
             return _accept_checkpoint(snapshot, command, now)

@@ -1,6 +1,6 @@
 import re
 
-from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from charlie_pinboard.domain.identifiers import ItemId, ProposalId
 from charlie_pinboard.domain.proposal_models import (
     CreateProposalOperation,
@@ -23,7 +23,7 @@ def decide_proposal_creation(
     existing: tuple[ProposalId, ...],
     existing_items: tuple[ItemId, ...],
     operation: CreateProposalOperation,
-) -> ProposalCreationDecision | DecisionFailure:
+) -> DecisionResult[ProposalCreationDecision]:
     intake = operation.intake
     if authority != LocalIntakeAuthority(current_project_revision, current_host_epoch):
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Local intake authority is stale.")

@@ -20,7 +20,7 @@ from charlie_pinboard.domain.authority_models import (
     RevokeCoordinationAuthority,
     TransferAttemptAuthority,
 )
-from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from charlie_pinboard.domain.identifiers import AttemptId, ItemId
 from charlie_pinboard.domain.work_models import (
     CommandAttemptAuthority,
@@ -44,7 +44,7 @@ def _coordination_token(value: CoordinationLeaseAuthority) -> CoordinationComman
 def decide_coordination_authority(  # noqa: C901, PLR0912
     retained: CoordinationLeaseAuthority | None,
     operation: CoordinationAuthorityOperation,
-) -> CoordinationAuthorityDecision | DecisionFailure:
+) -> DecisionResult[CoordinationAuthorityDecision]:
     match operation:
         case AcquireCoordinationAuthority(
             host_epoch=host_epoch,
@@ -186,7 +186,7 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
     live_attempt: tuple[AttemptId, ItemId] | None = None,
     transferable_attempt: tuple[AttemptId, ItemId] | None = None,
     project_host_epoch: int | None = None,
-) -> AttemptAuthorityDecision | DecisionFailure:
+) -> DecisionResult[AttemptAuthorityDecision]:
     match operation:
         case AcquireInitialAttemptAuthority(
             host_epoch=host_epoch,

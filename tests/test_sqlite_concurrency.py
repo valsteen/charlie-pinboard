@@ -5,7 +5,6 @@ import tempfile
 import unittest
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
-from typing import cast
 
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
@@ -14,13 +13,10 @@ from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.application.mutations import project_transition_mutation
 from charlie_pinboard.domain.decision_models import (
-    Action,
     ActionKind,
     ActorAuthority,
     AuthorizationKind,
-    Decision,
     Role,
-    TransitionCommand,
 )
 from charlie_pinboard.domain.decisions import (
     available_actions,
@@ -28,6 +24,7 @@ from charlie_pinboard.domain.decisions import (
     decide,
 )
 from charlie_pinboard.domain.work_models import ReasonInput
+from tests.domain_support import expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -40,10 +37,10 @@ def _commit_same_pause(
     before = store.snapshot()
     snapshot = project_decision_snapshot(before)
     actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
-    actions = cast(tuple[Action, ...], available_actions(snapshot, actor))
+    actions = expect_success(available_actions(snapshot, actor))
     action = next(value for value in actions if value.kind == ActionKind.PAUSE)
-    command = cast(TransitionCommand, bind_transition(action, ReasonInput("Concurrent pause.")))
-    decision = cast(Decision, decide(snapshot, command, SQLITE_NOW))
+    command = expect_success(bind_transition(action, ReasonInput("Concurrent pause.")))
+    decision = expect_success(decide(snapshot, command, SQLITE_NOW))
     mutation = project_transition_mutation(before, decision)
     barrier.wait()
     try:

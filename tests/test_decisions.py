@@ -1,7 +1,7 @@
 import hashlib
 import unittest
+from dataclasses import replace as replace_dataclass
 from datetime import UTC, datetime
-from typing import cast
 
 from charlie_pinboard.domain.decision_models import (
     Action,
@@ -61,13 +61,14 @@ from tests.domain_support import (
     defer_input as DeferInput,
 )
 from tests.domain_support import (
+    expect_success,
+    replace,
+)
+from tests.domain_support import (
     item_scope as make_item_scope,
 )
 from tests.domain_support import (
     proposal_record as ProposalRecord,
-)
-from tests.domain_support import (
-    replace,
 )
 from tests.domain_support import (
     scope_anchor as ScopeAnchor,
@@ -85,23 +86,23 @@ DIGEST_B = "b" * 64
 
 
 def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
-    return cast(tuple[Action, ...], available_actions_outcome(snapshot, actor))
+    return expect_success(available_actions_outcome(snapshot, actor))
 
 
 def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand:
-    return cast(TransitionCommand, bind_transition_outcome(action, value))
+    return expect_success(bind_transition_outcome(action, value))
 
 
 def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:
-    return cast(Decision, decision_outcome(snapshot, command, now))
+    return expect_success(decision_outcome(snapshot, command, now))
 
 
 def item_scope_bytes(scope: ItemScope) -> bytes:
-    return cast(bytes, item_scope_bytes_outcome(scope))
+    return expect_success(item_scope_bytes_outcome(scope))
 
 
 def item_scope_digest(scope: ItemScope) -> str:
-    return cast(str, item_scope_digest_outcome(scope))
+    return expect_success(item_scope_digest_outcome(scope))
 
 
 def item(item_id: str, state: WorkState, *, attempt: str | None = None) -> WorkItem:
@@ -118,7 +119,7 @@ def item(item_id: str, state: WorkState, *, attempt: str | None = None) -> WorkI
 
 
 def action(kind: ActionKind, subject: str) -> Action:
-    return replace(make_action(kind, subject), authorization=AuthorizationKind.COORDINATOR)
+    return replace_dataclass(make_action(kind, subject), authorization=AuthorizationKind.COORDINATOR)
 
 
 def native_scope(*, artifacts: tuple[ScopeArtifact, ...] | None = None) -> ItemScope:
@@ -451,12 +452,11 @@ class LifecycleDecisionTest(unittest.TestCase):
         for snapshot, kind, subject, value, code in cases:
             with self.subTest(kind=kind.value, code=code):
                 bound = bind_transition_outcome(action(kind, subject), value)
-                match bound:
-                    case DecisionFailure():
-                        rejected = bound
-                    case _:
-                        rejected = decision_outcome(snapshot, bound, NOW)
-                        self.assertIsInstance(rejected, DecisionFailure)
+                if isinstance(bound, DecisionFailure):
+                    rejected = bound
+                else:
+                    rejected = decision_outcome(snapshot, bound, NOW)
+                    self.assertIsInstance(rejected, DecisionFailure)
                 self.assertEqual(DecisionFailureCode(code), rejected.code)
 
 

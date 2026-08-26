@@ -3,6 +3,7 @@ from typing import Any  # noqa: TID251 - fixture corruption intentionally crosse
 
 from charlie_pinboard.domain.decision_models import Action as ActionValue
 from charlie_pinboard.domain.decision_models import ActionKind
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionResult
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     AttemptId,
@@ -32,6 +33,12 @@ from charlie_pinboard.domain.work_models import TransferCoordinatorInput as Tran
 def replace(instance: Any, **changes: Any) -> Any:  # noqa: ANN401
     """Create valid variants and deliberately malformed values for rejection tests."""
     return dataclass_replace(instance, **changes)
+
+
+def expect_success[T](value: DecisionResult[T]) -> T:
+    if isinstance(value, DecisionFailure):
+        raise AssertionError(f"Expected success, received {value.code.value}: {value.message}")
+    return value
 
 
 def action(kind: ActionKind, subject: str) -> ActionValue:

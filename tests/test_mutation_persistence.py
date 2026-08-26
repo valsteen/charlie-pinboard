@@ -4,7 +4,6 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import cast
 
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
@@ -83,19 +82,20 @@ from charlie_pinboard.domain.work_models import (
     Timing,
     TransitionInput,
 )
+from tests.domain_support import expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
 def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
-    return cast(tuple[Action, ...], available_actions_outcome(snapshot, actor))
+    return expect_success(available_actions_outcome(snapshot, actor))
 
 
 def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand:
-    return cast(TransitionCommand, bind_transition_outcome(action, value))
+    return expect_success(bind_transition_outcome(action, value))
 
 
 def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:
-    return cast(Decision, decision_outcome(snapshot, command, now))
+    return expect_success(decision_outcome(snapshot, command, now))
 
 
 class MutationPersistenceTest(unittest.TestCase):

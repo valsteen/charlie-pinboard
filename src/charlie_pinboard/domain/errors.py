@@ -32,6 +32,9 @@ class DecisionFailure:
     message: str
 
 
+type DecisionResult[T] = T | DecisionFailure
+
+
 class HistoryRecordErrorCode(Enum):
     ARTIFACT_IDENTITY_DUPLICATE = "HISTORY_ARTIFACT_IDENTITY_DUPLICATE"
     ARTIFACT_KIND_ROLE_MISMATCH = "HISTORY_ARTIFACT_KIND_ROLE_MISMATCH"

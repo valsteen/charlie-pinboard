@@ -7,6 +7,7 @@ import msgspec
 from charlie_pinboard.domain.errors import (
     DecisionFailure,
     DecisionFailureCode,
+    DecisionResult,
     HistoryRecordError,
     HistoryRecordErrorCode,
 )
@@ -178,7 +179,7 @@ def _semantic_role(role: ArtifactRole) -> SemanticArtifactRole | None:
 
 def _semantic_artifacts(  # noqa: C901, PLR0912
     scope: ItemScope,
-) -> tuple[ScopeArtifactRecord, ...] | DecisionFailure:
+) -> DecisionResult[tuple[ScopeArtifactRecord, ...]]:
     semantic_roles = {ArtifactRole.REQUIREMENTS, ArtifactRole.PLAN, ArtifactRole.DESIGN}
     artifacts = tuple(value for value in scope.artifacts if value.role in semantic_roles)
     identities: set[tuple[str, str, int]] = set()
@@ -243,7 +244,7 @@ def _semantic_artifacts(  # noqa: C901, PLR0912
     return tuple(records)
 
 
-def _item_scope_record(scope: ItemScope) -> ItemScopeRecord | DecisionFailure:
+def _item_scope_record(scope: ItemScope) -> DecisionResult[ItemScopeRecord]:
     for field, value in (("item ID", scope.item_id), ("user label", scope.user_label)):
         if (failure := _nonempty(value, field)) is not None:
             return failure
@@ -263,12 +264,9 @@ def _item_scope_record(scope: ItemScope) -> ItemScopeRecord | DecisionFailure:
         )
     ) is not None:
         return failure
-    result = _semantic_artifacts(scope)
-    match result:
-        case DecisionFailure():
-            return result
-        case artifacts:
-            pass
+    artifacts = _semantic_artifacts(scope)
+    if isinstance(artifacts, DecisionFailure):
+        return artifacts
     return ItemScopeRecord(
         artifacts,
         tuple(
@@ -285,19 +283,15 @@ def _item_scope_record(scope: ItemScope) -> ItemScopeRecord | DecisionFailure:
     )
 
 
-def item_scope_bytes(scope: ItemScope) -> bytes | DecisionFailure:
-    result = _item_scope_record(scope)
-    match result:
-        case DecisionFailure():
-            return result
-        case record:
-            return _encoded_record(record)
+def item_scope_bytes(scope: ItemScope) -> DecisionResult[bytes]:
+    record = _item_scope_record(scope)
+    if isinstance(record, DecisionFailure):
+        return record
+    return _encoded_record(record)
 
 
-def item_scope_digest(scope: ItemScope) -> str | DecisionFailure:
-    result = item_scope_bytes(scope)
-    match result:
-        case DecisionFailure():
-            return result
-        case payload:
-            return hashlib.sha256(payload).hexdigest()
+def item_scope_digest(scope: ItemScope) -> DecisionResult[str]:
+    payload = item_scope_bytes(scope)
+    if isinstance(payload, DecisionFailure):
+        return payload
+    return hashlib.sha256(payload).hexdigest()

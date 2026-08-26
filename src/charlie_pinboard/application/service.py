@@ -54,7 +54,7 @@ from charlie_pinboard.domain.decisions import (
     decide,
     rediscover_action,
 )
-from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     AttemptId,
@@ -79,18 +79,15 @@ from charlie_pinboard.domain.work_models import (
 def change_coordination_authority(
     store: WorkStore,
     operation: CoordinationAuthorityOperation,
-) -> TransitionReceipt | DecisionFailure:
+) -> DecisionResult[TransitionReceipt]:
     """Decide and persist one exact coordination-authority mutation."""
 
     with store.write() as transaction:
         before = transaction.snapshot()
         snapshot = project_decision_snapshot(before)
-        result = decide_coordination_authority(snapshot.coordination_lease, operation)
-        match result:
-            case DecisionFailure():
-                return result
-            case decision:
-                pass
+        decision = decide_coordination_authority(snapshot.coordination_lease, operation)
+        if isinstance(decision, DecisionFailure):
+            return decision
         after_authority = decision.after
         stored_after = StoredCoordinationLease(
             after_authority.lease_id,
@@ -188,7 +185,7 @@ def _retained_attempt_authority(
 def change_attempt_authority(
     store: WorkStore,
     operation: AttemptAuthorityOperation,
-) -> TransitionReceipt | DecisionFailure:
+) -> DecisionResult[TransitionReceipt]:
     """Decide and persist one exact attempt-authority mutation."""
 
     match operation:
@@ -224,7 +221,7 @@ def change_attempt_authority(
             0,
         )
         retained = _retained_attempt_authority(before, attempt_id)
-        result = decide_attempt_authority(
+        decision = decide_attempt_authority(
             retained,
             counter,
             operation,
@@ -242,11 +239,8 @@ def change_attempt_authority(
             ),
             project_host_epoch=snapshot.host_epoch,
         )
-        match result:
-            case DecisionFailure():
-                return result
-            case decision:
-                pass
+        if isinstance(decision, DecisionFailure):
+            return decision
         after = decision.current_after
         transition = TransitionReceipt(
             ActionId(f"continue:attempt-authority:{attempt_id}:{after.generation}"),
@@ -280,14 +274,14 @@ def create_proposal(
     store: WorkStore,
     operation: CreateProposalOperation,
     now: datetime,
-) -> TransitionReceipt | DecisionFailure:
+) -> DecisionResult[TransitionReceipt]:
     """Persist one immutable proposal under authority selected from the locked local store."""
 
     with store.write() as transaction:
         before = transaction.snapshot()
         project = before.lifecycle.project
         authority = LocalIntakeAuthority(project.revision, project.host_epoch)
-        result = decide_proposal_creation(
+        decision = decide_proposal_creation(
             authority,
             project.revision,
             project.host_epoch,
@@ -295,11 +289,8 @@ def create_proposal(
             tuple(value.item_id for value in before.lifecycle.work_items),
             operation,
         )
-        match result:
-            case DecisionFailure():
-                return result
-            case decision:
-                pass
+        if isinstance(decision, DecisionFailure):
+            return decision
         intake = decision.proposal
         transition = TransitionReceipt(
             ActionId(f"inspect:proposal:{intake.proposal_id}"),
@@ -330,7 +321,7 @@ def _actor_for(
     snapshot: LedgerSnapshot,
     action: Action,
     now: datetime,
-) -> ActorAuthority | DecisionFailure:
+) -> DecisionResult[ActorAuthority]:
     match action.authorization:
         case AuthorizationKind.COORDINATOR:
             return ActorAuthority(Role.COORDINATOR, action.authorization, action.coordinator_generation)
@@ -386,28 +377,20 @@ def execute(
     store: WorkStore,
     command: TransitionCommand,
     now: datetime,
-) -> TransitionReceipt | DecisionFailure:
+) -> DecisionResult[TransitionReceipt]:
     """Rediscover, decide, and persist one lifecycle mutation under one write lock."""
 
     supplied = command_action(command)
     with store.write() as transaction:
         before = transaction.snapshot()
         snapshot = project_decision_snapshot(before)
-        result = _actor_for(snapshot, supplied, now)
-        match result:
-            case DecisionFailure():
-                return result
-            case actor:
-                pass
-        result = rediscover_action(snapshot, actor, supplied)
-        match result:
-            case DecisionFailure() as unavailable:
-                return unavailable
-            case Action():
-                pass
-        result = decide(snapshot, command, now)
-        match result:
-            case DecisionFailure():
-                return result
-            case decision:
-                return transaction.commit(project_transition_mutation(before, decision))
+        actor = _actor_for(snapshot, supplied, now)
+        if isinstance(actor, DecisionFailure):
+            return actor
+        current = rediscover_action(snapshot, actor, supplied)
+        if isinstance(current, DecisionFailure):
+            return current
+        decision = decide(snapshot, command, now)
+        if isinstance(decision, DecisionFailure):
+            return decision
+        return transaction.commit(project_transition_mutation(before, decision))

@@ -44,6 +44,10 @@ search-path = ["."]
 preset = "strict"
 min-severity = "warn"
 
+[tool.pyrefly.errors]
+invalid-cast = "error"
+no-any-return = "error"
+
 [[tool.pyrefly.sub-config]]
 matches = "src/**"
 
