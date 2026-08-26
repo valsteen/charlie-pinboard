@@ -93,6 +93,12 @@ class ContractRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class VerificationRecord:
+    authorization_basis: AuthorizationBasis
+    obligation: str
+
+
+@dataclass(frozen=True, slots=True)
 class BriefOwner:
     kind: BriefOwnerKind
     value: str

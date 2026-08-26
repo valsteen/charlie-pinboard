@@ -50,6 +50,9 @@ CONTRACT_TABLE = """\
 | --- | --- | --- | --- | --- | --- | --- |
 | Kotlin and Rust use protocol v13 together. | Extension protocol | Rust connector | Unsupported version is explicit. | `pnpm rust:test` | Re-run after both consumers change. | `accepted-scope:work-a@1` |
 """
+VERIFICATION_ENTRY = (
+    "- `repository-policy:architecture#protocol-contract` — `uv run --locked python -m unittest tests.test_dispatch`"
+)
 AUTHORITY_COLUMNS = "| Authority ID | Selector | Reviewed SHA-256 | In-scope families |"
 COVERAGE_COLUMNS = "| Authority / invariant family | Required distinction | Required consumer / production observation | Disposition | Brief owner | Cheapest counterexample |"
 REVIEW_COLUMNS = "| Authority / invariant family | Brief owner | Verdict | Cheapest counterexample result |"
@@ -127,6 +130,10 @@ Lifecycle partition: not-applicable — this protocol change has no lifecycle op
 #### Acceptance criteria
 
 1. The production Rust connector accepts protocol v13.
+
+#### Verification
+
+{VERIFICATION_ENTRY}
 """.encode()
 
 
@@ -719,6 +726,83 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
         with self.assertRaises(DispatchError) as error:
             self._prepare_cross_boundary(project, six_column)
         self.assertEqual(DispatchErrorCode.DISPATCH_CONTRACT_MISSING, error.exception.code)
+
+    def test_cross_boundary_verification_authorization_basis_is_closed_and_resolved(self) -> None:
+        accepted = (
+            b"accepted-scope:work-a@1",
+            b"authority:architecture#protocol-contract",
+            b"repository-policy:architecture#protocol-contract",
+            b"existing-consumer:plan#consumer-proof",
+        )
+        original_basis = b"repository-policy:architecture#protocol-contract"
+        for basis in accepted:
+            project = Path(tempfile.mkdtemp()).resolve()
+            brief = _reviewed_brief(project).replace(original_basis, basis, 1)
+            with self.subTest(basis=basis):
+                self.assertIn(CHECKPOINT, self._prepare_cross_boundary(project, brief))
+
+        rejected = (
+            b"accepted-scope:work-b@1",
+            b"accepted-scope:work-a@2",
+            b"accepted-scope:work-a@0",
+            b"invented:architecture#protocol-contract",
+            b"authority:missing#protocol-contract",
+            b"repository-policy:architecture#missing",
+            b"existing-consumer:plan#missing",
+        )
+        for basis in rejected:
+            project = Path(tempfile.mkdtemp()).resolve()
+            brief = _reviewed_brief(project).replace(original_basis, basis, 1)
+            with self.subTest(basis=basis), self.assertRaises(DispatchError) as error:
+                self._prepare_cross_boundary(project, brief)
+            self.assertEqual(DispatchErrorCode.DISPATCH_VERIFICATION_INVALID, error.exception.code)
+
+    def test_cross_boundary_verification_section_is_mandatory_and_exact(self) -> None:
+        cases: tuple[tuple[Callable[[bytes], bytes], DispatchErrorCode], ...] = (
+            (
+                lambda value: value.replace(b"#### Verification\n\n" + VERIFICATION_ENTRY.encode() + b"\n", b""),
+                DispatchErrorCode.DISPATCH_VERIFICATION_MISSING,
+            ),
+            (
+                lambda value: value.replace(VERIFICATION_ENTRY.encode(), b""),
+                DispatchErrorCode.DISPATCH_VERIFICATION_INCOMPLETE,
+            ),
+            (
+                lambda value: value.replace(
+                    VERIFICATION_ENTRY.encode(),
+                    VERIFICATION_ENTRY.encode() + b"\n\n#### Verification\n\n" + VERIFICATION_ENTRY.encode(),
+                ),
+                DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
+            ),
+            (
+                lambda value: value.replace(b"- `repository-policy", b"`repository-policy", 1),
+                DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
+            ),
+            (
+                lambda value: value.replace(
+                    b"protocol-contract` \xe2\x80\x94 `uv run", b"protocol-contract` - `uv run", 1
+                ),
+                DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
+            ),
+            (
+                lambda value: value.replace(
+                    b"`repository-policy:architecture#protocol-contract`",
+                    b"repository-policy:architecture#protocol-contract",
+                    1,
+                ),
+                DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
+            ),
+            (
+                lambda value: value.replace(b"`uv run --locked python -m unittest tests.test_dispatch`", b"``", 1),
+                DispatchErrorCode.DISPATCH_VERIFICATION_INCOMPLETE,
+            ),
+        )
+        for mutate, code in cases:
+            project = Path(tempfile.mkdtemp()).resolve()
+            brief = mutate(_reviewed_brief(project))
+            with self.subTest(code=code), self.assertRaises(DispatchError) as error:
+                self._prepare_cross_boundary(project, brief)
+            self.assertEqual(code, error.exception.code)
 
     def test_reviewed_authority_digest_tracks_only_the_selected_source(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

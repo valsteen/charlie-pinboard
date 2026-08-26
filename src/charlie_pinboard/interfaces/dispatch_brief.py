@@ -33,6 +33,7 @@ from charlie_pinboard.interfaces.dispatch_brief_models import (
     MarkdownTable,
     RepositoryPolicyAuthorizationBasis,
     ReviewedAuthority,
+    VerificationRecord,
 )
 from charlie_pinboard.interfaces.errors import (
     BriefSourceError,
@@ -70,6 +71,7 @@ REPOSITORY_POLICY_REFERENCE: Final = re.compile(
 EXISTING_CONSUMER_REFERENCE: Final = re.compile(
     r"^existing-consumer:(?P<authority>[a-z0-9]+(?:-[a-z0-9]+)*)#(?P<family>[a-z0-9]+(?:-[a-z0-9]+)*)$"
 )
+VERIFICATION_ENTRY: Final = re.compile(r"^- (?P<basis>`[^`]*`) — (?P<obligation>`[^`]*`)$")
 CRITERION_OWNER: Final = re.compile(r"^criterion:(?P<number>[1-9][0-9]*)$")
 PROHIBITION: Final = re.compile(r"\b(?:must not|do not|cannot|never|prohibition|prohibited)\b", re.IGNORECASE)
 DEFERRAL: Final = re.compile(
@@ -258,13 +260,15 @@ def _normalized_section_bytes(section: tuple[str, ...]) -> bytes:
 
 
 def _source_authorization_key(
-    match: re.Match[str], authorities: tuple[ReviewedAuthority, ...]
+    match: re.Match[str],
+    authorities: tuple[ReviewedAuthority, ...],
+    invalid_code: DispatchErrorCode,
 ) -> tuple[AuthorityId, AuthorityFamily]:
     key = (AuthorityId(match.group("authority")), AuthorityFamily(match.group("family")))
     known = frozenset((authority.authority_id, family) for authority in authorities for family in authority.families)
     if key not in known:
         raise DispatchError(
-            DispatchErrorCode.DISPATCH_CONTRACT_INVALID,
+            invalid_code,
             f"Authorization basis references unknown authority family 'authority:{key[0]}#{key[1]}'.",
         )
     return key
@@ -275,6 +279,7 @@ def _authorization_basis(
     accepted_item_id: str,
     accepted_scope_revision: int,
     authorities: tuple[ReviewedAuthority, ...],
+    invalid_code: DispatchErrorCode,
 ) -> (
     AcceptedScopeAuthorizationBasis
     | AuthorityAuthorizationBasis
@@ -287,21 +292,21 @@ def _authorization_basis(
         scope_revision = int(match.group("revision"))
         if item_id != accepted_item_id or scope_revision != accepted_scope_revision:
             raise DispatchError(
-                DispatchErrorCode.DISPATCH_CONTRACT_INVALID,
+                invalid_code,
                 "Accepted-scope authorization does not match the current attempt item and scope revision.",
             )
         return AcceptedScopeAuthorizationBasis(item_id, scope_revision)
     if (match := AUTHORITY_REFERENCE.fullmatch(value)) is not None:
-        authority_id, family = _source_authorization_key(match, authorities)
+        authority_id, family = _source_authorization_key(match, authorities, invalid_code)
         return AuthorityAuthorizationBasis(authority_id, family)
     if (match := REPOSITORY_POLICY_REFERENCE.fullmatch(value)) is not None:
-        authority_id, family = _source_authorization_key(match, authorities)
+        authority_id, family = _source_authorization_key(match, authorities, invalid_code)
         return RepositoryPolicyAuthorizationBasis(authority_id, family)
     if (match := EXISTING_CONSUMER_REFERENCE.fullmatch(value)) is not None:
-        authority_id, family = _source_authorization_key(match, authorities)
+        authority_id, family = _source_authorization_key(match, authorities, invalid_code)
         return ExistingConsumerAuthorizationBasis(authority_id, family)
     raise DispatchError(
-        DispatchErrorCode.DISPATCH_CONTRACT_INVALID,
+        invalid_code,
         "Authorization basis must be accepted-scope, authority, repository-policy, or existing-consumer.",
     )
 
@@ -333,6 +338,7 @@ def _contract_records(
             accepted_item_id,
             accepted_scope_revision,
             authorities,
+            DispatchErrorCode.DISPATCH_CONTRACT_INVALID,
         )
         records.append(
             ContractRecord(
@@ -345,6 +351,64 @@ def _contract_records(
                 authorization_basis,
             )
         )
+    return tuple(records)
+
+
+def _verification_records(
+    section: tuple[str, ...],
+    accepted_item_id: str,
+    accepted_scope_revision: int,
+    authorities: tuple[ReviewedAuthority, ...],
+) -> tuple[VerificationRecord, ...]:
+    starts: list[tuple[int, int]] = []
+    for index, line in enumerate(section):
+        match = HEADING.fullmatch(line)
+        if match is not None and match.group(2) == "Verification":
+            starts.append((index, len(match.group(1))))
+    if not starts:
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_VERIFICATION_MISSING,
+            "The Verification section is missing.",
+        )
+    if len(starts) != 1:
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
+            "The Verification section must appear exactly once.",
+        )
+    start, level = starts[0]
+    end = len(section)
+    for index in range(start + 1, len(section)):
+        match = HEADING.fullmatch(section[index])
+        if match is not None and len(match.group(1)) <= level:
+            end = index
+            break
+    entries = tuple(line for line in section[start + 1 : end] if line.strip())
+    if not entries:
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_VERIFICATION_INCOMPLETE,
+            "The Verification section has no mandatory entries.",
+        )
+    records: list[VerificationRecord] = []
+    for entry_number, entry in enumerate(entries, start=1):
+        match = VERIFICATION_ENTRY.fullmatch(entry)
+        if match is None:
+            raise DispatchError(
+                DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
+                f"Verification entry {entry_number} must be '- `<authorization basis>` — `<command or observation>`'.",
+            )
+        obligation = _require_value(
+            _code_value(match.group("obligation")),
+            DispatchErrorCode.DISPATCH_VERIFICATION_INCOMPLETE,
+            f"Verification entry {entry_number}",
+        )
+        authorization_basis = _authorization_basis(
+            match.group("basis"),
+            accepted_item_id,
+            accepted_scope_revision,
+            authorities,
+            DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
+        )
+        records.append(VerificationRecord(authorization_basis, obligation))
     return tuple(records)
 
 
@@ -833,6 +897,7 @@ def _validate_semantic_preservation(
 ) -> None:
     authorities, authority_table = _reviewed_authorities(section)
     contracts = _contract_records(section, accepted_item_id, accepted_scope_revision, authorities)
+    _verification_records(section, accepted_item_id, accepted_scope_revision, authorities)
     coverage = _coverage_records(section, authorities, contracts)
     _validate_lifecycle_partition(section)
     _validate_authority_digests(project_root, authorities)
