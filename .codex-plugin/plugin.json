@@ -1,6 +1,6 @@
 {
   "name": "charlie-pinboard",
-  "version": "0.1.0+codex.20260826181022",
+  "version": "0.1.0+codex.20260826210217",
   "description": "Coordinate repository work with canonical execution briefs and validated state transitions.",
   "author": {
     "name": "Vincent Alsteen",
@@ -29,7 +29,7 @@
     "defaultPrompt": [
       "Show the legal next project actions.",
       "Preserve this finding for the next coordination pass.",
-      "Trace and plan a recursive cleanup of dead and test-only code."
+      "Trace and plan a recursive cleanup of dead, test-only, and abandoned feature residue."
     ]
   }
 }
