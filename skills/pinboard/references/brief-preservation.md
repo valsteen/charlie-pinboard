@@ -11,9 +11,9 @@ Resolve and measure the complete authority set before loading source bodies. Cre
   "schema": "pinboard-brief-sources/v1",
   "sources": [
     {
-      "authority_id": "sqlite-storage-plan",
-      "selector": ".codex/topics/sqlite-storage/implementation-plan.md#Checkpoint 3",
-      "families": ["requirements", "acceptance"]
+      "authority_id": "architecture",
+      "selector": "ARCHITECTURE.md#Dependency direction",
+      "families": ["ownership", "dependencies"]
     }
   ]
 }
