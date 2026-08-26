@@ -12,12 +12,13 @@ from charlie_pinboard.application.dispatch_models import (
 )
 from charlie_pinboard.application.errors import DispatchError, DispatchErrorCode
 from charlie_pinboard.domain.identifiers import TaskId
+from charlie_pinboard.interfaces.brief_source_models import AuthoritySelector
+from charlie_pinboard.interfaces.brief_sources import parse_authority_selector, select_brief_source
 from charlie_pinboard.interfaces.dispatch_brief_models import (
     ArchitectureImpact,
     ArchitectureImpactKind,
     AuthorityFamily,
     AuthorityId,
-    AuthoritySelector,
     BriefOwner,
     BriefOwnerKind,
     BriefReviewMetadata,
@@ -29,7 +30,12 @@ from charlie_pinboard.interfaces.dispatch_brief_models import (
     MarkdownTable,
     ReviewedAuthority,
 )
-from charlie_pinboard.interfaces.errors import HeaderError, HeaderErrorCode
+from charlie_pinboard.interfaces.errors import (
+    BriefSourceError,
+    BriefSourceErrorCode,
+    HeaderError,
+    HeaderErrorCode,
+)
 
 type HeaderValue = str | bool | None
 type Header = dict[str, HeaderValue]
@@ -237,30 +243,6 @@ def _normalized_section_bytes(section: tuple[str, ...]) -> bytes:
     return ("\n".join(section) + "\n").encode()
 
 
-def _selected_section(lines: tuple[str, ...], heading: str, path: Path) -> tuple[str, ...]:
-    matches: list[tuple[int, int]] = []
-    for index, line in enumerate(lines):
-        match = HEADING.fullmatch(line)
-        if match is not None and match.group(2) == heading:
-            matches.append((index, len(match.group(1))))
-    if not matches:
-        raise DispatchError(
-            DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID, f"Heading '{heading}' is not in '{path}'."
-        )
-    if len(matches) != 1:
-        raise DispatchError(
-            DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID, f"Heading '{heading}' is not unique in '{path}'."
-        )
-    start, level = matches[0]
-    end = len(lines)
-    for index in range(start + 1, len(lines)):
-        match = HEADING.fullmatch(lines[index])
-        if match is not None and len(match.group(1)) <= level:
-            end = index
-            break
-    return lines[start:end]
-
-
 def _contract_records(section: tuple[str, ...]) -> tuple[ContractRecord, ...]:
     table = _markdown_table(
         section,
@@ -292,14 +274,13 @@ def _validate_cross_boundary_checkpoint(section: tuple[str, ...]) -> tuple[Contr
 
 def _authority_selector(cell: str) -> AuthoritySelector:
     value = _code_value(cell)
-    relative, separator, heading = value.partition("#")
-    relative_path = Path(relative)
-    if not relative or relative_path.is_absolute() or ".." in relative_path.parts or (separator and not heading):
+    try:
+        return parse_authority_selector(value)
+    except BriefSourceError as error:
         raise DispatchError(
             DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID,
-            f"Authority selector '{value}' must name one project-relative file and optional literal heading.",
-        )
-    return AuthoritySelector(relative_path, heading if separator else None)
+            error.message,
+        ) from error
 
 
 def _architecture_impact(section: tuple[str, ...]) -> ArchitectureImpact:
@@ -386,25 +367,18 @@ def _reviewed_authorities(section: tuple[str, ...]) -> tuple[tuple[ReviewedAutho
 
 
 def _authority_bytes(project_root: Path, authority: ReviewedAuthority) -> bytes:
-    path = project_root / authority.selector.relative_path
     try:
-        raw = path.read_bytes()
-    except OSError as error:
+        return select_brief_source(project_root, authority.selector, require_utf8=False).content
+    except BriefSourceError as error:
+        code = (
+            DispatchErrorCode.DISPATCH_AUTHORITY_UNREADABLE
+            if error.code == BriefSourceErrorCode.SOURCE_UNREADABLE
+            else DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID
+        )
         raise DispatchError(
-            DispatchErrorCode.DISPATCH_AUTHORITY_UNREADABLE,
-            f"Cannot read authority '{authority.authority_id}' at '{path}': {error}",
+            code,
+            f"Cannot select authority '{authority.authority_id}': {error.message}",
         ) from error
-    if authority.selector.heading is None:
-        return raw
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise DispatchError(
-            DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID,
-            f"Heading-selected authority '{path}' is not UTF-8.",
-        ) from error
-    selected = _selected_section(tuple(text.splitlines()), authority.selector.heading, path)
-    return _normalized_section_bytes(selected)
 
 
 def _validate_authority_digests(project_root: Path, authorities: tuple[ReviewedAuthority, ...]) -> None:

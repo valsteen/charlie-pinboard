@@ -14,6 +14,7 @@ class CommandName(Enum):
     CLOSE = "close"
     ACTIONS = "actions"
     INPUT_CONTRACT = "input-contract"
+    BRIEF_SOURCES = "brief-sources"
     INIT = "init"
     PROPOSAL = "proposal"
     TRANSITION = "transition"
@@ -72,6 +73,8 @@ class CliArguments(argparse.Namespace):
     item_id: str
     outcome: str
     reason: str
+    max_batch_bytes: int
+    emit_batch: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +159,43 @@ class CloseView(msgspec.Struct, frozen=True):
 class InputContractView(msgspec.Struct, frozen=True):
     action_kind: str
     payload_schema: msgspec.Raw
+
+
+class BriefSourceSegmentView(msgspec.Struct, frozen=True):
+    authority_id: str
+    selector: str
+    index: int
+    start_line: int
+    end_line: int
+    content_byte_count: int
+    content_sha256: str
+
+
+class BriefSourceView(msgspec.Struct, frozen=True):
+    authority_id: str
+    selector: str
+    families: tuple[str, ...]
+    selected_sha256: str
+    selected_byte_count: int
+    start_line: int
+    end_line: int
+    whole_file: bool
+    segments: tuple[BriefSourceSegmentView, ...]
+
+
+class BriefSourceBatchView(msgspec.Struct, frozen=True):
+    index: int
+    content_byte_count: int
+    estimated_rendered_byte_count: int
+    segments: tuple[BriefSourceSegmentView, ...]
+
+
+class BriefSourcePlanView(msgspec.Struct, frozen=True):
+    schema: str
+    manifest_sha256: str
+    max_batch_bytes: int
+    sources: tuple[BriefSourceView, ...]
+    batches: tuple[BriefSourceBatchView, ...]
 
 
 class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):

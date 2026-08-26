@@ -29,6 +29,8 @@ from charlie_pinboard.domain.decision_models import (
     Role,
 )
 from charlie_pinboard.domain.identifiers import LeaseId
+from charlie_pinboard.interfaces.brief_source_models import BriefSourceManifest, BriefSourceRequest
+from charlie_pinboard.interfaces.brief_sources import plan_brief_sources
 from charlie_pinboard.interfaces.cli import main
 from charlie_pinboard.interfaces.dispatch_brief import (
     _checkpoint_section,
@@ -676,6 +678,18 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
     def test_reviewed_authority_digest_tracks_only_the_selected_source(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         brief = _reviewed_brief(project)
+        source_plan = plan_brief_sources(
+            project,
+            BriefSourceManifest(
+                "pinboard-brief-sources/v1",
+                (BriefSourceRequest("architecture", "architecture.md#Protocol semantics", ("contract",)),),
+            ),
+            max_batch_bytes=128,
+        )
+        self.assertEqual(
+            hashlib.sha256(b"## Protocol semantics\n\nProtocol v13 is shared.\n\n").hexdigest(),
+            source_plan.sources[0].selected_sha256,
+        )
         self.assertIn(CHECKPOINT, self._prepare_cross_boundary(project, brief))
 
         architecture = project / "architecture.md"

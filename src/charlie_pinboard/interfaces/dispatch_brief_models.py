@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import NewType
+
+from charlie_pinboard.interfaces.brief_source_models import AuthoritySelector
 
 AuthorityId = NewType("AuthorityId", str)
 AuthorityFamily = NewType("AuthorityFamily", str)
@@ -25,12 +26,6 @@ class BriefOwnerKind(Enum):
 class MarkdownTable:
     rows: tuple[tuple[str, ...], ...]
     serialized: bytes
-
-
-@dataclass(frozen=True, slots=True)
-class AuthoritySelector:
-    relative_path: Path
-    heading: str | None
 
 
 class ArchitectureImpactKind(Enum):

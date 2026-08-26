@@ -92,7 +92,8 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 | --- | --- |
 | `cli_models.py`, `cli.py` | Command and presentation records plus the current command surface, argument decoding, authority-token comparison, SQLite composition, JSON/text conversion, and generated-view refresh |
 | `transition_models.py`, `transition_input.py` | Strict external transition payload records and conversion to typed command input |
-| `dispatch_brief_models.py`, `dispatch_brief.py` | Closed brief record vocabulary plus canonical checkpoint parsing, architecture-impact validation, reviewed-authority and brief-review verification, and canonical launch prompt rendering |
+| `brief_source_models.py`, `brief_sources.py` | Strict source manifests, shared project-relative file and Markdown-heading selection, deterministic digests, overlap rejection, and context-bounded batch planning |
+| `dispatch_brief_models.py`, `dispatch_brief.py` | Closed brief record vocabulary plus canonical checkpoint parsing, architecture-impact validation, reviewed-authority and brief-review verification through shared source selection, and canonical launch prompt rendering |
 | `proposal_models.py`, `proposals.py` | Strict proposal-file records and decoding into current SQLite intake input |
 | `errors.py` | Exact interface exception families and their code enums |
 
@@ -124,6 +125,10 @@ Accepted requirements, briefs, results, reviews, and other evidence are immutabl
 
 Status, overview, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. They never parse generated Markdown. Validation verifies the database and every accepted artifact reference, then reports generated-view drift separately.
 
+### Brief source planning
+
+The installed `pinboard brief-sources` command reads a strict source manifest without opening work state. It resolves every project-relative whole-file or Markdown-heading selector before emitting content, rejects overlapping line spans, reports normalized selected-source digests, and assigns every selected UTF-8 byte to one consecutive segment and batch. Its heading selection is also used by dispatch when validating reviewed-authority digests. Planning is read-only and does not acquire authority or write project state.
+
 ### Mutations and proposal intake
 
 The CLI decodes command input into exact typed values and reselects the advertised action. `application.service` rechecks authority and legality inside the store transaction, then commits one closed mutation. Proposal intake follows the same SQLite transaction boundary: the proposal file is decoded at the interface, the immutable inbox decision rejects duplicates, and the accepted row is stored without changing scheduling state.
@@ -144,7 +149,7 @@ Portable copy requires a quiescent source. It backs up `state.sqlite3`, copies a
 
 ## Stored formats
 
-The `.codex/work` path is current. Proposal JSON uses `pinboard-proposal/v1`; accepted work briefs use `pinboard-work-brief/v1`; independent review evidence uses `pinboard-work-brief-review/v1`; dispatch environments use `pinboard-dispatch/v1`; and read projections use `pinboard-overview/v1` and `pinboard-parallel-preview/v1`. Atomic file publication uses private `.pinboard-stage-*` names.
+The `.codex/work` path is current. Proposal JSON uses `pinboard-proposal/v1`; accepted work briefs use `pinboard-work-brief/v1`; independent review evidence uses `pinboard-work-brief-review/v1`; dispatch environments use `pinboard-dispatch/v1`; brief-source manifests and plans use `pinboard-brief-sources/v1` and `pinboard-brief-source-plan/v1`; and read projections use `pinboard-overview/v1` and `pinboard-parallel-preview/v1`. Atomic file publication uses private `.pinboard-stage-*` names.
 
 ## Keeping this map current
 

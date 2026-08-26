@@ -85,10 +85,25 @@ from charlie_pinboard.domain.proposal_models import (
     ProposalIntake,
 )
 from charlie_pinboard.domain.work_models import CloseOutcome, CoordinationCommandAuthority
+from charlie_pinboard.interfaces.brief_source_models import (
+    BriefSourceBatch,
+    BriefSourcePlan,
+    BriefSourceSegment,
+    PlannedBriefSource,
+)
+from charlie_pinboard.interfaces.brief_sources import (
+    decode_brief_source_manifest,
+    plan_brief_sources,
+    render_brief_source_batch,
+)
 from charlie_pinboard.interfaces.cli_models import (
     ActionsView,
     ActionView,
     AttemptOperation,
+    BriefSourceBatchView,
+    BriefSourcePlanView,
+    BriefSourceSegmentView,
+    BriefSourceView,
     CliArguments,
     CloseView,
     CommandContext,
@@ -109,6 +124,8 @@ from charlie_pinboard.interfaces.cli_models import (
 )
 from charlie_pinboard.interfaces.dispatch_brief import prepare_dispatch_from_artifact, read_dispatch_environment
 from charlie_pinboard.interfaces.errors import (
+    BriefSourceError,
+    BriefSourceErrorCode,
     CommandError,
     CommandErrorCode,
     ProposalError,
@@ -158,6 +175,51 @@ def _overview_view(overview: WorkOverview) -> OverviewView:
 
 def _input_contract_view(kind: str) -> InputContractView:
     return InputContractView(kind, msgspec.Raw(encoded_transition_input_schema(kind)))
+
+
+def _brief_source_segment_view(segment: BriefSourceSegment) -> BriefSourceSegmentView:
+    return BriefSourceSegmentView(
+        segment.authority_id,
+        segment.selector,
+        segment.index,
+        segment.start_line,
+        segment.end_line,
+        segment.content_byte_count,
+        segment.content_sha256,
+    )
+
+
+def _brief_source_view(source: PlannedBriefSource) -> BriefSourceView:
+    return BriefSourceView(
+        source.authority_id,
+        source.selector,
+        source.families,
+        source.selected_sha256,
+        source.selected_byte_count,
+        source.start_line,
+        source.end_line,
+        source.whole_file,
+        tuple(_brief_source_segment_view(segment) for segment in source.segments),
+    )
+
+
+def _brief_source_batch_view(batch: BriefSourceBatch) -> BriefSourceBatchView:
+    return BriefSourceBatchView(
+        batch.index,
+        batch.content_byte_count,
+        batch.estimated_rendered_byte_count,
+        tuple(_brief_source_segment_view(segment) for segment in batch.segments),
+    )
+
+
+def _brief_source_plan_view(plan: BriefSourcePlan) -> BriefSourcePlanView:
+    return BriefSourcePlanView(
+        plan.schema,
+        plan.manifest_sha256,
+        plan.max_batch_bytes,
+        tuple(_brief_source_view(source) for source in plan.sources),
+        tuple(_brief_source_batch_view(batch) for batch in plan.batches),
+    )
 
 
 def _action_view(action: Action, *, include_input_contract: bool = False) -> ActionView:
@@ -300,6 +362,15 @@ def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.Argume
     )
     input_contract.add_argument("action_kind", choices=TRANSITION_ACTION_KINDS)
     input_contract.add_argument("--json", action="store_true")
+    brief_sources = commands.add_parser(
+        "brief-sources",
+        help="Plan or emit deterministic context-bounded authority source batches.",
+    )
+    brief_sources.add_argument("--file", type=Path, required=True, help="pinboard-brief-sources/v1 manifest.")
+    brief_sources.add_argument("--max-batch-bytes", type=int, default=24_000)
+    brief_source_output = brief_sources.add_mutually_exclusive_group(required=True)
+    brief_source_output.add_argument("--json", action="store_true", help="Print the complete batch plan.")
+    brief_source_output.add_argument("--emit-batch", type=int, help="Print exactly one zero-based planned batch.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -627,6 +698,27 @@ def _input_contract(context: CommandContext) -> int:
     else:
         print(f"OK INPUT_CONTRACT action_kind={value.action_kind}")
         sys.stdout.write(msgspec.json.format(bytes(value.payload_schema), indent=2).decode() + "\n")
+    return 0
+
+
+def _brief_sources(context: CommandContext) -> int:
+    try:
+        raw_manifest = context.arguments.file.read_bytes()
+    except OSError as error:
+        raise BriefSourceError(
+            BriefSourceErrorCode.MANIFEST_INVALID,
+            f"Cannot read brief source manifest '{context.arguments.file}': {error}",
+        ) from error
+    plan = plan_brief_sources(
+        context.project,
+        decode_brief_source_manifest(raw_manifest),
+        context.arguments.max_batch_bytes,
+    )
+    batch_index = context.arguments.emit_batch
+    if batch_index is None:
+        _write_json(_brief_source_plan_view(plan))
+    else:
+        sys.stdout.write(render_brief_source_batch(plan, batch_index).decode("utf-8"))
     return 0
 
 
@@ -1150,6 +1242,8 @@ def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhausti
             return _actions(context)
         case CommandName.INPUT_CONTRACT:
             return _input_contract(context)
+        case CommandName.BRIEF_SOURCES:
+            return _brief_sources(context)
         case CommandName.INIT:
             return _initialize(context)
         case CommandName.PROPOSAL:
@@ -1194,3 +1288,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except DispatchError as error:
         print(str(error), file=sys.stderr)
         return 14
+    except BriefSourceError as error:
+        print(str(error), file=sys.stderr)
+        return 15

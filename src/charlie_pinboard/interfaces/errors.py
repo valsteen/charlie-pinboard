@@ -66,6 +66,26 @@ class TransitionInputError(ValueError):
         super().__init__(f"{code.value}: {message}")
 
 
+class BriefSourceErrorCode(Enum):
+    BATCH_NOT_FOUND = "BRIEF_SOURCE_BATCH_NOT_FOUND"
+    LINE_TOO_LARGE = "BRIEF_SOURCE_LINE_TOO_LARGE"
+    MANIFEST_INVALID = "BRIEF_SOURCE_MANIFEST_INVALID"
+    SELECTOR_INVALID = "BRIEF_SOURCE_SELECTOR_INVALID"
+    SELECTOR_OVERLAP = "BRIEF_SOURCE_SELECTOR_OVERLAP"
+    SOURCE_NOT_UTF8 = "BRIEF_SOURCE_NOT_UTF8"
+    SOURCE_UNREADABLE = "BRIEF_SOURCE_UNREADABLE"
+
+
+class BriefSourceError(ValueError):
+    code: BriefSourceErrorCode
+    message: str
+
+    def __init__(self, code: BriefSourceErrorCode, message: str) -> None:
+        self.code = code
+        self.message = message
+        super().__init__(f"{code.value}: {message}")
+
+
 class HeaderErrorCode(Enum):
     FIELD_DUPLICATE = "HEADER_FIELD_DUPLICATE"
     FIELD_INVALID = "HEADER_FIELD_INVALID"

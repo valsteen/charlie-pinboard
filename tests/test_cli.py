@@ -91,6 +91,7 @@ class CliTest(unittest.TestCase):
             "close",
             "actions",
             "input-contract",
+            "brief-sources",
             "init",
             "proposal",
             "transition",

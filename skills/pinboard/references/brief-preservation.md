@@ -2,11 +2,34 @@
 
 Use this procedure only for a checkpoint declared `Checkpoint boundary: cross-boundary`. It makes projection from named architecture, plans, and accepted evidence into the execution brief reviewable before implementation. Local checkpoints do not add these tables, lifecycle declarations, or brief reviews.
 
+## Plan authority loading
+
+Resolve and measure the complete authority set before loading source bodies. Create a temporary strict `pinboard-brief-sources/v1` JSON manifest with one row per exact selector:
+
+```json
+{
+  "schema": "pinboard-brief-sources/v1",
+  "sources": [
+    {
+      "authority_id": "sqlite-storage-plan",
+      "selector": ".codex/topics/sqlite-storage/implementation-plan.md#Checkpoint 3",
+      "families": ["requirements", "acceptance"]
+    }
+  ]
+}
+```
+
+Use one selector with several families instead of repeating or nesting the same selection. Run `pinboard brief-sources --file <manifest> --json` before reading any selected body. Correct `BRIEF_SOURCE_SELECTOR_OVERLAP` in the manifest. Inspect the returned selected byte counts, line spans, digests, and batches, then run `pinboard brief-sources --file <manifest> --emit-batch <index>` once for each batch in ascending order.
+
+Preserve each selector and selected digest as its read receipt. Across corrections, reuse exact unchanged receipts and reread only changed owners plus neighboring rows whose meaning depends on them. If output truncates, continue from the first unread boundary without replaying returned content.
+
+If the complete authority set plus working headroom cannot fit, stop before compiling or reviewing the brief. Narrow selectors, split only a semantically independent checkpoint, or move mechanical comparison into validated tooling. Do not omit an accepted requirement, prohibition, lifecycle sibling, or consumer to fit context.
+
 ## Compile the brief
 
 The canonical `attempt.md` front matter uses `kind: work-attempt` and `schema: pinboard-work-brief/v1`. Dispatch rejects missing, arbitrary, or stale brief format tags before interpreting either a local or cross-boundary checkpoint.
 
-1. Read the exact sources that own the checkpoint's relevant semantics. Keep semantic truth in those sources; the brief records durable selectors and the executable subset rather than copying source prose.
+1. Read the planned batches for the exact sources that own the checkpoint's relevant semantics. Keep semantic truth in those sources; the brief records durable selectors and the executable subset rather than copying source prose.
 2. Verify the checkpoint's one architecture declaration against those sources. `none` must explain why ownership and dependency direction are unchanged. `read-only` names the project-relative architecture authority implementation must conform to. `update-required` names the authority that must change in the same candidate; a later documentation task is not a valid substitute.
 3. Record `Checkpoint outcome: independently-buildable` and the existing six-column `Contract table`.
 4. Add one `Reviewed authorities` table:
@@ -39,7 +62,7 @@ The canonical `attempt.md` front matter uses `kind: work-attempt` and `schema: p
 
 Commission one read-only reviewer in fresh context after the checkpoint is compiled and before implementation begins. The reviewer task identity must differ from the attempt owner, and both task identities must be canonical values without surrounding whitespace.
 
-Give the reviewer the canonical checkpoint and its selectors. The reviewer must:
+Give the reviewer the canonical checkpoint and the same manifest or its complete `brief-sources --json` plan. The reviewer must:
 
 - recompute every selected-source digest;
 - compare each coverage distinction and owner with its named source;
