@@ -1,6 +1,6 @@
 ---
 name: slop-cleanup
-description: Guide recursive repository cleanup after abandoned or repeatedly revised features leave dead production paths, test-only APIs, stale variants, archaeological names, or incoherent boundaries. Use for campaigns that must trace provenance and recurse to no new findings. Do not use for one known unused symbol or a localized refactor.
+description: Guide recursive repository cleanup after abandoned or repeatedly revised features leave dead production paths, test-only APIs, stale variants, archaeological names, stale documentation or tooling, or incoherent boundaries. Use for campaigns that must trace provenance and recurse to no new findings. Do not use for one known unused symbol or a localized refactor.
 ---
 
 # Clean repository slop recursively
@@ -31,7 +31,7 @@ For every candidate, record:
 - current persisted-data or external-protocol responsibility;
 - the first known introduction and intended product effect;
 - any accepted or deferred requirement or work item that still needs it;
-- dependencies likely to become orphaned if it is removed;
+- documentation, third-party dependencies, build configuration, and CI support likely to become orphaned if it is removed;
 - the proposed disposition and evidence that could falsify it.
 
 Use runtime observations and real stores when they cheaply distinguish a required compatibility reader from empty scaffolding. Zero rows strengthen a case but do not by themselves prove that a product capability is unwanted.
@@ -80,7 +80,7 @@ Order checkpoints around semantic dependencies, not file count:
 1. Confirm provenance, reachability roots, current data, and user dispositions.
 2. Isolate valuable not-yet-production evidence so it cannot keep production machinery alive.
 3. Remove unwanted entry points and complete producerless or consumerless feature families.
-4. Recurse through newly orphaned models, variants, persistence, serializers, tests, documentation, and tooling.
+4. Recurse through newly orphaned models, variants, persistence, serializers, tests, documentation, dependencies, lockfile entries, build and release configuration, and CI tooling.
 5. Collapse and regroup the surviving structure, then run a fresh repository-wide inventory.
 
 Do not freeze the initial candidate list as the whole scope: recursive discovery is part of the accepted outcome. Keep newly exposed work inside the cleanup objective only when it is a direct dependent of an approved removal. Preserve materially different product decisions as separate findings.
@@ -93,11 +93,15 @@ For each approved family:
 
 1. Remove or isolate its outermost unsupported entry points.
 2. Recompute production reachability immediately.
-3. Follow the orphan chain through commands and arguments, state producers and consumers, records and fields, closed-union members, enum values, branches, serializers, schema, readers and writers, error codes, helpers, tests, fixtures, examples, documentation, skills, and package exports.
+3. Follow the orphan chain through commands and arguments, state producers and consumers, records and fields, closed-union members, enum values, branches, serializers, schema, readers and writers, error codes, helpers, tests, fixtures, examples, documentation, skills, package exports, direct and transitive dependencies, lockfiles, build and release configuration, and CI workflows.
 4. Delete tests whose only purpose was proving deleted implementation machinery. Preserve or add tests only for observable surviving behavior, boundaries, migrations, and rejection contracts.
 5. Run the cheapest relevant checks before continuing to the next family. A coverage drop can expose production code whose implementation-only tests disappeared; investigate that code instead of manufacturing tests or weakening the threshold.
 
 Stop and return to the user when recursion reaches a different feature, supported persisted data, an external compatibility promise, or an ambiguous product choice.
+
+For every surviving direct third-party dependency, identify a current production, test, validation, build, packaging, or CI consumer. Remove a dependency when its last supported consumer disappears, then regenerate the lockfile through the repository's package manager so orphaned transitive packages also leave. Do not retain a library, service integration, action, or setup tool merely because an abandoned feature once needed it.
+
+Treat CI as executable product support. Every job, matrix entry, service, secret, permission, cache, generator, release step, and external action must protect a supported platform, package, entry point, or required repository check. Remove pipeline paths that only build, test, publish, or provision deleted behavior. Preserve assurance for surviving behavior; cleanup is not authority to weaken required evidence or platform coverage.
 
 ## Collapse the structure left behind
 
@@ -113,7 +117,7 @@ After deletion changes the graph, search for structures that used to distinguish
 
 Regroup by current concepts. Separate declarations from logic when each side has a meaningful thematic role; merge them when separation would create ceremonial files. Make test organization mirror the surviving production concepts whenever practical. Test helpers belong in tests, not in production APIs created solely for fixtures.
 
-Run an archaeology pass over names, comments, error codes, schema labels, help text, examples, documentation, and tests. Remove wording that describes a predecessor, migration phase, plural capability that is now singular, or behavior the code can no longer perform. Remove stale suppressions such as unused `noqa`, lint-disable, ignore, or coverage directives with the ecosystem’s unused-suppression check when available.
+Run an archaeology pass over names, comments, error codes, schema labels, help text, examples, documentation, and tests. Remove wording that describes a predecessor, migration phase, plural capability that is now singular, or behavior the code can no longer perform. Collapse documentation around the surviving concepts, remove pages, sections, examples, diagrams, badges, and setup instructions whose feature or workflow was removed, and keep parallel documents consistent rather than leaving one stale version behind. Every advertised feature must trace to a supported entry point or explicitly labeled current limitation; do not turn deleted or never-shipped implementation into present-tense documentation or an invented roadmap. Remove stale suppressions such as unused `noqa`, lint-disable, ignore, or coverage directives with the ecosystem’s unused-suppression check when available.
 
 ## Handle persisted-state removal as a bridge burn
 
@@ -129,7 +133,8 @@ After the last change, start the complete inventory again from the production ro
 - every closed variant and branch has a real producer and consumer or an explicit boundary reason;
 - no production API exists only for tests, and no advertised entry point can only reject;
 - surviving files and tests have meaningful, preferably symmetric conceptual ownership;
-- names, comments, docs, examples, schema labels, and suppressions describe only current behavior;
+- names, comments, docs, examples, diagrams, schema labels, and suppressions describe only current behavior;
+- every direct dependency and CI path has a named surviving consumer or assurance role, and regenerated lockfiles contain no packages retained solely by removed direct dependencies;
 - package-content, behavior, persistence, type, lint, and repository metadata checks pass for the changed surface.
 
 Report the deleted families, isolated prototypes, retained exceptions, migrations and recoverability, provenance conclusions the user asked for, and the evidence for the clean final pass. Do not hide unresolved candidates behind the phrase “fixed point.”
