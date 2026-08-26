@@ -80,6 +80,7 @@ BRIEF_REVIEW_COLUMNS: Final = (
     "Cheapest counterexample result",
 )
 
+
 def _scalar(raw: str) -> HeaderValue:
     value = raw.strip()
     if len(value) >= 2 and value[0] == value[-1] == '"':
@@ -131,7 +132,9 @@ def _validate_work_brief_header(path: Path, attempt_id: str) -> None:
     try:
         header = _parse_header(path)
     except (OSError, UnicodeError, HeaderError) as error:
-        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_INVALID, f"Cannot read canonical work brief: {error}") from error
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_BRIEF_INVALID, f"Cannot read canonical work brief: {error}"
+        ) from error
     if header.get("kind") != "work-attempt" or header.get("schema") != "pinboard-work-brief/v1":
         raise DispatchError(
             DispatchErrorCode.DISPATCH_BRIEF_INVALID,
@@ -145,11 +148,15 @@ def read_dispatch_environment(path: Path) -> DispatchEnvironment:
     try:
         data = path.read_bytes()
     except OSError as error:
-        raise DispatchError(DispatchErrorCode.DISPATCH_ENVIRONMENT_UNREADABLE, f"Cannot read '{path}': {error}") from error
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_ENVIRONMENT_UNREADABLE, f"Cannot read '{path}': {error}"
+        ) from error
     try:
         return msgspec.json.decode(data, type=DispatchEnvironment)
     except msgspec.DecodeError as error:
-        raise DispatchError(DispatchErrorCode.DISPATCH_ENVIRONMENT_INVALID, f"Cannot decode dispatch environment: {error}") from error
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_ENVIRONMENT_INVALID, f"Cannot decode dispatch environment: {error}"
+        ) from error
 
 
 def _checkpoint_section(path: Path, checkpoint: str) -> tuple[str, ...]:
@@ -160,9 +167,13 @@ def _checkpoint_section(path: Path, checkpoint: str) -> tuple[str, ...]:
         if match is not None and match.group(2) == checkpoint:
             matches.append((index, len(match.group(1))))
     if not matches:
-        raise DispatchError(DispatchErrorCode.DISPATCH_CHECKPOINT_MISSING, f"Checkpoint '{checkpoint}' is not in '{path}'.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_CHECKPOINT_MISSING, f"Checkpoint '{checkpoint}' is not in '{path}'."
+        )
     if len(matches) != 1:
-        raise DispatchError(DispatchErrorCode.DISPATCH_CHECKPOINT_AMBIGUOUS, f"Checkpoint '{checkpoint}' appears more than once.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_CHECKPOINT_AMBIGUOUS, f"Checkpoint '{checkpoint}' appears more than once."
+        )
     start, level = matches[0]
     end = len(lines)
     for index in range(start + 1, len(lines)):
@@ -233,9 +244,13 @@ def _selected_section(lines: tuple[str, ...], heading: str, path: Path) -> tuple
         if match is not None and match.group(2) == heading:
             matches.append((index, len(match.group(1))))
     if not matches:
-        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID, f"Heading '{heading}' is not in '{path}'.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID, f"Heading '{heading}' is not in '{path}'."
+        )
     if len(matches) != 1:
-        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID, f"Heading '{heading}' is not unique in '{path}'.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID, f"Heading '{heading}' is not unique in '{path}'."
+        )
     start, level = matches[0]
     end = len(lines)
     for index in range(start + 1, len(lines)):
@@ -416,7 +431,9 @@ def _acceptance_criteria(section: tuple[str, ...]) -> frozenset[int]:
     start = headings[0]
     level_match = HEADING.fullmatch(section[start])
     if level_match is None:
-        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Acceptance criteria heading is invalid.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Acceptance criteria heading is invalid."
+        )
     level = len(level_match.group(1))
     end = len(section)
     for index in range(start + 1, len(section)):
@@ -444,7 +461,9 @@ def _deferrals(section: tuple[str, ...]) -> frozenset[str]:
         if match is None:
             continue
         _require_value(match.group("reason"), DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Deferral reason")
-        _require_value(match.group("reopen"), DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Deferral reopen condition")
+        _require_value(
+            match.group("reopen"), DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Deferral reopen condition"
+        )
         labels.append(match.group("label"))
     if len(set(labels)) != len(labels):
         raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Deferral labels must be unique.")
@@ -461,11 +480,15 @@ def _brief_owner(
     value = _code_value(cell)
     prefix, separator, owner_value = value.partition(":")
     if not separator or not owner_value:
-        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Brief owner '{value}' is unresolved.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Brief owner '{value}' is unresolved."
+        )
     try:
         kind = BriefOwnerKind(prefix)
     except ValueError as error:
-        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Brief owner '{value}' is unresolved.") from error
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Brief owner '{value}' is unresolved."
+        ) from error
     expected_kind = {
         CoverageDisposition.CONTRACT: BriefOwnerKind.CONTRACT,
         CoverageDisposition.ACCEPTANCE: BriefOwnerKind.CRITERION,
@@ -478,13 +501,19 @@ def _brief_owner(
             f"Disposition '{disposition.value}' cannot use owner '{value}'.",
         )
     if kind == BriefOwnerKind.CONTRACT and owner_value not in contracts:
-        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Contract owner '{owner_value}' does not exist.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Contract owner '{owner_value}' does not exist."
+        )
     if kind == BriefOwnerKind.CRITERION:
         criterion = CRITERION_OWNER.fullmatch(value)
         if criterion is None or int(criterion.group("number")) not in criteria:
-            raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Criterion owner '{value}' does not exist.")
+            raise DispatchError(
+                DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Criterion owner '{value}' does not exist."
+            )
     if kind == BriefOwnerKind.DEFERRAL and owner_value not in deferrals:
-        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Deferral owner '{owner_value}' does not exist.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Deferral owner '{owner_value}' does not exist."
+        )
     if kind == BriefOwnerKind.REASON:
         _require_value(owner_value, DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Not-applicable reason")
     return BriefOwner(kind, owner_value)
@@ -562,7 +591,9 @@ def _validate_lifecycle_partition(section: tuple[str, ...]) -> tuple[LifecycleRe
     declaration = declarations[0]
     if declaration.startswith("Lifecycle partition: not-applicable —"):
         reason = declaration.removeprefix("Lifecycle partition: not-applicable —").strip()
-        _require_value(reason, DispatchErrorCode.DISPATCH_LIFECYCLE_PARTITION_INVALID, "Lifecycle not-applicable reason")
+        _require_value(
+            reason, DispatchErrorCode.DISPATCH_LIFECYCLE_PARTITION_INVALID, "Lifecycle not-applicable reason"
+        )
         return ()
     if declaration != "Lifecycle partition: required":
         raise DispatchError(
@@ -595,7 +626,9 @@ def _validate_lifecycle_partition(section: tuple[str, ...]) -> tuple[LifecycleRe
 def _header_string(header: Header, field: str, source: str) -> str:
     value = header.get(field)
     if not isinstance(value, str) or not value.strip():
-        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, f"Brief review '{source}' needs string field '{field}'.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, f"Brief review '{source}' needs string field '{field}'."
+        )
     return value
 
 
@@ -627,7 +660,9 @@ def _validate_review_rows(data: bytes, source: str, coverage: tuple[CoverageReco
     try:
         review_lines = tuple(data.decode("utf-8").splitlines())
     except UnicodeError as error:
-        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, f"Cannot read brief review '{source}': {error}") from error
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, f"Cannot read brief review '{source}': {error}"
+        ) from error
     table = _markdown_table(
         review_lines,
         BRIEF_REVIEW_COLUMNS,
@@ -677,26 +712,35 @@ def _validate_brief_review_bytes(
     authority_set_sha256 = hashlib.sha256(authority_table).hexdigest()
     metadata = _review_metadata_bytes(data, source)
     if metadata.attempt != attempt_id or metadata.checkpoint != checkpoint:
-        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, "Brief review names a different attempt or checkpoint.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, "Brief review names a different attempt or checkpoint."
+        )
     if (
         SHA256.fullmatch(metadata.checkpoint_sha256) is None
         or SHA256.fullmatch(metadata.reviewed_authority_set_sha256) is None
     ):
-        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, "Brief review digest fields must be lowercase SHA-256.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, "Brief review digest fields must be lowercase SHA-256."
+        )
     if (
         metadata.checkpoint_sha256 != checkpoint_sha256
         or metadata.reviewed_authority_set_sha256 != authority_set_sha256
     ):
         raise DispatchError(
-            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_STALE, "Brief review is not bound to the current checkpoint and sources."
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_STALE,
+            "Brief review is not bound to the current checkpoint and sources.",
         )
     try:
         attempt_header = _parse_header(attempt_path)
     except (OSError, ValueError) as error:
-        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, f"Cannot read attempt owner: {error}") from error
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, f"Cannot read attempt owner: {error}"
+        ) from error
     owner = attempt_header.get("owner_task_id", attempt_header.get("owner"))
     if not isinstance(owner, str) or not owner.strip():
-        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, "The attempt has no concrete owner task identity.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, "The attempt has no concrete owner task identity."
+        )
     reviewer_task_id = TaskId(metadata.reviewer_task_id.strip())
     owner_task_id = TaskId(owner.strip())
     if reviewer_task_id == owner_task_id:

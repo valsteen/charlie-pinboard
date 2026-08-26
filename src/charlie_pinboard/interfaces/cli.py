@@ -434,7 +434,9 @@ def _action_from_values(
         kind = ActionKind(kind_value)
         authorization_kind = AuthorizationKind(authorization)
     except ValueError as error:
-        raise CommandError(CommandErrorCode.ACTION_ID_INVALID, f"Unknown action or authorization kind: {error}.") from error
+        raise CommandError(
+            CommandErrorCode.ACTION_ID_INVALID, f"Unknown action or authorization kind: {error}."
+        ) from error
     attempt_kinds = {
         ActionKind.ACCEPT_CHECKPOINT,
         ActionKind.BLOCK,
@@ -486,7 +488,9 @@ def _reselect_action(context: CommandContext, supplied: Action, role: Role) -> A
         raise CommandError(CommandErrorCode(error.code.value), str(error).partition(": ")[2]) from error
     current = next((value for value in available if value.action_id == supplied.action_id), None)
     if current is None:
-        raise CommandError(CommandErrorCode.ACTION_NOT_AVAILABLE, f"Action '{supplied.action_id}' is not currently legal.")
+        raise CommandError(
+            CommandErrorCode.ACTION_NOT_AVAILABLE, f"Action '{supplied.action_id}' is not currently legal."
+        )
     if current.expected_revision != supplied.expected_revision:
         raise CommandError(CommandErrorCode.STALE_ACTION, "The work ledger changed after this action was selected.")
     supplied_capability = (
@@ -507,7 +511,8 @@ def _reselect_action(context: CommandContext, supplied: Action, role: Role) -> A
     )
     if current_capability != supplied_capability:
         raise CommandError(
-            CommandErrorCode.ACTION_NOT_AVAILABLE, f"Action '{supplied.action_id}' no longer has exact current authority."
+            CommandErrorCode.ACTION_NOT_AVAILABLE,
+            f"Action '{supplied.action_id}' no longer has exact current authority.",
         )
     return current
 
@@ -592,7 +597,8 @@ def _actions(context: CommandContext) -> int:
         available = tuple(action for action in available if action.action_id == exact_action_id)
         if not available:
             raise CommandError(
-                CommandErrorCode.ACTION_NOT_AVAILABLE, f"Action '{exact_action_id}' is not currently legal for this role and lease."
+                CommandErrorCode.ACTION_NOT_AVAILABLE,
+                f"Action '{exact_action_id}' is not currently legal for this role and lease.",
             )
     if context.arguments.json:
         _write_json(
@@ -642,7 +648,9 @@ def _proposal(context: CommandContext) -> int:
     try:
         created_at = datetime.fromisoformat(proposal.created_at.replace("Z", "+00:00"))
     except ValueError as error:
-        raise ProposalError(ProposalErrorCode.PROPOSAL_INVALID, "Proposal created_at must be an ISO timestamp.") from error
+        raise ProposalError(
+            ProposalErrorCode.PROPOSAL_INVALID, "Proposal created_at must be an ISO timestamp."
+        ) from error
     if created_at.tzinfo is None:
         if len(proposal.created_at) == 10:
             created_at = created_at.replace(tzinfo=UTC)
@@ -687,7 +695,9 @@ def _transition(context: CommandContext) -> int:
     try:
         payload = payload_path.read_bytes()
     except OSError as error:
-        raise CommandError(CommandErrorCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}") from error
+        raise CommandError(
+            CommandErrorCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}"
+        ) from error
     role = Role.WORKER if action.authorization == AuthorizationKind.ATTEMPT else Role.COORDINATOR
     action = _reselect_action(context, action, role)
     parsed = parse_transition_input(action.kind.value, payload)
@@ -858,7 +868,9 @@ def _coordinated_transition(context: CommandContext) -> int:
     try:
         payload = payload_path.read_bytes()
     except OSError as error:
-        raise CommandError(CommandErrorCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}") from error
+        raise CommandError(
+            CommandErrorCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}"
+        ) from error
     transition_revision = _execute_borrowed_coordination(context, context.arguments.action_id, payload)
     value = CoordinatedTransitionView(context.arguments.action_id, transition_revision)
     if context.arguments.json:
@@ -1025,7 +1037,9 @@ def _attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR0915 - 
             case AttemptOperation.REVOKE:
                 coordination = state.authority.coordination
                 if coordination is None:
-                    raise CommandError(CommandErrorCode.COORDINATION_LEASE_REQUIRED, "Coordination authority is absent.")
+                    raise CommandError(
+                        CommandErrorCode.COORDINATION_LEASE_REQUIRED, "Coordination authority is absent."
+                    )
                 authority_operation = RevokeAttemptAuthority(
                     attempt_id,
                     LeaseId(context.arguments.lease_id or ""),
@@ -1051,7 +1065,9 @@ def _attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR0915 - 
         state = store.snapshot()
     lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
     if lease is None:
-        raise CommandError(CommandErrorCode.ATTEMPT_LEASE_REQUIRED, f"Attempt '{attempt_id}' has no retained authority.")
+        raise CommandError(
+            CommandErrorCode.ATTEMPT_LEASE_REQUIRED, f"Attempt '{attempt_id}' has no retained authority."
+        )
     anchor = next(
         (
             value

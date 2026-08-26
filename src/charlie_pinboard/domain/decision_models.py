@@ -60,16 +60,19 @@ class ActionKind(Enum):
     SUBMIT_REVIEW = "submit-review"
     TRANSFER_COORDINATOR = "transfer-coordinator"
 
+
 class AuthorizationKind(Enum):
     COORDINATOR = "coordinator"
     COORDINATION = "coordination"
     ATTEMPT = "attempt"
     OBSERVER = "observer"
 
+
 class Role(Enum):
     COORDINATOR = "coordinator"
     WORKER = "worker"
     OBSERVER = "observer"
+
 
 @dataclass(frozen=True, slots=True)
 class Action:
@@ -84,6 +87,7 @@ class Action:
     lease_id: LeaseId | None = None
     command_authority: CommandAttemptAuthority | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class ActionCapability:
     subject: SubjectId
@@ -95,90 +99,108 @@ class ActionCapability:
     lease_id: LeaseId | None
     command_authority: CommandAttemptAuthority | None
 
+
 @dataclass(frozen=True, slots=True)
 class AcceptCheckpointCommand:
     capability: ActionCapability
     value: AcceptCheckpointInput
+
 
 @dataclass(frozen=True, slots=True)
 class ActivateCommand:
     capability: ActionCapability
     value: ActivateInput
 
+
 @dataclass(frozen=True, slots=True)
 class PauseCommand:
     capability: ActionCapability
     value: ReasonInput
+
 
 @dataclass(frozen=True, slots=True)
 class BlockCommand:
     capability: ActionCapability
     value: BlockInput
 
+
 @dataclass(frozen=True, slots=True)
 class CompleteCommand:
     capability: ActionCapability
     value: EvidenceInput
+
 
 @dataclass(frozen=True, slots=True)
 class CloseCommand:
     capability: ActionCapability
     value: CloseInput
 
+
 @dataclass(frozen=True, slots=True)
 class ResumeCommand:
     capability: ActionCapability
     value: ResumeInput
+
 
 @dataclass(frozen=True, slots=True)
 class SubmitReviewCommand:
     capability: ActionCapability
     value: SubmitReviewInput
 
+
 @dataclass(frozen=True, slots=True)
 class ReturnForCorrectionCommand:
     capability: ActionCapability
     value: ReasonInput
+
 
 @dataclass(frozen=True, slots=True)
 class ReopenCommand:
     capability: ActionCapability
     value: EvidenceInput
 
+
 @dataclass(frozen=True, slots=True)
 class MarkReadyCommand:
     capability: ActionCapability
     value: ReasonInput
+
 
 @dataclass(frozen=True, slots=True)
 class BlockItemCommand:
     capability: ActionCapability
     value: BlockInput
 
+
 @dataclass(frozen=True, slots=True)
 class DeferCommand:
     capability: ActionCapability
     value: DeferInput
+
 
 @dataclass(frozen=True, slots=True)
 class AcceptProposalCommand:
     capability: ActionCapability
     value: AcceptProposalInput
 
+
 @dataclass(frozen=True, slots=True)
 class MergeProposalCommand:
     capability: ActionCapability
     value: MergeProposalInput
+
 
 @dataclass(frozen=True, slots=True)
 class ReturnProposalCommand:
     capability: ActionCapability
     value: ReasonInput
 
+
 @dataclass(frozen=True, slots=True)
 class RejectProposalCommand:
     capability: ActionCapability
     value: ReasonInput
+
 
 @dataclass(frozen=True, slots=True)
 class TransferCoordinatorCommand:
@@ -217,6 +239,7 @@ class ActorAuthority:
     attempts: tuple[AttemptId, ...] = ()
     revision_scoped: bool = True
 
+
 @dataclass(frozen=True, slots=True)
 class ItemChange:
     item: ItemId
@@ -224,6 +247,7 @@ class ItemChange:
     after: WorkState | None
     attempt: AttemptId | None = None
     outcome_evidence: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class AttemptChange:
@@ -237,6 +261,7 @@ class AttemptChange:
     branch: str | None = None
     base_revision: str | None = None
     owner: str | None = None
+
 
 @dataclass(frozen=True, slots=True)
 class AcceptedProposalItem:
@@ -254,6 +279,7 @@ class AcceptedProposalItem:
     notes: str
     scope_digest: str
 
+
 @dataclass(frozen=True, slots=True)
 class ProposalChange:
     proposal: ProposalId
@@ -263,15 +289,18 @@ class ProposalChange:
     disposed_at: datetime
     accepted_item: AcceptedProposalItem | None = None
 
+
 @dataclass(frozen=True, slots=True)
 class AttemptAuthorityChange:
     before: AttemptAuthority
     after: AttemptAuthority
 
+
 @dataclass(frozen=True, slots=True)
 class CoordinatorAuthorityChange:
     before: CoordinationLeaseAuthority
     after: CoordinationLeaseAuthority
+
 
 @dataclass(frozen=True, slots=True)
 class CheckpointAcceptanceChange:
@@ -281,6 +310,7 @@ class CheckpointAcceptanceChange:
     evidence: str
     accepted_at: datetime
 
+
 @dataclass(frozen=True, slots=True)
 class TransitionReceipt:
     action_id: ActionId
@@ -288,6 +318,7 @@ class TransitionReceipt:
     outcome: str
     evidence: str | None
     decided_at: datetime
+
 
 @dataclass(frozen=True, slots=True)
 class Decision:

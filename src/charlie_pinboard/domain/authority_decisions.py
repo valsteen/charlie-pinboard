@@ -139,26 +139,6 @@ def decide_coordination_authority(  # noqa: C901, PLR0912
             assert_never(unreachable)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _attempt_token(value: AttemptLeaseAuthority) -> CommandAttemptAuthority:
     return CommandAttemptAuthority(
         value.host_epoch,

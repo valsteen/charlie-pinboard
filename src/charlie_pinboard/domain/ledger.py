@@ -67,4 +67,3 @@ class LedgerSnapshot:
             ),
             None,
         )
-

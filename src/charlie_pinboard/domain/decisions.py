@@ -224,8 +224,6 @@ def bind_transition(  # noqa: C901, PLR0912
             assert_never(unreachable)
 
 
-
-
 @dataclass(frozen=True, slots=True)
 class ActionFactory:
     revision: str
@@ -251,24 +249,6 @@ class ActionFactory:
             lease_id=self.actor.lease_id,
             command_authority=command_authority,
         )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _authority(snapshot: LedgerSnapshot, actor: ActorAuthority, attempt: AttemptId) -> AttemptAuthority | None:

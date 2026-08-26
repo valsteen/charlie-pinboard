@@ -10,6 +10,7 @@ class LocalIntakeAuthority:
     project_revision: int
     host_epoch: int
 
+
 @dataclass(frozen=True, slots=True)
 class ProposalIntake:
     proposal_id: ProposalId
@@ -26,14 +27,14 @@ class ProposalIntake:
     evidence: tuple[str, ...]
     freshness_assumptions: tuple[str, ...]
 
+
 @dataclass(frozen=True, slots=True)
 class CreateProposalOperation:
     intake: ProposalIntake
+
 
 @dataclass(frozen=True, slots=True)
 class ProposalCreationDecision:
     proposal: ProposalIntake
     evidence: tuple[str, ...]
     freshness: tuple[str, ...]
-
-

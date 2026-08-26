@@ -62,7 +62,9 @@ def _sync_directory(path: Path) -> None:
         finally:
             os.close(descriptor)
     except OSError as error:
-        raise FileIOError(FileIOErrorCode.DIRECTORY_SYNC_FAILED, f"Directory could not be synchronized: {path}") from error
+        raise FileIOError(
+            FileIOErrorCode.DIRECTORY_SYNC_FAILED, f"Directory could not be synchronized: {path}"
+        ) from error
 
 
 def ensure_directory_chain(roots: DurableRoots) -> None:
@@ -99,7 +101,9 @@ def ensure_child_directory(parent: Path, component: str) -> Path:
     except FileExistsError:
         pass
     except OSError as error:
-        raise FileIOError(FileIOErrorCode.DIRECTORY_CREATE_FAILED, f"Durable directory could not be created: {child}") from error
+        raise FileIOError(
+            FileIOErrorCode.DIRECTORY_CREATE_FAILED, f"Durable directory could not be created: {child}"
+        ) from error
     if child.is_symlink() or not child.is_dir():
         raise FileIOError(FileIOErrorCode.DIRECTORY_INVALID, f"Durable directory is not a real directory: {child}")
     _sync_directory(verified_parent)
@@ -146,7 +150,9 @@ def create_immutable(path: Path, content: bytes) -> DurableFile:
     except FileIOError:
         raise
     except OSError as error:
-        raise FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, f"Immutable file could not be published: {path}") from error
+        raise FileIOError(
+            FileIOErrorCode.FILE_PUBLISH_FAILED, f"Immutable file could not be published: {path}"
+        ) from error
     finally:
         _cleanup_staging(staging, parent)
 
@@ -162,6 +168,8 @@ def atomic_replace(path: Path, content: bytes) -> DurableFile:
     except FileIOError:
         raise
     except OSError as error:
-        raise FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, f"Replacement file could not be published: {path}") from error
+        raise FileIOError(
+            FileIOErrorCode.FILE_PUBLISH_FAILED, f"Replacement file could not be published: {path}"
+        ) from error
     finally:
         _cleanup_staging(staging, parent)

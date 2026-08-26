@@ -37,14 +37,18 @@ def _current_action(store: WorkStore, supplied: Action) -> Action:
         raise DispatchError(DispatchErrorCode(error.code.value), str(error).partition(": ")[2]) from error
     current = next((value for value in actions if value.action_id == supplied.action_id), None)
     if current is None or supplied.kind != ActionKind.DISPATCH:
-        raise DispatchError(DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE, f"Action '{supplied.action_id}' is not available.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE, f"Action '{supplied.action_id}' is not available."
+        )
     if current != supplied:
         if current.expected_revision != supplied.expected_revision:
             raise DispatchError(
                 DispatchErrorCode.STALE_ACTION,
                 "The work ledger changed after this dispatch action was selected.",
             )
-        raise DispatchError(DispatchErrorCode.DISPATCH_ACTION_INVALID, "The dispatch action does not carry exact current authority.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_ACTION_INVALID, "The dispatch action does not carry exact current authority."
+        )
     return current
 
 
@@ -68,9 +72,13 @@ def _review_publisher(
         )
         if candidate is None:
             if review_id is not None:
-                raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID, "--review-id requires --brief-review.")
+                raise DispatchError(
+                    DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID, "--review-id requires --brief-review."
+                )
             if existing is None:
-                raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_MISSING, "The exact ready brief review is absent.")
+                raise DispatchError(
+                    DispatchErrorCode.DISPATCH_BRIEF_REVIEW_MISSING, "The exact ready brief review is absent."
+                )
             artifacts.verify(existing)
             path = artifacts.path(existing)
             return path.read_bytes(), str(path)
@@ -193,5 +201,7 @@ def prepare_dispatch(
             and replace(current, expected_revision=action.expected_revision) == action
         )
     if not current_matches:
-        raise DispatchError(DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE, "Dispatch authority changed during prompt preparation.")
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE, "Dispatch authority changed during prompt preparation."
+        )
     return prompt

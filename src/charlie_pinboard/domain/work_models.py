@@ -312,6 +312,3 @@ class AttemptRecord:
 class SubjectRevision:
     subject: ItemId | AttemptId | ProposalId
     revision: str
-
-
-

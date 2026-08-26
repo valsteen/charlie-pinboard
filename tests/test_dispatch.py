@@ -715,8 +715,14 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
         cases = (
             (review.replace(checkpoint_digest, b"f" * 64, 1), DispatchErrorCode.DISPATCH_BRIEF_REVIEW_STALE),
             (review.replace(authority_digest, b"e" * 64, 1), DispatchErrorCode.DISPATCH_BRIEF_REVIEW_STALE),
-            (review.replace(b"status: complete", b"status: incomplete"), DispatchErrorCode.DISPATCH_BRIEF_REVIEW_NOT_READY),
-            (review.replace(b"verdict: ready", b"verdict: rejected"), DispatchErrorCode.DISPATCH_BRIEF_REVIEW_NOT_READY),
+            (
+                review.replace(b"status: complete", b"status: incomplete"),
+                DispatchErrorCode.DISPATCH_BRIEF_REVIEW_NOT_READY,
+            ),
+            (
+                review.replace(b"verdict: ready", b"verdict: rejected"),
+                DispatchErrorCode.DISPATCH_BRIEF_REVIEW_NOT_READY,
+            ),
             (
                 review.replace(b'reviewer_task_id: "brief-reviewer-task"', b'reviewer_task_id: "worker"'),
                 DispatchErrorCode.DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT,
@@ -816,7 +822,10 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
         review = _review(brief)
         review_cases = (
             (b"not frontmatter\n", DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID),
-            (review.replace(b"kind: work-brief-review", b"kind: other"), DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID),
+            (
+                review.replace(b"kind: work-brief-review", b"kind: other"),
+                DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID,
+            ),
             (
                 review.replace(b"schema: pinboard-work-brief-review/v1", ("schema: " + "repo" + "-work/v2").encode()),
                 DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID,
@@ -832,7 +841,10 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
                 review.replace(b'reviewer_task_id: "brief-reviewer-task"', b"reviewer_task_id: null"),
                 DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID,
             ),
-            (review.replace(b"Counterexample rejected.", "—".encode(), 1), DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INCOMPLETE),
+            (
+                review.replace(b"Counterexample rejected.", "—".encode(), 1),
+                DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INCOMPLETE,
+            ),
         )
         for candidate, code in review_cases:
             with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:

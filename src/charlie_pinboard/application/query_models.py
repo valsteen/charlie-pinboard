@@ -9,14 +9,17 @@ class ParallelOutcome(Enum):
     LAUNCHABLE = "launchable"
     EXCLUDED = "excluded"
 
+
 class ParallelSelection(Enum):
     ALL_SAFE = "all-safe"
     SELECTED = "selected"
+
 
 class ParallelReasonCode(Enum):
     ATTEMPT_OWNED = "attempt-owned"
     DEPENDENCY_LIVE = "dependency-live"
     STATE_NOT_LAUNCHABLE = "state-not-launchable"
+
 
 class OverviewItem(msgspec.Struct, frozen=True):
     item_id: str
@@ -27,6 +30,7 @@ class OverviewItem(msgspec.Struct, frozen=True):
     attempt_id: str | None
     next_action: str | None
     notes: str
+
 
 class WorkOverview(msgspec.Struct, frozen=True):
     schema: str
@@ -39,9 +43,11 @@ class WorkOverview(msgspec.Struct, frozen=True):
     inbox: tuple[str, ...]
     immediate_options: tuple[str, ...]
 
+
 class ParallelReason(msgspec.Struct, frozen=True):
     code: ParallelReasonCode
     message: str
+
 
 class ParallelItem(msgspec.Struct, frozen=True):
     item_id: str
@@ -51,6 +57,7 @@ class ParallelItem(msgspec.Struct, frozen=True):
     outcome: ParallelOutcome
     reasons: tuple[ParallelReason, ...] = ()
 
+
 class ParallelPreview(msgspec.Struct, frozen=True):
     schema: str
     revision: str
@@ -58,4 +65,3 @@ class ParallelPreview(msgspec.Struct, frozen=True):
     safe: bool
     launchable: tuple[ParallelItem, ...]
     excluded: tuple[ParallelItem, ...]
-

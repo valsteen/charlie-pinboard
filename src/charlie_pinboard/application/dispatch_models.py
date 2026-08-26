@@ -14,6 +14,7 @@ type DispatchSchema = Literal["pinboard-dispatch/v1"]
 
 type BriefReviewPublisher = Callable[[str, bytes | None, str | None], tuple[bytes, str]]
 
+
 class DispatchPermission(Enum):
     REPOSITORY_READ = "repository-read"
     REPOSITORY_WRITE = "repository-write"
@@ -21,12 +22,14 @@ class DispatchPermission(Enum):
     EXTERNAL_WRITE = "external-write"
     LIVE_APPLICATION = "live-application"
 
+
 class DispatchEnvironment(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     schema: DispatchSchema
     checkout: NonEmptyLine
     branch: NonEmptyLine
     starting_revision: NonEmptyLine
     permissions: tuple[DispatchPermission, ...]
+
 
 class DispatchArtifactPort(Protocol):
     @property
@@ -37,6 +40,7 @@ class DispatchArtifactPort(Protocol):
     def path(self, reference: ArtifactReference) -> Path: ...
 
     def publish(self, artifact: NewArtifact) -> ArtifactRef: ...
+
 
 class DispatchBriefPreparer(Protocol):
     def __call__(
@@ -52,4 +56,3 @@ class DispatchBriefPreparer(Protocol):
         review_id: str | None = None,
         review_publisher: BriefReviewPublisher | None = None,
     ) -> str: ...
-

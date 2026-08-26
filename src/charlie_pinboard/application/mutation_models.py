@@ -28,6 +28,7 @@ class MutationReceipt:
     input_schema: str
     input_payload: CanonicalJson
 
+
 @dataclass(frozen=True, slots=True)
 class ProposalCreationMutation:
     """Persists an authorized proposal intake without deciding its legality."""
@@ -36,6 +37,7 @@ class ProposalCreationMutation:
     after: StoredWorkState
     receipt: MutationReceipt
     decision: ProposalCreationDecision
+
 
 @dataclass(frozen=True, slots=True)
 class TransitionMutation:
@@ -46,6 +48,7 @@ class TransitionMutation:
     after: StoredWorkState
     receipt: MutationReceipt
 
+
 @dataclass(frozen=True, slots=True)
 class CoordinationAuthorityMutation:
     """Persists an authorized coordination change without deciding its legality."""
@@ -55,6 +58,7 @@ class CoordinationAuthorityMutation:
     receipt: MutationReceipt
     decision: CoordinationAuthorityDecision
 
+
 @dataclass(frozen=True, slots=True)
 class AttemptAuthorityMutation:
     """Persists an authorized attempt-authority change without deciding its legality."""
@@ -63,6 +67,7 @@ class AttemptAuthorityMutation:
     after: StoredWorkState
     receipt: MutationReceipt
     decision: AttemptAuthorityDecision
+
 
 type StoredStateMutation = (
     TransitionMutation | ProposalCreationMutation | CoordinationAuthorityMutation | AttemptAuthorityMutation

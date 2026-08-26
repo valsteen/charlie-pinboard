@@ -12,14 +12,6 @@ from charlie_pinboard.domain.work_models import ProposalRelationKind
 _PROPOSAL_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
-
-
-
-
-
-
-
-
 def _proposal_text(value: str) -> bool:
     return bool(value) and value.strip() == value and "|" not in value and "\n" not in value
 
