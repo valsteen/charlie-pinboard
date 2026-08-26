@@ -6,7 +6,6 @@ from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.registration import initialize_work_state
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.registration import InitializationError
 from charlie_pinboard.application.validation import validate_work_state
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
@@ -41,20 +40,13 @@ class SQLiteValidationTest(unittest.TestCase):
         self.assertFalse(invalid.valid)
         self.assertIn("STORAGE_INVARIANT_VIOLATION", invalid.render())
 
-    def test_initialization_resumes_current_state_and_refuses_conflicting_state_files(self) -> None:
+    def test_initialization_resumes_current_state(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         first = initialize_work_state(project, now=SQLITE_NOW)
         second = initialize_work_state(project, now=SQLITE_NOW)
         self.assertFalse(first.resumed)
         self.assertTrue(second.resumed)
         self.assertEqual(first.database_path, second.database_path)
-
-        blocked = Path(tempfile.mkdtemp()).resolve()
-        work = blocked / ".codex" / "work"
-        work.mkdir(parents=True)
-        (work / "authority.json").write_text("{}\n", encoding="utf-8")
-        with self.assertRaisesRegex(InitializationError, "WORK_STATE_CONFLICT"):
-            initialize_work_state(blocked, now=SQLITE_NOW)
 
 
 if __name__ == "__main__":

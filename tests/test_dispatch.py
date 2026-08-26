@@ -33,7 +33,7 @@ from charlie_pinboard.interfaces.dispatch_brief import (
 )
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
-CHECKPOINT = "Sequence 2 — Complete the shared protocol cutover"
+CHECKPOINT = "Sequence 2 — Complete the shared protocol"
 CONTRACT_INVARIANT = "Kotlin and Rust use protocol v13 together."
 CONTRACT_TABLE = """\
 #### Contract table
@@ -114,7 +114,7 @@ Architecture impact: update-required — `architecture.md` — This checkpoint c
 | `authority:architecture#protocol-contract` | The protocol version remains shared. | Kotlin and Rust protocol consumers | contract | `contract:{CONTRACT_INVARIANT}` | Keep Kotlin on v12 while Rust moves to v13. |
 | `authority:plan#consumer-proof` | The Rust consumer is verified directly. | Rust connector | acceptance | `criterion:1` | Delete the Rust protocol test. |
 
-Lifecycle partition: not-applicable — this protocol cutover changes no lifecycle operation.
+Lifecycle partition: not-applicable — this protocol change has no lifecycle operation.
 
 #### Acceptance criteria
 
@@ -196,7 +196,7 @@ class DispatchTest(unittest.TestCase):
             replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
         )
         brief = replace(
-            state.artifacts.references[0],
+            state.artifact_references[0],
             key=published.key,
             revision=published.revision,
             selector=published.selector,
@@ -205,7 +205,7 @@ class DispatchTest(unittest.TestCase):
         )
         state = replace(
             state,
-            artifacts=replace(state.artifacts, references=(brief, *state.artifacts.references[1:])),
+            artifact_references=(brief, *state.artifact_references[1:]),
             authority=replace(state.authority, coordination=coordination, attempt_leases=attempt_leases),
         )
         store = SQLiteWorkStore(roots.database_path)
@@ -675,7 +675,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
         self.assertEqual("DISPATCH_AUTHORITY_STALE", stale.exception.code)
 
     def test_heading_selectors_support_each_markdown_heading_level(self) -> None:
-        old_digest = hashlib.sha256(b"## Protocol semantics\n\nProtocol v13 is shared.\n\n").hexdigest()
+        initial_digest = hashlib.sha256(b"## Protocol semantics\n\nProtocol v13 is shared.\n\n").hexdigest()
         for level in range(1, 7):
             project = Path(tempfile.mkdtemp()).resolve()
             brief = _reviewed_brief(project)
@@ -686,7 +686,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
             )
             digest = hashlib.sha256(f"{heading}\n\nProtocol v13 is shared.\n\n".encode()).hexdigest()
             brief = brief.replace(b"architecture.md#Protocol semantics", b"architecture.md#Protocol # semantics")
-            brief = brief.replace(old_digest.encode(), digest.encode())
+            brief = brief.replace(initial_digest.encode(), digest.encode())
             with self.subTest(level=level):
                 self.assertIn(CHECKPOINT, self._prepare_cross_boundary(project, brief))
 
@@ -730,7 +730,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
 | direct-preserve | active | human authorization | exact observation | revoke and fence | quarantined / stable rejection |
 """
         brief = brief.replace(
-            b"Lifecycle partition: not-applicable \xe2\x80\x94 this protocol cutover changes no lifecycle operation.",
+            b"Lifecycle partition: not-applicable \xe2\x80\x94 this protocol change has no lifecycle operation.",
             lifecycle,
         )
         self.assertIn(CHECKPOINT, self._prepare_cross_boundary(project, brief))
@@ -876,7 +876,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
                 self._prepare_cross_boundary(project, candidate)
             self.assertEqual(code, rejected.exception.code)
 
-    def test_dispatch_environment_rejects_predecessor_schema(self) -> None:
+    def test_dispatch_environment_rejects_unsupported_schema(self) -> None:
         path = Path(tempfile.mkdtemp()) / "environment.json"
         path.write_text(
             msgspec.json.encode(
@@ -950,7 +950,7 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
                 review_id="later-review",
             )
         self.assertEqual("DISPATCH_BRIEF_REVIEW_COLLISION", collision.exception.code)
-        self.assertTrue(any("rejected-later-review" in value.key for value in store.snapshot().artifacts.references))
+        self.assertTrue(any("rejected-later-review" in value.key for value in store.snapshot().artifact_references))
 
     def test_cli_dispatch_publishes_review_and_verifies_the_rendered_prompt(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

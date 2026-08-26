@@ -5,7 +5,6 @@ import msgspec
 
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.stored_state import (
-    AttemptLeaseState,
     ItemDependency,
     StoredAttempt,
     StoredProposal,
@@ -13,6 +12,7 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
 )
+from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
 from charlie_pinboard.domain.identifiers import ItemId
 from charlie_pinboard.domain.model import AttemptState, WorkState
 
@@ -187,10 +187,6 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
     )
 
 
-def read_overview(store: WorkStore) -> WorkOverview:
-    return overview_from_state(store.snapshot())
-
-
 def _preview_time(value: datetime | None) -> datetime:
     current = value or datetime.now(UTC)
     if current.tzinfo is None:
@@ -237,7 +233,7 @@ def _parallel_reasons(
             (candidate for candidate in state.authority.attempt_leases if candidate.attempt_id == attempt.attempt_id),
             None,
         )
-        if lease is not None and lease.state == AttemptLeaseState.ACTIVE and current < lease.expires_at:
+        if lease is not None and lease.state == AttemptLeaseStatus.ACTIVE and current < lease.expires_at:
             return (
                 ParallelReason(
                     ParallelReasonCode.ATTEMPT_OWNED,

@@ -11,7 +11,7 @@ class DecisionProjectionTest(unittest.TestCase):
 
         self.assertEqual("12", snapshot.revision)
         self.assertEqual(
-            (ItemId("legacy-work"), ItemId("work-a"), ItemId("work-c")),
+            (ItemId("intake-work"), ItemId("work-a"), ItemId("work-c")),
             tuple(item.item for item in snapshot.items),
         )
         self.assertEqual((ItemId("work-c"),), snapshot.items_by_id()[ItemId("work-a")].depends_on)

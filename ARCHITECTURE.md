@@ -35,12 +35,11 @@ Two application modules currently compose concrete adapters for workflows that s
 
 ### Package root
 
-Only distribution identity and command composition live at the package root.
+Only distribution version lookup and command composition live at the package root.
 
 | Location | Ownership |
 | --- | --- |
 | `charlie_pinboard/__init__.py` | Installed distribution version lookup |
-| `charlie_pinboard/identity.py` | Current distribution and program names |
 | `charlie_pinboard/__main__.py` | `python -m charlie_pinboard` route to the CLI |
 
 ### Domain
@@ -65,9 +64,9 @@ Expected rejection over constructed domain values is returned as a typed `Decisi
 | --- | --- |
 | `stored_state.py`, `mutations.py`, `ports.py` | Complete persistence aggregate, closed mutation family, and transactional store capabilities |
 | `decision_projection.py`, `service.py` | Projection into domain decisions and locked mutation orchestration |
-| `actions.py`, `queries.py`, `diagnostics.py` | Legal-action discovery plus current overview, parallel-preview, and diagnostic read models |
+| `actions.py`, `queries.py` | Legal-action discovery plus current overview and parallel-preview read models |
 | `artifacts.py`, `dispatch.py` | Immutable artifact references, accepted evidence publication, dispatch eligibility, and prompt preparation |
-| `registration.py`, `validation.py`, `transfer.py` | Initialization results, whole-work-root validation, and portable-copy workflow |
+| `validation.py`, `transfer.py` | Whole-work-root validation and portable-copy workflow |
 
 SQLite rows are not active domain objects. `StoredWorkState` contains exact typed records without SQL handles or filesystem paths, and `LedgerSnapshot` remains the storage-independent decision input.
 
@@ -94,7 +93,6 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 | `transition_input.py` | Strict external transition payload records and conversion to typed command input |
 | `dispatch_brief.py` | Canonical checkpoint parsing, architecture-impact shape validation, reviewed-authority and brief-review verification, and canonical launch prompt rendering |
 | `proposals.py` | Strict proposal-file decoding and conversion into current SQLite intake input |
-| `errors.py` | Stable interface error presentation |
 
 ## Storage boundaries
 

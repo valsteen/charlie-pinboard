@@ -1,9 +1,17 @@
-from enum import Enum
 from typing import Annotated, Literal
 
 import msgspec
 
-from charlie_pinboard.interfaces.errors import ProposalError
+from charlie_pinboard.domain.model import ProposalRelationKind
+
+
+class ProposalError(RuntimeError):
+    code: str
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(f"{code}: {message}")
+
 
 type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
 type ProposalSchema = Literal["pinboard-proposal/v1"]
@@ -11,16 +19,8 @@ type ProposalIdentity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z
 type ProposalText = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^|\n]*[^\s|][^|\n]*$")]
 
 
-class RelationKind(Enum):
-    INDEPENDENT = "independent"
-    PREREQUISITE = "prerequisite"
-    FOLLOW_UP = "follow-up"
-    DUPLICATE = "duplicate"
-    CONTRADICTION = "contradiction"
-
-
 class ProposalRelation(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    kind: RelationKind
+    kind: ProposalRelationKind
     item: ProposalIdentity | None
 
 
@@ -38,10 +38,6 @@ class Proposal(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     unlock: ProposalText
     urgency_evidence: ProposalText
     freshness_assumptions: tuple[NonEmptyString, ...]
-
-    def render(self) -> bytes:
-        encoded = msgspec.json.encode(self, order="sorted")
-        return msgspec.json.format(encoded, indent=2) + b"\n"
 
 
 def parse_proposal(data: bytes | str) -> Proposal:

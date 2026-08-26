@@ -2,25 +2,19 @@ from datetime import UTC, datetime, timedelta
 
 from charlie_pinboard.application.stored_state import (
     ArtifactKind,
-    ArtifactRecords,
     ArtifactReference,
     AttemptLeaseCounter,
     AttemptLeaseGeneration,
-    AttemptLeaseState,
     AuthorityRecords,
     CanonicalJson,
-    CoordinationLeaseState,
-    HistoryRecords,
     ItemArtifactLink,
     ItemDependency,
     ItemScopeRevision,
     LifecycleRecords,
-    OriginKind,
     ProjectRecord,
     ProposalEvidence,
     ProposalFreshness,
     ProposalRecords,
-    ProposalRelation,
     StoredAttempt,
     StoredAttemptLease,
     StoredCoordinationLease,
@@ -33,6 +27,7 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
+from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -48,6 +43,8 @@ from charlie_pinboard.domain.identifiers import (
 from charlie_pinboard.domain.model import (
     ArtifactRole,
     AttemptState,
+    CoordinationLeaseStatus,
+    ProposalRelationKind,
     Timing,
 )
 
@@ -63,27 +60,24 @@ def _stored_item(
     state: StoredWorkItemState,
     *,
     outcome_evidence: str | None = None,
-    legacy: bool = False,
+    sparse: bool = False,
 ) -> StoredWorkItem:
     return StoredWorkItem(
         item_id,
-        OriginKind.LEGACY_IMPORT if legacy else OriginKind.NATIVE,
         f"Work {item_id}",
         state,
-        None if legacy else Timing.MUST_NOW,
-        None if legacy else "accepted requirement",
-        None if legacy else "A verified observation",
-        None if legacy else "The workflow needs this fact.",
-        None if legacy else "The state becomes explicit.",
-        None if legacy else "The next decision can run.",
+        None if sparse else Timing.MUST_NOW,
+        None if sparse else "accepted requirement",
+        None if sparse else "A verified observation",
+        None if sparse else "The workflow needs this fact.",
+        None if sparse else "The state becomes explicit.",
+        None if sparse else "The next decision can run.",
         outcome_evidence,
         "continue" if state == StoredWorkItemState.ACTIVE else "activate",
-        None if legacy else "Current work remains bounded.",
+        None if sparse else "Current work remains bounded.",
         1,
         SQLITE_DIGEST,
         7,
-        None if legacy else SQLITE_NOW,
-        None if legacy else SQLITE_NOW,
         SQLITE_NOW,
         SQLITE_NOW,
     )
@@ -93,7 +87,7 @@ def complete_sqlite_state() -> StoredWorkState:
     item_a = ItemId("work-a")
     item_b = ItemId("work-b")
     item_c = ItemId("work-c")
-    legacy_item = ItemId("legacy-work")
+    intake_item = ItemId("intake-work")
     attempt_id = AttemptId("work-a-1")
     attempt_lease_id = LeaseId("attempt-lease-a")
     brief = ArtifactReference(
@@ -124,13 +118,13 @@ def complete_sqlite_state() -> StoredWorkState:
     lifecycle = LifecycleRecords(
         ProjectRecord("charlie-pinboard", 1, 12, 2, SQLITE_NOW, SQLITE_NOW),
         (
-            _stored_item(legacy_item, StoredWorkItemState.INTAKE, legacy=True),
+            _stored_item(intake_item, StoredWorkItemState.INTAKE, sparse=True),
             _stored_item(item_a, StoredWorkItemState.ACTIVE),
             _stored_item(item_b, StoredWorkItemState.SUPERSEDED, outcome_evidence="work-b superseded"),
             _stored_item(item_c, StoredWorkItemState.READY),
         ),
         tuple(
-            ItemScopeRevision(item, 1, SQLITE_DIGEST, 3, SQLITE_NOW) for item in (legacy_item, item_a, item_b, item_c)
+            ItemScopeRevision(item, 1, SQLITE_DIGEST, 3, SQLITE_NOW) for item in (intake_item, item_a, item_b, item_c)
         ),
         (ItemDependency(item_a, item_c, 0),),
         (ItemArtifactLink(item_a, design.artifact_ref_id, ArtifactRole.DESIGN, 0),),
@@ -138,7 +132,6 @@ def complete_sqlite_state() -> StoredWorkState:
             StoredAttempt(
                 attempt_id,
                 item_a,
-                OriginKind.NATIVE,
                 AttemptState.ACTIVE,
                 "codex/work-a",
                 "base-revision",
@@ -153,8 +146,6 @@ def complete_sqlite_state() -> StoredWorkState:
                 8,
                 SQLITE_NOW,
                 SQLITE_NOW,
-                SQLITE_NOW,
-                SQLITE_NOW,
             ),
         ),
     )
@@ -163,14 +154,13 @@ def complete_sqlite_state() -> StoredWorkState:
         (
             StoredProposal(
                 proposal_id,
-                OriginKind.NATIVE,
                 SQLITE_NOW,
                 SQLITE_NOW,
                 TaskId("source-task"),
                 "Proposal A",
                 "A related observation",
                 "It may affect work C.",
-                ProposalRelation.FOLLOW_UP,
+                ProposalRelationKind.FOLLOW_UP,
                 item_c,
                 "Record the follow-up.",
                 "A later coordinator can assess it.",
@@ -179,7 +169,6 @@ def complete_sqlite_state() -> StoredWorkState:
                 None,
                 None,
                 4,
-                None,
                 None,
             ),
         ),
@@ -194,37 +183,35 @@ def complete_sqlite_state() -> StoredWorkState:
             9,
             SQLITE_NOW,
             SQLITE_NOW + timedelta(minutes=5),
-            CoordinationLeaseState.ACTIVE,
+            CoordinationLeaseStatus.ACTIVE,
         ),
         (AttemptLeaseCounter(attempt_id, 3),),
         (AttemptLeaseGeneration(attempt_id, 3, attempt_lease_id, TaskId("worker"), HostId("host-a")),),
-        (StoredAttemptLease(attempt_id, 3, SQLITE_NOW, SQLITE_NOW + timedelta(minutes=5), AttemptLeaseState.ACTIVE),),
+        (StoredAttemptLease(attempt_id, 3, SQLITE_NOW, SQLITE_NOW + timedelta(minutes=5), AttemptLeaseStatus.ACTIVE),),
     )
-    history = HistoryRecords(
-        (
-            StoredTransitionReceipt(
-                HistoryId(1),
-                11,
-                ActionId("continue:work-a-1"),
-                TransitionHistoryActionKind.CONTINUE,
-                HistorySubjectId("work-a-1"),
-                evidence.artifact_ref_id,
-                TransitionHistoryAuthorizationKind.ATTEMPT,
-                TaskId("worker"),
-                HostId("host-a"),
-                "empty/v1",
-                CanonicalJson(b"{}"),
-                "continued/v1",
-                CanonicalJson(b"{}"),
-                SQLITE_NOW,
-            ),
-        )
+    transition_receipts = (
+        StoredTransitionReceipt(
+            HistoryId(1),
+            11,
+            ActionId("continue:work-a-1"),
+            TransitionHistoryActionKind.CONTINUE,
+            HistorySubjectId("work-a-1"),
+            evidence.artifact_ref_id,
+            TransitionHistoryAuthorizationKind.ATTEMPT,
+            TaskId("worker"),
+            HostId("host-a"),
+            "empty/v1",
+            CanonicalJson(b"{}"),
+            "continued/v1",
+            CanonicalJson(b"{}"),
+            SQLITE_NOW,
+        ),
     )
     return StoredWorkState(
         lifecycle,
         proposals,
-        ArtifactRecords((brief, design, evidence)),
+        (brief, design, evidence),
         authority,
-        history,
+        transition_receipts,
         StoredFocus(item_a, attempt_id, "continue", 6),
     )

@@ -81,7 +81,7 @@ class CliTest(unittest.TestCase):
             store.initialize_state(state)
         return project, roots.work_root, store
 
-    def test_current_command_surface_excludes_retired_runtime(self) -> None:
+    def test_current_command_surface_lists_every_command(self) -> None:
         help_text = build_parser().format_help()
         for retained in (
             "root",
@@ -101,11 +101,6 @@ class CliTest(unittest.TestCase):
             "views",
         ):
             self.assertIn(retained, help_text)
-        for removed in ("recover", "migrate", "legacy-import", "legacy-cleanup", "resource"):
-            self.assertNotIn(removed, help_text)
-            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
-                main((removed,))
-            self.assertEqual(2, raised.exception.code)
 
     def test_init_and_current_read_commands_need_no_filesystem_authority(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

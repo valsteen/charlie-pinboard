@@ -29,7 +29,6 @@ CREATE TABLE artifact_refs (
 
 CREATE TABLE work_items (
     item_id TEXT PRIMARY KEY,
-    origin_kind TEXT NOT NULL CHECK (origin_kind IN ('native', 'legacy-import')),
     user_label TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN (
         'intake', 'ready', 'active', 'paused', 'blocked', 'deferred', 'review',
@@ -47,20 +46,13 @@ CREATE TABLE work_items (
     scope_revision INTEGER NOT NULL CHECK (scope_revision >= 1),
     scope_digest TEXT NOT NULL CHECK (length(scope_digest) = 64),
     subject_revision INTEGER NOT NULL CHECK (subject_revision >= 0),
-    origin_created_at TEXT,
-    origin_updated_at TEXT,
     recorded_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE (item_id, state, outcome_evidence),
     CHECK ((state IN ('done', 'superseded', 'dropped')) = (outcome_evidence IS NOT NULL)),
     FOREIGN KEY (item_id, scope_revision, scope_digest)
         REFERENCES item_scope_revisions(item_id, scope_revision, scope_digest)
-        DEFERRABLE INITIALLY DEFERRED,
-    CHECK (origin_kind = 'legacy-import' OR (
-        source IS NOT NULL AND trigger IS NOT NULL AND why_it_matters IS NOT NULL
-        AND effect IS NOT NULL AND unlock IS NOT NULL AND notes IS NOT NULL
-        AND origin_created_at IS NOT NULL AND origin_updated_at IS NOT NULL
-    ))
+        DEFERRABLE INITIALLY DEFERRED
 ) STRICT;
 
 CREATE TABLE item_scope_revisions (
@@ -96,7 +88,6 @@ CREATE TABLE item_artifacts (
 CREATE TABLE attempts (
     attempt_id TEXT PRIMARY KEY,
     item_id TEXT NOT NULL REFERENCES work_items(item_id),
-    origin_kind TEXT NOT NULL CHECK (origin_kind IN ('native', 'legacy-import')),
     state TEXT NOT NULL CHECK (state IN ('active', 'paused', 'blocked', 'review', 'done', 'closed')),
     branch TEXT NOT NULL,
     base_revision TEXT NOT NULL,
@@ -112,8 +103,6 @@ CREATE TABLE attempts (
     accepted_scope_revision INTEGER NOT NULL CHECK (accepted_scope_revision >= 1),
     accepted_scope_digest TEXT NOT NULL CHECK (length(accepted_scope_digest) = 64),
     subject_revision INTEGER NOT NULL CHECK (subject_revision >= 0),
-    origin_created_at TEXT,
-    origin_updated_at TEXT,
     recorded_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE (attempt_id, item_id),
@@ -128,15 +117,12 @@ CREATE TABLE attempts (
     CHECK ((result_artifact_ref_id IS NULL) = (result_artifact_kind IS NULL)),
     CHECK ((blocker_artifact_ref_id IS NULL) = (blocker_artifact_kind IS NULL)),
     CHECK ((candidate_revision IS NULL) = (candidate_recorded_at IS NULL)),
-    CHECK (origin_kind = 'legacy-import' OR (
+    CHECK (
         (state = 'review' AND candidate_revision IS NOT NULL)
         OR state = 'done'
         OR (state IN ('active', 'paused', 'blocked') AND candidate_revision IS NULL)
         OR state = 'closed'
-    )),
-    CHECK (origin_kind = 'legacy-import' OR (
-        origin_created_at IS NOT NULL AND origin_updated_at IS NOT NULL
-    ))
+    )
 ) STRICT;
 
 CREATE UNIQUE INDEX one_live_attempt_per_item
@@ -145,7 +131,6 @@ WHERE state NOT IN ('done', 'closed');
 
 CREATE TABLE proposals (
     proposal_id TEXT PRIMARY KEY,
-    origin_kind TEXT NOT NULL CHECK (origin_kind IN ('native', 'legacy-import')),
     created_at TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
     source_task_id TEXT NOT NULL,
@@ -163,13 +148,8 @@ CREATE TABLE proposals (
     disposition_target_item_id TEXT REFERENCES work_items(item_id),
     disposition_reason TEXT,
     subject_revision INTEGER NOT NULL CHECK (subject_revision >= 0),
-    origin_disposed_at TEXT,
     disposition_recorded_at TEXT,
-    CHECK ((disposition IS NULL) = (disposition_recorded_at IS NULL)),
-    CHECK (origin_kind = 'legacy-import' OR (
-        (disposition IS NULL AND origin_disposed_at IS NULL)
-        OR (disposition IS NOT NULL AND origin_disposed_at IS NOT NULL)
-    ))
+    CHECK ((disposition IS NULL) = (disposition_recorded_at IS NULL))
 ) STRICT;
 
 CREATE TABLE proposal_evidence (

@@ -492,12 +492,12 @@ class ScopeContractTest(unittest.TestCase):
             item_scope_bytes(scope), item_scope_bytes(replace(scope, artifacts=(*scope.artifacts, evidence)))
         )
 
-        legacy = make_item_scope("legacy-item", "Legacy item", None, None, None, None)
+        sparse = make_item_scope("sparse-item", "Sparse item", None, None, None, None)
         self.assertEqual(
-            b'{"artifacts":[],"dependencies":[],"effect":null,"item_id":"legacy-item",'
+            b'{"artifacts":[],"dependencies":[],"effect":null,"item_id":"sparse-item",'
             b'"schema":"item-scope/v2","trigger":null,"unlock":null,'
-            b'"user_label":"Legacy item","why_it_matters":null}\n',
-            item_scope_bytes(legacy),
+            b'"user_label":"Sparse item","why_it_matters":null}\n',
+            item_scope_bytes(sparse),
         )
 
     def test_scope_rejects_noncanonical_positions_and_semantic_duplicates(self) -> None:

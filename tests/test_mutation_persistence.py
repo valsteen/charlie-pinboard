@@ -20,10 +20,6 @@ from charlie_pinboard.application.mutations import (
 from charlie_pinboard.application.ports import WorkStore, WorkTransaction
 from charlie_pinboard.application.stored_state import (
     CanonicalJson,
-    HistoryRecords,
-    OriginKind,
-    ProposalDisposition,
-    ProposalRelation,
     StoredProposal,
     StoredTransitionReceipt,
     StoredWorkItemState,
@@ -80,6 +76,7 @@ from charlie_pinboard.domain.model import (
     DeferInput,
     LedgerSnapshot,
     MergeProposalInput,
+    ProposalDispositionKind,
     ProposalRelationKind,
     ReasonInput,
     ResumeInput,
@@ -205,7 +202,7 @@ class MutationPersistenceTest(unittest.TestCase):
         decided_at = before.lifecycle.project.updated_at + timedelta(seconds=1)
         receipt = TransitionReceipt(ActionId(action), ItemId("work-a"), action, None, decided_at)
         stored_receipt = StoredTransitionReceipt(
-            HistoryId(1 + max((int(value.history_id) for value in before.history.receipts), default=0)),
+            HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
             before.lifecycle.project.revision + 1,
             receipt.action_id,
             TransitionHistoryActionKind.INSPECT,
@@ -236,12 +233,12 @@ class MutationPersistenceTest(unittest.TestCase):
                     updated_at=decided_at,
                 ),
             ),
-            history=HistoryRecords((*before.history.receipts, stored_receipt)),
+            transition_receipts=(*before.transition_receipts, stored_receipt),
         )
         return receipt, after
 
     def _stored_receipt(self, after: StoredWorkState) -> StoredTransitionReceipt:
-        return after.history.receipts[-1]
+        return after.transition_receipts[-1]
 
     def _mutation_receipt(self, receipt: TransitionReceipt, after: StoredWorkState) -> MutationReceipt:
         stored = self._stored_receipt(after)
@@ -265,7 +262,7 @@ class MutationPersistenceTest(unittest.TestCase):
             outcome_schema=outcome.outcome_schema,
             outcome_payload=CanonicalJson(outcome.payload),
         )
-        return replace(after, history=HistoryRecords((*after.history.receipts[:-1], stored_receipt)))
+        return replace(after, transition_receipts=(*after.transition_receipts[:-1], stored_receipt))
 
     def test_activation_decision_retains_and_persists_creation_facts(self) -> None:
         store = self._store()
@@ -308,12 +305,12 @@ class MutationPersistenceTest(unittest.TestCase):
             (attempt.branch, attempt.base_revision, attempt.provenance, attempt.brief_artifact_ref_id),
         )
         self.assertEqual(13, reopened.lifecycle.project.revision)
-        self.assertEqual(2, len(reopened.history.receipts))
-        self.assertEqual("transition-receipt/v1", reopened.history.receipts[-1].outcome_schema)
+        self.assertEqual(2, len(reopened.transition_receipts))
+        self.assertEqual("transition-receipt/v1", reopened.transition_receipts[-1].outcome_schema)
 
     def test_resume_replaces_the_attempt_brief_and_reloads_it_from_sqlite(self) -> None:
         state = complete_sqlite_state()
-        current = state.artifacts.references[0]
+        current = state.artifact_references[0]
         replacement = replace(
             current,
             artifact_ref_id=ArtifactRefId(99),
@@ -335,7 +332,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 dependencies=tuple(value for value in state.lifecycle.dependencies if value.item_id != attempt.item_id),
                 attempts=(replace(attempt, state=AttemptState.PAUSED),),
             ),
-            artifacts=replace(state.artifacts, references=(*state.artifacts.references, replacement)),
+            artifact_references=(*state.artifact_references, replacement),
         )
         store = self._store_with_state(state)
         snapshot = project_decision_snapshot(store.snapshot())
@@ -366,7 +363,7 @@ class MutationPersistenceTest(unittest.TestCase):
                     AcceptedProposalState.READY,
                     "activate",
                     timing=None,
-                    depends_on=(ItemId("work-c"), ItemId("legacy-work")),
+                    depends_on=(ItemId("work-c"), ItemId("intake-work")),
                 ),
             ),
             SQLITE_NOW + timedelta(seconds=1),
@@ -385,13 +382,13 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         self.assertEqual(StoredWorkItemState.READY, item.state)
         self.assertEqual(
-            (ItemId("work-c"), ItemId("legacy-work")),
+            (ItemId("work-c"), ItemId("intake-work")),
             tuple(value.dependency_id for value in reopened.lifecycle.dependencies if value.item_id == item.item_id),
         )
-        self.assertEqual(ProposalDisposition.ACCEPTED, proposal.disposition)
+        self.assertEqual(ProposalDispositionKind.ACCEPTED, proposal.disposition)
         self.assertEqual(ItemId("accepted-proposal"), proposal.disposition_target_item_id)
         self.assertEqual(13, reopened.lifecycle.project.revision)
-        self.assertEqual(2, len(reopened.history.receipts))
+        self.assertEqual(2, len(reopened.transition_receipts))
 
     def test_two_writers_reject_the_stale_typed_mutation_without_partial_state(self) -> None:
         first, second = self._store_pair()
@@ -440,14 +437,13 @@ class MutationPersistenceTest(unittest.TestCase):
         receipt, after = self._receipt_state(before, "inspect:proposal-create")
         proposal = StoredProposal(
             ProposalId("proposal-b"),
-            OriginKind.NATIVE,
             receipt.decided_at,
             receipt.decided_at,
             TaskId("source-b"),
             "Proposal B",
             "A new observation",
             "The queue needs the observation.",
-            ProposalRelation.INDEPENDENT,
+            ProposalRelationKind.INDEPENDENT,
             None,
             "Preserve the proposal.",
             "A coordinator can assess it.",
@@ -456,7 +452,6 @@ class MutationPersistenceTest(unittest.TestCase):
             None,
             None,
             13,
-            None,
             None,
         )
         after = replace(
@@ -564,13 +559,13 @@ class MutationPersistenceTest(unittest.TestCase):
         close_action = next(
             value
             for value in available_actions(snapshot, actor)
-            if value.kind == ActionKind.CLOSE and value.subject == ItemId("legacy-work")
+            if value.kind == ActionKind.CLOSE and value.subject == ItemId("intake-work")
         )
         close = decide(
             snapshot,
             bind_transition(
                 close_action,
-                CloseInput(CloseOutcome.DROPPED, "The legacy intake is no longer needed."),
+                CloseInput(CloseOutcome.DROPPED, "The intake is no longer needed."),
             ),
             SQLITE_NOW + timedelta(seconds=1),
         )
@@ -586,13 +581,13 @@ class MutationPersistenceTest(unittest.TestCase):
             close_action = next(
                 value
                 for value in available_actions(snapshot, actor)
-                if value.kind == ActionKind.CLOSE and value.subject == ItemId("legacy-work")
+                if value.kind == ActionKind.CLOSE and value.subject == ItemId("intake-work")
             )
             close = decide(
                 snapshot,
                 bind_transition(
                     close_action,
-                    CloseInput(CloseOutcome.DROPPED, "The legacy intake is no longer needed."),
+                    CloseInput(CloseOutcome.DROPPED, "The intake is no longer needed."),
                 ),
                 SQLITE_NOW + timedelta(seconds=1),
             )
@@ -693,7 +688,7 @@ class MutationPersistenceTest(unittest.TestCase):
         action = next(
             value
             for value in available_actions(snapshot, actor)
-            if value.kind == ActionKind.DEFER and value.subject == ItemId("legacy-work")
+            if value.kind == ActionKind.DEFER and value.subject == ItemId("intake-work")
         )
         decision = decide(
             snapshot,
@@ -747,7 +742,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 coordination=replace(coordination, expires_at=coordination.expires_at + timedelta(minutes=1)),
             ),
         )
-        accepted = after.history.receipts[-1]
+        accepted = after.transition_receipts[-1]
         mutation_receipt = self._mutation_receipt(receipt, after)
         changed_identities = (
             replace(mutation_receipt, history_id=HistoryId(9)),
@@ -796,7 +791,7 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         for changed_receipt in changed_receipts:
             with self.subTest(field=changed_receipt):
-                changed_after = replace(after, history=HistoryRecords((*before.history.receipts, changed_receipt)))
+                changed_after = replace(after, transition_receipts=(*before.transition_receipts, changed_receipt))
                 with self.assertRaises(StorageError), store.write() as transaction:
                     transaction.commit(
                         CoordinationAuthorityMutation(

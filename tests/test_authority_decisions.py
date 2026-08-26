@@ -6,7 +6,6 @@ from charlie_pinboard.application.decision_projection import (
     project_decision_snapshot,
     project_inactive_attempt_authority,
 )
-from charlie_pinboard.application.stored_state import AttemptLeaseState
 from charlie_pinboard.domain.authority_decisions import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
@@ -44,7 +43,7 @@ class AuthorityDecisionTest(unittest.TestCase):
             authority=replace(
                 state.authority,
                 attempt_leases=tuple(
-                    replace(value, state=AttemptLeaseState.RELEASED) for value in state.authority.attempt_leases
+                    replace(value, state=AttemptLeaseStatus.RELEASED) for value in state.authority.attempt_leases
                 ),
             ),
         )
@@ -55,7 +54,7 @@ class AuthorityDecisionTest(unittest.TestCase):
             authority=replace(
                 recovered.authority,
                 attempt_leases=tuple(
-                    replace(value, state=AttemptLeaseState.ACTIVE, expires_at=SQLITE_NOW)
+                    replace(value, state=AttemptLeaseStatus.ACTIVE, expires_at=SQLITE_NOW)
                     for value in recovered.authority.attempt_leases
                 ),
             ),

@@ -1,11 +1,31 @@
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 
 from charlie_pinboard.adapters.files.artifacts import ArtifactError, verify_reference
 from charlie_pinboard.adapters.files.views import expected_view_bytes
 from charlie_pinboard.adapters.sqlite.database import StorageError
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.diagnostics import Diagnostic, Severity
+
+
+class Severity(Enum):
+    ERROR = "error"
+    WARNING = "warning"
+
+
+@dataclass(frozen=True, slots=True)
+class Diagnostic:
+    code: str
+    severity: Severity
+    path: Path
+    message: str
+    hint: str | None = None
+
+    def render(self) -> str:
+        result = f"{self.severity.value.upper()} {self.code} {self.path}: {self.message}"
+        if self.hint:
+            result += f" Hint: {self.hint}"
+        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +55,7 @@ def validate_work_state(work_root: Path) -> ValidationReport:
     except StorageError as error:
         return ValidationReport((_error(error.code.value, database, str(error)),))
     diagnostics: list[Diagnostic] = []
-    for reference in state.artifacts.references:
+    for reference in state.artifact_references:
         try:
             verify_reference(work_root, reference)
         except ArtifactError as error:

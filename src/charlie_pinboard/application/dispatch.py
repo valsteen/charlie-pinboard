@@ -8,7 +8,7 @@ from typing import Annotated, Literal, Protocol
 import msgspec
 
 from charlie_pinboard.application.actions import ActionQueryError, discover_actions
-from charlie_pinboard.application.artifacts import ArtifactRef, ArtifactReferenceStore, NewArtifact, accept_reference
+from charlie_pinboard.application.artifacts import ArtifactRef, NewArtifact
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.stored_state import ArtifactKind, ArtifactReference
 from charlie_pinboard.domain.decisions import Action, ActionKind, Role
@@ -42,10 +42,6 @@ class DispatchEnvironment(msgspec.Struct, frozen=True, forbid_unknown_fields=Tru
     branch: NonEmptyLine
     starting_revision: NonEmptyLine
     permissions: tuple[DispatchPermission, ...]
-
-
-class DispatchStore(WorkStore, ArtifactReferenceStore, Protocol):
-    pass
 
 
 class DispatchArtifactPort(Protocol):
@@ -96,7 +92,7 @@ def _current_action(store: WorkStore, supplied: Action) -> Action:
 
 
 def _review_publisher(
-    store: DispatchStore,
+    store: WorkStore,
     artifacts: DispatchArtifactPort,
     attempt_id: AttemptId,
     item_id: ItemId,
@@ -108,7 +104,7 @@ def _review_publisher(
         existing = next(
             (
                 value
-                for value in state.artifacts.references
+                for value in state.artifact_references
                 if value.kind == ArtifactKind.EVIDENCE and value.key == key and value.revision == 1
             ),
             None,
@@ -144,8 +140,7 @@ def _review_publisher(
                     candidate,
                 ),
             )
-            accept_reference(
-                store,
+            store.accept_artifact_reference(
                 artifacts.work_root,
                 rejected,
                 datetime.now(UTC),
@@ -157,8 +152,7 @@ def _review_publisher(
                 f"Ready review already differs; later evidence is preserved at '{rejected.selector}'.",
             )
         published = artifacts.publish(NewArtifact(ArtifactKind.EVIDENCE, key, 1, ".md", candidate))
-        accepted = accept_reference(
-            store,
+        accepted = store.accept_artifact_reference(
             artifacts.work_root,
             published,
             datetime.now(UTC),
@@ -172,7 +166,7 @@ def _review_publisher(
 
 
 def prepare_dispatch(
-    store: DispatchStore,
+    store: WorkStore,
     artifacts: DispatchArtifactPort,
     prepare_brief: DispatchBriefPreparer,
     project_root: Path,
@@ -192,7 +186,7 @@ def prepare_dispatch(
     reference = next(
         (
             value
-            for value in state.artifacts.references
+            for value in state.artifact_references
             if value.artifact_ref_id == attempt.brief_artifact_ref_id and value.kind == ArtifactKind.BRIEF
         ),
         None,

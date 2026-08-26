@@ -17,13 +17,11 @@ from charlie_pinboard.application.service import (
     create_proposal,
     execute,
 )
-from charlie_pinboard.application.stored_state import (
-    AttemptLeaseState,
-    StoredWorkState,
-)
+from charlie_pinboard.application.stored_state import StoredWorkState
 from charlie_pinboard.domain.authority_decisions import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
+    AttemptLeaseStatus,
     ReleaseAttemptAuthority,
     ReleaseCoordinationAuthority,
     RenewAttemptAuthority,
@@ -109,7 +107,7 @@ class ServiceTest(unittest.TestCase):
         self.assertNotIsInstance(outcome, DecisionFailure)
         after = store.snapshot()
         self.assertEqual(before.lifecycle.project.revision + 1, after.lifecycle.project.revision)
-        self.assertEqual(len(before.history.receipts) + 1, len(after.history.receipts))
+        self.assertEqual(len(before.transition_receipts) + 1, len(after.transition_receipts))
 
     def test_execute_accepts_exact_live_worker_authority_for_review_submission(self) -> None:
         store = self._store()
@@ -169,7 +167,7 @@ class ServiceTest(unittest.TestCase):
         assert after.authority.coordination is not None
         self.assertEqual(acquired_at + timedelta(minutes=3), after.authority.coordination.expires_at)
         self.assertEqual(state.lifecycle.project.revision + 2, after.lifecycle.project.revision)
-        self.assertEqual(len(state.history.receipts) + 2, len(after.history.receipts))
+        self.assertEqual(len(state.transition_receipts) + 2, len(after.transition_receipts))
         renewed_authority = project_decision_snapshot(after).coordination_authority
         assert renewed_authority is not None
         released = change_coordination_authority(
@@ -232,7 +230,7 @@ class ServiceTest(unittest.TestCase):
         self.assertNotIsInstance(released, DecisionFailure)
         after = store.snapshot()
         self.assertEqual(4, after.authority.attempt_counters[0].generation_high_water)
-        self.assertEqual(AttemptLeaseState.RELEASED, after.authority.attempt_leases[0].state)
+        self.assertEqual(AttemptLeaseStatus.RELEASED, after.authority.attempt_leases[0].state)
 
     def test_attempt_authority_initial_acquire_transfer_and_revoke_persist_exact_generations(self) -> None:
         state = complete_sqlite_state()
@@ -305,7 +303,7 @@ class ServiceTest(unittest.TestCase):
             ),
         )
         self.assertNotIsInstance(revoked, DecisionFailure)
-        self.assertEqual(AttemptLeaseState.REVOKED, normal_store.snapshot().authority.attempt_leases[0].state)
+        self.assertEqual(AttemptLeaseStatus.REVOKED, normal_store.snapshot().authority.attempt_leases[0].state)
 
     def test_execute_rejects_a_stale_action_before_decision_or_commit(self) -> None:
         store = self._store()
@@ -358,7 +356,7 @@ class ServiceTest(unittest.TestCase):
         after = store.snapshot()
         current_attempt = after.authority.attempt_leases[0]
         self.assertEqual(prior_attempt.generation + 1, current_attempt.generation)
-        self.assertEqual(AttemptLeaseState.REVOKED, current_attempt.state)
+        self.assertEqual(AttemptLeaseStatus.REVOKED, current_attempt.state)
 
     def test_sqlite_proposal_intake_is_immutable_and_does_not_require_a_coordination_lease(self) -> None:
         state = complete_sqlite_state()
@@ -401,7 +399,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(created_at, proposal.created_at)
         self.assertEqual(recorded_at, proposal.recorded_at)
         self.assertEqual(recorded_at, after.lifecycle.project.updated_at)
-        self.assertEqual(recorded_at, after.history.receipts[-1].committed_at)
+        self.assertEqual(recorded_at, after.transition_receipts[-1].committed_at)
 
     def test_sqlite_proposal_intake_rejects_a_missing_related_item_before_persistence(self) -> None:
         state = complete_sqlite_state()

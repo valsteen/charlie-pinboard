@@ -2,7 +2,8 @@ from datetime import UTC, datetime
 
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.application.ports import WorkStore
-from charlie_pinboard.application.stored_state import AttemptLeaseState, CoordinationLeaseState, StoredWorkState
+from charlie_pinboard.application.stored_state import StoredWorkState
+from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
 from charlie_pinboard.domain.decisions import (
     Action,
     ActorAuthority,
@@ -12,6 +13,7 @@ from charlie_pinboard.domain.decisions import (
 )
 from charlie_pinboard.domain.errors import DecisionFailure
 from charlie_pinboard.domain.identifiers import AttemptId, LeaseId
+from charlie_pinboard.domain.model import CoordinationLeaseStatus
 
 
 class ActionQueryError(RuntimeError):
@@ -35,7 +37,7 @@ def _worker_attempts(
         lease.attempt_id
         for lease in store_state.authority.attempt_leases
         if lease.generation == generation
-        and lease.state == AttemptLeaseState.ACTIVE
+        and lease.state == AttemptLeaseStatus.ACTIVE
         and lease.expires_at > now
         and (anchor := anchors.get((lease.attempt_id, lease.generation))) is not None
         and anchor.lease_id == lease_id
@@ -62,7 +64,7 @@ def discover_actions(
             if lease_id is not None:
                 if (
                     coordination is None
-                    or coordination.state != CoordinationLeaseState.ACTIVE
+                    or coordination.state != CoordinationLeaseStatus.ACTIVE
                     or coordination.lease_id != lease_id
                     or coordination.generation != selected_generation
                     or coordination.expires_at <= current

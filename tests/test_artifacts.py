@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,7 +13,6 @@ from charlie_pinboard.adapters.files.artifacts import (
 from charlie_pinboard.adapters.files.file_io import DurableFile, FileIOError, resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import StorageError, initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.artifacts import accept_reference
 from charlie_pinboard.application.stored_state import ArtifactKind
 from charlie_pinboard.domain.identifiers import ItemId
 from charlie_pinboard.domain.model import ArtifactRole
@@ -28,22 +28,21 @@ class ArtifactPersistenceTest(unittest.TestCase):
         store.initialize_state(complete_sqlite_state())
         published = write_revision(
             roots,
-            NewArtifact(ArtifactKind.EVIDENCE, "legacy-work-review", 1, ".md", b"ready\n"),
+            NewArtifact(ArtifactKind.EVIDENCE, "intake-work-review", 1, ".md", b"ready\n"),
         )
 
-        accepted = accept_reference(
-            store,
+        accepted = store.accept_artifact_reference(
             roots.work_root,
             published,
             SQLITE_NOW,
-            item_id=ItemId("legacy-work"),
+            item_id=ItemId("intake-work"),
             role=ArtifactRole.EVIDENCE,
         )
 
         reloaded = SQLiteWorkStore(roots.database_path).snapshot()
-        self.assertIn(accepted, reloaded.artifacts.references)
+        self.assertIn(accepted, reloaded.artifact_references)
         self.assertEqual(
-            ["legacy-work", "work-a"],
+            ["intake-work", "work-a"],
             [str(value.item_id) for value in reloaded.lifecycle.item_artifacts],
         )
 
@@ -58,8 +57,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             NewArtifact(ArtifactKind.EVIDENCE, "review-a", 1, ".md", b"ready\n"),
         )
 
-        accepted = accept_reference(
-            store,
+        accepted = store.accept_artifact_reference(
             roots.work_root,
             published,
             SQLITE_NOW,
@@ -68,7 +66,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         )
 
         reloaded = SQLiteWorkStore(roots.database_path).snapshot()
-        self.assertIn(accepted, reloaded.artifacts.references)
+        self.assertIn(accepted, reloaded.artifact_references)
         self.assertEqual(13, reloaded.lifecycle.project.revision)
         self.assertTrue(
             any(link.artifact_ref_id == accepted.artifact_ref_id for link in reloaded.lifecycle.item_artifacts)
@@ -98,9 +96,9 @@ class ArtifactPersistenceTest(unittest.TestCase):
         )
 
         for changed in (
-            reference.with_selector("../outside"),
-            reference.with_size(reference.size_bytes + 1),
-            reference.with_digest("0" * 64),
+            replace(reference, selector="../outside"),
+            replace(reference, size_bytes=reference.size_bytes + 1),
+            replace(reference, content_sha256="0" * 64),
         ):
             with self.subTest(reference=changed), self.assertRaises(ArtifactError):
                 verify_reference(roots.work_root, changed)
@@ -132,7 +130,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             "artifacts/briefs/brief/1.md/extra",
         ):
             with self.subTest(selector=selector), self.assertRaises(ArtifactError):
-                verify_reference(roots.work_root, published.with_selector(selector))
+                verify_reference(roots.work_root, replace(published, selector=selector))
 
         with (
             patch(
@@ -165,24 +163,22 @@ class ArtifactPersistenceTest(unittest.TestCase):
             roots,
             NewArtifact(ArtifactKind.EVIDENCE, "review-reuse", 1, ".md", b"ready\n"),
         )
-        accepted = accept_reference(
-            store,
+        accepted = store.accept_artifact_reference(
             roots.work_root,
             published,
             SQLITE_NOW,
             item_id=ItemId("work-a"),
             role=ArtifactRole.EVIDENCE,
         )
-        self.assertEqual(accepted, accept_reference(store, roots.work_root, published, SQLITE_NOW))
+        self.assertEqual(accepted, store.accept_artifact_reference(roots.work_root, published, SQLITE_NOW))
 
         later_link = write_revision(
             roots,
             NewArtifact(ArtifactKind.EVIDENCE, "review-linked-later", 1, ".md", b"ready\n"),
         )
-        initially_unlinked = accept_reference(store, roots.work_root, later_link, SQLITE_NOW)
+        initially_unlinked = store.accept_artifact_reference(roots.work_root, later_link, SQLITE_NOW)
         before_link = store.snapshot()
-        linked = accept_reference(
-            store,
+        linked = store.accept_artifact_reference(
             roots.work_root,
             later_link,
             SQLITE_NOW,
@@ -201,7 +197,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             )
         )
         with self.assertRaises(StorageError):
-            accept_reference(store, roots.work_root, later_link, SQLITE_NOW, item_id=ItemId("work-a"))
+            store.accept_artifact_reference(roots.work_root, later_link, SQLITE_NOW, item_id=ItemId("work-a"))
 
         for item_id, role in (
             (ItemId("work-a"), None),
@@ -214,8 +210,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             )
             before = store.snapshot()
             with self.subTest(item_id=item_id, role=role), self.assertRaises(StorageError):
-                accept_reference(
-                    store,
+                store.accept_artifact_reference(
                     roots.work_root,
                     candidate,
                     SQLITE_NOW,

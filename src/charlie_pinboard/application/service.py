@@ -15,7 +15,6 @@ from charlie_pinboard.application.mutations import (
 )
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.stored_state import (
-    CoordinationLeaseState,
     StoredCoordinationLease,
     StoredWorkState,
     TransitionHistoryActionKind,
@@ -90,7 +89,7 @@ def change_coordination_authority(
             after_authority.generation,
             after_authority.acquired_at,
             after_authority.expires_at,
-            CoordinationLeaseState(after_authority.state.value),
+            after_authority.state,
         )
         match operation:
             case AcquireCoordinationAuthority(acquired_at=decided_at):
@@ -116,7 +115,7 @@ def change_coordination_authority(
         )
         receipt = MutationReceipt(
             transition,
-            HistoryId(1 + max((int(value.history_id) for value in before.history.receipts), default=0)),
+            HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
             before.lifecycle.project.revision + 1,
             TransitionHistoryActionKind.CONTINUE,
             HistorySubjectId("ledger"),
@@ -251,7 +250,7 @@ def change_attempt_authority(
         )
         receipt = MutationReceipt(
             transition,
-            HistoryId(1 + max((int(value.history_id) for value in before.history.receipts), default=0)),
+            HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
             before.lifecycle.project.revision + 1,
             TransitionHistoryActionKind.CONTINUE,
             HistorySubjectId(attempt_id),
@@ -301,7 +300,7 @@ def create_proposal(
         )
         receipt = MutationReceipt(
             transition,
-            HistoryId(1 + max((int(value.history_id) for value in before.history.receipts), default=0)),
+            HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
             project.revision + 1,
             TransitionHistoryActionKind.INSPECT,
             HistorySubjectId(intake.proposal_id),

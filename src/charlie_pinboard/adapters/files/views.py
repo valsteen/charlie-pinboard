@@ -135,7 +135,7 @@ def _history(state: StoredWorkState) -> bytes:
         + "# Transition History\n\n"
         + "| History | Revision | Action | Subject | Committed |\n"
         + "| --- | --- | --- | --- | --- |\n"
-        + "".join(_history_row(receipt) for receipt in state.history.receipts)
+        + "".join(_history_row(receipt) for receipt in state.transition_receipts)
     ).encode()
 
 

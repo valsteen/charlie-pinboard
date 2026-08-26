@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -5,26 +6,22 @@ from charlie_pinboard.adapters.files.file_io import FileIOError, ensure_director
 from charlie_pinboard.adapters.files.views import rebuild
 from charlie_pinboard.adapters.sqlite.database import OpenMode, StorageError, initialize_database, open_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.registration import InitializationError, InitReceipt
-
-_CONFLICTING_STATE_SELECTORS = (
-    "authority.json",
-    "queue.md",
-    "current.md",
-    "coordinator.json",
-    "v2",
-    "legacy-v1",
-    "legacy-v2",
-)
 
 
-def _reject_conflicting_state(work_root: Path) -> None:
-    existing = tuple(selector for selector in _CONFLICTING_STATE_SELECTORS if (work_root / selector).exists())
-    if existing:
-        raise InitializationError(
-            "WORK_STATE_CONFLICT",
-            f"Fresh SQLite initialization refuses conflicting state files: {', '.join(existing)}.",
-        )
+class InitializationError(RuntimeError):
+    code: str
+
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(f"{code}: {message}")
+
+
+@dataclass(frozen=True, slots=True)
+class InitReceipt:
+    work_root: Path
+    database_path: Path
+    project_revision: int
+    resumed: bool
 
 
 def initialize_work_state(
@@ -35,7 +32,6 @@ def initialize_work_state(
 ) -> InitReceipt:
     try:
         roots = resolve_durable_roots(project_root, work_root)
-        _reject_conflicting_state(roots.work_root)
         resumed = roots.database_path.exists()
         current = now or datetime.now(UTC)
         if resumed:

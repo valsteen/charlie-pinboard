@@ -63,6 +63,13 @@ class ProposalRelationKind(Enum):
     CONTRADICTION = "contradiction"
 
 
+class ProposalDispositionKind(Enum):
+    ACCEPTED = "accepted"
+    MERGED = "merged"
+    RETURNED = "returned"
+    REJECTED = "rejected"
+
+
 @dataclass(frozen=True, slots=True)
 class WorkItem:
     item: ItemId

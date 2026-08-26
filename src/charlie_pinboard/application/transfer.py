@@ -19,7 +19,8 @@ from charlie_pinboard.adapters.sqlite.database import (
 )
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
-from charlie_pinboard.application.stored_state import AttemptLeaseState, CoordinationLeaseState
+from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
+from charlie_pinboard.domain.model import CoordinationLeaseStatus
 
 
 class PortableCopyError(RuntimeError):
@@ -53,12 +54,12 @@ def _row_integer(row: sqlite3.Row, key: str | int) -> int:
 def _quiescent_source(store: SQLiteWorkStore) -> None:
     state = store.snapshot()
     coordination = state.authority.coordination
-    if coordination is not None and coordination.state == CoordinationLeaseState.ACTIVE:
+    if coordination is not None and coordination.state == CoordinationLeaseStatus.ACTIVE:
         raise PortableCopyError(
             "PORTABLE_COPY_SOURCE_NOT_QUIESCENT",
             "The source has active coordination authority.",
         )
-    if any(lease.state == AttemptLeaseState.ACTIVE for lease in state.authority.attempt_leases):
+    if any(lease.state == AttemptLeaseStatus.ACTIVE for lease in state.authority.attempt_leases):
         raise PortableCopyError(
             "PORTABLE_COPY_SOURCE_NOT_QUIESCENT",
             "The source has active attempt authority.",
@@ -77,7 +78,7 @@ def _exists(path: Path) -> bool:
 
 def _copy_artifacts(source_work_root: Path, staging_roots: DurableRoots) -> int:
     state = SQLiteWorkStore(source_work_root / "state.sqlite3").snapshot()
-    for reference in state.artifacts.references:
+    for reference in state.artifact_references:
         verify_reference(source_work_root, reference)
         source = source_work_root / reference.selector
         try:
@@ -104,7 +105,7 @@ def _copy_artifacts(source_work_root: Path, staging_roots: DurableRoots) -> int:
                 "STORAGE_INVARIANT_VIOLATION",
                 f"Copied artifact changed identity: {reference.selector}",
             )
-    return len(state.artifacts.references)
+    return len(state.artifact_references)
 
 
 def _neutralize(database: Path, now: datetime) -> tuple[int, int, int, int]:
@@ -134,7 +135,7 @@ def _neutralize(database: Path, now: datetime) -> tuple[int, int, int, int]:
                     history_id, project_revision, action_id, action_kind, subject_id, artifact_ref_id,
                     artifact_kind, authorization_kind, actor_task_id, actor_host_id, input_schema,
                     input_json, outcome_schema, outcome_json, committed_at
-                ) VALUES (?, ?, ?, 'portable-copy', 'ledger', NULL, NULL, 'migration',
+                ) VALUES (?, ?, ?, 'portable-copy', 'ledger', NULL, NULL, 'portable-copy',
                           'portable-copy', NULL, 'portable-copy-input/v1', ?,
                           'portable-copy-outcome/v1', ?, ?)
                 """,
@@ -238,7 +239,7 @@ def create_portable_copy(source_work_root: Path, destination_work_root: Path) ->
         )
         destination_store = SQLiteWorkStore(staging_roots.database_path)
         destination_state = destination_store.snapshot()
-        for reference in destination_state.artifacts.references:
+        for reference in destination_state.artifact_references:
             verify_reference(staging, reference)
         rebuilt = rebuild(destination_store, staging)
         if rebuilt.warning is not None:

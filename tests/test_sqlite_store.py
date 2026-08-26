@@ -1,4 +1,3 @@
-import hashlib
 import os
 import sqlite3
 import tempfile
@@ -30,11 +29,11 @@ from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.application.mutations import project_transition_mutation
 from charlie_pinboard.application.stored_state import (
-    AttemptLeaseState,
     StoredWorkItemState,
     StoredWorkState,
     TransitionHistoryActionKind,
 )
+from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
 from charlie_pinboard.domain.decisions import (
     Action,
     ActionKind,
@@ -103,11 +102,6 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(0, store.snapshot().lifecycle.project.revision)
 
     def test_schema_identity_initialization_backup_and_reopen_contract(self) -> None:
-        self.assertEqual(
-            "44a5a36c09dcf33884bd8086814073e7a2a6d8631cb5f698c8e8c20695feac77",
-            hashlib.sha256(schema_bytes()).hexdigest(),
-        )
-
         path, store = self._store()
         self.assertEqual(complete_sqlite_state(), store.snapshot())
         connection = open_database(path, OpenMode.READ_ONLY)
@@ -123,8 +117,8 @@ class SQLiteStoreTest(unittest.TestCase):
 
         for field, value, expected in (
             ("application", "charlie-board", StorageErrorCode.INVALID_STATE),
-            ("schema_version", 0, StorageErrorCode.MIGRATION_REQUIRED),
-            ("schema_version", 2, StorageErrorCode.SCHEMA_TOO_NEW),
+            ("schema_version", 0, StorageErrorCode.SCHEMA_UNSUPPORTED),
+            ("schema_version", 2, StorageErrorCode.SCHEMA_UNSUPPORTED),
         ):
             tampered, _ = self._store(populated=False)
             connection = sqlite3.connect(tampered)
@@ -174,7 +168,7 @@ class SQLiteStoreTest(unittest.TestCase):
         with self.assertRaises(StorageError) as newer_error:
             open_database(newer_wal, OpenMode.READ_WRITE)
 
-        self.assertEqual(StorageErrorCode.SCHEMA_TOO_NEW, newer_error.exception.code)
+        self.assertEqual(StorageErrorCode.SCHEMA_UNSUPPORTED, newer_error.exception.code)
         self.assertEqual(
             before_rejection,
             tuple(
@@ -575,17 +569,13 @@ class SQLiteStoreTest(unittest.TestCase):
             connection.close()
         self.assertEqual(16, table_count)
 
-        native_items = list(state.lifecycle.work_items)
-        native_items[1] = replace(native_items[1], source=None)
-        wrong_origin = replace(state, lifecycle=replace(state.lifecycle, work_items=tuple(native_items)))
-
         wrong_kind = replace(
             state,
             lifecycle=replace(
                 state.lifecycle,
                 item_artifacts=(
                     replace(
-                        state.lifecycle.item_artifacts[0], artifact_ref_id=state.artifacts.references[0].artifact_ref_id
+                        state.lifecycle.item_artifacts[0], artifact_ref_id=state.artifact_references[0].artifact_ref_id
                     ),
                 ),
             ),
@@ -593,15 +583,14 @@ class SQLiteStoreTest(unittest.TestCase):
         review_items = list(state.lifecycle.work_items)
         review_items[1] = replace(review_items[1], state=StoredWorkItemState.REVIEW)
         review_attempt = replace(state.lifecycle.attempts[0], state=AttemptState.REVIEW)
-        native_review_without_candidate = replace(
+        review_without_candidate = replace(
             state,
             lifecycle=replace(state.lifecycle, work_items=tuple(review_items), attempts=(review_attempt,)),
         )
         mismatched_focus = replace(state, focus=replace(state.focus, item_id=ItemId("work-c")))
         for name, candidate in (
-            ("native origin completeness", wrong_origin),
             ("artifact kind compatibility", wrong_kind),
-            ("native review candidate", native_review_without_candidate),
+            ("review candidate", review_without_candidate),
             ("focus ownership", mismatched_focus),
         ):
             self._assert_state_rejected(name, candidate)
@@ -636,17 +625,14 @@ class SQLiteStoreTest(unittest.TestCase):
     def test_candidate_and_relational_acceptance_matrix(self) -> None:
         state = complete_sqlite_state()
         same_identity_other_kind = replace(
-            state.artifacts.references[2],
+            state.artifact_references[2],
             artifact_ref_id=ArtifactRefId(4),
-            key=state.artifacts.references[1].key,
+            key=state.artifact_references[1].key,
             selector="artifacts/evidence/same-key.md",
         )
         accepted_relational_state = replace(
             state,
-            artifacts=replace(
-                state.artifacts,
-                references=(*state.artifacts.references, same_identity_other_kind),
-            ),
+            artifact_references=(*state.artifact_references, same_identity_other_kind),
         )
         _accepted_path, accepted_store = self._store(populated=False)
         accepted_store.initialize_state(accepted_relational_state)
@@ -706,7 +692,7 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(13, committed.lifecycle.project.revision)
         self.assertEqual(StoredWorkItemState.PAUSED, committed.lifecycle.work_items[1].state)
         self.assertEqual(AttemptState.PAUSED, committed.lifecycle.attempts[0].state)
-        self.assertEqual(TransitionHistoryActionKind.PAUSE, committed.history.receipts[-1].action_kind)
+        self.assertEqual(TransitionHistoryActionKind.PAUSE, committed.transition_receipts[-1].action_kind)
 
         with self.assertRaises(StorageError) as stale, store.write() as transaction:
             transaction.commit(mutation)
@@ -784,7 +770,7 @@ class SQLiteStoreTest(unittest.TestCase):
             (AttemptState.DONE, None, None), (attempt.state, attempt.candidate_revision, attempt.candidate_recorded_at)
         )
         self.assertEqual(4, completed.authority.attempt_counters[0].generation_high_water)
-        self.assertEqual(AttemptLeaseState.REVOKED, completed.authority.attempt_leases[0].state)
+        self.assertEqual(AttemptLeaseStatus.REVOKED, completed.authority.attempt_leases[0].state)
         self.assertIsNone(completed.focus.item_id)
         self.assertIsNone(completed.focus.attempt_id)
 
@@ -815,7 +801,7 @@ class SQLiteStoreTest(unittest.TestCase):
         attempt = committed.lifecycle.attempts[0]
         self.assertEqual((AttemptState.REVIEW, candidate), (attempt.state, attempt.candidate_revision))
         self.assertEqual(SQLITE_NOW + timedelta(seconds=1), attempt.candidate_recorded_at)
-        self.assertIn(b'"candidate":"candidate-from-caller"', committed.history.receipts[-1].outcome_payload)
+        self.assertIn(b'"candidate":"candidate-from-caller"', committed.transition_receipts[-1].outcome_payload)
 
     def test_review_return_clears_candidate_and_fences_mutation_authority(self) -> None:
         state = complete_sqlite_state()

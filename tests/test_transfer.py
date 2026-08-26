@@ -11,16 +11,15 @@ from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.service import change_attempt_authority
 from charlie_pinboard.application.stored_state import (
-    AttemptLeaseState,
-    CoordinationLeaseState,
     TransitionHistoryActionKind,
 )
 from charlie_pinboard.application.transfer import PortableCopyError, create_portable_copy
 from charlie_pinboard.domain.authority_decisions import (
+    AttemptLeaseStatus,
     RenewAttemptAuthority,
 )
 from charlie_pinboard.domain.errors import DecisionFailure
-from charlie_pinboard.domain.model import CommandAttemptAuthority
+from charlie_pinboard.domain.model import CommandAttemptAuthority, CoordinationLeaseStatus
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -31,7 +30,7 @@ class PortableCopyTest(unittest.TestCase):
         initialize_database(roots, SQLITE_NOW)
         state = complete_sqlite_state()
         references = []
-        for reference in state.artifacts.references:
+        for reference in state.artifact_references:
             content = f"portable artifact {reference.key}\n".encode()
             published = write_revision(
                 roots,
@@ -53,14 +52,14 @@ class PortableCopyTest(unittest.TestCase):
                     state.authority,
                     coordination=replace(
                         state.authority.coordination,
-                        state=CoordinationLeaseState.RELEASED,
+                        state=CoordinationLeaseStatus.RELEASED,
                     ),
                     attempt_leases=tuple(
-                        replace(lease, state=AttemptLeaseState.RELEASED) for lease in state.authority.attempt_leases
+                        replace(lease, state=AttemptLeaseStatus.RELEASED) for lease in state.authority.attempt_leases
                     ),
                 ),
             )
-        state = replace(state, artifacts=replace(state.artifacts, references=tuple(references)))
+        state = replace(state, artifact_references=tuple(references))
         store = SQLiteWorkStore(roots.database_path)
         store.initialize_state(state)
         return roots.work_root, store
@@ -88,19 +87,19 @@ class PortableCopyTest(unittest.TestCase):
         self.assertEqual(source_state.lifecycle.item_artifacts, copied.lifecycle.item_artifacts)
         self.assertEqual(source_state.lifecycle.attempts, copied.lifecycle.attempts)
         self.assertEqual(source_state.proposals, copied.proposals)
-        self.assertEqual(source_state.artifacts, copied.artifacts)
+        self.assertEqual(source_state.artifact_references, copied.artifact_references)
         self.assertTrue(
             copied.authority.coordination is None
-            or copied.authority.coordination.state != CoordinationLeaseState.ACTIVE
+            or copied.authority.coordination.state != CoordinationLeaseStatus.ACTIVE
         )
-        self.assertTrue(all(lease.state != AttemptLeaseState.ACTIVE for lease in copied.authority.attempt_leases))
+        self.assertTrue(all(lease.state != AttemptLeaseStatus.ACTIVE for lease in copied.authority.attempt_leases))
         self.assertEqual(source_state.lifecycle.project.host_epoch + 1, copied.lifecycle.project.host_epoch)
         self.assertEqual(source_state.lifecycle.project.revision + 1, copied.lifecycle.project.revision)
-        self.assertEqual(TransitionHistoryActionKind.PORTABLE_COPY, copied.history.receipts[-1].action_kind)
+        self.assertEqual(TransitionHistoryActionKind.PORTABLE_COPY, copied.transition_receipts[-1].action_kind)
         self.assertEqual(source_state.lifecycle.project.revision, receipt.source_revision)
         self.assertEqual(copied.lifecycle.project.revision, receipt.destination_revision)
-        self.assertEqual(len(source_state.artifacts.references), receipt.artifacts_copied)
-        for reference in copied.artifacts.references:
+        self.assertEqual(len(source_state.artifact_references), receipt.artifacts_copied)
+        for reference in copied.artifact_references:
             verify_reference(destination, reference)
         self.assertTrue((destination / "views" / "queue.md").is_file())
         self.assertTrue((destination / "views" / "attempts" / "work-a-1.md").is_file())
@@ -147,7 +146,7 @@ class PortableCopyTest(unittest.TestCase):
         self.assertEqual(b"existing destination", sentinel.read_bytes())
 
         missing_destination = destination_parent / "missing-artifact-copy"
-        missing = source / source_store.snapshot().artifacts.references[0].selector
+        missing = source / source_store.snapshot().artifact_references[0].selector
         missing.unlink()
         with self.assertRaises(PortableCopyError) as artifact:
             create_portable_copy(source, missing_destination)

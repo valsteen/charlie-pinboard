@@ -34,6 +34,7 @@ from charlie_pinboard.domain.model import (
     ItemScope,
     LedgerSnapshot,
     MergeProposalInput,
+    ProposalDispositionKind,
     ReasonInput,
     ResumeInput,
     ScopeDependency,
@@ -446,13 +447,6 @@ class AttemptChange:
     branch: str | None = None
     base_revision: str | None = None
     owner: str | None = None
-
-
-class ProposalDispositionKind(Enum):
-    ACCEPTED = "accepted"
-    MERGED = "merged"
-    RETURNED = "returned"
-    REJECTED = "rejected"
 
 
 @dataclass(frozen=True, slots=True)

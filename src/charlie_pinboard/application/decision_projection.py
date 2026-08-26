@@ -2,8 +2,6 @@ from datetime import datetime
 from typing import assert_never
 
 from charlie_pinboard.application.stored_state import (
-    AttemptLeaseState,
-    CoordinationLeaseState,
     ItemArtifactLink,
     ItemDependency,
     ProposalEvidence,
@@ -60,12 +58,12 @@ def project_inactive_attempt_authority(
             DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
             "The retained attempt generation has no exact identity anchor.",
         )
-    if lease.state == AttemptLeaseState.ACTIVE:
+    if lease.state == AttemptLeaseStatus.ACTIVE:
         if lease.expires_at > now:
             return DecisionFailure(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "Attempt authority remains live.")
         status = AttemptLeaseStatus.EXPIRED
-    elif lease.state in {AttemptLeaseState.RELEASED, AttemptLeaseState.REVOKED}:
-        status = AttemptLeaseStatus(lease.state.value)
+    elif lease.state in {AttemptLeaseStatus.RELEASED, AttemptLeaseStatus.REVOKED}:
+        status = lease.state
     else:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "Attempt authority is not inactive.")
     return InactiveAttemptAuthority(
@@ -156,7 +154,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         )
         for item in state.lifecycle.work_items
     }
-    artifact_by_id = {artifact.artifact_ref_id: artifact for artifact in state.artifacts.references}
+    artifact_by_id = {artifact.artifact_ref_id: artifact for artifact in state.artifact_references}
     artifacts_by_item = {
         item.item_id: tuple(
             ScopeArtifact(
@@ -219,7 +217,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             lease.attempt_id,
             attempt_by_id[lease.attempt_id].item_id,
             attempt_anchors[(lease.attempt_id, lease.generation)].lease_id
-            if lease.state == AttemptLeaseState.ACTIVE
+            if lease.state == AttemptLeaseStatus.ACTIVE
             else None,
             lease.generation,
         )
@@ -245,7 +243,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             lease.expires_at,
         )
         for lease in state.authority.attempt_leases
-        if lease.state == AttemptLeaseState.ACTIVE
+        if lease.state == AttemptLeaseStatus.ACTIVE
         for anchor in (attempt_anchors[(lease.attempt_id, lease.generation)],)
     )
     coordination_authority = (
@@ -258,7 +256,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             state.authority.coordination.expires_at,
         )
         if state.authority.coordination is not None
-        and state.authority.coordination.state == CoordinationLeaseState.ACTIVE
+        and state.authority.coordination.state == CoordinationLeaseStatus.ACTIVE
         else None
     )
 
@@ -279,7 +277,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             for attempt in state.lifecycle.attempts
         ),
         artifacts=tuple(
-            ArtifactRecord(artifact.artifact_ref_id, artifact.kind.value) for artifact in state.artifacts.references
+            ArtifactRecord(artifact.artifact_ref_id, artifact.kind.value) for artifact in state.artifact_references
         ),
         proposals=tuple(
             ProposalRecord(

@@ -25,8 +25,7 @@ class StorageErrorCode(Enum):
     BUSY = "STORAGE_BUSY"
     INVARIANT_VIOLATION = "STORAGE_INVARIANT_VIOLATION"
     INVALID_STATE = "WORK_STATE_INVALID"
-    MIGRATION_REQUIRED = "MIGRATION_REQUIRED"
-    SCHEMA_TOO_NEW = "SCHEMA_TOO_NEW"
+    SCHEMA_UNSUPPORTED = "SCHEMA_UNSUPPORTED"
     IO_ERROR = "STORAGE_IO_ERROR"
     OPERATION_FAILED = "STORAGE_OPERATION_FAILED"
     STALE_WRITE = "ACTION_NOT_AVAILABLE"
@@ -145,13 +144,11 @@ def _verify_current_schema(connection: sqlite3.Connection) -> None:
             StorageErrorCode.INVALID_STATE,
             f"The database belongs to application {application!r}, not {APPLICATION!r}.",
         )
-    if version < SCHEMA_VERSION:
+    if version != SCHEMA_VERSION:
         raise StorageError(
-            StorageErrorCode.MIGRATION_REQUIRED,
-            f"Schema sqlite-v{version} requires an explicit migration to {SCHEMA_ID}.",
+            StorageErrorCode.SCHEMA_UNSUPPORTED,
+            f"Schema sqlite-v{version} is not the supported {SCHEMA_ID} schema.",
         )
-    if version > SCHEMA_VERSION:
-        raise StorageError(StorageErrorCode.SCHEMA_TOO_NEW, f"Schema sqlite-v{version} is newer than {SCHEMA_ID}.")
     try:
         if _schema_signature(connection) != _expected_schema_signature():
             raise StorageError(StorageErrorCode.INVALID_STATE, "The database does not have the exact current schema.")

@@ -3,6 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
+from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -19,13 +20,11 @@ from charlie_pinboard.domain.model import (
     ArtifactRole,
     AttemptState,
     CanonicalJson,
+    CoordinationLeaseStatus,
+    ProposalDispositionKind,
+    ProposalRelationKind,
     Timing,
 )
-
-
-class OriginKind(Enum):
-    NATIVE = "native"
-    LEGACY_IMPORT = "legacy-import"
 
 
 class ArtifactKind(Enum):
@@ -49,34 +48,6 @@ class StoredWorkItemState(Enum):
     DONE = "done"
     SUPERSEDED = "superseded"
     DROPPED = "dropped"
-
-
-class ProposalRelation(Enum):
-    INDEPENDENT = "independent"
-    PREREQUISITE = "prerequisite"
-    FOLLOW_UP = "follow-up"
-    DUPLICATE = "duplicate"
-    CONTRADICTION = "contradiction"
-
-
-class ProposalDisposition(Enum):
-    ACCEPTED = "accepted"
-    MERGED = "merged"
-    RETURNED = "returned"
-    REJECTED = "rejected"
-
-
-class CoordinationLeaseState(Enum):
-    ACTIVE = "active"
-    RELEASED = "released"
-    REVOKED = "revoked"
-
-
-class AttemptLeaseState(Enum):
-    ACTIVE = "active"
-    RELEASED = "released"
-    REVOKED = "revoked"
-    EXPIRED = "expired"
 
 
 class TransitionHistoryActionKind(Enum):
@@ -109,7 +80,7 @@ class TransitionHistoryAuthorizationKind(Enum):
     COORDINATOR = "coordinator"
     COORDINATION = "coordination"
     ATTEMPT = "attempt"
-    MIGRATION = "migration"
+    PORTABLE_COPY = "portable-copy"
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +109,6 @@ class ArtifactReference:
 @dataclass(frozen=True, slots=True)
 class StoredWorkItem:
     item_id: ItemId
-    origin: OriginKind
     user_label: str
     state: StoredWorkItemState
     timing: Timing | None
@@ -153,8 +123,6 @@ class StoredWorkItem:
     scope_revision: int
     scope_digest: str
     subject_revision: int
-    origin_created_at: datetime | None
-    origin_updated_at: datetime | None
     recorded_at: datetime
     updated_at: datetime
 
@@ -187,7 +155,6 @@ class ItemArtifactLink:
 class StoredAttempt:
     attempt_id: AttemptId
     item_id: ItemId
-    origin: OriginKind
     state: AttemptState
     branch: str
     base_revision: str
@@ -200,8 +167,6 @@ class StoredAttempt:
     accepted_scope_revision: int
     accepted_scope_digest: str
     subject_revision: int
-    origin_created_at: datetime | None
-    origin_updated_at: datetime | None
     recorded_at: datetime
     updated_at: datetime
 
@@ -209,23 +174,21 @@ class StoredAttempt:
 @dataclass(frozen=True, slots=True)
 class StoredProposal:
     proposal_id: ProposalId
-    origin: OriginKind
     created_at: datetime
     recorded_at: datetime
     source_task_id: TaskId
     user_label: str
     trigger: str
     why_it_matters: str
-    relation: ProposalRelation
+    relation: ProposalRelationKind
     relation_item_id: ItemId | None
     effect: str
     unlock: str
     urgency_evidence: str
-    disposition: ProposalDisposition | None
+    disposition: ProposalDispositionKind | None
     disposition_target_item_id: ItemId | None
     disposition_reason: str | None
     subject_revision: int
-    origin_disposed_at: datetime | None
     disposition_recorded_at: datetime | None
 
 
@@ -251,7 +214,7 @@ class StoredCoordinationLease:
     generation: int
     acquired_at: datetime
     expires_at: datetime
-    state: CoordinationLeaseState
+    state: CoordinationLeaseStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,7 +238,7 @@ class StoredAttemptLease:
     generation: int
     acquired_at: datetime
     expires_at: datetime
-    state: AttemptLeaseState
+    state: AttemptLeaseStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,11 +285,6 @@ class ProposalRecords:
 
 
 @dataclass(frozen=True, slots=True)
-class ArtifactRecords:
-    references: tuple[ArtifactReference, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class AuthorityRecords:
     coordination: StoredCoordinationLease | None = None
     attempt_counters: tuple[AttemptLeaseCounter, ...] = ()
@@ -335,15 +293,10 @@ class AuthorityRecords:
 
 
 @dataclass(frozen=True, slots=True)
-class HistoryRecords:
-    receipts: tuple[StoredTransitionReceipt, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class StoredWorkState:
     lifecycle: LifecycleRecords
     proposals: ProposalRecords
-    artifacts: ArtifactRecords
+    artifact_references: tuple[ArtifactReference, ...]
     authority: AuthorityRecords
-    history: HistoryRecords
+    transition_receipts: tuple[StoredTransitionReceipt, ...]
     focus: StoredFocus

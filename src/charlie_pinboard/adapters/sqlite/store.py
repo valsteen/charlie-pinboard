@@ -32,26 +32,19 @@ from charlie_pinboard.application.mutations import (
 )
 from charlie_pinboard.application.stored_state import (
     ArtifactKind,
-    ArtifactRecords,
     ArtifactReference,
     AttemptLeaseCounter,
     AttemptLeaseGeneration,
-    AttemptLeaseState,
     AuthorityRecords,
     CanonicalJson,
-    CoordinationLeaseState,
-    HistoryRecords,
     ItemArtifactLink,
     ItemDependency,
     ItemScopeRevision,
     LifecycleRecords,
-    OriginKind,
     ProjectRecord,
-    ProposalDisposition,
     ProposalEvidence,
     ProposalFreshness,
     ProposalRecords,
-    ProposalRelation,
     StoredAttempt,
     StoredAttemptLease,
     StoredCoordinationLease,
@@ -64,6 +57,7 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
+from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
 from charlie_pinboard.domain.decisions import (
     TransitionReceipt,
 )
@@ -82,6 +76,9 @@ from charlie_pinboard.domain.identifiers import (
 from charlie_pinboard.domain.model import (
     ArtifactRole,
     AttemptState,
+    CoordinationLeaseStatus,
+    ProposalDispositionKind,
+    ProposalRelationKind,
     Timing,
 )
 
@@ -212,7 +209,6 @@ class _StoredStateReader:
         items = tuple(
             StoredWorkItem(
                 ItemId(_text(row, "item_id")),
-                _enum_value(OriginKind, row, "origin_kind"),
                 _text(row, "user_label"),
                 _enum_value(StoredWorkItemState, row, "state"),
                 None if (timing := _optional_text(row, "timing")) is None else Timing(timing),
@@ -227,8 +223,6 @@ class _StoredStateReader:
                 _integer(row, "scope_revision"),
                 _text(row, "scope_digest"),
                 _integer(row, "subject_revision"),
-                _optional_time(row, "origin_created_at"),
-                _optional_time(row, "origin_updated_at"),
                 _time(row, "recorded_at"),
                 _time(row, "updated_at"),
             )
@@ -272,7 +266,6 @@ class _StoredStateReader:
                 StoredAttempt(
                     AttemptId(_text(row, "attempt_id")),
                     ItemId(_text(row, "item_id")),
-                    _enum_value(OriginKind, row, "origin_kind"),
                     _enum_value(AttemptState, row, "state"),
                     _text(row, "branch"),
                     _text(row, "base_revision"),
@@ -289,8 +282,6 @@ class _StoredStateReader:
                     _integer(row, "accepted_scope_revision"),
                     _text(row, "accepted_scope_digest"),
                     _integer(row, "subject_revision"),
-                    _optional_time(row, "origin_created_at"),
-                    _optional_time(row, "origin_updated_at"),
                     _time(row, "recorded_at"),
                     _time(row, "updated_at"),
                 )
@@ -301,25 +292,23 @@ class _StoredStateReader:
         proposals = tuple(
             StoredProposal(
                 ProposalId(_text(row, "proposal_id")),
-                _enum_value(OriginKind, row, "origin_kind"),
                 _time(row, "created_at"),
                 _time(row, "recorded_at"),
                 TaskId(_text(row, "source_task_id")),
                 _text(row, "user_label"),
                 _text(row, "trigger"),
                 _text(row, "why_it_matters"),
-                _enum_value(ProposalRelation, row, "relation_kind"),
+                _enum_value(ProposalRelationKind, row, "relation_kind"),
                 None if (relation := _optional_text(row, "relation_item_id")) is None else ItemId(relation),
                 _text(row, "effect"),
                 _text(row, "unlock"),
                 _text(row, "urgency_evidence"),
                 None
                 if (disposition := _optional_text(row, "disposition")) is None
-                else ProposalDisposition(disposition),
+                else ProposalDispositionKind(disposition),
                 None if (target := _optional_text(row, "disposition_target_item_id")) is None else ItemId(target),
                 _optional_text(row, "disposition_reason"),
                 _integer(row, "subject_revision"),
-                _optional_time(row, "origin_disposed_at"),
                 _optional_time(row, "disposition_recorded_at"),
             )
             for row in self._rows("SELECT * FROM proposals ORDER BY proposal_id")
@@ -336,22 +325,20 @@ class _StoredStateReader:
         )
         return ProposalRecords(proposals, evidence, freshness)
 
-    def _artifacts(self) -> ArtifactRecords:
-        return ArtifactRecords(
-            tuple(
-                ArtifactReference(
-                    ArtifactRefId(_integer(row, "artifact_ref_id")),
-                    _text(row, "artifact_key"),
-                    _integer(row, "artifact_revision"),
-                    _enum_value(ArtifactKind, row, "kind"),
-                    _text(row, "relative_path"),
-                    _text(row, "content_sha256"),
-                    _integer(row, "size_bytes"),
-                    _integer(row, "accepted_revision"),
-                    _time(row, "created_at"),
-                )
-                for row in self._rows("SELECT * FROM artifact_refs ORDER BY artifact_ref_id")
+    def _artifacts(self) -> tuple[ArtifactReference, ...]:
+        return tuple(
+            ArtifactReference(
+                ArtifactRefId(_integer(row, "artifact_ref_id")),
+                _text(row, "artifact_key"),
+                _integer(row, "artifact_revision"),
+                _enum_value(ArtifactKind, row, "kind"),
+                _text(row, "relative_path"),
+                _text(row, "content_sha256"),
+                _integer(row, "size_bytes"),
+                _integer(row, "accepted_revision"),
+                _time(row, "created_at"),
             )
+            for row in self._rows("SELECT * FROM artifact_refs ORDER BY artifact_ref_id")
         )
 
     def _authority(self) -> AuthorityRecords:
@@ -368,7 +355,7 @@ class _StoredStateReader:
                 _integer(row, "generation"),
                 _time(row, "acquired_at"),
                 _time(row, "expires_at"),
-                _enum_value(CoordinationLeaseState, row, "status"),
+                _enum_value(CoordinationLeaseStatus, row, "status"),
             )
         counters = tuple(
             AttemptLeaseCounter(AttemptId(_text(row, "attempt_id")), _integer(row, "generation_high_water"))
@@ -390,13 +377,13 @@ class _StoredStateReader:
                 _integer(row, "generation"),
                 _time(row, "acquired_at"),
                 _time(row, "expires_at"),
-                _enum_value(AttemptLeaseState, row, "status"),
+                _enum_value(AttemptLeaseStatus, row, "status"),
             )
             for row in self._rows("SELECT * FROM attempt_leases ORDER BY attempt_id")
         )
         return AuthorityRecords(coordination, counters, generations, leases)
 
-    def _history(self) -> HistoryRecords:
+    def _history(self) -> tuple[StoredTransitionReceipt, ...]:
         receipts: list[StoredTransitionReceipt] = []
         for row in self._rows("SELECT * FROM transition_history ORDER BY history_id"):
             artifact_ref = _optional_integer(row, "artifact_ref_id")
@@ -422,7 +409,7 @@ class _StoredStateReader:
                     _time(row, "committed_at"),
                 )
             )
-        return HistoryRecords(tuple(receipts))
+        return tuple(receipts)
 
     def _focus(self) -> StoredFocus:
         rows = self._rows("SELECT * FROM current_focus ORDER BY singleton")
@@ -483,12 +470,12 @@ class _StoredStateWriter:
         if occupied != 0 or current_revision is None or current_revision[0] != 0:
             raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "Initial state requires a new empty database.")
         self._connection.execute("PRAGMA defer_foreign_keys = ON")
-        self._artifacts(state.artifacts)
+        self._artifacts(state.artifact_references)
         self._lifecycle(state.lifecycle)
         self._proposals(state.proposals)
         self._authority(state.authority)
         self._focus(state.focus)
-        self._history(state.history)
+        self._history(state.transition_receipts)
         self._connection.execute(
             """
             UPDATE project_meta
@@ -521,7 +508,7 @@ class _StoredStateWriter:
         self._connection.execute("UPDATE project_meta SET revision = 0")
         self.insert_initial(state)
 
-    def _artifacts(self, records: ArtifactRecords) -> None:
+    def _artifacts(self, records: tuple[ArtifactReference, ...]) -> None:
         self._connection.executemany(
             """
             INSERT INTO artifact_refs (
@@ -541,7 +528,7 @@ class _StoredStateWriter:
                     value.accepted_revision,
                     value.created_at.isoformat(),
                 )
-                for value in records.references
+                for value in records
             ),
         )
 
@@ -549,15 +536,14 @@ class _StoredStateWriter:
         self._connection.executemany(
             """
             INSERT INTO work_items (
-                item_id, origin_kind, user_label, state, timing, source, trigger, why_it_matters,
+                item_id, user_label, state, timing, source, trigger, why_it_matters,
                 effect, unlock, outcome_evidence, next_action, notes, scope_revision, scope_digest,
-                subject_revision, origin_created_at, origin_updated_at, recorded_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                subject_revision, recorded_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             tuple(
                 (
                     value.item_id,
-                    value.origin.value,
                     value.user_label,
                     value.state.value,
                     None if value.timing is None else value.timing.value,
@@ -572,8 +558,6 @@ class _StoredStateWriter:
                     value.scope_revision,
                     value.scope_digest,
                     value.subject_revision,
-                    _timestamp(value.origin_created_at),
-                    _timestamp(value.origin_updated_at),
                     value.recorded_at.isoformat(),
                     value.updated_at.isoformat(),
                 )
@@ -611,18 +595,16 @@ class _StoredStateWriter:
         self._connection.executemany(
             """
             INSERT INTO attempts (
-                attempt_id, item_id, origin_kind, state, branch, base_revision, provenance,
+                attempt_id, item_id, state, branch, base_revision, provenance,
                 brief_artifact_ref_id, brief_artifact_kind, result_artifact_ref_id, result_artifact_kind,
                 blocker_artifact_ref_id, blocker_artifact_kind, candidate_revision, candidate_recorded_at,
-                accepted_scope_revision, accepted_scope_digest, subject_revision, origin_created_at,
-                origin_updated_at, recorded_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'brief', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                accepted_scope_revision, accepted_scope_digest, subject_revision, recorded_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'brief', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             tuple(
                 (
                     value.attempt_id,
                     value.item_id,
-                    value.origin.value,
                     value.state.value,
                     value.branch,
                     value.base_revision,
@@ -637,8 +619,6 @@ class _StoredStateWriter:
                     value.accepted_scope_revision,
                     value.accepted_scope_digest,
                     value.subject_revision,
-                    _timestamp(value.origin_created_at),
-                    _timestamp(value.origin_updated_at),
                     value.recorded_at.isoformat(),
                     value.updated_at.isoformat(),
                 )
@@ -650,16 +630,15 @@ class _StoredStateWriter:
         self._connection.executemany(
             """
             INSERT INTO proposals (
-                proposal_id, origin_kind, created_at, recorded_at, source_task_id, user_label,
+                proposal_id, created_at, recorded_at, source_task_id, user_label,
                 trigger, why_it_matters, relation_kind, relation_item_id, effect, unlock,
                 urgency_evidence, disposition, disposition_target_item_id, disposition_reason,
-                subject_revision, origin_disposed_at, disposition_recorded_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                subject_revision, disposition_recorded_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             tuple(
                 (
                     value.proposal_id,
-                    value.origin.value,
                     value.created_at.isoformat(),
                     value.recorded_at.isoformat(),
                     value.source_task_id,
@@ -675,7 +654,6 @@ class _StoredStateWriter:
                     value.disposition_target_item_id,
                     value.disposition_reason,
                     value.subject_revision,
-                    _timestamp(value.origin_disposed_at),
                     _timestamp(value.disposition_recorded_at),
                 )
                 for value in records.proposals
@@ -749,7 +727,7 @@ class _StoredStateWriter:
             (focus.item_id, focus.attempt_id, focus.next_action, focus.subject_revision),
         )
 
-    def _history(self, records: HistoryRecords) -> None:
+    def _history(self, records: tuple[StoredTransitionReceipt, ...]) -> None:
         self._connection.executemany(
             """
             INSERT INTO transition_history (
@@ -776,7 +754,7 @@ class _StoredStateWriter:
                     _json_text(value.outcome_payload),
                     value.committed_at.isoformat(),
                 )
-                for value in records.receipts
+                for value in records
             ),
         )
 
@@ -870,7 +848,7 @@ class SQLiteWorkStore:
                 existing = next(
                     (
                         value
-                        for value in before.artifacts.references
+                        for value in before.artifact_references
                         if (value.kind, value.key, value.revision)
                         == (published.kind, published.key, published.revision)
                     ),
@@ -890,7 +868,7 @@ class SQLiteWorkStore:
                 else:
                     reference = ArtifactReference(
                         ArtifactRefId(
-                            1 + max((int(value.artifact_ref_id) for value in before.artifacts.references), default=0)
+                            1 + max((int(value.artifact_ref_id) for value in before.artifact_references), default=0)
                         ),
                         published.key,
                         published.revision,
@@ -958,13 +936,8 @@ class SQLiteWorkStore:
                             updated_at=accepted_at,
                         ),
                     ),
-                    artifacts=replace(
-                        before.artifacts,
-                        references=(
-                            before.artifacts.references
-                            if existing is not None
-                            else (*before.artifacts.references, reference)
-                        ),
+                    artifact_references=(
+                        before.artifact_references if existing is not None else (*before.artifact_references, reference)
                     ),
                 )
                 _StoredStateWriter(connection).replace_current(after)

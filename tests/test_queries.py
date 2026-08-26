@@ -10,8 +10,8 @@ from charlie_pinboard.application.actions import ActionQueryError, discover_acti
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.application.queries import (
     QueryError,
+    overview_from_state,
     preview_parallel,
-    read_overview,
 )
 from charlie_pinboard.application.stored_state import (
     StoredWorkState,
@@ -62,7 +62,7 @@ class SQLiteQueriesTest(unittest.TestCase):
     def test_overview_and_parallel_preview_read_only_sqlite_state(self) -> None:
         store = self._store()
 
-        overview = read_overview(store)
+        overview = overview_from_state(store.snapshot())
         preview = preview_parallel(store, now=SQLITE_NOW)
 
         self.assertEqual("sqlite-v1", overview.authority)

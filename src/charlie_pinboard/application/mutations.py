@@ -4,17 +4,11 @@ from typing import assert_never
 from charlie_pinboard.application.stored_state import (
     AttemptLeaseCounter,
     AttemptLeaseGeneration,
-    AttemptLeaseState,
-    CoordinationLeaseState,
-    HistoryRecords,
     ItemDependency,
     ItemScopeRevision,
     LifecycleRecords,
-    OriginKind,
-    ProposalDisposition,
     ProposalEvidence,
     ProposalFreshness,
-    ProposalRelation,
     StoredAttempt,
     StoredAttemptLease,
     StoredFocus,
@@ -28,6 +22,7 @@ from charlie_pinboard.application.stored_state import (
 )
 from charlie_pinboard.domain.authority_decisions import (
     AttemptAuthorityDecision,
+    AttemptLeaseStatus,
     CoordinationAuthorityDecision,
 )
 from charlie_pinboard.domain.decisions import ActionKind, AuthorizationKind, Decision, TransitionReceipt
@@ -211,7 +206,7 @@ def _common_after(mutation: StoredStateMutation) -> StoredWorkState:
     before = mutation.before
     project = before.lifecycle.project
     receipt = mutation.receipt
-    next_history_id = 1 + max((int(value.history_id) for value in before.history.receipts), default=0)
+    next_history_id = 1 + max((int(value.history_id) for value in before.transition_receipts), default=0)
     if int(receipt.history_id) != next_history_id or receipt.project_revision != project.revision + 1:
         raise MutationContractError("The accepted stored receipt does not identify the mutation exactly.")
     stored_receipt = _stored_receipt(mutation)
@@ -221,7 +216,7 @@ def _common_after(mutation: StoredStateMutation) -> StoredWorkState:
             before.lifecycle,
             project=replace(project, revision=project.revision + 1, updated_at=stored_receipt.committed_at),
         ),
-        history=HistoryRecords((*before.history.receipts, stored_receipt)),
+        transition_receipts=(*before.transition_receipts, stored_receipt),
     )
 
 
@@ -245,14 +240,13 @@ def _proposal_creation_after(
     intake = decision.proposal
     proposal = StoredProposal(
         intake.proposal_id,
-        OriginKind.NATIVE,
         intake.created_at,
         mutation.receipt.transition.decided_at,
         intake.source_task_id,
         intake.user_label,
         intake.trigger,
         intake.why_it_matters,
-        ProposalRelation(intake.relation.value),
+        intake.relation,
         intake.relation_item,
         intake.effect,
         intake.unlock,
@@ -261,7 +255,6 @@ def _proposal_creation_after(
         None,
         None,
         mutation.receipt.project_revision,
-        None,
         None,
     )
     if any(value.proposal_id == intake.proposal_id for value in common.proposals.proposals):
@@ -335,7 +328,6 @@ def _transition_item_after(
         items.append(
             StoredWorkItem(
                 accepted.item,
-                OriginKind.NATIVE,
                 accepted.user_label,
                 StoredWorkItemState(accepted.state.value),
                 accepted.timing,
@@ -350,8 +342,6 @@ def _transition_item_after(
                 1,
                 accepted.scope_digest,
                 revision,
-                now,
-                now,
                 now,
                 now,
             )
@@ -390,7 +380,6 @@ def _transition_item_after(
         state=_transition_item_state(decision) if change.after is None else StoredWorkItemState(change.after.value),
         outcome_evidence=change.outcome_evidence if terminal else None,
         subject_revision=revision,
-        origin_updated_at=now if items[index].origin == OriginKind.NATIVE else items[index].origin_updated_at,
         updated_at=now,
     )
     return replace(lifecycle, work_items=tuple(items))
@@ -426,7 +415,6 @@ def _transition_attempt_after(
             StoredAttempt(
                 change.attempt,
                 item.item_id,
-                OriginKind.NATIVE,
                 change.after,
                 change.branch,
                 change.base_revision,
@@ -439,8 +427,6 @@ def _transition_attempt_after(
                 item.scope_revision,
                 item.scope_digest,
                 revision,
-                now,
-                now,
                 now,
                 now,
             )
@@ -476,7 +462,6 @@ def _transition_attempt_after(
             else attempts[index].candidate_recorded_at
         ),
         subject_revision=revision,
-        origin_updated_at=now if attempts[index].origin == OriginKind.NATIVE else attempts[index].origin_updated_at,
         updated_at=now,
     )
     return replace(lifecycle, attempts=tuple(attempts))
@@ -486,7 +471,7 @@ def _transition_proposals_after(mutation: TransitionMutation, common: StoredWork
     change = mutation.decision.proposal_change
     if change is None:
         return common
-    disposition = ProposalDisposition(change.disposition.value)
+    disposition = change.disposition
     proposals = list(common.proposals.proposals)
     index = next(
         (position for position, proposal in enumerate(proposals) if proposal.proposal_id == change.proposal), None
@@ -499,7 +484,6 @@ def _transition_proposals_after(mutation: TransitionMutation, common: StoredWork
         disposition_target_item_id=change.target_item,
         disposition_reason=change.reason,
         subject_revision=mutation.receipt.project_revision,
-        origin_disposed_at=change.disposed_at,
         disposition_recorded_at=change.disposed_at,
     )
     return replace(common, proposals=replace(common.proposals, proposals=tuple(proposals)))
@@ -533,7 +517,7 @@ def _transition_attempt_authority_after(mutation: TransitionMutation, common: St
         leases[lease_index],
         generation=change.after.generation,
         expires_at=mutation.decision.receipt.decided_at,
-        state=AttemptLeaseState.REVOKED,
+        state=AttemptLeaseStatus.REVOKED,
     )
     generations = (
         *authority.attempt_generations,
@@ -584,7 +568,7 @@ def _transition_coordinator_after(mutation: TransitionMutation, common: StoredWo
         generation=after.generation,
         acquired_at=after.acquired_at,
         expires_at=after.expires_at,
-        state=CoordinationLeaseState(after.state.value),
+        state=after.state,
     )
     return replace(common, authority=replace(common.authority, coordination=coordination))
 
@@ -620,7 +604,7 @@ def _attempt_authority_carrier_after(
         after.generation,
         after.acquired_at,
         after.expires_at,
-        AttemptLeaseState(after.state.value),
+        after.state,
     )
     if lease_index is None:
         if decision.current_before is not None:
@@ -781,7 +765,7 @@ def project_transition_mutation(before: StoredWorkState, decision: Decision) -> 
             actor_task_id, actor_host_id = coordination.task_id, coordination.host_id
     receipt = MutationReceipt(
         decision.receipt,
-        HistoryId(1 + max((int(value.history_id) for value in before.history.receipts), default=0)),
+        HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
         before.lifecycle.project.revision + 1,
         TransitionHistoryActionKind(action.kind.value),
         HistorySubjectId(action.subject),
