@@ -31,7 +31,14 @@ The canonical `attempt.md` front matter uses `kind: work-attempt` and `schema: p
 
 1. Read the planned batches for the exact sources that own the checkpoint's relevant semantics. Keep semantic truth in those sources; the brief records durable selectors and the executable subset rather than copying source prose.
 2. Verify the checkpoint's one architecture declaration against those sources. `none` must explain why ownership and dependency direction are unchanged. `read-only` names the project-relative architecture authority implementation must conform to. `update-required` names the authority that must change in the same candidate; a later documentation task is not a valid substitute.
-3. Record `Checkpoint outcome: independently-buildable` and the existing six-column `Contract table`.
+3. Record `Checkpoint outcome: independently-buildable` and this seven-column `Contract table`:
+
+   | Invariant | Authority / owner | Required consumer or production observation | Failure classification | Exact verification | Preflight / final revalidation | Authorization basis |
+   | --- | --- | --- | --- | --- | --- | --- |
+
+   Give every row exactly one authorization basis. Use `accepted-scope:<item>@<positive-scope-revision>` when the current accepted item owns the behavior. Use `authority:<authority-id>#<family>` for a reviewed product authority, `repository-policy:<authority-id>#<family>` for an applicable reviewed repository constraint, or `existing-consumer:<authority-id>#<family>` for a named reviewed production consumer. The latter three forms must reference an exact family in the `Reviewed authorities` table.
+
+   Dispatch checks syntax and reference integrity. For `accepted-scope`, it compares the token with the item and accepted scope revision reselected from the current SQLite attempt rather than trusting brief front matter. The independent reviewer owns semantic truth: it must reject a syntactically valid source used under the wrong role, such as code cited as repository policy, a validator cited as a production consumer, or newly written prose cited as product authority.
 4. Add one `Reviewed authorities` table:
 
    | Authority ID | Selector | Reviewed SHA-256 | In-scope families |
@@ -66,6 +73,7 @@ Give the reviewer the canonical checkpoint and the same manifest or its complete
 
 - recompute every selected-source digest;
 - compare each coverage distinction and owner with its named source;
+- verify every Contract authorization basis against its selected bytes, including wrong-role counterexamples for product authority, repository policy, and existing consumer claims;
 - test the architecture declaration against the named authority and reject any hidden ownership or dependency-direction change;
 - test the cheapest counterexample for every coverage row;
 - verify a required lifecycle table partitions every relevant source-state class and rejects its nearest sibling;
@@ -112,4 +120,4 @@ Preserve incomplete or rejected work directly under the rejected directory; neve
 
 ## Reuse during implementation review
 
-Use the compiled map again when reviewing the frozen implementation. Account for every acceptance criterion, Contract row, coverage row, and lifecycle sibling row. Compare the architecture declaration with the final diff, and require the named authority change in the same candidate when the declaration is `update-required`. Reuse exact unchanged selector hashes across correction rounds; re-read changed owners and sweep their neighboring rows. This review checks implementation against the already-compiled contract instead of rediscovering requirements from architecture.
+Use the compiled map again when reviewing the frozen implementation. Account for every acceptance criterion, Contract row and its authorization basis, coverage row, and lifecycle sibling row. Every blocking finding must cite one of those accepted owners or an applicable reviewed repository rule. Classify anything else as a brief omission, authority contradiction, unresolved product decision, or new capability rather than turning it into an implementation defect. Compare the architecture declaration with the final diff, and require the named authority change in the same candidate when the declaration is `update-required`. Reuse exact unchanged selector hashes across correction rounds; re-read changed owners and sweep their neighboring rows. This review checks implementation against the already-compiled contract instead of rediscovering requirements from architecture.

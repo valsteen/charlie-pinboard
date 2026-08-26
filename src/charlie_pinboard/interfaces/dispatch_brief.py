@@ -15,8 +15,10 @@ from charlie_pinboard.domain.identifiers import TaskId
 from charlie_pinboard.interfaces.brief_source_models import AuthoritySelector
 from charlie_pinboard.interfaces.brief_sources import parse_authority_selector, select_brief_source
 from charlie_pinboard.interfaces.dispatch_brief_models import (
+    AcceptedScopeAuthorizationBasis,
     ArchitectureImpact,
     ArchitectureImpactKind,
+    AuthorityAuthorizationBasis,
     AuthorityFamily,
     AuthorityId,
     BriefOwner,
@@ -26,8 +28,10 @@ from charlie_pinboard.interfaces.dispatch_brief_models import (
     ContractRecord,
     CoverageDisposition,
     CoverageRecord,
+    ExistingConsumerAuthorizationBasis,
     LifecycleRecord,
     MarkdownTable,
+    RepositoryPolicyAuthorizationBasis,
     ReviewedAuthority,
 )
 from charlie_pinboard.interfaces.errors import (
@@ -48,6 +52,7 @@ CONTRACT_COLUMNS: Final = (
     "Failure classification",
     "Exact verification",
     "Preflight / final revalidation",
+    "Authorization basis",
 )
 EMPTY_CONTRACT_CELLS: Final = frozenset({"", "—", "-", "none", "null", "n/a", "tbd", "todo"})
 TABLE_DELIMITER: Final = re.compile(r"^:?-{3,}:?$")
@@ -55,6 +60,15 @@ IDENTIFIER: Final = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SHA256: Final = re.compile(r"^[0-9a-f]{64}$")
 AUTHORITY_REFERENCE: Final = re.compile(
     r"^authority:(?P<authority>[a-z0-9]+(?:-[a-z0-9]+)*)#(?P<family>[a-z0-9]+(?:-[a-z0-9]+)*)$"
+)
+ACCEPTED_SCOPE_REFERENCE: Final = re.compile(
+    r"^accepted-scope:(?P<item>[a-z0-9]+(?:-[a-z0-9]+)*)@(?P<revision>[1-9][0-9]*)$"
+)
+REPOSITORY_POLICY_REFERENCE: Final = re.compile(
+    r"^repository-policy:(?P<authority>[a-z0-9]+(?:-[a-z0-9]+)*)#(?P<family>[a-z0-9]+(?:-[a-z0-9]+)*)$"
+)
+EXISTING_CONSUMER_REFERENCE: Final = re.compile(
+    r"^existing-consumer:(?P<authority>[a-z0-9]+(?:-[a-z0-9]+)*)#(?P<family>[a-z0-9]+(?:-[a-z0-9]+)*)$"
 )
 CRITERION_OWNER: Final = re.compile(r"^criterion:(?P<number>[1-9][0-9]*)$")
 PROHIBITION: Final = re.compile(r"\b(?:must not|do not|cannot|never|prohibition|prohibited)\b", re.IGNORECASE)
@@ -243,7 +257,61 @@ def _normalized_section_bytes(section: tuple[str, ...]) -> bytes:
     return ("\n".join(section) + "\n").encode()
 
 
-def _contract_records(section: tuple[str, ...]) -> tuple[ContractRecord, ...]:
+def _source_authorization_key(
+    match: re.Match[str], authorities: tuple[ReviewedAuthority, ...]
+) -> tuple[AuthorityId, AuthorityFamily]:
+    key = (AuthorityId(match.group("authority")), AuthorityFamily(match.group("family")))
+    known = frozenset((authority.authority_id, family) for authority in authorities for family in authority.families)
+    if key not in known:
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_CONTRACT_INVALID,
+            f"Authorization basis references unknown authority family 'authority:{key[0]}#{key[1]}'.",
+        )
+    return key
+
+
+def _authorization_basis(
+    cell: str,
+    accepted_item_id: str,
+    accepted_scope_revision: int,
+    authorities: tuple[ReviewedAuthority, ...],
+) -> (
+    AcceptedScopeAuthorizationBasis
+    | AuthorityAuthorizationBasis
+    | RepositoryPolicyAuthorizationBasis
+    | ExistingConsumerAuthorizationBasis
+):
+    value = _code_value(cell)
+    if (match := ACCEPTED_SCOPE_REFERENCE.fullmatch(value)) is not None:
+        item_id = match.group("item")
+        scope_revision = int(match.group("revision"))
+        if item_id != accepted_item_id or scope_revision != accepted_scope_revision:
+            raise DispatchError(
+                DispatchErrorCode.DISPATCH_CONTRACT_INVALID,
+                "Accepted-scope authorization does not match the current attempt item and scope revision.",
+            )
+        return AcceptedScopeAuthorizationBasis(item_id, scope_revision)
+    if (match := AUTHORITY_REFERENCE.fullmatch(value)) is not None:
+        authority_id, family = _source_authorization_key(match, authorities)
+        return AuthorityAuthorizationBasis(authority_id, family)
+    if (match := REPOSITORY_POLICY_REFERENCE.fullmatch(value)) is not None:
+        authority_id, family = _source_authorization_key(match, authorities)
+        return RepositoryPolicyAuthorizationBasis(authority_id, family)
+    if (match := EXISTING_CONSUMER_REFERENCE.fullmatch(value)) is not None:
+        authority_id, family = _source_authorization_key(match, authorities)
+        return ExistingConsumerAuthorizationBasis(authority_id, family)
+    raise DispatchError(
+        DispatchErrorCode.DISPATCH_CONTRACT_INVALID,
+        "Authorization basis must be accepted-scope, authority, repository-policy, or existing-consumer.",
+    )
+
+
+def _contract_records(
+    section: tuple[str, ...],
+    accepted_item_id: str,
+    accepted_scope_revision: int,
+    authorities: tuple[ReviewedAuthority, ...],
+) -> tuple[ContractRecord, ...]:
     table = _markdown_table(
         section,
         CONTRACT_COLUMNS,
@@ -259,17 +327,33 @@ def _contract_records(section: tuple[str, ...]) -> tuple[ContractRecord, ...]:
                     DispatchErrorCode.DISPATCH_CONTRACT_INCOMPLETE,
                     f"Contract row {row_number} has no concrete value for '{column}'.",
                 )
-        records.append(ContractRecord(*row))
+        invariant, authority, consumer, failure, verification, revalidation, authorization_cell = row
+        authorization_basis = _authorization_basis(
+            authorization_cell,
+            accepted_item_id,
+            accepted_scope_revision,
+            authorities,
+        )
+        records.append(
+            ContractRecord(
+                invariant,
+                authority,
+                consumer,
+                failure,
+                verification,
+                revalidation,
+                authorization_basis,
+            )
+        )
     return tuple(records)
 
 
-def _validate_cross_boundary_checkpoint(section: tuple[str, ...]) -> tuple[ContractRecord, ...]:
+def _validate_cross_boundary_checkpoint(section: tuple[str, ...]) -> None:
     if "Checkpoint outcome: independently-buildable" not in section:
         raise DispatchError(
             DispatchErrorCode.DISPATCH_CHECKPOINT_NOT_BUILDABLE,
             "A cross-boundary checkpoint must record 'Checkpoint outcome: independently-buildable'.",
         )
-    return _contract_records(section)
 
 
 def _authority_selector(cell: str) -> AuthoritySelector:
@@ -741,12 +825,14 @@ def _validate_semantic_preservation(
     checkpoint: str,
     section: tuple[str, ...],
     project_root: Path,
-    contracts: tuple[ContractRecord, ...],
+    accepted_item_id: str,
+    accepted_scope_revision: int,
     brief_review: bytes | None,
     review_id: str | None,
     review_publisher: BriefReviewPublisher | None = None,
 ) -> None:
     authorities, authority_table = _reviewed_authorities(section)
+    contracts = _contract_records(section, accepted_item_id, accepted_scope_revision, authorities)
     coverage = _coverage_records(section, authorities, contracts)
     _validate_lifecycle_partition(section)
     _validate_authority_digests(project_root, authorities)
@@ -822,6 +908,9 @@ def prepare_dispatch_from_artifact(
     project_root: Path,
     checkpoint: str,
     environment: DispatchEnvironment,
+    *,
+    accepted_item_id: str | None = None,
+    accepted_scope_revision: int | None = None,
     supplied_prompt: bytes | None = None,
     brief_review: bytes | None = None,
     review_id: str | None = None,
@@ -849,14 +938,20 @@ def prepare_dispatch_from_artifact(
                     "Local checkpoints do not publish cross-boundary brief reviews.",
                 )
         case CheckpointBoundary.CROSS_BOUNDARY:
-            contracts = _validate_cross_boundary_checkpoint(section)
+            _validate_cross_boundary_checkpoint(section)
+            if accepted_item_id is None or accepted_scope_revision is None:
+                raise DispatchError(
+                    DispatchErrorCode.DISPATCH_CONTRACT_INVALID,
+                    "Cross-boundary dispatch requires the current attempt item and accepted scope revision.",
+                )
             _validate_semantic_preservation(
                 attempt_path,
                 attempt_id,
                 checkpoint,
                 section,
                 project_root,
-                contracts,
+                accepted_item_id,
+                accepted_scope_revision,
                 brief_review,
                 review_id,
                 review_publisher,

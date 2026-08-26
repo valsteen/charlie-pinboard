@@ -32,6 +32,10 @@ When reacquiring an attempt returned from review, read the durable correction re
 
 Worker diff inspection, requirement mapping, and fresh verification are pre-review evidence. They do not replace independent review under a current coordination lease.
 
+For a cross-boundary attempt, map every observable behavior and behavior-defining test to an authorized Contract row before adding it. The row's `Authorization basis` must resolve to the current accepted scope or to an exact reviewed authority family. Ordinary internal choices that preserve supported behavior—such as helper names, local refactors, and equivalent algorithms—need no separate provenance record.
+
+When a useful addition has no authorized row, stop widening that part of the implementation and report the unsupported addition. Continue independent in-scope work when possible. Create an intake proposal only when the user explicitly authorizes preservation; proposal creation does not authorize implementation. Do not invent a ledger state or transition to represent the discovery.
+
 If additional work is useful but not required, invoke `$pinboard-intake` only when the user explicitly wants it preserved. Otherwise mention it in the result without creating shared state.
 
 When authorized intake is nested inside delivery, retain the attempt ID, current accepted objective, and next promised implementation or verification action as a continuation anchor. After the proposal is persisted and optional delivery handling ends, return to that action. Intake alone does not pause or reprioritize the attempt. Before the final result, account for every announced pending action as completed, durably deferred at an exact owner, or blocked by one exact decision.

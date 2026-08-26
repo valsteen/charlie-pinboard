@@ -176,10 +176,12 @@ def prepare_dispatch(
         project_root,
         checkpoint,
         environment,
-        supplied_prompt,
-        brief_review,
-        review_id,
-        publisher,
+        accepted_item_id=str(attempt.item_id),
+        accepted_scope_revision=attempt.accepted_scope_revision,
+        supplied_prompt=supplied_prompt,
+        brief_review=brief_review,
+        review_id=review_id,
+        review_publisher=publisher,
     )
     current = next(
         (

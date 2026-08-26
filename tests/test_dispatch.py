@@ -46,9 +46,9 @@ CONTRACT_INVARIANT = "Kotlin and Rust use protocol v13 together."
 CONTRACT_TABLE = """\
 #### Contract table
 
-| Invariant | Authority / owner | Required consumer or production observation | Failure classification | Exact verification | Preflight / final revalidation |
-| --- | --- | --- | --- | --- | --- |
-| Kotlin and Rust use protocol v13 together. | Extension protocol | Rust connector | Unsupported version is explicit. | `pnpm rust:test` | Re-run after both consumers change. |
+| Invariant | Authority / owner | Required consumer or production observation | Failure classification | Exact verification | Preflight / final revalidation | Authorization basis |
+| --- | --- | --- | --- | --- | --- | --- |
+| Kotlin and Rust use protocol v13 together. | Extension protocol | Rust connector | Unsupported version is explicit. | `pnpm rust:test` | Re-run after both consumers change. | `accepted-scope:work-a@1` |
 """
 AUTHORITY_COLUMNS = "| Authority ID | Selector | Reviewed SHA-256 | In-scope families |"
 COVERAGE_COLUMNS = "| Authority / invariant family | Required distinction | Required consumer / production observation | Disposition | Brief owner | Cheapest counterexample |"
@@ -187,6 +187,8 @@ class DispatchTest(unittest.TestCase):
             brief_review=candidate,
             review_id="review-id",
             review_publisher=lambda _digest, value, _review_id: (value or b"", "review"),
+            accepted_item_id="work-a",
+            accepted_scope_revision=1,
         )
 
     def _initialized(
@@ -596,6 +598,8 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
                     CHECKPOINT,
                     environment,
                     review_publisher=lambda _digest, _candidate, _review_id, value=value: (_review(value), "review"),
+                    accepted_item_id="work-a",
+                    accepted_scope_revision=1,
                 )
             self.assertEqual(code, rejected.exception.code)
 
@@ -631,6 +635,8 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
                     publication_attempts.append("published") or value or b"",
                     "review",
                 ),
+                accepted_item_id="work-a",
+                accepted_scope_revision=1,
             )
         self.assertEqual(DispatchErrorCode.DISPATCH_ARCHITECTURE_IMPACT_INVALID, rejected.exception.code)
         self.assertEqual([], publication_attempts)
@@ -643,8 +649,8 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
             ),
             (
                 lambda value: value.replace(
-                    b"| --- | --- | --- | --- | --- | --- |",
-                    b"| not | a | markdown | separator | row | here |",
+                    b"| --- | --- | --- | --- | --- | --- | --- |",
+                    b"| not | a | markdown | separator | row | here | either |",
                     1,
                 ),
                 DispatchErrorCode.DISPATCH_CONTRACT_INVALID,
@@ -674,6 +680,45 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
             with self.subTest(code=code), self.assertRaises(DispatchError) as rejected:
                 self._prepare_cross_boundary(project, brief)
             self.assertEqual(code, rejected.exception.code)
+
+    def test_cross_boundary_contract_authorization_basis_is_closed_and_resolved(self) -> None:
+        accepted = (
+            b"accepted-scope:work-a@1",
+            b"authority:architecture#protocol-contract",
+            b"repository-policy:architecture#protocol-contract",
+            b"existing-consumer:plan#consumer-proof",
+        )
+        for basis in accepted:
+            project = Path(tempfile.mkdtemp()).resolve()
+            brief = _reviewed_brief(project).replace(b"accepted-scope:work-a@1", basis)
+            with self.subTest(basis=basis):
+                self.assertIn(CHECKPOINT, self._prepare_cross_boundary(project, brief))
+
+        rejected = (
+            b"accepted-scope:work-b@1",
+            b"accepted-scope:work-a@2",
+            b"accepted-scope:work-a@0",
+            b"invented:architecture#protocol-contract",
+            b"authority:missing#protocol-contract",
+            b"repository-policy:architecture#missing",
+            b"existing-consumer:plan#missing",
+            "—".encode(),
+        )
+        for basis in rejected:
+            project = Path(tempfile.mkdtemp()).resolve()
+            brief = _reviewed_brief(project).replace(b"accepted-scope:work-a@1", basis)
+            with self.subTest(basis=basis), self.assertRaises(DispatchError) as error:
+                self._prepare_cross_boundary(project, brief)
+            self.assertIn(
+                error.exception.code,
+                {DispatchErrorCode.DISPATCH_CONTRACT_INCOMPLETE, DispatchErrorCode.DISPATCH_CONTRACT_INVALID},
+            )
+
+        project = Path(tempfile.mkdtemp()).resolve()
+        six_column = _reviewed_brief(project).replace(b" | Authorization basis |", b" |", 1)
+        with self.assertRaises(DispatchError) as error:
+            self._prepare_cross_boundary(project, six_column)
+        self.assertEqual(DispatchErrorCode.DISPATCH_CONTRACT_MISSING, error.exception.code)
 
     def test_reviewed_authority_digest_tracks_only_the_selected_source(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

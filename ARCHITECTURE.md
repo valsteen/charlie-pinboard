@@ -135,7 +135,7 @@ The CLI decodes command input into exact typed values and reselects the advertis
 
 ### Worker dispatch and review publication
 
-Dispatch reselects the current action, active attempt, and accepted brief reference from SQLite. The artifact adapter verifies the canonical brief bytes. `interfaces.dispatch_brief` validates the checkpoint boundary and architecture-impact declaration before any prompt is rendered. A cross-boundary checkpoint additionally verifies its contract, reviewed authority digests, coverage, lifecycle disposition, and independent READY review.
+Dispatch reselects the current action, active attempt, and accepted brief reference from SQLite. `application.dispatch` passes the selected attempt's item and accepted scope revision into brief validation. The artifact adapter verifies the canonical brief bytes. `interfaces.dispatch_brief` validates the checkpoint boundary and architecture-impact declaration before any prompt is rendered. A cross-boundary checkpoint additionally verifies its seven-column contract, authorization-basis syntax and reference integrity, reviewed authority digests, coverage, lifecycle disposition, and independent READY review. Accepted-scope authorization must match the reselected attempt; source-derived authorization must name one exact reviewed authority family. The independent brief reviewer, not the parser, verifies that each source truthfully serves its claimed product-authority, repository-policy, or existing-consumer role.
 
 Review evidence is published as an immutable artifact and accepted through the application-owned SQLite workflow. The launch prompt only points the worker to the canonical brief and names the execution environment; it does not duplicate or reinterpret the task contract.
 

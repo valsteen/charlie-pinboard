@@ -50,6 +50,38 @@ class ReviewedAuthority:
 
 
 @dataclass(frozen=True, slots=True)
+class AcceptedScopeAuthorizationBasis:
+    item_id: str
+    scope_revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorityAuthorizationBasis:
+    authority_id: AuthorityId
+    family: AuthorityFamily
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryPolicyAuthorizationBasis:
+    authority_id: AuthorityId
+    family: AuthorityFamily
+
+
+@dataclass(frozen=True, slots=True)
+class ExistingConsumerAuthorizationBasis:
+    authority_id: AuthorityId
+    family: AuthorityFamily
+
+
+type AuthorizationBasis = (
+    AcceptedScopeAuthorizationBasis
+    | AuthorityAuthorizationBasis
+    | RepositoryPolicyAuthorizationBasis
+    | ExistingConsumerAuthorizationBasis
+)
+
+
+@dataclass(frozen=True, slots=True)
 class ContractRecord:
     invariant: str
     authority: str
@@ -57,6 +89,7 @@ class ContractRecord:
     failure: str
     verification: str
     revalidation: str
+    authorization_basis: AuthorizationBasis
 
 
 @dataclass(frozen=True, slots=True)
