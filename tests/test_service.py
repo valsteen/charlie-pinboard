@@ -18,7 +18,7 @@ from charlie_pinboard.application.service import (
     execute,
 )
 from charlie_pinboard.application.stored_state import StoredWorkState
-from charlie_pinboard.domain.authority_decisions import (
+from charlie_pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
     AttemptLeaseStatus,
@@ -30,12 +30,14 @@ from charlie_pinboard.domain.authority_decisions import (
     RevokeCoordinationAuthority,
     TransferAttemptAuthority,
 )
-from charlie_pinboard.domain.decisions import (
+from charlie_pinboard.domain.decision_models import (
     Action,
     ActionKind,
     ActorAuthority,
     AuthorizationKind,
     Role,
+)
+from charlie_pinboard.domain.decisions import (
     available_actions,
     bind_transition,
 )
@@ -49,7 +51,11 @@ from charlie_pinboard.domain.identifiers import (
     ProposalId,
     TaskId,
 )
-from charlie_pinboard.domain.model import (
+from charlie_pinboard.domain.proposal_models import (
+    CreateProposalOperation,
+    ProposalIntake,
+)
+from charlie_pinboard.domain.work_models import (
     AcceptedProposalState,
     AcceptProposalInput,
     EvidenceInput,
@@ -60,7 +66,6 @@ from charlie_pinboard.domain.model import (
     Timing,
     TransferCoordinatorInput,
 )
-from charlie_pinboard.domain.proposal_decisions import CreateProposalOperation, ProposalIntake
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 

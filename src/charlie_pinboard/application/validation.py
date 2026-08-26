@@ -2,9 +2,10 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from charlie_pinboard.adapters.files.artifacts import ArtifactError, verify_reference
+from charlie_pinboard.adapters.files.artifacts import verify_reference
+from charlie_pinboard.adapters.files.errors import ArtifactError
 from charlie_pinboard.adapters.files.views import expected_view_bytes
-from charlie_pinboard.adapters.sqlite.database import StorageError
+from charlie_pinboard.adapters.sqlite.errors import StorageError
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 
 
@@ -59,7 +60,7 @@ def validate_work_state(work_root: Path) -> ValidationReport:
         try:
             verify_reference(work_root, reference)
         except ArtifactError as error:
-            diagnostics.append(_error(error.code, work_root / reference.selector, str(error)))
+            diagnostics.append(_error(error.code.value, work_root / reference.selector, str(error)))
     view_root = work_root / "views"
     for selector, expected in expected_view_bytes(state).items():
         path = view_root / selector

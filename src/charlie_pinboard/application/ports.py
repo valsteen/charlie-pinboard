@@ -4,20 +4,17 @@ from pathlib import Path
 from typing import Protocol
 
 from charlie_pinboard.application.artifacts import ArtifactRef
-from charlie_pinboard.application.mutations import (
-    TransitionMutation,
-    TransitionReceiptMutation,
-)
+from charlie_pinboard.application.mutation_models import StoredStateMutation
 from charlie_pinboard.application.stored_state import ArtifactReference, StoredWorkState
-from charlie_pinboard.domain.decisions import TransitionReceipt
+from charlie_pinboard.domain.decision_models import TransitionReceipt
 from charlie_pinboard.domain.identifiers import ItemId
-from charlie_pinboard.domain.model import ArtifactRole
+from charlie_pinboard.domain.work_models import ArtifactRole
 
 
 class WorkTransaction(Protocol):
     def snapshot(self) -> StoredWorkState: ...
 
-    def commit(self, mutation: TransitionMutation | TransitionReceiptMutation) -> TransitionReceipt: ...
+    def commit(self, mutation: StoredStateMutation) -> TransitionReceipt: ...
 
 
 class WorkStore(Protocol):

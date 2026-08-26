@@ -1,74 +1,28 @@
-from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
-from enum import Enum
 from pathlib import Path
-from typing import Annotated, Literal, Protocol
 
-import msgspec
-
-from charlie_pinboard.application.actions import ActionQueryError, discover_actions
-from charlie_pinboard.application.artifacts import ArtifactRef, NewArtifact
+from charlie_pinboard.application.actions import discover_actions
+from charlie_pinboard.application.artifacts import NewArtifact
+from charlie_pinboard.application.dispatch_models import (
+    BriefReviewPublisher,
+    DispatchArtifactPort,
+    DispatchBriefPreparer,
+    DispatchEnvironment,
+)
+from charlie_pinboard.application.errors import ActionQueryError, DispatchError, DispatchErrorCode
 from charlie_pinboard.application.ports import WorkStore
-from charlie_pinboard.application.stored_state import ArtifactKind, ArtifactReference
-from charlie_pinboard.domain.decisions import Action, ActionKind, Role
+from charlie_pinboard.application.stored_state import ArtifactKind
+from charlie_pinboard.domain.decision_models import (
+    Action,
+    ActionKind,
+    Role,
+)
 from charlie_pinboard.domain.identifiers import AttemptId, ItemId, LeaseId
-from charlie_pinboard.domain.model import ArtifactRole, AttemptState
-
-type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
-type DispatchSchema = Literal["pinboard-dispatch/v1"]
-type BriefReviewPublisher = Callable[[str, bytes | None, str | None], tuple[bytes, str]]
-
-
-class DispatchError(RuntimeError):
-    code: str
-
-    def __init__(self, code: str, message: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {message}")
-
-
-class DispatchPermission(Enum):
-    REPOSITORY_READ = "repository-read"
-    REPOSITORY_WRITE = "repository-write"
-    NETWORK = "network"
-    EXTERNAL_WRITE = "external-write"
-    LIVE_APPLICATION = "live-application"
-
-
-class DispatchEnvironment(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    schema: DispatchSchema
-    checkout: NonEmptyLine
-    branch: NonEmptyLine
-    starting_revision: NonEmptyLine
-    permissions: tuple[DispatchPermission, ...]
-
-
-class DispatchArtifactPort(Protocol):
-    @property
-    def work_root(self) -> Path: ...
-
-    def verify(self, reference: ArtifactReference) -> None: ...
-
-    def path(self, reference: ArtifactReference) -> Path: ...
-
-    def publish(self, artifact: NewArtifact) -> ArtifactRef: ...
-
-
-class DispatchBriefPreparer(Protocol):
-    def __call__(
-        self,
-        attempt_path: Path,
-        attempt_id: str,
-        attempt_branch: str,
-        project_root: Path,
-        checkpoint: str,
-        environment: DispatchEnvironment,
-        supplied_prompt: bytes | None = None,
-        brief_review: bytes | None = None,
-        review_id: str | None = None,
-        review_publisher: BriefReviewPublisher | None = None,
-    ) -> str: ...
+from charlie_pinboard.domain.work_models import (
+    ArtifactRole,
+    AttemptState,
+)
 
 
 def _current_action(store: WorkStore, supplied: Action) -> Action:
@@ -80,14 +34,17 @@ def _current_action(store: WorkStore, supplied: Action) -> Action:
             generation=supplied.coordinator_generation,
         )
     except ActionQueryError as error:
-        raise DispatchError(error.code, str(error).partition(": ")[2]) from error
+        raise DispatchError(DispatchErrorCode(error.code.value), str(error).partition(": ")[2]) from error
     current = next((value for value in actions if value.action_id == supplied.action_id), None)
     if current is None or supplied.kind != ActionKind.DISPATCH:
-        raise DispatchError("DISPATCH_ACTION_UNAVAILABLE", f"Action '{supplied.action_id}' is not available.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE, f"Action '{supplied.action_id}' is not available.")
     if current != supplied:
         if current.expected_revision != supplied.expected_revision:
-            raise DispatchError("STALE_ACTION", "The work ledger changed after this dispatch action was selected.")
-        raise DispatchError("DISPATCH_ACTION_INVALID", "The dispatch action does not carry exact current authority.")
+            raise DispatchError(
+                DispatchErrorCode.STALE_ACTION,
+                "The work ledger changed after this dispatch action was selected.",
+            )
+        raise DispatchError(DispatchErrorCode.DISPATCH_ACTION_INVALID, "The dispatch action does not carry exact current authority.")
     return current
 
 
@@ -111,9 +68,9 @@ def _review_publisher(
         )
         if candidate is None:
             if review_id is not None:
-                raise DispatchError("DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID", "--review-id requires --brief-review.")
+                raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID, "--review-id requires --brief-review.")
             if existing is None:
-                raise DispatchError("DISPATCH_BRIEF_REVIEW_MISSING", "The exact ready brief review is absent.")
+                raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_MISSING, "The exact ready brief review is absent.")
             artifacts.verify(existing)
             path = artifacts.path(existing)
             return path.read_bytes(), str(path)
@@ -123,7 +80,7 @@ def _review_publisher(
             or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in review_id)
         ):
             raise DispatchError(
-                "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
+                DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID,
                 "--brief-review requires one kebab-case --review-id.",
             )
         if existing is not None:
@@ -148,7 +105,7 @@ def _review_publisher(
                 role=ArtifactRole.EVIDENCE,
             )
             raise DispatchError(
-                "DISPATCH_BRIEF_REVIEW_COLLISION",
+                DispatchErrorCode.DISPATCH_BRIEF_REVIEW_COLLISION,
                 f"Ready review already differs; later evidence is preserved at '{rejected.selector}'.",
             )
         published = artifacts.publish(NewArtifact(ArtifactKind.EVIDENCE, key, 1, ".md", candidate))
@@ -182,7 +139,7 @@ def prepare_dispatch(
     attempt_id = AttemptId(action.subject)
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
     if attempt is None or attempt.state != AttemptState.ACTIVE:
-        raise DispatchError("DISPATCH_ATTEMPT_NOT_ACTIVE", f"Attempt '{attempt_id}' is not active.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_ATTEMPT_NOT_ACTIVE, f"Attempt '{attempt_id}' is not active.")
     reference = next(
         (
             value
@@ -192,7 +149,7 @@ def prepare_dispatch(
         None,
     )
     if reference is None:
-        raise DispatchError("DISPATCH_BRIEF_MISSING", "The attempt has no accepted brief artifact.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_MISSING, "The attempt has no accepted brief artifact.")
     artifacts.verify(reference)
     attempt_path = artifacts.path(reference)
     publication_revisions: list[int] = []
@@ -236,5 +193,5 @@ def prepare_dispatch(
             and replace(current, expected_revision=action.expected_revision) == action
         )
     if not current_matches:
-        raise DispatchError("DISPATCH_ACTION_UNAVAILABLE", "Dispatch authority changed during prompt preparation.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE, "Dispatch authority changed during prompt preparation.")
     return prompt

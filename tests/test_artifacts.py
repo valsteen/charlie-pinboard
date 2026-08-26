@@ -4,18 +4,22 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from charlie_pinboard.adapters.files.artifacts import (
+from charlie_pinboard.adapters.files.artifacts import verify_reference, write_revision
+from charlie_pinboard.adapters.files.errors import (
     ArtifactError,
-    NewArtifact,
-    verify_reference,
-    write_revision,
+    ArtifactErrorCode,
+    FileIOError,
+    FileIOErrorCode,
 )
-from charlie_pinboard.adapters.files.file_io import DurableFile, FileIOError, resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.database import StorageError, initialize_database
+from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
+from charlie_pinboard.adapters.files.models import DurableFile
+from charlie_pinboard.adapters.sqlite.database import initialize_database
+from charlie_pinboard.adapters.sqlite.errors import StorageError
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
+from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.stored_state import ArtifactKind
 from charlie_pinboard.domain.identifiers import ItemId
-from charlie_pinboard.domain.model import ArtifactRole
+from charlie_pinboard.domain.work_models import ArtifactRole
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -84,7 +88,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         verify_reference(roots.work_root, reference)
         with self.assertRaises(ArtifactError) as collision:
             write_revision(roots, NewArtifact(ArtifactKind.BRIEF, "attempt-a", 1, ".md", b"different\n"))
-        self.assertEqual("STORAGE_INVARIANT_VIOLATION", collision.exception.code)
+        self.assertEqual(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, collision.exception.code)
         self.assertEqual(b"# Brief\n", (roots.work_root / reference.selector).read_bytes())
 
     def test_reference_verification_rejects_escape_symlink_size_and_digest(self) -> None:
@@ -121,7 +125,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         for artifact in invalid:
             with self.subTest(artifact=artifact), self.assertRaises(ArtifactError) as raised:
                 write_revision(roots, artifact)
-            self.assertEqual("STORAGE_INVARIANT_VIOLATION", raised.exception.code)
+            self.assertEqual(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, raised.exception.code)
 
         published = write_revision(roots, NewArtifact(ArtifactKind.BRIEF, "brief", 1, ".md", b"x"))
         for selector in (
@@ -146,12 +150,12 @@ class ArtifactPersistenceTest(unittest.TestCase):
         with (
             patch(
                 "charlie_pinboard.adapters.files.artifacts.ensure_directory_chain",
-                side_effect=FileIOError("unavailable"),
+                side_effect=FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, "unavailable"),
             ),
             self.assertRaises(ArtifactError) as io_error,
         ):
             write_revision(failing_roots, NewArtifact(ArtifactKind.RESULT, "result", 1, ".md", b"x"))
-        self.assertEqual("STORAGE_IO_ERROR", io_error.exception.code)
+        self.assertEqual(ArtifactErrorCode.STORAGE_IO_ERROR, io_error.exception.code)
 
     def test_artifact_acceptance_reuse_and_relationship_failures_do_not_mutate(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

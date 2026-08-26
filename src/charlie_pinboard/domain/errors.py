@@ -30,3 +30,20 @@ class DecisionFailureCode(Enum):
 class DecisionFailure:
     code: DecisionFailureCode
     message: str
+
+
+class HistoryRecordErrorCode(Enum):
+    ARTIFACT_IDENTITY_DUPLICATE = "HISTORY_ARTIFACT_IDENTITY_DUPLICATE"
+    ARTIFACT_KIND_ROLE_MISMATCH = "HISTORY_ARTIFACT_KIND_ROLE_MISMATCH"
+    ARTIFACT_ORDER_INVALID = "HISTORY_ARTIFACT_ORDER_INVALID"
+    ARTIFACT_ROLE_POSITIONS_INVALID = "HISTORY_ARTIFACT_ROLE_POSITIONS_INVALID"
+    ARTIFACT_SELECTOR_INVALID = "HISTORY_ARTIFACT_SELECTOR_INVALID"
+    DEPENDENCIES_INVALID = "HISTORY_DEPENDENCIES_INVALID"
+
+
+class HistoryRecordError(ValueError):
+    code: HistoryRecordErrorCode
+
+    def __init__(self, code: HistoryRecordErrorCode, message: str) -> None:
+        self.code = code
+        super().__init__(f"{code.value}: {message}")

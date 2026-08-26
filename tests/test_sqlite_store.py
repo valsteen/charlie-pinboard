@@ -8,16 +8,13 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
+from charlie_pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
 from charlie_pinboard.adapters.files.file_io import (
-    FileIOError,
     atomic_replace,
     create_immutable,
     resolve_durable_roots,
 )
 from charlie_pinboard.adapters.sqlite.database import (
-    OpenMode,
-    StorageError,
-    StorageErrorCode,
     backup_database,
     initialize_database,
     open_database,
@@ -25,6 +22,8 @@ from charlie_pinboard.adapters.sqlite.database import (
     schema_bytes,
     write_transaction,
 )
+from charlie_pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
+from charlie_pinboard.adapters.sqlite.models import OpenMode
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.application.mutations import project_transition_mutation
@@ -33,8 +32,8 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkState,
     TransitionHistoryActionKind,
 )
-from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
-from charlie_pinboard.domain.decisions import (
+from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
+from charlie_pinboard.domain.decision_models import (
     Action,
     ActionKind,
     ActorAuthority,
@@ -43,15 +42,9 @@ from charlie_pinboard.domain.decisions import (
     Role,
     TransitionCommand,
 )
-from charlie_pinboard.domain.decisions import (
-    available_actions as available_actions_outcome,
-)
-from charlie_pinboard.domain.decisions import (
-    bind_transition as bind_transition_outcome,
-)
-from charlie_pinboard.domain.decisions import (
-    decide as decision_outcome,
-)
+from charlie_pinboard.domain.decisions import available_actions as available_actions_outcome
+from charlie_pinboard.domain.decisions import bind_transition as bind_transition_outcome
+from charlie_pinboard.domain.decisions import decide as decision_outcome
 from charlie_pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
@@ -59,10 +52,10 @@ from charlie_pinboard.domain.identifiers import (
     ItemId,
     LeaseId,
 )
-from charlie_pinboard.domain.model import (
+from charlie_pinboard.domain.ledger import LedgerSnapshot
+from charlie_pinboard.domain.work_models import (
     AttemptState,
     EvidenceInput,
-    LedgerSnapshot,
     ReasonInput,
     SubmitReviewInput,
     TransitionInput,
@@ -458,7 +451,10 @@ class SQLiteStoreTest(unittest.TestCase):
                 nonlocal calls
                 calls += 1
                 if calls == failure_at:
-                    raise FileIOError("injected directory synchronization stop")
+                    raise FileIOError(
+                        FileIOErrorCode.DIRECTORY_SYNC_FAILED,
+                        "injected directory synchronization stop",
+                    )
 
             with (
                 self.subTest(failure=failure),

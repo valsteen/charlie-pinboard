@@ -3,7 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from charlie_pinboard.adapters.files.root import RootError, resolve_project_root
+from charlie_pinboard.adapters.files.errors import RootError
+from charlie_pinboard.adapters.files.root import resolve_project_root
 
 
 class RootResolutionTest(unittest.TestCase):

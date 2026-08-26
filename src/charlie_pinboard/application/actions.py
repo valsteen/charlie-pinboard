@@ -1,27 +1,20 @@
 from datetime import UTC, datetime
 
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
+from charlie_pinboard.application.errors import ActionQueryError
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.stored_state import StoredWorkState
-from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
-from charlie_pinboard.domain.decisions import (
+from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
+from charlie_pinboard.domain.decision_models import (
     Action,
     ActorAuthority,
     AuthorizationKind,
     Role,
-    available_actions,
 )
-from charlie_pinboard.domain.errors import DecisionFailure
+from charlie_pinboard.domain.decisions import available_actions
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import AttemptId, LeaseId
-from charlie_pinboard.domain.model import CoordinationLeaseStatus
-
-
-class ActionQueryError(RuntimeError):
-    code: str
-
-    def __init__(self, code: str, message: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {message}")
+from charlie_pinboard.domain.work_models import CoordinationLeaseStatus
 
 
 def _worker_attempts(
@@ -69,7 +62,10 @@ def discover_actions(
                     or coordination.generation != selected_generation
                     or coordination.expires_at <= current
                 ):
-                    raise ActionQueryError("COORDINATION_LEASE_REQUIRED", "The coordination lease is not current.")
+                    raise ActionQueryError(
+                        DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
+                        "The coordination lease is not current.",
+                    )
                 authorization = AuthorizationKind.COORDINATION
             else:
                 authorization = AuthorizationKind.COORDINATOR
@@ -86,5 +82,5 @@ def discover_actions(
             )
     result = available_actions(snapshot, actor)
     if isinstance(result, DecisionFailure):
-        raise ActionQueryError(result.code.value, result.message)
+        raise ActionQueryError(result.code, result.message)
     return result

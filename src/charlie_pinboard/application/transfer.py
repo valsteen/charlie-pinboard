@@ -7,28 +7,22 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from charlie_pinboard.adapters.files.artifacts import ArtifactError, verify_reference, write_revision
-from charlie_pinboard.adapters.files.file_io import DurableRoots, FileIOError
+from charlie_pinboard.adapters.files.artifacts import verify_reference, write_revision
+from charlie_pinboard.adapters.files.errors import ArtifactError, FileIOError
+from charlie_pinboard.adapters.files.file_io import DurableRoots
 from charlie_pinboard.adapters.files.views import rebuild
 from charlie_pinboard.adapters.sqlite.database import (
-    OpenMode,
-    StorageError,
     backup_database,
     open_database,
     write_transaction,
 )
+from charlie_pinboard.adapters.sqlite.errors import StorageError
+from charlie_pinboard.adapters.sqlite.models import OpenMode
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
-from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
-from charlie_pinboard.domain.model import CoordinationLeaseStatus
-
-
-class PortableCopyError(RuntimeError):
-    code: str
-
-    def __init__(self, code: str, message: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {message}")
+from charlie_pinboard.application.errors import PortableCopyError, PortableCopyErrorCode
+from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
+from charlie_pinboard.domain.work_models import CoordinationLeaseStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +41,10 @@ def _canonical_json(value: dict[str, int]) -> str:
 def _row_integer(row: sqlite3.Row, key: str | int) -> int:
     value = row[key]
     if not isinstance(value, int) or isinstance(value, bool):
-        raise PortableCopyError("WORK_STATE_INVALID", "The copied database has invalid integer metadata.")
+        raise PortableCopyError(
+            PortableCopyErrorCode.WORK_STATE_INVALID,
+            "The copied database has invalid integer metadata.",
+        )
     return value
 
 
@@ -56,12 +53,12 @@ def _quiescent_source(store: SQLiteWorkStore) -> None:
     coordination = state.authority.coordination
     if coordination is not None and coordination.state == CoordinationLeaseStatus.ACTIVE:
         raise PortableCopyError(
-            "PORTABLE_COPY_SOURCE_NOT_QUIESCENT",
+            PortableCopyErrorCode.PORTABLE_COPY_SOURCE_NOT_QUIESCENT,
             "The source has active coordination authority.",
         )
     if any(lease.state == AttemptLeaseStatus.ACTIVE for lease in state.authority.attempt_leases):
         raise PortableCopyError(
-            "PORTABLE_COPY_SOURCE_NOT_QUIESCENT",
+            PortableCopyErrorCode.PORTABLE_COPY_SOURCE_NOT_QUIESCENT,
             "The source has active attempt authority.",
         )
 
@@ -72,7 +69,10 @@ def _exists(path: Path) -> bool:
     except FileNotFoundError:
         return False
     except OSError as error:
-        raise PortableCopyError("STORAGE_IO_ERROR", f"Portable-copy path could not be inspected: {path}") from error
+        raise PortableCopyError(
+            PortableCopyErrorCode.STORAGE_IO_ERROR,
+            f"Portable-copy path could not be inspected: {path}",
+        ) from error
     return True
 
 
@@ -85,7 +85,7 @@ def _copy_artifacts(source_work_root: Path, staging_roots: DurableRoots) -> int:
             content = source.read_bytes()
         except OSError as error:
             raise PortableCopyError(
-                "STORAGE_INVARIANT_VIOLATION",
+                PortableCopyErrorCode.STORAGE_INVARIANT_VIOLATION,
                 f"Referenced artifact could not be copied: {reference.selector}",
             ) from error
         published = write_revision(
@@ -102,7 +102,7 @@ def _copy_artifacts(source_work_root: Path, staging_roots: DurableRoots) -> int:
             reference.size_bytes,
         ):
             raise PortableCopyError(
-                "STORAGE_INVARIANT_VIOLATION",
+                PortableCopyErrorCode.STORAGE_INVARIANT_VIOLATION,
                 f"Copied artifact changed identity: {reference.selector}",
             )
     return len(state.artifact_references)
@@ -113,14 +113,20 @@ def _neutralize(database: Path, now: datetime) -> tuple[int, int, int, int]:
     try:
         row = connection.execute("SELECT revision, host_epoch FROM project_meta").fetchone()
         if row is None:
-            raise PortableCopyError("WORK_STATE_INVALID", "The copied database has no project metadata.")
+            raise PortableCopyError(
+                PortableCopyErrorCode.WORK_STATE_INVALID,
+                "The copied database has no project metadata.",
+            )
         source_revision = _row_integer(row, "revision")
         source_host_epoch = _row_integer(row, "host_epoch")
         destination_revision = source_revision + 1
         destination_host_epoch = source_host_epoch + 1
         history_row = connection.execute("SELECT COALESCE(MAX(history_id), 0) FROM transition_history").fetchone()
         if history_row is None:
-            raise PortableCopyError("WORK_STATE_INVALID", "The copied database history could not be read.")
+            raise PortableCopyError(
+                PortableCopyErrorCode.WORK_STATE_INVALID,
+                "The copied database history could not be read.",
+            )
         history_id = _row_integer(history_row, 0) + 1
         with write_transaction(connection):
             connection.execute("UPDATE coordination_lease SET status = 'released' WHERE status = 'active'")
@@ -186,7 +192,7 @@ def _sync_tree(root: Path) -> None:
 def _publish(staging: Path, destination: Path) -> None:
     if _exists(destination):
         raise PortableCopyError(
-            "PORTABLE_COPY_DESTINATION_EXISTS",
+            PortableCopyErrorCode.PORTABLE_COPY_DESTINATION_EXISTS,
             f"Portable-copy destination already exists: {destination}",
         )
     try:
@@ -199,7 +205,10 @@ def _publish(staging: Path, destination: Path) -> None:
     except PortableCopyError:
         raise
     except OSError as error:
-        raise PortableCopyError("STORAGE_IO_ERROR", "The portable-copy directory could not be published.") from error
+        raise PortableCopyError(
+            PortableCopyErrorCode.STORAGE_IO_ERROR,
+            "The portable-copy directory could not be published.",
+        ) from error
 
 
 def create_portable_copy(source_work_root: Path, destination_work_root: Path) -> PortableCopyReceipt:
@@ -209,19 +218,25 @@ def create_portable_copy(source_work_root: Path, destination_work_root: Path) ->
     destination = destination_work_root.absolute()
     if _exists(destination):
         raise PortableCopyError(
-            "PORTABLE_COPY_DESTINATION_EXISTS",
+            PortableCopyErrorCode.PORTABLE_COPY_DESTINATION_EXISTS,
             f"Portable-copy destination already exists: {destination}",
         )
     try:
         resolved_source = source.resolve(strict=True)
         parent = destination.parent.resolve(strict=True)
     except OSError as error:
-        raise PortableCopyError("STORAGE_IO_ERROR", "The portable-copy destination parent is unavailable.") from error
+        raise PortableCopyError(
+            PortableCopyErrorCode.STORAGE_IO_ERROR,
+            "The portable-copy destination parent is unavailable.",
+        ) from error
     if not parent.is_dir():
-        raise PortableCopyError("STORAGE_IO_ERROR", "The portable-copy destination parent is not a directory.")
+        raise PortableCopyError(
+            PortableCopyErrorCode.STORAGE_IO_ERROR,
+            "The portable-copy destination parent is not a directory.",
+        )
     if parent == resolved_source or resolved_source in parent.parents:
         raise PortableCopyError(
-            "PORTABLE_COPY_DESTINATION_INVALID",
+            PortableCopyErrorCode.PORTABLE_COPY_DESTINATION_INVALID,
             "The portable-copy destination must be outside the source work root.",
         )
 
@@ -243,7 +258,7 @@ def create_portable_copy(source_work_root: Path, destination_work_root: Path) ->
             verify_reference(staging, reference)
         rebuilt = rebuild(destination_store, staging)
         if rebuilt.warning is not None:
-            raise PortableCopyError(rebuilt.warning.code, rebuilt.warning.message)
+            raise PortableCopyError(PortableCopyErrorCode.STORAGE_IO_ERROR, rebuilt.warning.message)
         _sync_tree(staging)
         _publish(staging, destination)
         published = True
@@ -257,11 +272,11 @@ def create_portable_copy(source_work_root: Path, destination_work_root: Path) ->
     except PortableCopyError:
         raise
     except ArtifactError as error:
-        raise PortableCopyError(error.code, str(error)) from error
+        raise PortableCopyError(PortableCopyErrorCode(error.code.value), str(error)) from error
     except StorageError as error:
-        raise PortableCopyError(error.code.value, str(error)) from error
+        raise PortableCopyError(PortableCopyErrorCode(error.code.value), str(error)) from error
     except (FileIOError, OSError) as error:
-        raise PortableCopyError("STORAGE_IO_ERROR", str(error)) from error
+        raise PortableCopyError(PortableCopyErrorCode.STORAGE_IO_ERROR, str(error)) from error
     finally:
         if not published:
             shutil.rmtree(staging, ignore_errors=True)

@@ -3,42 +3,19 @@ import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
-from enum import Enum
 from functools import cache
 from pathlib import Path
 from urllib.parse import quote
 
-from charlie_pinboard.adapters.files.file_io import DurableRoots, FileIOError, ensure_directory_chain
+from charlie_pinboard.adapters.files.errors import FileIOError
+from charlie_pinboard.adapters.files.file_io import DurableRoots, ensure_directory_chain
+from charlie_pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
+from charlie_pinboard.adapters.sqlite.models import OpenMode
 
 APPLICATION = "charlie-pinboard"
 SCHEMA_VERSION = 1
 SCHEMA_ID = "sqlite-v1"
 BUSY_TIMEOUT_MS = 2_000
-
-
-class OpenMode(Enum):
-    READ_ONLY = "ro"
-    READ_WRITE = "rw"
-
-
-class StorageErrorCode(Enum):
-    BUSY = "STORAGE_BUSY"
-    INVARIANT_VIOLATION = "STORAGE_INVARIANT_VIOLATION"
-    INVALID_STATE = "WORK_STATE_INVALID"
-    SCHEMA_UNSUPPORTED = "SCHEMA_UNSUPPORTED"
-    IO_ERROR = "STORAGE_IO_ERROR"
-    OPERATION_FAILED = "STORAGE_OPERATION_FAILED"
-    STALE_WRITE = "ACTION_NOT_AVAILABLE"
-
-
-class StorageError(RuntimeError):
-    code: StorageErrorCode
-    retryable: bool
-
-    def __init__(self, code: StorageErrorCode, message: str, *, retryable: bool = False) -> None:
-        self.code = code
-        self.retryable = retryable
-        super().__init__(f"{code.value}: {message}")
 
 
 def _database_uri(path: Path, mode: OpenMode, *, immutable: bool = False) -> str:

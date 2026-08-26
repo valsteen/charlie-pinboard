@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
 
+from charlie_pinboard.adapters.files.errors import ArtifactError, ArtifactErrorCode, FileIOError
 from charlie_pinboard.adapters.files.file_io import (
     DurableRoots,
-    FileIOError,
     create_immutable,
     ensure_child_directory,
     ensure_directory_chain,
@@ -25,29 +25,24 @@ _DIRECTORIES: dict[ArtifactKind, str] = {
 }
 
 
-class ArtifactError(RuntimeError):
-    code: str
-
-    def __init__(self, code: str, message: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {message}")
-
-
 def _identity(value: str, *, label: str) -> str:
     if not value or value in {".", ".."} or "/" in value or os.sep in value or "\x00" in value:
-        raise ArtifactError("STORAGE_INVARIANT_VIOLATION", f"Artifact {label} is not a stable path component.")
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            f"Artifact {label} is not a stable path component.",
+        )
     return value
 
 
 def _suffix(value: str) -> str:
     if not value.startswith(".") or value in {".", ".."} or "/" in value or os.sep in value or "\x00" in value:
-        raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact suffix is not canonical.")
+        raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact suffix is not canonical.")
     return value
 
 
 def _selector(kind: ArtifactKind, key: str, revision: int, suffix: str) -> str:
     if revision < 1:
-        raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact revision must be positive.")
+        raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact revision must be positive.")
     return PurePosixPath(
         "artifacts", _DIRECTORIES[kind], _identity(key, label="key"), f"{revision}{_suffix(suffix)}"
     ).as_posix()
@@ -69,13 +64,19 @@ def _canonical_reference(reference: ArtifactRef | ArtifactReference) -> Path:
     pure = PurePosixPath(selector)
     parts = pure.parts
     if pure.is_absolute() or not parts or any(part in {"", ".", ".."} for part in parts):
-        raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact selector is not canonical.")
+        raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact selector is not canonical.")
     if len(parts) != 4 or parts[:3] != ("artifacts", _DIRECTORIES[kind], _identity(key, label="key")):
-        raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact selector does not match its identity.")
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            "Artifact selector does not match its identity.",
+        )
     filename = parts[3]
     prefix, separator, suffix = filename.partition(".")
     if not separator or prefix != str(revision) or not suffix:
-        raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact selector does not match its revision.")
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            "Artifact selector does not match its revision.",
+        )
     return Path(*parts)
 
 
@@ -84,22 +85,34 @@ def _read_regular_no_follow(work_root: Path, relative: Path) -> bytes:
     try:
         root_stat = current.lstat()
     except OSError as error:
-        raise ArtifactError("STORAGE_IO_ERROR", "Artifact work root could not be inspected.") from error
+        raise ArtifactError(ArtifactErrorCode.STORAGE_IO_ERROR, "Artifact work root could not be inspected.") from error
     if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
-        raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact work root is not a real directory.")
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            "Artifact work root is not a real directory.",
+        )
     for component in relative.parts[:-1]:
         current = current / component
         try:
             status = current.lstat()
         except OSError as error:
-            raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact directory chain is incomplete.") from error
+            raise ArtifactError(
+                ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+                "Artifact directory chain is incomplete.",
+            ) from error
         if stat.S_ISLNK(status.st_mode) or not stat.S_ISDIR(status.st_mode):
-            raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact directory chain is not real.")
+            raise ArtifactError(
+                ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+                "Artifact directory chain is not real.",
+            )
     path = current / relative.name
     try:
         status = path.lstat()
         if stat.S_ISLNK(status.st_mode) or not stat.S_ISREG(status.st_mode):
-            raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact selector is not a regular file.")
+            raise ArtifactError(
+                ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+                "Artifact selector is not a regular file.",
+            )
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         try:
             with os.fdopen(descriptor, "rb", closefd=False) as stream:
@@ -109,7 +122,10 @@ def _read_regular_no_follow(work_root: Path, relative: Path) -> bytes:
     except ArtifactError:
         raise
     except OSError as error:
-        raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact bytes could not be read safely.") from error
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            "Artifact bytes could not be read safely.",
+        ) from error
 
 
 def verify_reference(work_root: Path, reference: ArtifactRef | ArtifactReference) -> None:
@@ -117,7 +133,10 @@ def verify_reference(work_root: Path, reference: ArtifactRef | ArtifactReference
     _kind, _key, _revision, _selector_value, expected_digest, expected_size = _reference_values(reference)
     data = _read_regular_no_follow(work_root, relative)
     if len(data) != expected_size or sha256(data).hexdigest() != expected_digest:
-        raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Artifact size or digest does not match its reference.")
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            "Artifact size or digest does not match its reference.",
+        )
 
 
 def write_revision(roots: DurableRoots, artifact: NewArtifact) -> ArtifactRef:
@@ -139,19 +158,22 @@ def write_revision(roots: DurableRoots, artifact: NewArtifact) -> ArtifactRef:
                     verify_reference(roots.work_root, reference)
                 except ArtifactError as collision:
                     raise ArtifactError(
-                        "STORAGE_INVARIANT_VIOLATION",
+                        ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
                         "Artifact revision could not be published immutably.",
                     ) from collision
             else:
                 if (created.sha256, created.size) != (reference.content_sha256, reference.size_bytes):
-                    raise ArtifactError("STORAGE_INVARIANT_VIOLATION", "Published artifact facts changed unexpectedly.")
+                    raise ArtifactError(
+                        ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+                        "Published artifact facts changed unexpectedly.",
+                    )
         else:
             verify_reference(roots.work_root, reference)
         return reference
     except ArtifactError:
         raise
     except FileIOError as error:
-        raise ArtifactError("STORAGE_IO_ERROR", str(error)) from error
+        raise ArtifactError(ArtifactErrorCode.STORAGE_IO_ERROR, str(error)) from error
 
 
 @dataclass(frozen=True, slots=True)

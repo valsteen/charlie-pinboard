@@ -7,6 +7,10 @@ from charlie_pinboard.application.decision_projection import (
     project_inactive_attempt_authority,
 )
 from charlie_pinboard.domain.authority_decisions import (
+    decide_attempt_authority,
+    decide_coordination_authority,
+)
+from charlie_pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
     AttemptLeaseAuthority,
@@ -19,8 +23,6 @@ from charlie_pinboard.domain.authority_decisions import (
     RevokeAttemptAuthority,
     RevokeCoordinationAuthority,
     TransferAttemptAuthority,
-    decide_attempt_authority,
-    decide_coordination_authority,
 )
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import HostId, LeaseId, TaskId

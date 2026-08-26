@@ -9,17 +9,21 @@ from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
+from charlie_pinboard.application.errors import PortableCopyError, PortableCopyErrorCode
 from charlie_pinboard.application.service import change_attempt_authority
 from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
 )
-from charlie_pinboard.application.transfer import PortableCopyError, create_portable_copy
-from charlie_pinboard.domain.authority_decisions import (
+from charlie_pinboard.application.transfer import create_portable_copy
+from charlie_pinboard.domain.authority_models import (
     AttemptLeaseStatus,
     RenewAttemptAuthority,
 )
 from charlie_pinboard.domain.errors import DecisionFailure
-from charlie_pinboard.domain.model import CommandAttemptAuthority, CoordinationLeaseStatus
+from charlie_pinboard.domain.work_models import (
+    CommandAttemptAuthority,
+    CoordinationLeaseStatus,
+)
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -133,7 +137,7 @@ class PortableCopyTest(unittest.TestCase):
         destination = destination_parent / "relocated-work"
         with self.assertRaises(PortableCopyError) as live:
             create_portable_copy(source, destination)
-        self.assertEqual("PORTABLE_COPY_SOURCE_NOT_QUIESCENT", live.exception.code)
+        self.assertEqual(PortableCopyErrorCode.PORTABLE_COPY_SOURCE_NOT_QUIESCENT, live.exception.code)
         self.assertFalse(destination.exists())
 
         source, source_store = self._source()
@@ -142,7 +146,7 @@ class PortableCopyTest(unittest.TestCase):
         sentinel.write_bytes(b"existing destination")
         with self.assertRaises(PortableCopyError) as collision:
             create_portable_copy(source, destination)
-        self.assertEqual("PORTABLE_COPY_DESTINATION_EXISTS", collision.exception.code)
+        self.assertEqual(PortableCopyErrorCode.PORTABLE_COPY_DESTINATION_EXISTS, collision.exception.code)
         self.assertEqual(b"existing destination", sentinel.read_bytes())
 
         missing_destination = destination_parent / "missing-artifact-copy"
@@ -150,7 +154,7 @@ class PortableCopyTest(unittest.TestCase):
         missing.unlink()
         with self.assertRaises(PortableCopyError) as artifact:
             create_portable_copy(source, missing_destination)
-        self.assertEqual("STORAGE_INVARIANT_VIOLATION", artifact.exception.code)
+        self.assertEqual(PortableCopyErrorCode.STORAGE_INVARIANT_VIOLATION, artifact.exception.code)
         self.assertFalse(missing_destination.exists())
 
     def test_portable_copy_rejects_destination_nested_in_source_without_changing_source(self) -> None:
@@ -161,7 +165,7 @@ class PortableCopyTest(unittest.TestCase):
         with self.assertRaises(PortableCopyError) as invalid:
             create_portable_copy(source, destination)
 
-        self.assertEqual("PORTABLE_COPY_DESTINATION_INVALID", invalid.exception.code)
+        self.assertEqual(PortableCopyErrorCode.PORTABLE_COPY_DESTINATION_INVALID, invalid.exception.code)
         self.assertFalse(destination.exists())
         self.assertEqual(source_bytes, self._bytes(source))
 

@@ -6,7 +6,6 @@ from charlie_pinboard.application.stored_state import (
     AttemptLeaseCounter,
     AttemptLeaseGeneration,
     AuthorityRecords,
-    CanonicalJson,
     ItemArtifactLink,
     ItemDependency,
     ItemScopeRevision,
@@ -27,7 +26,7 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
-from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
+from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -40,9 +39,10 @@ from charlie_pinboard.domain.identifiers import (
     ProposalId,
     TaskId,
 )
-from charlie_pinboard.domain.model import (
+from charlie_pinboard.domain.work_models import (
     ArtifactRole,
     AttemptState,
+    CanonicalJson,
     CoordinationLeaseStatus,
     ProposalRelationKind,
     Timing,

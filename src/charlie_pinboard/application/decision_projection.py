@@ -10,10 +10,14 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
 )
-from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus, InactiveAttemptAuthority
+from charlie_pinboard.domain.authority_models import (
+    AttemptLeaseStatus,
+    InactiveAttemptAuthority,
+)
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, ItemId
-from charlie_pinboard.domain.model import (
+from charlie_pinboard.domain.ledger import LedgerSnapshot
+from charlie_pinboard.domain.work_models import (
     ArtifactRecord,
     AttemptAuthority,
     AttemptRecord,
@@ -22,7 +26,6 @@ from charlie_pinboard.domain.model import (
     CoordinationLeaseAuthority,
     CoordinationLeaseStatus,
     ItemScope,
-    LedgerSnapshot,
     ProposalRecord,
     ProposalRelationKind,
     ScopeAnchor,

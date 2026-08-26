@@ -6,23 +6,27 @@ from pathlib import Path
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.actions import ActionQueryError, discover_actions
+from charlie_pinboard.application.actions import discover_actions
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
+from charlie_pinboard.application.errors import ActionQueryError, QueryError, QueryErrorCode
 from charlie_pinboard.application.queries import (
-    QueryError,
     overview_from_state,
     preview_parallel,
 )
 from charlie_pinboard.application.stored_state import (
     StoredWorkState,
 )
-from charlie_pinboard.domain.decisions import ActionKind, Role
+from charlie_pinboard.domain.decision_models import (
+    ActionKind,
+    Role,
+)
+from charlie_pinboard.domain.errors import DecisionFailureCode
 from charlie_pinboard.domain.history import item_scope_digest
 from charlie_pinboard.domain.identifiers import (
     ItemId,
     LeaseId,
 )
-from charlie_pinboard.domain.model import AttemptState
+from charlie_pinboard.domain.work_models import AttemptState
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -117,18 +121,18 @@ class SQLiteQueriesTest(unittest.TestCase):
                 generation=coordination.generation,
                 now=SQLITE_NOW,
             )
-        self.assertEqual("COORDINATION_LEASE_REQUIRED", stale_coordination.exception.code)
+        self.assertEqual(DecisionFailureCode.COORDINATION_LEASE_REQUIRED, stale_coordination.exception.code)
         with self.assertRaises(ActionQueryError) as missing_worker:
             discover_actions(store, Role.WORKER, now=SQLITE_NOW)
-        self.assertEqual("ATTEMPT_LEASE_REQUIRED", missing_worker.exception.code)
+        self.assertEqual(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, missing_worker.exception.code)
         self.assertEqual(state, store.snapshot())
 
         with self.assertRaises(QueryError) as invalid_selection:
             preview_parallel(store, selected=("missing",), now=SQLITE_NOW)
-        self.assertEqual("PARALLEL_SELECTION_INVALID", invalid_selection.exception.code)
+        self.assertEqual(QueryErrorCode.PARALLEL_SELECTION_INVALID, invalid_selection.exception.code)
         with self.assertRaises(QueryError) as invalid_time:
             preview_parallel(store, now=SQLITE_NOW.replace(tzinfo=None))
-        self.assertEqual("PARALLEL_TIME_INVALID", invalid_time.exception.code)
+        self.assertEqual(QueryErrorCode.PARALLEL_TIME_INVALID, invalid_time.exception.code)
 
 
 if __name__ == "__main__":

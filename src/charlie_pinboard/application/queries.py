@@ -1,9 +1,17 @@
 from datetime import UTC, datetime
-from enum import Enum
 
-import msgspec
-
+from charlie_pinboard.application.errors import QueryError, QueryErrorCode
 from charlie_pinboard.application.ports import WorkStore
+from charlie_pinboard.application.query_models import (
+    OverviewItem,
+    ParallelItem,
+    ParallelOutcome,
+    ParallelPreview,
+    ParallelReason,
+    ParallelReasonCode,
+    ParallelSelection,
+    WorkOverview,
+)
 from charlie_pinboard.application.stored_state import (
     ItemDependency,
     StoredAttempt,
@@ -12,79 +20,12 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
 )
-from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
+from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
 from charlie_pinboard.domain.identifiers import ItemId
-from charlie_pinboard.domain.model import AttemptState, WorkState
-
-
-class QueryError(RuntimeError):
-    code: str
-
-    def __init__(self, code: str, message: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {message}")
-
-
-class ParallelOutcome(Enum):
-    LAUNCHABLE = "launchable"
-    EXCLUDED = "excluded"
-
-
-class ParallelSelection(Enum):
-    ALL_SAFE = "all-safe"
-    SELECTED = "selected"
-
-
-class ParallelReasonCode(Enum):
-    ATTEMPT_OWNED = "attempt-owned"
-    DEPENDENCY_LIVE = "dependency-live"
-    STATE_NOT_LAUNCHABLE = "state-not-launchable"
-
-
-class OverviewItem(msgspec.Struct, frozen=True):
-    item_id: str
-    label: str
-    state: WorkState
-    timing: str | None
-    depends_on: tuple[str, ...]
-    attempt_id: str | None
-    next_action: str | None
-    notes: str
-
-
-class WorkOverview(msgspec.Struct, frozen=True):
-    schema: str
-    authority: str
-    revision: str
-    focus_item: str | None
-    focus_attempt: str | None
-    active_attempts: tuple[str, ...]
-    items: tuple[OverviewItem, ...]
-    inbox: tuple[str, ...]
-    immediate_options: tuple[str, ...]
-
-
-class ParallelReason(msgspec.Struct, frozen=True):
-    code: ParallelReasonCode
-    message: str
-
-
-class ParallelItem(msgspec.Struct, frozen=True):
-    item_id: str
-    label: str
-    state: WorkState
-    attempt_id: str | None
-    outcome: ParallelOutcome
-    reasons: tuple[ParallelReason, ...] = ()
-
-
-class ParallelPreview(msgspec.Struct, frozen=True):
-    schema: str
-    revision: str
-    selection: ParallelSelection
-    safe: bool
-    launchable: tuple[ParallelItem, ...]
-    excluded: tuple[ParallelItem, ...]
+from charlie_pinboard.domain.work_models import (
+    AttemptState,
+    WorkState,
+)
 
 
 def _dependency_key(value: ItemDependency) -> tuple[int, str]:
@@ -122,7 +63,7 @@ def _work_state(value: StoredWorkItemState) -> WorkState:
     try:
         return WorkState(value.value)
     except ValueError as error:
-        raise QueryError("WORK_STATE_INVALID", f"Item state {value.value!r} is not live.") from error
+        raise QueryError(QueryErrorCode.WORK_STATE_INVALID, f"Item state {value.value!r} is not live.") from error
 
 
 def overview_from_state(state: StoredWorkState) -> WorkOverview:
@@ -190,7 +131,7 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
 def _preview_time(value: datetime | None) -> datetime:
     current = value or datetime.now(UTC)
     if current.tzinfo is None:
-        raise QueryError("PARALLEL_TIME_INVALID", "Preview time must be timezone-aware.")
+        raise QueryError(QueryErrorCode.PARALLEL_TIME_INVALID, "Preview time must be timezone-aware.")
     return current.astimezone(UTC)
 
 
@@ -254,7 +195,10 @@ def preview_parallel(
     live = tuple(item for item in state.lifecycle.work_items if item.state not in _TERMINAL_ITEM_STATES)
     by_id = {str(item.item_id): item for item in live}
     if len(selected) != len(set(selected)) or any(item_id not in by_id for item_id in selected):
-        raise QueryError("PARALLEL_SELECTION_INVALID", "Selected item identities must be unique current items.")
+        raise QueryError(
+            QueryErrorCode.PARALLEL_SELECTION_INVALID,
+            "Selected item identities must be unique current items.",
+        )
     candidates = tuple(by_id[item_id] for item_id in selected) if selected else tuple(sorted(live, key=_item_key))
     live_ids = frozenset(by_id)
     launchable: list[ParallelItem] = []

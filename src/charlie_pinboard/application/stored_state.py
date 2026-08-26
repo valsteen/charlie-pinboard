@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
+from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -16,7 +16,7 @@ from charlie_pinboard.domain.identifiers import (
     ProposalId,
     TaskId,
 )
-from charlie_pinboard.domain.model import (
+from charlie_pinboard.domain.work_models import (
     ArtifactRole,
     AttemptState,
     CanonicalJson,

@@ -1,4 +1,4 @@
-from typing import Annotated, Final, Literal, assert_never
+from typing import Final, assert_never
 
 import msgspec
 
@@ -11,14 +11,12 @@ from charlie_pinboard.domain.identifiers import (
     ItemId,
     TaskId,
 )
-from charlie_pinboard.domain.model import (
+from charlie_pinboard.domain.work_models import (
     AcceptCheckpointInput,
-    AcceptedProposalState,
     AcceptProposalInput,
     ActivateInput,
     BlockInput,
     CloseInput,
-    CloseOutcome,
     DeferInput,
     EmptyInput,
     EvidenceInput,
@@ -30,103 +28,23 @@ from charlie_pinboard.domain.model import (
     TransferCoordinatorInput,
     TransitionInput,
 )
-
-type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
-type Identity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
-type TimingPayload = Literal["must-now", "cheaper-now", "safe-to-defer"]
-
-
-class TransitionInputError(ValueError):
-    code: str
-
-    def __init__(self, code: str, message: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {message}")
-
-
-class EmptyInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    pass
-
-
-class ResumeInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    brief_artifact_ref_id: Annotated[int, msgspec.Meta(ge=1)] | None = None
-
-
-class StoredActivateInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    attempt: Identity
-    branch: NonEmptyLine
-    base_revision: NonEmptyLine
-    owner: NonEmptyLine
-    brief_artifact_ref_id: Annotated[int, msgspec.Meta(ge=1)]
-
-
-class SubmitReviewInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    candidate: NonEmptyLine
-
-
-class ReasonInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    reason: NonEmptyLine
-
-
-class BlockInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    reason: NonEmptyLine
-    depends_on: tuple[Identity, ...] = ()
-
-
-class EvidenceInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    evidence: NonEmptyLine
-
-
-class AcceptCheckpointInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    checkpoint: Identity
-    candidate: NonEmptyLine
-    evidence: NonEmptyLine
-
-
-class CloseInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    outcome: CloseOutcome
-    reason: NonEmptyLine
-
-
-class DeferInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    timing: TimingPayload
-    reopen_condition: NonEmptyLine
-
-
-class AcceptProposalInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
-    item: Identity
-    state: AcceptedProposalState
-    next_action: NonEmptyLine
-    timing: TimingPayload | None = None
-    depends_on: tuple[Identity, ...] = ()
-
-
-class MergeProposalInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    target: Identity
-
-
-class TransferCoordinatorInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    task_id: NonEmptyLine
-    host_id: NonEmptyLine
-
-
-type InputPayload = (
-    EmptyInputPayload
-    | ResumeInputPayload
-    | StoredActivateInputPayload
-    | SubmitReviewInputPayload
-    | ReasonInputPayload
-    | BlockInputPayload
-    | EvidenceInputPayload
-    | AcceptCheckpointInputPayload
-    | CloseInputPayload
-    | DeferInputPayload
-    | AcceptProposalInputPayload
-    | MergeProposalInputPayload
-    | TransferCoordinatorInputPayload
+from charlie_pinboard.interfaces.errors import TransitionInputError, TransitionInputErrorCode
+from charlie_pinboard.interfaces.transition_models import (
+    AcceptCheckpointInputPayload,
+    AcceptProposalInputPayload,
+    BlockInputPayload,
+    CloseInputPayload,
+    DeferInputPayload,
+    EmptyInputPayload,
+    EvidenceInputPayload,
+    InputModel,
+    MergeProposalInputPayload,
+    ReasonInputPayload,
+    ResumeInputPayload,
+    StoredActivateInputPayload,
+    SubmitReviewInputPayload,
+    TransferCoordinatorInputPayload,
 )
-type InputModel = type[InputPayload]
-
 
 TRANSITION_ACTION_KINDS: Final = (
     "accept-checkpoint",
@@ -177,7 +95,10 @@ def _input_model(kind: str) -> InputModel:  # noqa: C901, PLR0912
         case "transfer-coordinator":
             return TransferCoordinatorInputPayload
         case _:
-            raise TransitionInputError("ACTION_NOT_MUTATING", f"Action '{kind}' is not a canonical transition.")
+            raise TransitionInputError(
+                TransitionInputErrorCode.ACTION_NOT_MUTATING,
+                f"Action '{kind}' is not a canonical transition.",
+            )
 
 
 def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # noqa: C901, PLR0912
@@ -185,7 +106,10 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # 
     try:
         payload = msgspec.json.decode(data, type=model)
     except msgspec.DecodeError as error:
-        raise TransitionInputError("TRANSITION_INPUT_INVALID", f"Cannot decode transition JSON: {error}") from error
+        raise TransitionInputError(
+            TransitionInputErrorCode.TRANSITION_INPUT_INVALID,
+            f"Cannot decode transition JSON: {error}",
+        ) from error
     match payload:
         case EmptyInputPayload():
             return EmptyInput()

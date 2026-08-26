@@ -13,30 +13,28 @@ from charlie_pinboard.adapters.files.artifacts import verify_reference
 from charlie_pinboard.adapters.sqlite.database import (
     APPLICATION,
     SCHEMA_VERSION,
-    OpenMode,
-    StorageError,
-    StorageErrorCode,
     open_database,
     read_operation,
     write_transaction,
 )
+from charlie_pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
+from charlie_pinboard.adapters.sqlite.models import OpenMode
 from charlie_pinboard.application.artifacts import ArtifactRef
-from charlie_pinboard.application.mutations import (
+from charlie_pinboard.application.errors import MutationContractError
+from charlie_pinboard.application.mutation_models import (
     AttemptAuthorityMutation,
     CoordinationAuthorityMutation,
-    MutationContractError,
     ProposalCreationMutation,
+    StoredStateMutation,
     TransitionMutation,
-    TransitionReceiptMutation,
-    expected_stored_state,
 )
+from charlie_pinboard.application.mutations import expected_stored_state
 from charlie_pinboard.application.stored_state import (
     ArtifactKind,
     ArtifactReference,
     AttemptLeaseCounter,
     AttemptLeaseGeneration,
     AuthorityRecords,
-    CanonicalJson,
     ItemArtifactLink,
     ItemDependency,
     ItemScopeRevision,
@@ -57,10 +55,8 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
-from charlie_pinboard.domain.authority_decisions import AttemptLeaseStatus
-from charlie_pinboard.domain.decisions import (
-    TransitionReceipt,
-)
+from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
+from charlie_pinboard.domain.decision_models import TransitionReceipt
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -73,9 +69,10 @@ from charlie_pinboard.domain.identifiers import (
     ProposalId,
     TaskId,
 )
-from charlie_pinboard.domain.model import (
+from charlie_pinboard.domain.work_models import (
     ArtifactRole,
     AttemptState,
+    CanonicalJson,
     CoordinationLeaseStatus,
     ProposalDispositionKind,
     ProposalRelationKind,
@@ -766,7 +763,7 @@ class _SQLiteWorkTransaction:
     def snapshot(self) -> StoredWorkState:
         return _StoredStateReader(self._connection).read()
 
-    def commit(self, mutation: TransitionReceiptMutation) -> TransitionReceipt:
+    def commit(self, mutation: StoredStateMutation) -> TransitionReceipt:
         current = _StoredStateReader(self._connection).read()
         if current != mutation.before:
             raise StorageError(

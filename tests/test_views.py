@@ -3,8 +3,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from charlie_pinboard.adapters.files.file_io import FileIOError, resolve_durable_roots
-from charlie_pinboard.adapters.files.views import AffectedViews, rebuild, refresh
+from charlie_pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
+from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
+from charlie_pinboard.adapters.files.models import AffectedViews
+from charlie_pinboard.adapters.files.views import rebuild, refresh
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from tests.support import SQLITE_NOW, complete_sqlite_state
@@ -38,13 +40,16 @@ class GeneratedViewsTest(unittest.TestCase):
 
     def test_post_commit_refresh_failure_is_a_repairable_warning(self) -> None:
         work_root, store = self._state()
-        with patch("charlie_pinboard.adapters.files.views.atomic_replace", side_effect=FileIOError("disk full")):
-            result = refresh(store, work_root, AffectedViews.current())
+        with patch(
+            "charlie_pinboard.adapters.files.views.atomic_replace",
+            side_effect=FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, "disk full"),
+        ):
+            result = refresh(store, work_root, AffectedViews(current_focus=True))
 
         self.assertEqual(12, result.database_revision)
         self.assertIsNotNone(result.warning)
         assert result.warning is not None
-        self.assertEqual("VIEW_REFRESH_REQUIRED", result.warning.code)
+        self.assertIn("generated views need repair", result.warning.message)
         self.assertIn("pinboard views rebuild", result.warning.repair)
 
 

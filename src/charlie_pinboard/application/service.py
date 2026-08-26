@@ -5,11 +5,13 @@ from typing import assert_never
 from charlie_pinboard.application.decision_projection import (
     project_decision_snapshot,
 )
-from charlie_pinboard.application.mutations import (
+from charlie_pinboard.application.mutation_models import (
     AttemptAuthorityMutation,
     CoordinationAuthorityMutation,
     MutationReceipt,
     ProposalCreationMutation,
+)
+from charlie_pinboard.application.mutations import (
     expected_stored_state,
     project_transition_mutation,
 )
@@ -21,6 +23,10 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryAuthorizationKind,
 )
 from charlie_pinboard.domain.authority_decisions import (
+    decide_attempt_authority,
+    decide_coordination_authority,
+)
+from charlie_pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
     AttemptAuthorityOperation,
@@ -34,16 +40,16 @@ from charlie_pinboard.domain.authority_decisions import (
     RevokeAttemptAuthority,
     RevokeCoordinationAuthority,
     TransferAttemptAuthority,
-    decide_attempt_authority,
-    decide_coordination_authority,
 )
-from charlie_pinboard.domain.decisions import (
+from charlie_pinboard.domain.decision_models import (
     Action,
     ActorAuthority,
     AuthorizationKind,
     Role,
     TransitionCommand,
     TransitionReceipt,
+)
+from charlie_pinboard.domain.decisions import (
     command_action,
     decide,
     rediscover_action,
@@ -58,11 +64,15 @@ from charlie_pinboard.domain.identifiers import (
     LeaseId,
     TaskId,
 )
-from charlie_pinboard.domain.model import AttemptState, CanonicalJson, LedgerSnapshot
-from charlie_pinboard.domain.proposal_decisions import (
+from charlie_pinboard.domain.ledger import LedgerSnapshot
+from charlie_pinboard.domain.proposal_decisions import decide_proposal_creation
+from charlie_pinboard.domain.proposal_models import (
     CreateProposalOperation,
     LocalIntakeAuthority,
-    decide_proposal_creation,
+)
+from charlie_pinboard.domain.work_models import (
+    AttemptState,
+    CanonicalJson,
 )
 
 

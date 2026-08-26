@@ -1,7 +1,8 @@
-from dataclasses import dataclass
 from pathlib import Path
 
-from charlie_pinboard.adapters.files.file_io import FileIOError, atomic_replace, ensure_child_directory
+from charlie_pinboard.adapters.files.errors import FileIOError
+from charlie_pinboard.adapters.files.file_io import atomic_replace, ensure_child_directory
+from charlie_pinboard.adapters.files.models import AffectedViews, ViewRefreshResult, ViewWarning
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.stored_state import (
     ItemDependency,
@@ -10,7 +11,6 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItem,
     StoredWorkState,
 )
-from charlie_pinboard.domain.identifiers import AttemptId, ItemId
 
 NOTICE = "Generated projection; SQLite is authoritative."
 
@@ -21,42 +21,6 @@ def _item_key(value: StoredWorkItem) -> str:
 
 def _dependency_key(value: ItemDependency) -> tuple[str, int]:
     return str(value.item_id), value.position
-
-
-@dataclass(frozen=True, slots=True)
-class ViewWarning:
-    code: str
-    message: str
-    repair: str
-
-
-@dataclass(frozen=True, slots=True)
-class ViewRefreshResult:
-    database_revision: int
-    warning: ViewWarning | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class AffectedViews:
-    queue: bool = False
-    current_focus: bool = False
-    history: bool = False
-    items: tuple[ItemId, ...] = ()
-    attempts: tuple[AttemptId, ...] = ()
-
-    @classmethod
-    def current(cls) -> AffectedViews:
-        return cls(current_focus=True)
-
-    @classmethod
-    def all(cls, state: StoredWorkState) -> AffectedViews:
-        return cls(
-            queue=True,
-            current_focus=True,
-            history=True,
-            items=tuple(item.item_id for item in state.lifecycle.work_items),
-            attempts=tuple(attempt.attempt_id for attempt in state.lifecycle.attempts),
-        )
 
 
 def _header(kind: str, revision: int) -> str:
@@ -169,7 +133,6 @@ def refresh(store: WorkStore, work_root: Path, affected: AffectedViews) -> ViewR
         return ViewRefreshResult(
             state.lifecycle.project.revision,
             ViewWarning(
-                "VIEW_REFRESH_REQUIRED",
                 f"The SQLite transition succeeded, but generated views need repair: {error}",
                 "Run 'pinboard views rebuild'.",
             ),
@@ -195,12 +158,21 @@ def expected_view_bytes(state: StoredWorkState) -> dict[str, bytes]:
 def rebuild(store: WorkStore, work_root: Path) -> ViewRefreshResult:
     state = store.snapshot()
     try:
-        _write_views(work_root, state, AffectedViews.all(state))
+        _write_views(
+            work_root,
+            state,
+            AffectedViews(
+                queue=True,
+                current_focus=True,
+                history=True,
+                items=tuple(item.item_id for item in state.lifecycle.work_items),
+                attempts=tuple(attempt.attempt_id for attempt in state.lifecycle.attempts),
+            ),
+        )
     except FileIOError as error:
         return ViewRefreshResult(
             state.lifecycle.project.revision,
             ViewWarning(
-                "VIEW_REFRESH_REQUIRED",
                 f"Generated views could not be rebuilt: {error}",
                 "Resolve the filesystem problem and run 'pinboard views rebuild' again.",
             ),

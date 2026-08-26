@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
+from charlie_pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
+from charlie_pinboard.adapters.files.models import DurableFile
+
 
 @dataclass(frozen=True, slots=True)
 class DurableRoots:
@@ -24,29 +27,19 @@ class DurableRoots:
         return self.work_root / "state.sqlite3"
 
 
-@dataclass(frozen=True, slots=True)
-class DurableFile:
-    sha256: str
-    size: int
-
-
-class FileIOError(RuntimeError):
-    pass
-
-
 def _verified_directory(path: Path, *, label: str) -> Path:
     try:
         resolved = path.resolve(strict=True)
     except OSError as error:
-        raise FileIOError(f"{label} could not be verified: {path}") from error
+        raise FileIOError(FileIOErrorCode.DIRECTORY_VERIFY_FAILED, f"{label} could not be verified: {path}") from error
     if not resolved.is_dir():
-        raise FileIOError(f"{label} must be an existing directory: {path}")
+        raise FileIOError(FileIOErrorCode.DIRECTORY_INVALID, f"{label} must be an existing directory: {path}")
     return resolved
 
 
 def _validate_component(component: str) -> None:
     if component in {"", ".", ".."} or "/" in component or os.sep in component:
-        raise FileIOError(f"Invalid durable-root component: {component!r}")
+        raise FileIOError(FileIOErrorCode.DIRECTORY_INVALID, f"Invalid durable-root component: {component!r}")
 
 
 def resolve_durable_roots(project_root: Path, external_work_root: Path | None = None) -> DurableRoots:
@@ -69,7 +62,7 @@ def _sync_directory(path: Path) -> None:
         finally:
             os.close(descriptor)
     except OSError as error:
-        raise FileIOError(f"Directory could not be synchronized: {path}") from error
+        raise FileIOError(FileIOErrorCode.DIRECTORY_SYNC_FAILED, f"Directory could not be synchronized: {path}") from error
 
 
 def ensure_directory_chain(roots: DurableRoots) -> None:
@@ -82,9 +75,15 @@ def ensure_directory_chain(roots: DurableRoots) -> None:
         except FileExistsError:
             pass
         except OSError as error:
-            raise FileIOError(f"Durable-root component could not be created: {child}") from error
+            raise FileIOError(
+                FileIOErrorCode.DIRECTORY_CREATE_FAILED,
+                f"Durable-root component could not be created: {child}",
+            ) from error
         if child.is_symlink() or not child.is_dir():
-            raise FileIOError(f"Durable-root component is not a real directory: {child}")
+            raise FileIOError(
+                FileIOErrorCode.DIRECTORY_INVALID,
+                f"Durable-root component is not a real directory: {child}",
+            )
         _sync_directory(current)
         current = child
 
@@ -100,9 +99,9 @@ def ensure_child_directory(parent: Path, component: str) -> Path:
     except FileExistsError:
         pass
     except OSError as error:
-        raise FileIOError(f"Durable directory could not be created: {child}") from error
+        raise FileIOError(FileIOErrorCode.DIRECTORY_CREATE_FAILED, f"Durable directory could not be created: {child}") from error
     if child.is_symlink() or not child.is_dir():
-        raise FileIOError(f"Durable directory is not a real directory: {child}")
+        raise FileIOError(FileIOErrorCode.DIRECTORY_INVALID, f"Durable directory is not a real directory: {child}")
     _sync_directory(verified_parent)
     return child
 
@@ -140,14 +139,14 @@ def create_immutable(path: Path, content: bytes) -> DurableFile:
         try:
             os.link(staging, path, follow_symlinks=False)
         except FileExistsError as error:
-            raise FileIOError(f"Immutable file already exists: {path}") from error
+            raise FileIOError(FileIOErrorCode.FILE_ALREADY_EXISTS, f"Immutable file already exists: {path}") from error
         _sync_directory(parent)
         _cleanup_staging(staging, parent)
         return result
     except FileIOError:
         raise
     except OSError as error:
-        raise FileIOError(f"Immutable file could not be published: {path}") from error
+        raise FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, f"Immutable file could not be published: {path}") from error
     finally:
         _cleanup_staging(staging, parent)
 
@@ -163,6 +162,6 @@ def atomic_replace(path: Path, content: bytes) -> DurableFile:
     except FileIOError:
         raise
     except OSError as error:
-        raise FileIOError(f"Replacement file could not be published: {path}") from error
+        raise FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, f"Replacement file could not be published: {path}") from error
     finally:
         _cleanup_staging(staging, parent)

@@ -48,10 +48,10 @@ Only distribution version lookup and command composition live at the package roo
 
 | Owner group | Responsibility |
 | --- | --- |
-| `model.py`, `identifiers.py`, `errors.py` | Closed domain values, opaque identifiers, and expected decision failures |
-| `decisions.py` | Item and attempt lifecycle, focus, dependency, requirement, and review legality |
-| `authority_decisions.py` | Coordination and attempt authority lifecycle and fencing |
-| `proposal_decisions.py` | Immutable inbox intake |
+| `work_models.py`, `ledger.py`, `identifiers.py`, `errors.py` | Work-ledger values, read-only snapshot behavior, opaque identifiers, and expected decision failures |
+| `decision_models.py`, `decisions.py` | Closed item and attempt commands plus lifecycle, focus, dependency, requirement, and review legality |
+| `authority_models.py`, `authority_decisions.py` | Closed authority operations plus coordination and attempt authority lifecycle and fencing |
+| `proposal_models.py`, `proposal_decisions.py` | Closed proposal intake values and immutable inbox intake decisions |
 | `history.py` | Exact history scope records, canonical codecs, digests, and receipt relationships |
 
 Expected rejection over constructed domain values is returned as a typed `DecisionFailure`. Boundary decoding and infrastructure failures remain typed exceptions until input has become a valid domain value.
@@ -62,10 +62,11 @@ Expected rejection over constructed domain values is returned as a typed `Decisi
 
 | Owner group | Responsibility |
 | --- | --- |
-| `stored_state.py`, `mutations.py`, `ports.py` | Complete persistence aggregate, closed mutation family, and transactional store capabilities |
+| `stored_state.py`, `mutation_models.py`, `mutations.py`, `ports.py` | Complete persistence aggregate, closed mutation records, mutation projection, and transactional store capabilities |
 | `decision_projection.py`, `service.py` | Projection into domain decisions and locked mutation orchestration |
-| `actions.py`, `queries.py` | Legal-action discovery plus current overview and parallel-preview read models |
-| `artifacts.py`, `dispatch.py` | Immutable artifact references, accepted evidence publication, dispatch eligibility, and prompt preparation |
+| `actions.py`, `query_models.py`, `queries.py` | Legal-action discovery plus current overview and parallel-preview records and queries |
+| `artifacts.py`, `dispatch_models.py`, `dispatch.py` | Immutable artifact references, dispatch contracts, accepted evidence publication, dispatch eligibility, and prompt preparation |
+| `errors.py` | Exact application exception families and their code enums |
 | `validation.py`, `transfer.py` | Whole-work-root validation and portable-copy workflow |
 
 SQLite rows are not active domain objects. `StoredWorkState` contains exact typed records without SQL handles or filesystem paths, and `LedgerSnapshot` remains the storage-independent decision input.
@@ -76,10 +77,10 @@ Adapters own concrete persistence and filesystem mechanics without deciding prod
 
 | Owner group | Responsibility |
 | --- | --- |
-| `files/root.py`, `files/file_io.py` | Git-backed project discovery, durable-root resolution, confined paths, directory creation, and atomic file publication |
+| `files/root.py`, `files/file_io.py`, `files/models.py`, `files/errors.py` | Git-backed project discovery, durable-root resolution, file-operation records, exact failure families, directory creation, and atomic file publication |
 | `files/artifacts.py` | Immutable artifact naming, publication, digest verification, and reference resolution |
 | `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections |
-| `sqlite/schema.sql`, `sqlite/database.py` | Exact current schema, connection configuration, schema verification, transactions, backup, synchronization, and stable storage errors |
+| `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, schema verification, connection records, transactions, backup, synchronization, and exact storage failures |
 | `sqlite/store.py` | Complete `StoredWorkState` loading and exhaustive accepted-mutation persistence |
 | `sqlite/registration.py` | Fresh initialization, safe reopen of SQLite, and initial view generation |
 
@@ -87,12 +88,13 @@ Adapters own concrete persistence and filesystem mechanics without deciding prod
 
 Interfaces own user-facing boundaries. They may depend on application use cases, concrete adapters for composition, and domain identifiers needed to construct typed input. They do not own lifecycle legality or persistence policy.
 
-| Module | Responsibility |
+| Owner group | Responsibility |
 | --- | --- |
-| `cli.py` | Current command surface, argument decoding, authority-token comparison, SQLite composition, JSON/text presentation, and generated-view refresh |
-| `transition_input.py` | Strict external transition payload records and conversion to typed command input |
-| `dispatch_brief.py` | Canonical checkpoint parsing, architecture-impact shape validation, reviewed-authority and brief-review verification, and canonical launch prompt rendering |
-| `proposals.py` | Strict proposal-file decoding and conversion into current SQLite intake input |
+| `cli_models.py`, `cli.py` | Command and presentation records plus the current command surface, argument decoding, authority-token comparison, SQLite composition, JSON/text conversion, and generated-view refresh |
+| `transition_models.py`, `transition_input.py` | Strict external transition payload records and conversion to typed command input |
+| `dispatch_brief_models.py`, `dispatch_brief.py` | Closed brief record vocabulary plus canonical checkpoint parsing, architecture-impact validation, reviewed-authority and brief-review verification, and canonical launch prompt rendering |
+| `proposal_models.py`, `proposals.py` | Strict proposal-file records and decoding into current SQLite intake input |
+| `errors.py` | Exact interface exception families and their code enums |
 
 ## Storage boundaries
 

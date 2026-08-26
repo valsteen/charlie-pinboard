@@ -4,8 +4,13 @@ from typing import Annotated, Literal, assert_never
 
 import msgspec
 
-from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
-from charlie_pinboard.domain.model import (
+from charlie_pinboard.domain.errors import (
+    DecisionFailure,
+    DecisionFailureCode,
+    HistoryRecordError,
+    HistoryRecordErrorCode,
+)
+from charlie_pinboard.domain.work_models import (
     ArtifactRole,
     ItemScope,
     ScopeArtifact,
@@ -48,9 +53,15 @@ class ScopeArtifactRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=Tru
 
     def __post_init__(self) -> None:
         if self.kind != self.role:
-            raise ValueError("Semantic artifact kind must equal its role.")
+            raise HistoryRecordError(
+                HistoryRecordErrorCode.ARTIFACT_KIND_ROLE_MISMATCH,
+                "Semantic artifact kind must equal its role.",
+            )
         if not _canonical_selector(self.selector):
-            raise ValueError("Artifact selector must be a canonical relative POSIX path.")
+            raise HistoryRecordError(
+                HistoryRecordErrorCode.ARTIFACT_SELECTOR_INVALID,
+                "Artifact selector must be a canonical relative POSIX path.",
+            )
 
 
 class ItemScopeRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -68,7 +79,10 @@ class ItemScopeRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
         dependency_positions = tuple(value.position for value in self.dependencies)
         dependency_ids = tuple(value.dependency_id for value in self.dependencies)
         if not _canonical_positions(dependency_positions, dependency_ids):
-            raise ValueError("Dependency positions or identities are not canonical.")
+            raise HistoryRecordError(
+                HistoryRecordErrorCode.DEPENDENCIES_INVALID,
+                "Dependency positions or identities are not canonical.",
+            )
         artifact_positions: dict[SemanticArtifactRole, list[int]] = {}
         artifact_identities: set[tuple[str, str, int]] = set()
         artifact_order: list[tuple[str, int, str, str, int]] = []
@@ -76,13 +90,22 @@ class ItemScopeRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
             artifact_positions.setdefault(artifact.role, []).append(artifact.position)
             identity = (artifact.kind, artifact.key, artifact.revision)
             if identity in artifact_identities:
-                raise ValueError("Semantic artifact identity is duplicated.")
+                raise HistoryRecordError(
+                    HistoryRecordErrorCode.ARTIFACT_IDENTITY_DUPLICATE,
+                    "Semantic artifact identity is duplicated.",
+                )
             artifact_identities.add(identity)
             artifact_order.append((artifact.role, artifact.position, artifact.kind, artifact.key, artifact.revision))
         if any(positions != list(range(len(positions))) for positions in artifact_positions.values()):
-            raise ValueError("Artifact role positions are not canonical.")
+            raise HistoryRecordError(
+                HistoryRecordErrorCode.ARTIFACT_ROLE_POSITIONS_INVALID,
+                "Artifact role positions are not canonical.",
+            )
         if artifact_order != sorted(artifact_order):
-            raise ValueError("Artifact order is not canonical.")
+            raise HistoryRecordError(
+                HistoryRecordErrorCode.ARTIFACT_ORDER_INVALID,
+                "Artifact order is not canonical.",
+            )
 
 
 class TransitionReceiptOutcome(msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_defaults=True):

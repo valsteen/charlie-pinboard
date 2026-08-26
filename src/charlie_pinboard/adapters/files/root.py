@@ -1,13 +1,7 @@
 import subprocess
 from pathlib import Path
 
-
-class RootError(RuntimeError):
-    code: str
-
-    def __init__(self, code: str, message: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {message}")
+from charlie_pinboard.adapters.files.errors import RootError, RootErrorCode
 
 
 def resolve_project_root(cwd: Path) -> Path:
@@ -20,13 +14,13 @@ def resolve_project_root(cwd: Path) -> Path:
     )
     if result.returncode != 0:
         raise RootError(
-            "PROJECT_GIT_ROOT_UNAVAILABLE",
+            RootErrorCode.PROJECT_GIT_ROOT_UNAVAILABLE,
             result.stderr.strip() or f"'{cwd}' is not inside a Git repository.",
         )
     common_directory = Path(result.stdout.strip()).resolve()
     if common_directory.name != ".git":
         raise RootError(
-            "PROJECT_GIT_LAYOUT_UNSUPPORTED",
+            RootErrorCode.PROJECT_GIT_LAYOUT_UNSUPPORTED,
             f"Expected the shared Git directory to end in '.git', found '{common_directory}'.",
         )
     return common_directory.parent

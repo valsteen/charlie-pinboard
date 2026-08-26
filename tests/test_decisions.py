@@ -3,7 +3,7 @@ import unittest
 from datetime import UTC, datetime
 from typing import cast
 
-from charlie_pinboard.domain.decisions import (
+from charlie_pinboard.domain.decision_models import (
     Action,
     ActionKind,
     ActorAuthority,
@@ -12,15 +12,9 @@ from charlie_pinboard.domain.decisions import (
     Role,
     TransitionCommand,
 )
-from charlie_pinboard.domain.decisions import (
-    available_actions as available_actions_outcome,
-)
-from charlie_pinboard.domain.decisions import (
-    bind_transition as bind_transition_outcome,
-)
-from charlie_pinboard.domain.decisions import (
-    decide as decision_outcome,
-)
+from charlie_pinboard.domain.decisions import available_actions as available_actions_outcome
+from charlie_pinboard.domain.decisions import bind_transition as bind_transition_outcome
+from charlie_pinboard.domain.decisions import decide as decision_outcome
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.history import (
     item_scope_bytes as item_scope_bytes_outcome,
@@ -34,7 +28,8 @@ from charlie_pinboard.domain.identifiers import (
     CandidateId,
     ItemId,
 )
-from charlie_pinboard.domain.model import (
+from charlie_pinboard.domain.ledger import LedgerSnapshot
+from charlie_pinboard.domain.work_models import (
     AcceptedProposalState,
     ActivateInput,
     ArtifactRole,
@@ -45,7 +40,6 @@ from charlie_pinboard.domain.model import (
     EmptyInput,
     EvidenceInput,
     ItemScope,
-    LedgerSnapshot,
     ReasonInput,
     ResumeInput,
     ScopeArtifact,

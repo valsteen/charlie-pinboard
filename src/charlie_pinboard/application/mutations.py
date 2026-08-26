@@ -1,6 +1,15 @@
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import assert_never
 
+from charlie_pinboard.application.errors import MutationContractError, MutationContractErrorCode
+from charlie_pinboard.application.mutation_models import (
+    AttemptAuthorityMutation,
+    CoordinationAuthorityMutation,
+    MutationReceipt,
+    ProposalCreationMutation,
+    StoredStateMutation,
+    TransitionMutation,
+)
 from charlie_pinboard.application.stored_state import (
     AttemptLeaseCounter,
     AttemptLeaseGeneration,
@@ -20,29 +29,25 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
-from charlie_pinboard.domain.authority_decisions import (
-    AttemptAuthorityDecision,
+from charlie_pinboard.domain.authority_models import (
     AttemptLeaseStatus,
-    CoordinationAuthorityDecision,
 )
-from charlie_pinboard.domain.decisions import ActionKind, AuthorizationKind, Decision, TransitionReceipt
+from charlie_pinboard.domain.decision_models import (
+    ActionKind,
+    AuthorizationKind,
+    Decision,
+)
 from charlie_pinboard.domain.history import (
     HistoryOutcome,
     encode_transition_receipt_outcome,
 )
 from charlie_pinboard.domain.identifiers import (
-    ArtifactRefId,
     HistoryId,
     HistorySubjectId,
     HostId,
     TaskId,
 )
-from charlie_pinboard.domain.model import CanonicalJson
-from charlie_pinboard.domain.proposal_decisions import ProposalCreationDecision
-
-
-class MutationContractError(ValueError):
-    pass
+from charlie_pinboard.domain.work_models import CanonicalJson
 
 
 def _work_item_key(value: StoredWorkItem) -> str:
@@ -73,68 +78,17 @@ def _stored_attempt_lease_key(value: StoredAttemptLease) -> str:
     return str(value.attempt_id)
 
 
-@dataclass(frozen=True, slots=True)
-class MutationReceipt:
-    """Stored-history identity for an ordinary transition receipt."""
-
-    transition: TransitionReceipt
-    history_id: HistoryId
-    project_revision: int
-    action_kind: TransitionHistoryActionKind
-    subject_id: HistorySubjectId
-    artifact_ref_id: ArtifactRefId | None
-    authorization: TransitionHistoryAuthorizationKind
-    actor_task_id: TaskId | None
-    actor_host_id: HostId | None
-    input_schema: str
-    input_payload: CanonicalJson
 
 
-@dataclass(frozen=True, slots=True)
-class ProposalCreationMutation:
-    """Persists an authorized proposal intake without deciding its legality."""
-
-    before: StoredWorkState
-    after: StoredWorkState
-    receipt: MutationReceipt
-    decision: ProposalCreationDecision
 
 
-@dataclass(frozen=True, slots=True)
-class TransitionMutation:
-    """Persists one accepted closed lifecycle decision as an exact relational delta."""
-
-    decision: Decision
-    before: StoredWorkState
-    after: StoredWorkState
-    receipt: MutationReceipt
 
 
-@dataclass(frozen=True, slots=True)
-class CoordinationAuthorityMutation:
-    """Persists an authorized coordination change without deciding its legality."""
-
-    before: StoredWorkState
-    after: StoredWorkState
-    receipt: MutationReceipt
-    decision: CoordinationAuthorityDecision
 
 
-@dataclass(frozen=True, slots=True)
-class AttemptAuthorityMutation:
-    """Persists an authorized attempt-authority change without deciding its legality."""
-
-    before: StoredWorkState
-    after: StoredWorkState
-    receipt: MutationReceipt
-    decision: AttemptAuthorityDecision
 
 
-type TransitionReceiptMutation = (
-    TransitionMutation | ProposalCreationMutation | CoordinationAuthorityMutation | AttemptAuthorityMutation
-)
 
-type StoredStateMutation = TransitionReceiptMutation
 
 
 def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
@@ -208,7 +162,7 @@ def _common_after(mutation: StoredStateMutation) -> StoredWorkState:
     receipt = mutation.receipt
     next_history_id = 1 + max((int(value.history_id) for value in before.transition_receipts), default=0)
     if int(receipt.history_id) != next_history_id or receipt.project_revision != project.revision + 1:
-        raise MutationContractError("The accepted stored receipt does not identify the mutation exactly.")
+        raise MutationContractError(MutationContractErrorCode.RECEIPT_MISMATCH, "The accepted stored receipt does not identify the mutation exactly.")
     stored_receipt = _stored_receipt(mutation)
     return replace(
         before,
@@ -258,7 +212,7 @@ def _proposal_creation_after(
         None,
     )
     if any(value.proposal_id == intake.proposal_id for value in common.proposals.proposals):
-        raise MutationContractError("Proposal creation identity already exists.")
+        raise MutationContractError(MutationContractErrorCode.PROPOSAL_EXISTS, "Proposal creation identity already exists.")
     return replace(
         common,
         proposals=replace(
@@ -303,9 +257,9 @@ def _transition_item_state(decision: Decision) -> StoredWorkItemState:
     try:
         state = StoredWorkItemState(decision.receipt.outcome)
     except ValueError as error:
-        raise MutationContractError("A terminal transition must name its exact stored item state.") from error
+        raise MutationContractError(MutationContractErrorCode.TERMINAL_STATE_INVALID, "A terminal transition must name its exact stored item state.") from error
     if state not in {StoredWorkItemState.DONE, StoredWorkItemState.SUPERSEDED, StoredWorkItemState.DROPPED}:
-        raise MutationContractError("A terminal transition must name a terminal stored item state.")
+        raise MutationContractError(MutationContractErrorCode.TERMINAL_STATE_INVALID, "A terminal transition must name a terminal stored item state.")
     return state
 
 
@@ -324,7 +278,7 @@ def _transition_item_after(
         proposal_change = decision.proposal_change
         accepted = None if proposal_change is None else proposal_change.accepted_item
         if accepted is None or change.after != accepted.state:
-            raise MutationContractError("Item creation requires one complete accepted-proposal decision.")
+            raise MutationContractError(MutationContractErrorCode.ACCEPTED_PROPOSAL_INCOMPLETE, "Item creation requires one complete accepted-proposal decision.")
         items.append(
             StoredWorkItem(
                 accepted.item,
@@ -373,7 +327,7 @@ def _transition_item_after(
         )
     index = next((position for position, item in enumerate(items) if item.item_id == change.item), None)
     if index is None or items[index].state.value != change.before.value:
-        raise MutationContractError("The transition item change is stale.")
+        raise MutationContractError(MutationContractErrorCode.ITEM_CHANGE_STALE, "The transition item change is stale.")
     terminal = change.after is None
     items[index] = replace(
         items[index],
@@ -404,13 +358,13 @@ def _transition_attempt_after(
             or change.owner is None
             or mutation.decision.item_change is None
         ):
-            raise MutationContractError("Attempt creation facts are incomplete.")
+            raise MutationContractError(MutationContractErrorCode.ATTEMPT_CREATION_INCOMPLETE, "Attempt creation facts are incomplete.")
         item = next(
             (value for value in lifecycle.work_items if value.item_id == mutation.decision.item_change.item),
             None,
         )
         if item is None:
-            raise MutationContractError("Attempt creation requires its current item.")
+            raise MutationContractError(MutationContractErrorCode.ATTEMPT_ITEM_MISSING, "Attempt creation requires its current item.")
         attempts.append(
             StoredAttempt(
                 change.attempt,
@@ -434,11 +388,11 @@ def _transition_attempt_after(
         return replace(lifecycle, attempts=tuple(sorted(attempts, key=_attempt_key)))
     index = next((position for position, attempt in enumerate(attempts) if attempt.attempt_id == change.attempt), None)
     if index is None or attempts[index].state != change.before or change.after is None:
-        raise MutationContractError("The transition attempt change is stale or incomplete.")
+        raise MutationContractError(MutationContractErrorCode.ATTEMPT_CHANGE_INCOMPLETE, "The transition attempt change is stale or incomplete.")
     clears_candidate = change.after.value in {"active", "paused", "blocked"}
     records_candidate = change.after.value == "review"
     if records_candidate and (change.protected_candidate_after is None or change.candidate_observed_at is None):
-        raise MutationContractError("Review submission requires exact protected candidate provenance.")
+        raise MutationContractError(MutationContractErrorCode.REVIEW_PROVENANCE_MISSING, "Review submission requires exact protected candidate provenance.")
     attempts[index] = replace(
         attempts[index],
         state=change.after,
@@ -477,7 +431,7 @@ def _transition_proposals_after(mutation: TransitionMutation, common: StoredWork
         (position for position, proposal in enumerate(proposals) if proposal.proposal_id == change.proposal), None
     )
     if index is None or proposals[index].disposition is not None:
-        raise MutationContractError("The transition proposal change is stale.")
+        raise MutationContractError(MutationContractErrorCode.PROPOSAL_CHANGE_STALE, "The transition proposal change is stale.")
     proposals[index] = replace(
         proposals[index],
         disposition=disposition,
@@ -509,9 +463,9 @@ def _transition_attempt_authority_after(mutation: TransitionMutation, common: St
         None,
     )
     if counter_index is None or lease_index is None or anchor is None:
-        raise MutationContractError("Attempt-authority fencing requires its exact retained generation.")
+        raise MutationContractError(MutationContractErrorCode.ATTEMPT_AUTHORITY_GENERATION_MISSING, "Attempt-authority fencing requires its exact retained generation.")
     if change.after.lease_id is not None or change.after.generation != change.before.generation + 1:
-        raise MutationContractError("Attempt-authority fencing must allocate one revoked generation.")
+        raise MutationContractError(MutationContractErrorCode.ATTEMPT_AUTHORITY_GENERATION_INVALID, "Attempt-authority fencing must allocate one revoked generation.")
     counters[counter_index] = replace(counters[counter_index], generation_high_water=change.after.generation)
     leases[lease_index] = replace(
         leases[lease_index],
@@ -558,7 +512,7 @@ def _transition_coordinator_after(mutation: TransitionMutation, common: StoredWo
         change.before.expires_at,
         change.before.state.value,
     ):
-        raise MutationContractError("The coordinator transfer is stale.")
+        raise MutationContractError(MutationContractErrorCode.TRANSFER_STALE, "The coordinator transfer is stale.")
     after = change.after
     coordination = replace(
         retained,
@@ -587,11 +541,11 @@ def _attempt_authority_carrier_after(
     counter = AttemptLeaseCounter(decision.attempt, decision.counter_after)
     if counter_index is None:
         if decision.counter_before != 0:
-            raise MutationContractError("Attempt authority requires its retained counter.")
+            raise MutationContractError(MutationContractErrorCode.ATTEMPT_AUTHORITY_COUNTER_MISSING, "Attempt authority requires its retained counter.")
         counters.append(counter)
     else:
         if counters[counter_index].generation_high_water != decision.counter_before:
-            raise MutationContractError("The attempt-authority counter is stale.")
+            raise MutationContractError(MutationContractErrorCode.ATTEMPT_AUTHORITY_COUNTER_STALE, "The attempt-authority counter is stale.")
         counters[counter_index] = counter
     leases = list(authority.attempt_leases)
     lease_index = next(
@@ -608,7 +562,7 @@ def _attempt_authority_carrier_after(
     )
     if lease_index is None:
         if decision.current_before is not None:
-            raise MutationContractError("Attempt authority expected a retained lease row.")
+            raise MutationContractError(MutationContractErrorCode.ATTEMPT_AUTHORITY_LEASE_MISSING, "Attempt authority expected a retained lease row.")
         leases.append(stored_lease)
     else:
         leases[lease_index] = stored_lease
@@ -677,7 +631,7 @@ def _carrier_after(mutation: StoredStateMutation, common: StoredWorkState) -> St
             return _transition_after(mutation, common)
         case CoordinationAuthorityMutation():
             if supplied.authority.coordination == common.authority.coordination:
-                raise MutationContractError("A coordination-authority carrier must change the coordination lease.")
+                raise MutationContractError(MutationContractErrorCode.COORDINATION_CARRIER_INVALID, "A coordination-authority carrier must change the coordination lease.")
             decision = mutation.decision
             retained = mutation.before.authority.coordination
             changed = supplied.authority.coordination
@@ -698,10 +652,10 @@ def _carrier_after(mutation: StoredStateMutation, common: StoredWorkState) -> St
                 decision.after.expires_at,
                 decision.after.state.value,
             ):
-                raise MutationContractError("The coordination decision does not match its relational delta.")
+                raise MutationContractError(MutationContractErrorCode.COORDINATION_DECISION_MISMATCH, "The coordination decision does not match its relational delta.")
             if decision.before is None:
                 if retained is not None:
-                    raise MutationContractError("Coordination acquisition expected no retained authority.")
+                    raise MutationContractError(MutationContractErrorCode.COORDINATION_EXPECTED_ABSENT, "Coordination acquisition expected no retained authority.")
             elif retained is None or (
                 retained.lease_id,
                 retained.task_id,
@@ -719,7 +673,7 @@ def _carrier_after(mutation: StoredStateMutation, common: StoredWorkState) -> St
                 decision.before.expires_at,
                 decision.before.state.value,
             ):
-                raise MutationContractError("The coordination decision is stale.")
+                raise MutationContractError(MutationContractErrorCode.COORDINATION_STALE, "The coordination decision is stale.")
             return replace(common, authority=replace(common.authority, coordination=supplied.authority.coordination))
         case AttemptAuthorityMutation():
             return _attempt_authority_carrier_after(mutation, common)

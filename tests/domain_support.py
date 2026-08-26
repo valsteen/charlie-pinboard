@@ -1,52 +1,32 @@
 from dataclasses import replace as dataclass_replace
 from typing import Any  # noqa: TID251 - fixture corruption intentionally crosses the typed boundary
 
-from charlie_pinboard.domain.decisions import Action as ActionValue
-from charlie_pinboard.domain.decisions import ActionKind
+from charlie_pinboard.domain.decision_models import Action as ActionValue
+from charlie_pinboard.domain.decision_models import ActionKind
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     AttemptId,
     CandidateId,
     HostId,
     ItemId,
-    LeaseId,
     LedgerId,
     ProposalId,
     TaskId,
 )
-from charlie_pinboard.domain.model import (
+from charlie_pinboard.domain.work_models import (
     AcceptedProposalState,
     AttemptState,
     ScopeArtifact,
     Timing,
 )
-from charlie_pinboard.domain.model import (
-    AcceptProposalInput as AcceptProposalInputValue,
-)
-from charlie_pinboard.domain.model import (
-    AttemptAuthority as AttemptAuthorityValue,
-)
-from charlie_pinboard.domain.model import (
-    AttemptRecord as AttemptRecordValue,
-)
-from charlie_pinboard.domain.model import (
-    DeferInput as DeferInputValue,
-)
-from charlie_pinboard.domain.model import (
-    ItemScope as ItemScopeValue,
-)
-from charlie_pinboard.domain.model import (
-    ProposalRecord as ProposalRecordValue,
-)
-from charlie_pinboard.domain.model import (
-    ScopeAnchor as ScopeAnchorValue,
-)
-from charlie_pinboard.domain.model import (
-    ScopeDependency as ScopeDependencyValue,
-)
-from charlie_pinboard.domain.model import (
-    TransferCoordinatorInput as TransferCoordinatorInputValue,
-)
+from charlie_pinboard.domain.work_models import AcceptProposalInput as AcceptProposalInputValue
+from charlie_pinboard.domain.work_models import AttemptRecord as AttemptRecordValue
+from charlie_pinboard.domain.work_models import DeferInput as DeferInputValue
+from charlie_pinboard.domain.work_models import ItemScope as ItemScopeValue
+from charlie_pinboard.domain.work_models import ProposalRecord as ProposalRecordValue
+from charlie_pinboard.domain.work_models import ScopeAnchor as ScopeAnchorValue
+from charlie_pinboard.domain.work_models import ScopeDependency as ScopeDependencyValue
+from charlie_pinboard.domain.work_models import TransferCoordinatorInput as TransferCoordinatorInputValue
 
 
 def replace(instance: Any, **changes: Any) -> Any:  # noqa: ANN401
@@ -131,20 +111,6 @@ def scope_anchor(item: str, revision: int, digest: str, scope: ItemScopeValue) -
 
 def proposal_record(proposal: str, revision: str) -> ProposalRecordValue:
     return ProposalRecordValue(ProposalId(proposal), revision)
-
-
-def attempt_authority(
-    attempt: str,
-    item: str,
-    lease_id: str | None,
-    generation: int,
-) -> AttemptAuthorityValue:
-    return AttemptAuthorityValue(
-        AttemptId(attempt),
-        ItemId(item),
-        LeaseId(lease_id) if lease_id is not None else None,
-        generation,
-    )
 
 
 def accept_proposal_input(

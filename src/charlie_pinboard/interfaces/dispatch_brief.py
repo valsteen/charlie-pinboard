@@ -1,20 +1,35 @@
 import hashlib
 import json
 import re
-from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
-from typing import Final, NewType, assert_never
+from typing import Final, assert_never
 
 import msgspec
 
-from charlie_pinboard.application.dispatch import (
+from charlie_pinboard.application.dispatch_models import (
     BriefReviewPublisher,
     DispatchEnvironment,
-    DispatchError,
 )
-from charlie_pinboard.application.dispatch import DispatchPermission as DispatchPermission
+from charlie_pinboard.application.errors import DispatchError, DispatchErrorCode
 from charlie_pinboard.domain.identifiers import TaskId
+from charlie_pinboard.interfaces.dispatch_brief_models import (
+    ArchitectureImpact,
+    ArchitectureImpactKind,
+    AuthorityFamily,
+    AuthorityId,
+    AuthoritySelector,
+    BriefOwner,
+    BriefOwnerKind,
+    BriefReviewMetadata,
+    CheckpointBoundary,
+    ContractRecord,
+    CoverageDisposition,
+    CoverageRecord,
+    LifecycleRecord,
+    MarkdownTable,
+    ReviewedAuthority,
+)
+from charlie_pinboard.interfaces.errors import HeaderError, HeaderErrorCode
 
 type HeaderValue = str | bool | None
 type Header = dict[str, HeaderValue]
@@ -65,114 +80,6 @@ BRIEF_REVIEW_COLUMNS: Final = (
     "Cheapest counterexample result",
 )
 
-AuthorityId = NewType("AuthorityId", str)
-AuthorityFamily = NewType("AuthorityFamily", str)
-
-
-class CoverageDisposition(Enum):
-    CONTRACT = "contract"
-    ACCEPTANCE = "acceptance"
-    DEFERRED = "deferred"
-    NOT_APPLICABLE = "not-applicable"
-
-
-class BriefOwnerKind(Enum):
-    CONTRACT = "contract"
-    CRITERION = "criterion"
-    DEFERRAL = "deferral"
-    REASON = "reason"
-
-
-@dataclass(frozen=True, slots=True)
-class MarkdownTable:
-    rows: tuple[tuple[str, ...], ...]
-    serialized: bytes
-
-
-@dataclass(frozen=True, slots=True)
-class AuthoritySelector:
-    relative_path: Path
-    heading: str | None
-
-
-class ArchitectureImpactKind(Enum):
-    NONE = "none"
-    READ_ONLY = "read-only"
-    UPDATE_REQUIRED = "update-required"
-
-
-@dataclass(frozen=True, slots=True)
-class ArchitectureImpact:
-    kind: ArchitectureImpactKind
-    selector: AuthoritySelector | None
-    reason: str
-
-
-@dataclass(frozen=True, slots=True)
-class ReviewedAuthority:
-    authority_id: AuthorityId
-    selector: AuthoritySelector
-    reviewed_sha256: str
-    families: tuple[AuthorityFamily, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class ContractRecord:
-    invariant: str
-    authority: str
-    consumer: str
-    failure: str
-    verification: str
-    revalidation: str
-
-
-@dataclass(frozen=True, slots=True)
-class BriefOwner:
-    kind: BriefOwnerKind
-    value: str
-
-
-@dataclass(frozen=True, slots=True)
-class CoverageRecord:
-    authority_id: AuthorityId
-    family: AuthorityFamily
-    distinction: str
-    consumer: str
-    disposition: CoverageDisposition
-    owner: BriefOwner
-    counterexample: str
-
-    @property
-    def reference(self) -> str:
-        return f"authority:{self.authority_id}#{self.family}"
-
-
-@dataclass(frozen=True, slots=True)
-class LifecycleRecord:
-    operation: str
-    source_state: str
-    authority: str
-    evidence: str
-    effects: str
-    illegal_sibling: str
-
-
-@dataclass(frozen=True, slots=True)
-class BriefReviewMetadata:
-    attempt: str
-    checkpoint: str
-    checkpoint_sha256: str
-    reviewed_authority_set_sha256: str
-    reviewer_task_id: str
-    status: str
-    verdict: str
-
-
-class CheckpointBoundary(Enum):
-    LOCAL = "local"
-    CROSS_BOUNDARY = "cross-boundary"
-
-
 def _scalar(raw: str) -> HeaderValue:
     value = raw.strip()
     if len(value) >= 2 and value[0] == value[-1] == '"':
@@ -195,23 +102,23 @@ def _scalar(raw: str) -> HeaderValue:
 def _parse_header_text(text: str) -> Header:
     lines = text.splitlines()
     if not lines or lines[0] != "---":
-        raise ValueError("HEADER_MISSING: cannot parse fields")
+        raise HeaderError(HeaderErrorCode.MISSING, "Cannot parse fields without an opening delimiter.")
     try:
         end = lines.index("---", 1)
     except ValueError as error:
-        raise ValueError("HEADER_UNTERMINATED: cannot parse fields") from error
+        raise HeaderError(HeaderErrorCode.UNTERMINATED, "Cannot parse fields without a closing delimiter.") from error
     result: Header = {}
     for line_number, line in enumerate(lines[1:end], start=2):
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         if ":" not in line:
-            raise ValueError(f"HEADER_FIELD_INVALID: expected 'name: value' at line {line_number}")
+            raise HeaderError(HeaderErrorCode.FIELD_INVALID, f"Expected 'name: value' at line {line_number}.")
         key, raw = line.split(":", 1)
         key = key.strip()
         if not key:
-            raise ValueError(f"HEADER_FIELD_INVALID: header key is empty at line {line_number}")
+            raise HeaderError(HeaderErrorCode.FIELD_INVALID, f"Header key is empty at line {line_number}.")
         if key in result:
-            raise ValueError(f"HEADER_FIELD_DUPLICATE: duplicate header field '{key}' at line {line_number}")
+            raise HeaderError(HeaderErrorCode.FIELD_DUPLICATE, f"Duplicate header field '{key}' at line {line_number}.")
         result[key] = _scalar(raw)
     return result
 
@@ -223,26 +130,26 @@ def _parse_header(path: Path) -> Header:
 def _validate_work_brief_header(path: Path, attempt_id: str) -> None:
     try:
         header = _parse_header(path)
-    except (OSError, UnicodeError, ValueError) as error:
-        raise DispatchError("DISPATCH_BRIEF_INVALID", f"Cannot read canonical work brief: {error}") from error
+    except (OSError, UnicodeError, HeaderError) as error:
+        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_INVALID, f"Cannot read canonical work brief: {error}") from error
     if header.get("kind") != "work-attempt" or header.get("schema") != "pinboard-work-brief/v1":
         raise DispatchError(
-            "DISPATCH_BRIEF_INVALID",
+            DispatchErrorCode.DISPATCH_BRIEF_INVALID,
             "Canonical work brief kind and schema must be 'work-attempt' and 'pinboard-work-brief/v1'.",
         )
     if header.get("attempt") != attempt_id:
-        raise DispatchError("DISPATCH_BRIEF_INVALID", "Canonical work brief names a different attempt.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_INVALID, "Canonical work brief names a different attempt.")
 
 
 def read_dispatch_environment(path: Path) -> DispatchEnvironment:
     try:
         data = path.read_bytes()
     except OSError as error:
-        raise DispatchError("DISPATCH_ENVIRONMENT_UNREADABLE", f"Cannot read '{path}': {error}") from error
+        raise DispatchError(DispatchErrorCode.DISPATCH_ENVIRONMENT_UNREADABLE, f"Cannot read '{path}': {error}") from error
     try:
         return msgspec.json.decode(data, type=DispatchEnvironment)
     except msgspec.DecodeError as error:
-        raise DispatchError("DISPATCH_ENVIRONMENT_INVALID", f"Cannot decode dispatch environment: {error}") from error
+        raise DispatchError(DispatchErrorCode.DISPATCH_ENVIRONMENT_INVALID, f"Cannot decode dispatch environment: {error}") from error
 
 
 def _checkpoint_section(path: Path, checkpoint: str) -> tuple[str, ...]:
@@ -253,9 +160,9 @@ def _checkpoint_section(path: Path, checkpoint: str) -> tuple[str, ...]:
         if match is not None and match.group(2) == checkpoint:
             matches.append((index, len(match.group(1))))
     if not matches:
-        raise DispatchError("DISPATCH_CHECKPOINT_MISSING", f"Checkpoint '{checkpoint}' is not in '{path}'.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_CHECKPOINT_MISSING, f"Checkpoint '{checkpoint}' is not in '{path}'.")
     if len(matches) != 1:
-        raise DispatchError("DISPATCH_CHECKPOINT_AMBIGUOUS", f"Checkpoint '{checkpoint}' appears more than once.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_CHECKPOINT_AMBIGUOUS, f"Checkpoint '{checkpoint}' appears more than once.")
     start, level = matches[0]
     end = len(lines)
     for index in range(start + 1, len(lines)):
@@ -277,7 +184,7 @@ def _code_value(cell: str) -> str:
     return cell[1:-1] if len(cell) >= 2 and cell.startswith("`") and cell.endswith("`") else cell
 
 
-def _require_value(value: str, error_code: str, description: str) -> str:
+def _require_value(value: str, error_code: DispatchErrorCode, description: str) -> str:
     if value.casefold() in EMPTY_CONTRACT_CELLS:
         raise DispatchError(error_code, f"{description} must have a concrete value.")
     return value
@@ -288,8 +195,8 @@ def _markdown_table(
     columns: tuple[str, ...],
     *,
     label: str,
-    missing_code: str,
-    invalid_code: str,
+    missing_code: DispatchErrorCode,
+    invalid_code: DispatchErrorCode,
 ) -> MarkdownTable:
     starts = tuple(index for index, line in enumerate(lines) if _table_cells(line) == columns)
     if not starts:
@@ -326,9 +233,9 @@ def _selected_section(lines: tuple[str, ...], heading: str, path: Path) -> tuple
         if match is not None and match.group(2) == heading:
             matches.append((index, len(match.group(1))))
     if not matches:
-        raise DispatchError("DISPATCH_AUTHORITY_SELECTOR_INVALID", f"Heading '{heading}' is not in '{path}'.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID, f"Heading '{heading}' is not in '{path}'.")
     if len(matches) != 1:
-        raise DispatchError("DISPATCH_AUTHORITY_SELECTOR_INVALID", f"Heading '{heading}' is not unique in '{path}'.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID, f"Heading '{heading}' is not unique in '{path}'.")
     start, level = matches[0]
     end = len(lines)
     for index in range(start + 1, len(lines)):
@@ -344,15 +251,15 @@ def _contract_records(section: tuple[str, ...]) -> tuple[ContractRecord, ...]:
         section,
         CONTRACT_COLUMNS,
         label="Contract",
-        missing_code="DISPATCH_CONTRACT_MISSING",
-        invalid_code="DISPATCH_CONTRACT_INVALID",
+        missing_code=DispatchErrorCode.DISPATCH_CONTRACT_MISSING,
+        invalid_code=DispatchErrorCode.DISPATCH_CONTRACT_INVALID,
     )
     records: list[ContractRecord] = []
     for row_number, row in enumerate(table.rows, start=1):
         for column, cell in zip(CONTRACT_COLUMNS, row, strict=True):
             if cell.casefold() in EMPTY_CONTRACT_CELLS:
                 raise DispatchError(
-                    "DISPATCH_CONTRACT_INCOMPLETE",
+                    DispatchErrorCode.DISPATCH_CONTRACT_INCOMPLETE,
                     f"Contract row {row_number} has no concrete value for '{column}'.",
                 )
         records.append(ContractRecord(*row))
@@ -362,7 +269,7 @@ def _contract_records(section: tuple[str, ...]) -> tuple[ContractRecord, ...]:
 def _validate_cross_boundary_checkpoint(section: tuple[str, ...]) -> tuple[ContractRecord, ...]:
     if "Checkpoint outcome: independently-buildable" not in section:
         raise DispatchError(
-            "DISPATCH_CHECKPOINT_NOT_BUILDABLE",
+            DispatchErrorCode.DISPATCH_CHECKPOINT_NOT_BUILDABLE,
             "A cross-boundary checkpoint must record 'Checkpoint outcome: independently-buildable'.",
         )
     return _contract_records(section)
@@ -374,7 +281,7 @@ def _authority_selector(cell: str) -> AuthoritySelector:
     relative_path = Path(relative)
     if not relative or relative_path.is_absolute() or ".." in relative_path.parts or (separator and not heading):
         raise DispatchError(
-            "DISPATCH_AUTHORITY_SELECTOR_INVALID",
+            DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID,
             f"Authority selector '{value}' must name one project-relative file and optional literal heading.",
         )
     return AuthoritySelector(relative_path, heading if separator else None)
@@ -384,7 +291,7 @@ def _architecture_impact(section: tuple[str, ...]) -> ArchitectureImpact:
     declarations = tuple(line for line in section if line.startswith("Architecture impact:"))
     if len(declarations) != 1:
         raise DispatchError(
-            "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+            DispatchErrorCode.DISPATCH_ARCHITECTURE_IMPACT_INVALID,
             "The checkpoint must declare exactly one architecture impact.",
         )
     kind_value, separator, details = declarations[0].removeprefix("Architecture impact:").strip().partition(" — ")
@@ -392,32 +299,32 @@ def _architecture_impact(section: tuple[str, ...]) -> ArchitectureImpact:
         kind = ArchitectureImpactKind(kind_value)
     except ValueError as error:
         raise DispatchError(
-            "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+            DispatchErrorCode.DISPATCH_ARCHITECTURE_IMPACT_INVALID,
             f"Architecture impact '{kind_value}' is not 'none', 'read-only', or 'update-required'.",
         ) from error
     if not separator:
         raise DispatchError(
-            "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+            DispatchErrorCode.DISPATCH_ARCHITECTURE_IMPACT_INVALID,
             "The architecture impact must include a nonempty reason.",
         )
     if kind == ArchitectureImpactKind.NONE:
         if details.casefold() in EMPTY_CONTRACT_CELLS or " — " in details:
             raise DispatchError(
-                "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+                DispatchErrorCode.DISPATCH_ARCHITECTURE_IMPACT_INVALID,
                 "Architecture impact 'none' must contain only a nonempty reason.",
             )
         return ArchitectureImpact(kind, None, details)
     selector_value, selector_separator, reason = details.partition(" — ")
     if not selector_separator or reason.casefold() in EMPTY_CONTRACT_CELLS:
         raise DispatchError(
-            "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+            DispatchErrorCode.DISPATCH_ARCHITECTURE_IMPACT_INVALID,
             f"Architecture impact '{kind.value}' must name a project-relative authority selector and nonempty reason.",
         )
     try:
         selector = _authority_selector(selector_value)
     except DispatchError as error:
         raise DispatchError(
-            "DISPATCH_ARCHITECTURE_IMPACT_INVALID",
+            DispatchErrorCode.DISPATCH_ARCHITECTURE_IMPACT_INVALID,
             f"Architecture impact '{kind.value}' has an invalid authority selector.",
         ) from error
     return ArchitectureImpact(kind, selector, reason)
@@ -428,8 +335,8 @@ def _reviewed_authorities(section: tuple[str, ...]) -> tuple[tuple[ReviewedAutho
         section,
         REVIEWED_AUTHORITY_COLUMNS,
         label="Reviewed authorities",
-        missing_code="DISPATCH_REVIEWED_AUTHORITIES_MISSING",
-        invalid_code="DISPATCH_REVIEWED_AUTHORITIES_INVALID",
+        missing_code=DispatchErrorCode.DISPATCH_REVIEWED_AUTHORITIES_MISSING,
+        invalid_code=DispatchErrorCode.DISPATCH_REVIEWED_AUTHORITIES_INVALID,
     )
     records: list[ReviewedAuthority] = []
     seen_ids: set[AuthorityId] = set()
@@ -441,12 +348,12 @@ def _reviewed_authorities(section: tuple[str, ...]) -> tuple[tuple[ReviewedAutho
         families = tuple(AuthorityFamily(value) for value in family_cells)
         if IDENTIFIER.fullmatch(identifier) is None or identifier in seen_ids:
             raise DispatchError(
-                "DISPATCH_REVIEWED_AUTHORITIES_INVALID",
+                DispatchErrorCode.DISPATCH_REVIEWED_AUTHORITIES_INVALID,
                 f"Authority ID '{identifier}' must be unique kebab-case.",
             )
         if SHA256.fullmatch(digest) is None:
             raise DispatchError(
-                "DISPATCH_REVIEWED_AUTHORITIES_INVALID",
+                DispatchErrorCode.DISPATCH_REVIEWED_AUTHORITIES_INVALID,
                 f"Authority '{identifier}' must carry a lowercase SHA-256 digest.",
             )
         if (
@@ -455,7 +362,7 @@ def _reviewed_authorities(section: tuple[str, ...]) -> tuple[tuple[ReviewedAutho
             or len(set(families)) != len(families)
         ):
             raise DispatchError(
-                "DISPATCH_REVIEWED_AUTHORITIES_INVALID",
+                DispatchErrorCode.DISPATCH_REVIEWED_AUTHORITIES_INVALID,
                 f"Authority '{identifier}' must name one or more unique kebab-case families.",
             )
         seen_ids.add(identifier)
@@ -469,7 +376,7 @@ def _authority_bytes(project_root: Path, authority: ReviewedAuthority) -> bytes:
         raw = path.read_bytes()
     except OSError as error:
         raise DispatchError(
-            "DISPATCH_AUTHORITY_UNREADABLE",
+            DispatchErrorCode.DISPATCH_AUTHORITY_UNREADABLE,
             f"Cannot read authority '{authority.authority_id}' at '{path}': {error}",
         ) from error
     if authority.selector.heading is None:
@@ -478,7 +385,7 @@ def _authority_bytes(project_root: Path, authority: ReviewedAuthority) -> bytes:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
         raise DispatchError(
-            "DISPATCH_AUTHORITY_SELECTOR_INVALID",
+            DispatchErrorCode.DISPATCH_AUTHORITY_SELECTOR_INVALID,
             f"Heading-selected authority '{path}' is not UTF-8.",
         ) from error
     selected = _selected_section(tuple(text.splitlines()), authority.selector.heading, path)
@@ -490,7 +397,7 @@ def _validate_authority_digests(project_root: Path, authorities: tuple[ReviewedA
         observed = hashlib.sha256(_authority_bytes(project_root, authority)).hexdigest()
         if observed != authority.reviewed_sha256:
             raise DispatchError(
-                "DISPATCH_AUTHORITY_STALE",
+                DispatchErrorCode.DISPATCH_AUTHORITY_STALE,
                 f"Authority '{authority.authority_id}' changed after the brief review.",
             )
 
@@ -503,13 +410,13 @@ def _acceptance_criteria(section: tuple[str, ...]) -> frozenset[int]:
     )
     if len(headings) != 1:
         raise DispatchError(
-            "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID,
             "A cross-boundary checkpoint must have one Acceptance criteria section.",
         )
     start = headings[0]
     level_match = HEADING.fullmatch(section[start])
     if level_match is None:
-        raise DispatchError("DISPATCH_AUTHORITY_COVERAGE_INVALID", "Acceptance criteria heading is invalid.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Acceptance criteria heading is invalid.")
     level = len(level_match.group(1))
     end = len(section)
     for index in range(start + 1, len(section)):
@@ -524,7 +431,7 @@ def _acceptance_criteria(section: tuple[str, ...]) -> frozenset[int]:
     )
     if not numbers or len(set(numbers)) != len(numbers):
         raise DispatchError(
-            "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID,
             "Acceptance criteria must use unique positive numbered rows.",
         )
     return frozenset(numbers)
@@ -536,11 +443,11 @@ def _deferrals(section: tuple[str, ...]) -> frozenset[str]:
         match = DEFERRAL.fullmatch(line)
         if match is None:
             continue
-        _require_value(match.group("reason"), "DISPATCH_AUTHORITY_COVERAGE_INVALID", "Deferral reason")
-        _require_value(match.group("reopen"), "DISPATCH_AUTHORITY_COVERAGE_INVALID", "Deferral reopen condition")
+        _require_value(match.group("reason"), DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Deferral reason")
+        _require_value(match.group("reopen"), DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Deferral reopen condition")
         labels.append(match.group("label"))
     if len(set(labels)) != len(labels):
-        raise DispatchError("DISPATCH_AUTHORITY_COVERAGE_INVALID", "Deferral labels must be unique.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Deferral labels must be unique.")
     return frozenset(labels)
 
 
@@ -554,11 +461,11 @@ def _brief_owner(
     value = _code_value(cell)
     prefix, separator, owner_value = value.partition(":")
     if not separator or not owner_value:
-        raise DispatchError("DISPATCH_AUTHORITY_COVERAGE_INVALID", f"Brief owner '{value}' is unresolved.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Brief owner '{value}' is unresolved.")
     try:
         kind = BriefOwnerKind(prefix)
     except ValueError as error:
-        raise DispatchError("DISPATCH_AUTHORITY_COVERAGE_INVALID", f"Brief owner '{value}' is unresolved.") from error
+        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Brief owner '{value}' is unresolved.") from error
     expected_kind = {
         CoverageDisposition.CONTRACT: BriefOwnerKind.CONTRACT,
         CoverageDisposition.ACCEPTANCE: BriefOwnerKind.CRITERION,
@@ -567,19 +474,19 @@ def _brief_owner(
     }[disposition]
     if kind != expected_kind:
         raise DispatchError(
-            "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID,
             f"Disposition '{disposition.value}' cannot use owner '{value}'.",
         )
     if kind == BriefOwnerKind.CONTRACT and owner_value not in contracts:
-        raise DispatchError("DISPATCH_AUTHORITY_COVERAGE_INVALID", f"Contract owner '{owner_value}' does not exist.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Contract owner '{owner_value}' does not exist.")
     if kind == BriefOwnerKind.CRITERION:
         criterion = CRITERION_OWNER.fullmatch(value)
         if criterion is None or int(criterion.group("number")) not in criteria:
-            raise DispatchError("DISPATCH_AUTHORITY_COVERAGE_INVALID", f"Criterion owner '{value}' does not exist.")
+            raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Criterion owner '{value}' does not exist.")
     if kind == BriefOwnerKind.DEFERRAL and owner_value not in deferrals:
-        raise DispatchError("DISPATCH_AUTHORITY_COVERAGE_INVALID", f"Deferral owner '{owner_value}' does not exist.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, f"Deferral owner '{owner_value}' does not exist.")
     if kind == BriefOwnerKind.REASON:
-        _require_value(owner_value, "DISPATCH_AUTHORITY_COVERAGE_INVALID", "Not-applicable reason")
+        _require_value(owner_value, DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Not-applicable reason")
     return BriefOwner(kind, owner_value)
 
 
@@ -592,8 +499,8 @@ def _coverage_records(
         section,
         COVERAGE_COLUMNS,
         label="Authoritative coverage",
-        missing_code="DISPATCH_AUTHORITY_COVERAGE_MISSING",
-        invalid_code="DISPATCH_AUTHORITY_COVERAGE_INVALID",
+        missing_code=DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_MISSING,
+        invalid_code=DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID,
     )
     contract_invariants = frozenset(record.invariant for record in contracts)
     criteria = _acceptance_criteria(section)
@@ -607,30 +514,30 @@ def _coverage_records(
         match = AUTHORITY_REFERENCE.fullmatch(reference)
         if match is None:
             raise DispatchError(
-                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+                DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID,
                 f"Coverage reference '{reference}' must be 'authority:<id>#<family>'.",
             )
         key = (AuthorityId(match.group("authority")), AuthorityFamily(match.group("family")))
         if key not in expected or key in seen:
             raise DispatchError(
-                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+                DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID,
                 f"Coverage reference '{reference}' is unknown or duplicated.",
             )
         try:
             disposition = CoverageDisposition(_code_value(disposition_cell))
         except ValueError as error:
             raise DispatchError(
-                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+                DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID,
                 f"Coverage disposition '{disposition_cell}' is not allowed.",
             ) from error
-        _require_value(distinction, "DISPATCH_AUTHORITY_COVERAGE_INVALID", "Required distinction")
-        _require_value(consumer, "DISPATCH_AUTHORITY_COVERAGE_INVALID", "Required consumer")
-        _require_value(counterexample, "DISPATCH_AUTHORITY_COVERAGE_INVALID", "Cheapest counterexample")
+        _require_value(distinction, DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Required distinction")
+        _require_value(consumer, DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Required consumer")
+        _require_value(counterexample, DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID, "Cheapest counterexample")
         if disposition in {CoverageDisposition.DEFERRED, CoverageDisposition.NOT_APPLICABLE} and PROHIBITION.search(
             distinction
         ):
             raise DispatchError(
-                "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+                DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID,
                 f"In-scope prohibition '{reference}' cannot be deferred or marked not-applicable.",
             )
         owner = _brief_owner(owner_cell, disposition, contract_invariants, criteria, deferrals)
@@ -639,7 +546,7 @@ def _coverage_records(
     if seen != expected:
         missing = ", ".join(f"authority:{authority}#{family}" for authority, family in sorted(expected - seen))
         raise DispatchError(
-            "DISPATCH_AUTHORITY_COVERAGE_INVALID",
+            DispatchErrorCode.DISPATCH_AUTHORITY_COVERAGE_INVALID,
             f"Authoritative coverage is incomplete; missing: {missing}.",
         )
     return tuple(records)
@@ -649,35 +556,35 @@ def _validate_lifecycle_partition(section: tuple[str, ...]) -> tuple[LifecycleRe
     declarations = tuple(line for line in section if line.startswith("Lifecycle partition:"))
     if len(declarations) != 1:
         raise DispatchError(
-            "DISPATCH_LIFECYCLE_PARTITION_INVALID",
+            DispatchErrorCode.DISPATCH_LIFECYCLE_PARTITION_INVALID,
             "A cross-boundary checkpoint must declare exactly one lifecycle partition disposition.",
         )
     declaration = declarations[0]
     if declaration.startswith("Lifecycle partition: not-applicable —"):
         reason = declaration.removeprefix("Lifecycle partition: not-applicable —").strip()
-        _require_value(reason, "DISPATCH_LIFECYCLE_PARTITION_INVALID", "Lifecycle not-applicable reason")
+        _require_value(reason, DispatchErrorCode.DISPATCH_LIFECYCLE_PARTITION_INVALID, "Lifecycle not-applicable reason")
         return ()
     if declaration != "Lifecycle partition: required":
         raise DispatchError(
-            "DISPATCH_LIFECYCLE_PARTITION_INVALID",
+            DispatchErrorCode.DISPATCH_LIFECYCLE_PARTITION_INVALID,
             "Lifecycle partition must be 'required' or reasoned 'not-applicable'.",
         )
     table = _markdown_table(
         section,
         LIFECYCLE_COLUMNS,
         label="Lifecycle partition",
-        missing_code="DISPATCH_LIFECYCLE_PARTITION_INVALID",
-        invalid_code="DISPATCH_LIFECYCLE_PARTITION_INVALID",
+        missing_code=DispatchErrorCode.DISPATCH_LIFECYCLE_PARTITION_INVALID,
+        invalid_code=DispatchErrorCode.DISPATCH_LIFECYCLE_PARTITION_INVALID,
     )
     records: list[LifecycleRecord] = []
     operations: set[str] = set()
     for row in table.rows:
         for column, cell in zip(LIFECYCLE_COLUMNS, row, strict=True):
-            _require_value(cell, "DISPATCH_LIFECYCLE_PARTITION_INVALID", f"Lifecycle '{column}'")
+            _require_value(cell, DispatchErrorCode.DISPATCH_LIFECYCLE_PARTITION_INVALID, f"Lifecycle '{column}'")
         operation = _code_value(row[0])
         if IDENTIFIER.fullmatch(operation) is None or operation in operations:
             raise DispatchError(
-                "DISPATCH_LIFECYCLE_PARTITION_INVALID",
+                DispatchErrorCode.DISPATCH_LIFECYCLE_PARTITION_INVALID,
                 f"Lifecycle operation '{operation}' must be unique kebab-case.",
             )
         records.append(LifecycleRecord(operation, *row[1:]))
@@ -688,7 +595,7 @@ def _validate_lifecycle_partition(section: tuple[str, ...]) -> tuple[LifecycleRe
 def _header_string(header: Header, field: str, source: str) -> str:
     value = header.get(field)
     if not isinstance(value, str) or not value.strip():
-        raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", f"Brief review '{source}' needs string field '{field}'.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, f"Brief review '{source}' needs string field '{field}'.")
     return value
 
 
@@ -696,13 +603,13 @@ def _review_metadata_bytes(data: bytes, source: str) -> BriefReviewMetadata:
     try:
         text = data.decode("utf-8")
         header = _parse_header_text(text)
-    except (UnicodeError, ValueError) as error:
+    except (UnicodeError, HeaderError) as error:
         raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot parse brief review '{source}': {error}"
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, f"Cannot parse brief review '{source}': {error}"
         ) from error
     if header.get("kind") != "work-brief-review" or header.get("schema") != "pinboard-work-brief-review/v1":
         raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_INVALID",
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID,
             "Brief review kind and schema must be 'work-brief-review' and 'pinboard-work-brief-review/v1'.",
         )
     return BriefReviewMetadata(
@@ -720,32 +627,38 @@ def _validate_review_rows(data: bytes, source: str, coverage: tuple[CoverageReco
     try:
         review_lines = tuple(data.decode("utf-8").splitlines())
     except UnicodeError as error:
-        raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot read brief review '{source}': {error}") from error
+        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, f"Cannot read brief review '{source}': {error}") from error
     table = _markdown_table(
         review_lines,
         BRIEF_REVIEW_COLUMNS,
         label="brief-review coverage",
-        missing_code="DISPATCH_BRIEF_REVIEW_INCOMPLETE",
-        invalid_code="DISPATCH_BRIEF_REVIEW_INCOMPLETE",
+        missing_code=DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INCOMPLETE,
+        invalid_code=DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INCOMPLETE,
     )
-    expected = {(record.reference, f"{record.owner.kind.value}:{record.owner.value}") for record in coverage}
+    expected = {
+        (
+            f"authority:{record.authority_id}#{record.family}",
+            f"{record.owner.kind.value}:{record.owner.value}",
+        )
+        for record in coverage
+    }
     observed: set[tuple[str, str]] = set()
     for reference_cell, owner_cell, verdict, counterexample_result in table.rows:
         key = (_code_value(reference_cell), _code_value(owner_cell))
         if key not in expected or key in observed or verdict != "covered":
             raise DispatchError(
-                "DISPATCH_BRIEF_REVIEW_INCOMPLETE",
+                DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INCOMPLETE,
                 f"Brief review row '{key[0]}' is missing, duplicated, unresolved, or not covered.",
             )
         _require_value(
             counterexample_result,
-            "DISPATCH_BRIEF_REVIEW_INCOMPLETE",
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INCOMPLETE,
             "Cheapest counterexample result",
         )
         observed.add(key)
     if observed != expected:
         raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_INCOMPLETE",
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INCOMPLETE,
             "Brief review must contain exactly one covered row for every authoritative coverage row.",
         )
 
@@ -764,41 +677,41 @@ def _validate_brief_review_bytes(
     authority_set_sha256 = hashlib.sha256(authority_table).hexdigest()
     metadata = _review_metadata_bytes(data, source)
     if metadata.attempt != attempt_id or metadata.checkpoint != checkpoint:
-        raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", "Brief review names a different attempt or checkpoint.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, "Brief review names a different attempt or checkpoint.")
     if (
         SHA256.fullmatch(metadata.checkpoint_sha256) is None
         or SHA256.fullmatch(metadata.reviewed_authority_set_sha256) is None
     ):
-        raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", "Brief review digest fields must be lowercase SHA-256.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, "Brief review digest fields must be lowercase SHA-256.")
     if (
         metadata.checkpoint_sha256 != checkpoint_sha256
         or metadata.reviewed_authority_set_sha256 != authority_set_sha256
     ):
         raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_STALE", "Brief review is not bound to the current checkpoint and sources."
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_STALE, "Brief review is not bound to the current checkpoint and sources."
         )
     try:
         attempt_header = _parse_header(attempt_path)
     except (OSError, ValueError) as error:
-        raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", f"Cannot read attempt owner: {error}") from error
+        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, f"Cannot read attempt owner: {error}") from error
     owner = attempt_header.get("owner_task_id", attempt_header.get("owner"))
     if not isinstance(owner, str) or not owner.strip():
-        raise DispatchError("DISPATCH_BRIEF_REVIEW_INVALID", "The attempt has no concrete owner task identity.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID, "The attempt has no concrete owner task identity.")
     reviewer_task_id = TaskId(metadata.reviewer_task_id.strip())
     owner_task_id = TaskId(owner.strip())
     if reviewer_task_id == owner_task_id:
         raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT",
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT,
             "The brief reviewer must be a different task from the attempt owner.",
         )
     if metadata.reviewer_task_id != reviewer_task_id or owner != owner_task_id:
         raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_INVALID",
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID,
             "Brief reviewer and attempt owner task identities must not contain surrounding whitespace.",
         )
     if metadata.status != "complete" or metadata.verdict != "ready":
         raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_NOT_READY",
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_NOT_READY,
             "Brief review must be complete with a ready verdict before dispatch.",
         )
     _validate_review_rows(data, source, coverage)
@@ -833,7 +746,7 @@ def _validate_semantic_preservation(
         )
     if review_publisher is None:
         raise DispatchError(
-            "DISPATCH_BRIEF_REVIEW_MISSING",
+            DispatchErrorCode.DISPATCH_BRIEF_REVIEW_MISSING,
             "Current SQLite dispatch requires application-owned review publication.",
         )
     review_bytes, source = review_publisher(checkpoint_sha256, brief_review, review_id)
@@ -855,14 +768,14 @@ def _checkpoint_boundary(section: tuple[str, ...]) -> CheckpointBoundary:
     )
     if len(values) != 1:
         raise DispatchError(
-            "DISPATCH_BOUNDARY_MISSING",
+            DispatchErrorCode.DISPATCH_BOUNDARY_MISSING,
             "The checkpoint must declare exactly one 'Checkpoint boundary: local' or 'cross-boundary'.",
         )
     try:
         return CheckpointBoundary(values[0])
     except ValueError as error:
         raise DispatchError(
-            "DISPATCH_BOUNDARY_INVALID",
+            DispatchErrorCode.DISPATCH_BOUNDARY_INVALID,
             f"Checkpoint boundary '{values[0]}' is not 'local' or 'cross-boundary'.",
         ) from error
 
@@ -901,12 +814,12 @@ def prepare_dispatch_from_artifact(
     _validate_work_brief_header(attempt_path, attempt_id)
     if environment.branch != attempt_branch:
         raise DispatchError(
-            "DISPATCH_BRANCH_MISMATCH",
+            DispatchErrorCode.DISPATCH_BRANCH_MISMATCH,
             f"Environment branch '{environment.branch}' does not match attempt branch '{attempt_branch}'.",
         )
     checkout = Path(environment.checkout)
     if not checkout.is_dir():
-        raise DispatchError("DISPATCH_CHECKOUT_MISSING", f"Checkout '{checkout}' is not a directory.")
+        raise DispatchError(DispatchErrorCode.DISPATCH_CHECKOUT_MISSING, f"Checkout '{checkout}' is not a directory.")
     section = _checkpoint_section(attempt_path, checkpoint)
     _architecture_impact(section)
     boundary = _checkpoint_boundary(section)
@@ -914,7 +827,7 @@ def prepare_dispatch_from_artifact(
         case CheckpointBoundary.LOCAL:
             if brief_review is not None or review_id is not None:
                 raise DispatchError(
-                    "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID",
+                    DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID,
                     "Local checkpoints do not publish cross-boundary brief reviews.",
                 )
         case CheckpointBoundary.CROSS_BOUNDARY:
@@ -935,7 +848,7 @@ def prepare_dispatch_from_artifact(
     prompt = _canonical_prompt(attempt_path, attempt_id, checkpoint, environment)
     if supplied_prompt is not None and supplied_prompt != prompt.encode():
         raise DispatchError(
-            "DISPATCH_PROMPT_NOT_CANONICAL",
+            DispatchErrorCode.DISPATCH_PROMPT_NOT_CANONICAL,
             "The launch adds or changes instructions outside the canonical attempt brief; render and use the exact prompt.",
         )
     return prompt

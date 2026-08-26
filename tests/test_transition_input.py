@@ -2,44 +2,22 @@ import json
 import unittest
 
 import msgspec
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId
-from charlie_pinboard.domain.model import AcceptCheckpointInput, ActivateInput, ResumeInput
-from charlie_pinboard.interfaces.proposals import ProposalError, parse_proposal
+from charlie_pinboard.domain.work_models import AcceptCheckpointInput, ActivateInput, ResumeInput
+from charlie_pinboard.interfaces.errors import TransitionInputError
 from charlie_pinboard.interfaces.transition_input import (
     TRANSITION_ACTION_KINDS,
-    TransitionInputError,
     encoded_transition_input_schema,
     parse_transition_input,
 )
-from tests.support import JsonObject
+from tests.support import JsonObject, JsonValue
 
 
-def proposal() -> JsonObject:
-    return {
-        "schema": "pinboard-proposal/v1",
-        "proposal_id": "finding-1",
-        "created_at": "2026-08-25T00:00:00Z",
-        "source_task_id": "task",
-        "user_label": "Finding",
-        "trigger": "A current boundary exposed a missing behavior.",
-        "evidence": ["source:test"],
-        "why_it_matters": "The behavior must persist through SQLite.",
-        "relation": {"kind": "independent", "item": None},
-        "effect": "The proposal appears in the inbox.",
-        "unlock": "Current proposal intake remains usable.",
-        "urgency_evidence": "The installed command exercises this boundary.",
-        "freshness_assumptions": ["SQLite remains authoritative."],
-    }
-
-
-class JsonBoundaryTest(unittest.TestCase):
-    def test_current_json_boundaries_decode_exact_models(self) -> None:
-        value = proposal()
-        self.assertEqual("finding-1", parse_proposal(json.dumps(value)).proposal_id)
-        with self.assertRaises(ProposalError):
-            parse_proposal(json.dumps({**value, "unexpected": True}))
-
+class TransitionInputTest(unittest.TestCase):
+    def test_current_inputs_decode_exact_models(self) -> None:
         activation = parse_transition_input(
             "activate",
             json.dumps(
@@ -65,23 +43,7 @@ class JsonBoundaryTest(unittest.TestCase):
         )
         self.assertIsInstance(checkpoint, AcceptCheckpointInput)
 
-    def test_proposal_decoder_rejects_invalid_shapes_and_reports_paths(self) -> None:
-        valid = proposal()
-        cases = (
-            ({**valid, "schema": "repo" + "-work/v1"}, "schema"),
-            ({**valid, "schema": "pinboard" + "-proposal/v2"}, "schema"),
-            ({**valid, "proposal_id": "Not Valid"}, "proposal_id"),
-            ({**valid, "trigger": ""}, "trigger"),
-            ({**valid, "evidence": [""]}, "evidence[0]"),
-            ({**valid, "relation": {"kind": "invented", "item": None}}, "relation.kind"),
-        )
-        for value, field in cases:
-            with self.subTest(field=field), self.assertRaisesRegex(ProposalError, "PROPOSAL_INVALID") as caught:
-                parse_proposal(json.dumps(value))
-            self.assertIsInstance(caught.exception.__cause__, msgspec.ValidationError)
-            self.assertIn(field, str(caught.exception.__cause__))
-
-    def test_transition_input_rejects_invalid_closed_choices_with_native_paths(self) -> None:
+    def test_invalid_closed_choices_report_native_paths(self) -> None:
         cases: tuple[tuple[str, JsonObject], ...] = (
             (
                 "activate",
@@ -107,7 +69,7 @@ class JsonBoundaryTest(unittest.TestCase):
         with self.assertRaisesRegex(TransitionInputError, "ACTION_NOT_MUTATING"):
             parse_transition_input("unknown", "{}")
 
-    def test_every_current_transition_input_kind_decodes_and_has_a_schema(self) -> None:
+    def test_every_current_kind_decodes_and_has_a_schema(self) -> None:
         payloads: dict[str, JsonObject] = {
             "accept-checkpoint": {"checkpoint": "checkpoint-a", "candidate": "candidate", "evidence": "accepted"},
             "accept-proposal": {
@@ -146,6 +108,19 @@ class JsonBoundaryTest(unittest.TestCase):
                 self.assertIsNotNone(parse_transition_input(kind, json.dumps(payload)))
                 schema = encoded_transition_input_schema(kind)
                 self.assertIn(b'"type":"object"', schema)
+
+    @settings(max_examples=50)
+    @given(invalid=st.one_of(st.none(), st.integers(), st.lists(st.integers()), st.dictionaries(st.text(), st.text())))
+    def test_activate_rejects_non_string_attempt(self, invalid: JsonValue) -> None:
+        value: dict[str, JsonValue] = {
+            "attempt": invalid,
+            "branch": "codex/reveal-core",
+            "base_revision": "abc123",
+            "owner": "worker",
+            "brief_artifact_ref_id": 1,
+        }
+        with self.assertRaises(TransitionInputError):
+            parse_transition_input("activate", json.dumps(value))
 
 
 if __name__ == "__main__":
