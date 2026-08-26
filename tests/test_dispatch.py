@@ -805,6 +805,13 @@ Architecture impact: none — This checkpoint changes no ownership or dependency
                 ),
                 DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
             ),
+            (
+                lambda value: value.replace(
+                    b"Deferral: later-check \xe2\x80\x94 The current checkpoint does not need another check. Reopen when: accepted scope requires it.",
+                    b"Deferral: later-check \xe2\x80\x94 The current checkpoint does not need another check. Reopen when: accepted scope requires it.\nArbitrary prose.",
+                ),
+                DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
+            ),
         )
         for mutate, code in cases:
             project = Path(tempfile.mkdtemp()).resolve()

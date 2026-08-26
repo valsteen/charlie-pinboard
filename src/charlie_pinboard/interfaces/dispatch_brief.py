@@ -354,6 +354,29 @@ def _contract_records(
     return tuple(records)
 
 
+def _verification_entry_lines(section: tuple[str, ...], start: int, level: int) -> tuple[str, ...]:
+    section_end = next(
+        (
+            index
+            for index in range(start + 1, len(section))
+            if (match := HEADING.fullmatch(section[index])) is not None and len(match.group(1)) <= level
+        ),
+        len(section),
+    )
+    deferral_start = next(
+        (index for index in range(start + 1, section_end) if DEFERRAL.fullmatch(section[index]) is not None),
+        section_end,
+    )
+    if deferral_start != section_end and any(
+        line.strip() and DEFERRAL.fullmatch(line) is None for line in section[deferral_start:section_end]
+    ):
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_VERIFICATION_INVALID,
+            "Only valid Deferral directives may follow the mandatory Verification entries.",
+        )
+    return tuple(line for line in section[start + 1 : deferral_start] if line.strip())
+
+
 def _verification_records(
     section: tuple[str, ...],
     accepted_item_id: str,
@@ -376,16 +399,7 @@ def _verification_records(
             "The Verification section must appear exactly once.",
         )
     start, level = starts[0]
-    end = len(section)
-    for index in range(start + 1, len(section)):
-        if DEFERRAL.fullmatch(section[index]) is not None:
-            end = index
-            break
-        match = HEADING.fullmatch(section[index])
-        if match is not None and len(match.group(1)) <= level:
-            end = index
-            break
-    entries = tuple(line for line in section[start + 1 : end] if line.strip())
+    entries = _verification_entry_lines(section, start, level)
     if not entries:
         raise DispatchError(
             DispatchErrorCode.DISPATCH_VERIFICATION_INCOMPLETE,
