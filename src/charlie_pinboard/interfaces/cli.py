@@ -22,6 +22,8 @@ from charlie_pinboard.adapters.sqlite.errors import StorageError
 from charlie_pinboard.adapters.sqlite.registration import initialize_work_state
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.actions import discover_actions
+from charlie_pinboard.application.artifact_publication import publish_accepted_artifact, validate_transition_work_brief
+from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.decision_projection import (
     project_decision_snapshot,
     project_inactive_attempt_authority,
@@ -49,7 +51,8 @@ from charlie_pinboard.application.service import (
     create_proposal,
     execute,
 )
-from charlie_pinboard.application.validation import ValidationReport, validate_work_state
+from charlie_pinboard.application.stored_state import ArtifactKind
+from charlie_pinboard.application.validation import Diagnostic, Severity, ValidationReport, validate_work_state
 from charlie_pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
@@ -100,6 +103,8 @@ from charlie_pinboard.interfaces.cli_models import (
     ActionsView,
     ActionView,
     AttemptOperation,
+    BriefOperation,
+    BriefPublicationView,
     BriefSourceBatchView,
     BriefSourcePlanView,
     BriefSourceSegmentView,
@@ -132,12 +137,20 @@ from charlie_pinboard.interfaces.errors import (
     ProposalErrorCode,
     TransitionInputError,
     TransitionInputErrorCode,
+    WorkBriefError,
+    WorkBriefErrorCode,
 )
 from charlie_pinboard.interfaces.proposals import parse_proposal
 from charlie_pinboard.interfaces.transition_input import (
     TRANSITION_ACTION_KINDS,
     encoded_transition_input_schema,
     parse_transition_input,
+)
+from charlie_pinboard.interfaces.work_briefs import (
+    build_attempt_brief_views,
+    canonical_work_brief_bytes,
+    decode_work_brief,
+    decode_work_brief_identity,
 )
 
 
@@ -373,6 +386,14 @@ def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.Argume
     brief_source_output.add_argument("--emit-batch", type=int, help="Print exactly one zero-based planned batch.")
 
 
+def _add_brief_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    brief = commands.add_parser("brief", help="Publish canonical typed work briefs without scheduling them.")
+    operations = brief.add_subparsers(dest="operation", required=True)
+    publish = operations.add_parser("publish", help="Validate and immutably publish one pinboard-work-brief/v2 file.")
+    publish.add_argument("--file", type=Path, required=True)
+    publish.add_argument("--json", action="store_true")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pinboard", description="Inspect and transition one pinboard.")
     parser.add_argument("--version", action="version", version=__version__)
@@ -381,6 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     _add_inspection_parsers(commands)
     commands.add_parser("init", help="Create an empty current SQLite work state.")
+    _add_brief_parser(commands)
     proposal = commands.add_parser("proposal", help="Create one immutable inbox proposal.")
     proposal.add_argument("--file", type=Path, required=True)
     transition = commands.add_parser("transition", help="Apply one action returned by the actions command.")
@@ -398,9 +420,7 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch.add_argument("--expected-revision", required=True, help="Ledger revision from the dispatch action.")
     dispatch.add_argument("--generation", required=True, type=int, help="Coordinator generation from the action.")
     dispatch.add_argument("--lease-id", help="Current coordination lease identity.")
-    dispatch.add_argument(
-        "--checkpoint", required=True, help="Exact checkpoint heading in the canonical attempt brief."
-    )
+    dispatch.add_argument("--checkpoint", required=True, help="Stable checkpoint ID in the canonical work brief.")
     dispatch.add_argument(
         "--environment",
         required=True,
@@ -456,6 +476,13 @@ def _diagnostic_view(report: ValidationReport) -> ValidationView:
             )
             for diagnostic in report.diagnostics
         ),
+    )
+
+
+def _brief_views(context: CommandContext, store: SQLiteWorkStore) -> dict[AttemptId, bytes]:
+    return build_attempt_brief_views(
+        store.snapshot(),
+        ArtifactRepository(resolve_durable_roots(context.project, context.work)),
     )
 
 
@@ -594,7 +621,21 @@ def _root(context: CommandContext) -> int:
 
 
 def _validate(context: CommandContext) -> int:
-    report = validate_work_state(context.work)
+    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    try:
+        attempt_briefs = _brief_views(context, store)
+    except WorkBriefError as error:
+        report = validate_work_state(context.work)
+        report = ValidationReport(
+            (
+                *report.diagnostics,
+                Diagnostic(error.code.value, Severity.ERROR, context.work, error.message),
+            )
+        )
+    except ArtifactError, StorageError:
+        report = validate_work_state(context.work)
+    else:
+        report = validate_work_state(context.work, attempt_briefs)
     if context.arguments.json:
         _write_json(_diagnostic_view(report))
     else:
@@ -722,10 +763,63 @@ def _brief_sources(context: CommandContext) -> int:
     return 0
 
 
+def _brief(context: CommandContext) -> int:
+    if BriefOperation(context.arguments.operation) != BriefOperation.PUBLISH:
+        raise WorkBriefError(WorkBriefErrorCode.BRIEF_INVALID, "Unknown brief operation.")
+    try:
+        candidate = context.arguments.file.read_bytes()
+    except OSError as error:
+        raise WorkBriefError(
+            WorkBriefErrorCode.BRIEF_INVALID,
+            f"Cannot read work brief candidate '{context.arguments.file}': {error}",
+        ) from error
+    brief = decode_work_brief(candidate)
+    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    accepted = publish_accepted_artifact(
+        store,
+        ArtifactRepository(resolve_durable_roots(context.project, context.work)),
+        NewArtifact(
+            ArtifactKind.BRIEF,
+            brief.attempt_id,
+            brief.artifact_revision,
+            ".json",
+            canonical_work_brief_bytes(brief),
+        ),
+        datetime.now(UTC),
+    )
+    view_result = rebuild_views(store, context.work, _brief_views(context, store))
+    if view_result.warning is not None:
+        print(view_result.warning.message, file=sys.stderr)
+    view = BriefPublicationView(
+        int(accepted.artifact_ref_id),
+        accepted.kind.value,
+        accepted.key,
+        accepted.revision,
+        accepted.selector,
+        accepted.content_sha256,
+        accepted.size_bytes,
+        accepted.accepted_revision,
+    )
+    if context.arguments.json:
+        _write_json(view)
+    else:
+        print(
+            f"OK BRIEF_PUBLISHED artifact_ref_id={view.artifact_ref_id} selector={view.selector} "
+            f"accepted_revision={view.accepted_revision}"
+        )
+    return 0
+
+
 def _initialize(context: CommandContext) -> int:
     selected_work = context.work if context.arguments.work_root is not None else None
     receipt = initialize_work_state(context.project, selected_work)
     initialized = receipt.work_root
+    store = SQLiteWorkStore(receipt.database_path)
+    rebuilt = rebuild_views(
+        store, initialized, _brief_views(CommandContext(context.arguments, context.project, initialized), store)
+    )
+    if rebuilt.warning is not None:
+        raise FileIOError(FileIOErrorCode.VIEW_REFRESH_FAILED, rebuilt.warning.message)
     print(f"OK WORK_STATE_INITIALIZED {initialized}")
     return 0
 
@@ -767,7 +861,12 @@ def _proposal(context: CommandContext) -> int:
     result = create_proposal(store, CreateProposalOperation(intake), datetime.now(UTC))
     if isinstance(result, DecisionFailure):
         raise ProposalError(ProposalErrorCode(result.code.value), result.message)
-    view_result = refresh_views(store, context.work, AffectedViews(queue=True, history=True))
+    view_result = refresh_views(
+        store,
+        context.work,
+        AffectedViews(queue=True, history=True),
+        _brief_views(context, store),
+    )
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     print(f"OK PROPOSAL_CREATED {proposal.proposal_id}")
@@ -797,7 +896,18 @@ def _transition(context: CommandContext) -> int:
     if isinstance(command, DecisionFailure):
         raise CommandError(CommandErrorCode(command.code.value), command.message)
     store = SQLiteWorkStore(context.work / "state.sqlite3")
-    result = execute(store, command, datetime.now(UTC))
+    artifacts = ArtifactRepository(resolve_durable_roots(context.project, context.work))
+    result = execute(
+        store,
+        command,
+        datetime.now(UTC),
+        lambda state, current: validate_transition_work_brief(
+            state,
+            current,
+            artifacts,
+            decode_work_brief_identity,
+        ),
+    )
     if isinstance(result, DecisionFailure):
         raise CommandError(CommandErrorCode(result.code.value), result.message)
     state = store.snapshot()
@@ -810,7 +920,7 @@ def _transition(context: CommandContext) -> int:
         if any(attempt.attempt_id == action.subject for attempt in state.lifecycle.attempts)
         else (),
     )
-    view_result = refresh_views(store, context.work, affected)
+    view_result = refresh_views(store, context.work, affected, _brief_views(context, store))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     revision = str(state.lifecycle.project.revision)
@@ -949,7 +1059,12 @@ def _coordination(context: CommandContext) -> int:
     result = change_coordination_authority(store, authority_operation)
     if isinstance(result, DecisionFailure):
         raise CommandError(CommandErrorCode(result.code.value), result.message)
-    view_result = refresh_views(store, context.work, AffectedViews(queue=True, current_focus=True, history=True))
+    view_result = refresh_views(
+        store,
+        context.work,
+        AffectedViews(queue=True, current_focus=True, history=True),
+        _brief_views(context, store),
+    )
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     return _emit_coordination(context)
@@ -974,6 +1089,7 @@ def _coordinated_transition(context: CommandContext) -> int:
 
 def _execute_borrowed_coordination(context: CommandContext, action_id: str, payload: bytes) -> str:
     store = SQLiteWorkStore(context.work / "state.sqlite3")
+    artifacts = ArtifactRepository(resolve_durable_roots(context.project, context.work))
     now = datetime.now(UTC)
     state = store.snapshot()
     acquire = AcquireCoordinationAuthority(
@@ -1008,7 +1124,17 @@ def _execute_borrowed_coordination(context: CommandContext, action_id: str, payl
         command = bind_transition(action, parsed)
         if isinstance(command, DecisionFailure):
             raise CommandError(CommandErrorCode(command.code.value), command.message)
-        result = execute(store, command, datetime.now(UTC))
+        result = execute(
+            store,
+            command,
+            datetime.now(UTC),
+            lambda state, current: validate_transition_work_brief(
+                state,
+                current,
+                artifacts,
+                decode_work_brief_identity,
+            ),
+        )
         if isinstance(result, DecisionFailure):
             raise CommandError(CommandErrorCode(result.code.value), result.message)
         transition_revision = str(store.snapshot().lifecycle.project.revision)
@@ -1031,7 +1157,7 @@ def _execute_borrowed_coordination(context: CommandContext, action_id: str, payl
             )
             if isinstance(released, DecisionFailure) and transition_revision is None:
                 raise CommandError(CommandErrorCode(released.code.value), released.message)
-    view_result = rebuild_views(store, context.work)
+    view_result = rebuild_views(store, context.work, _brief_views(context, store))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     assert transition_revision is not None
@@ -1151,7 +1277,12 @@ def _attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR0915 - 
         result = change_attempt_authority(store, authority_operation)
         if isinstance(result, DecisionFailure):
             raise CommandError(CommandErrorCode(result.code.value), result.message)
-        refresh_result = refresh_views(store, context.work, AffectedViews(queue=True, current_focus=True, history=True))
+        refresh_result = refresh_views(
+            store,
+            context.work,
+            AffectedViews(queue=True, current_focus=True, history=True),
+            _brief_views(context, store),
+        )
         if refresh_result.warning is not None:
             print(refresh_result.warning.message, file=sys.stderr)
         state = store.snapshot()
@@ -1217,7 +1348,8 @@ def _parallel(context: CommandContext) -> int:
 
 
 def _views(context: CommandContext) -> int:
-    result = rebuild_views(SQLiteWorkStore(context.work / "state.sqlite3"), context.work)
+    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    result = rebuild_views(store, context.work, _brief_views(context, store))
     if result.warning is not None:
         raise FileIOError(FileIOErrorCode.VIEW_REFRESH_FAILED, result.warning.message)
     print(f"OK VIEWS_REBUILT revision={result.database_revision}")
@@ -1244,6 +1376,8 @@ def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhausti
             return _input_contract(context)
         case CommandName.BRIEF_SOURCES:
             return _brief_sources(context)
+        case CommandName.BRIEF:
+            return _brief(context)
         case CommandName.INIT:
             return _initialize(context)
         case CommandName.PROPOSAL:
@@ -1291,3 +1425,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except BriefSourceError as error:
         print(str(error), file=sys.stderr)
         return 15
+    except WorkBriefError as error:
+        print(str(error), file=sys.stderr)
+        return 16

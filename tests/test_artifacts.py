@@ -79,17 +79,17 @@ class ArtifactPersistenceTest(unittest.TestCase):
     def test_revision_is_published_immutably_and_identical_retry_is_reused(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
-        artifact = NewArtifact(ArtifactKind.BRIEF, "attempt-a", 1, ".md", b"# Brief\n")
+        artifact = NewArtifact(ArtifactKind.BRIEF, "attempt-a", 1, ".json", b"{}\n")
 
         reference = write_revision(roots, artifact)
 
-        self.assertEqual("artifacts/briefs/attempt-a/1.md", reference.selector)
+        self.assertEqual("artifacts/briefs/attempt-a/1.json", reference.selector)
         self.assertEqual(reference, write_revision(roots, artifact))
         verify_reference(roots.work_root, reference)
         with self.assertRaises(ArtifactError) as collision:
-            write_revision(roots, NewArtifact(ArtifactKind.BRIEF, "attempt-a", 1, ".md", b"different\n"))
+            write_revision(roots, NewArtifact(ArtifactKind.BRIEF, "attempt-a", 1, ".json", b"different\n"))
         self.assertEqual(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, collision.exception.code)
-        self.assertEqual(b"# Brief\n", (roots.work_root / reference.selector).read_bytes())
+        self.assertEqual(b"{}\n", (roots.work_root / reference.selector).read_bytes())
 
     def test_reference_verification_rejects_escape_symlink_size_and_digest(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
@@ -118,20 +118,20 @@ class ArtifactPersistenceTest(unittest.TestCase):
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         invalid = (
-            NewArtifact(ArtifactKind.BRIEF, "../escape", 1, ".md", b"x"),
-            NewArtifact(ArtifactKind.BRIEF, "brief", 0, ".md", b"x"),
-            NewArtifact(ArtifactKind.BRIEF, "brief", 1, "md", b"x"),
+            NewArtifact(ArtifactKind.BRIEF, "../escape", 1, ".json", b"x"),
+            NewArtifact(ArtifactKind.BRIEF, "brief", 0, ".json", b"x"),
+            NewArtifact(ArtifactKind.BRIEF, "brief", 1, "json", b"x"),
         )
         for artifact in invalid:
             with self.subTest(artifact=artifact), self.assertRaises(ArtifactError) as raised:
                 write_revision(roots, artifact)
             self.assertEqual(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, raised.exception.code)
 
-        published = write_revision(roots, NewArtifact(ArtifactKind.BRIEF, "brief", 1, ".md", b"x"))
+        published = write_revision(roots, NewArtifact(ArtifactKind.BRIEF, "brief", 1, ".json", b"x"))
         for selector in (
-            "artifacts/briefs/other/1.md",
-            "artifacts/briefs/brief/not-a-revision.md",
-            "artifacts/briefs/brief/1.md/extra",
+            "artifacts/briefs/other/1.json",
+            "artifacts/briefs/brief/not-a-revision.json",
+            "artifacts/briefs/brief/1.json/extra",
         ):
             with self.subTest(selector=selector), self.assertRaises(ArtifactError):
                 verify_reference(roots.work_root, replace(published, selector=selector))

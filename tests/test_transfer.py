@@ -12,6 +12,8 @@ from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.errors import PortableCopyError, PortableCopyErrorCode
 from charlie_pinboard.application.service import change_attempt_authority
 from charlie_pinboard.application.stored_state import (
+    ArtifactKind,
+    ArtifactReference,
     TransitionHistoryActionKind,
 )
 from charlie_pinboard.application.transfer import create_portable_copy
@@ -20,11 +22,14 @@ from charlie_pinboard.domain.authority_models import (
     RenewAttemptAuthority,
 )
 from charlie_pinboard.domain.errors import DecisionFailure
+from charlie_pinboard.domain.identifiers import ArtifactRefId
 from charlie_pinboard.domain.work_models import (
     CommandAttemptAuthority,
     CoordinationLeaseStatus,
 )
+from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 from tests.support import SQLITE_NOW, complete_sqlite_state
+from tests.work_brief_support import work_a_brief
 
 
 class PortableCopyTest(unittest.TestCase):
@@ -35,19 +40,46 @@ class PortableCopyTest(unittest.TestCase):
         state = complete_sqlite_state()
         references = []
         for reference in state.artifact_references:
-            content = f"portable artifact {reference.key}\n".encode()
+            if reference.kind == ArtifactKind.BRIEF:
+                value = work_a_brief(project)
+                content = canonical_work_brief_bytes(value)
+                suffix = ".json"
+                key = value.attempt_id
+            else:
+                content = f"portable artifact {reference.key}\n".encode()
+                suffix = ".md"
+                key = reference.key
             published = write_revision(
                 roots,
-                NewArtifact(reference.kind, reference.key, reference.revision, ".md", content),
+                NewArtifact(reference.kind, key, reference.revision, suffix, content),
             )
             references.append(
                 replace(
                     reference,
+                    key=published.key,
+                    revision=published.revision,
                     selector=published.selector,
                     content_sha256=published.content_sha256,
                     size_bytes=published.size_bytes,
                 )
             )
+        historical = write_revision(
+            roots,
+            NewArtifact(ArtifactKind.BRIEF, "historical-v1-attempt", 1, ".md", b"opaque terminal v1 evidence\n"),
+        )
+        references.append(
+            ArtifactReference(
+                ArtifactRefId(1 + max(int(value.artifact_ref_id) for value in state.artifact_references)),
+                historical.key,
+                historical.revision,
+                historical.kind,
+                historical.selector,
+                historical.content_sha256,
+                historical.size_bytes,
+                state.lifecycle.project.revision,
+                SQLITE_NOW,
+            )
+        )
         if not live_authority:
             assert state.authority.coordination is not None
             state = replace(

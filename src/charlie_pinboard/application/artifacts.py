@@ -20,3 +20,13 @@ class ArtifactRef:
     selector: str
     content_sha256: str
     size_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class WorkBriefIdentity:
+    attempt_id: str
+    item_id: str
+    branch: str
+    base_revision: str
+    accepted_scope_revision: int
+    accepted_scope_digest: str

@@ -15,8 +15,10 @@ from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.stored_state import StoredWorkState
 from charlie_pinboard.interfaces.cli import build_parser, main
+from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 
 from .support import SQLITE_NOW, JsonObject, JsonValue, complete_sqlite_state
+from .work_brief_support import work_c_brief
 
 
 class CliTest(unittest.TestCase):
@@ -91,6 +93,7 @@ class CliTest(unittest.TestCase):
             "close",
             "actions",
             "input-contract",
+            "brief",
             "brief-sources",
             "init",
             "proposal",
@@ -184,6 +187,10 @@ class CliTest(unittest.TestCase):
         store = SQLiteWorkStore(database)
         store.initialize_state(state)
         common = ("--project-root", str(project), "--work-root", str(work))
+        candidate = work_c_brief()
+        brief_path = project / "work-c-brief.json"
+        brief_path.write_bytes(canonical_work_brief_bytes(candidate))
+        publication = self.run_json_cli(*common, "brief", "publish", "--file", str(brief_path))
         payload = project / "activate.json"
         payload.write_text(
             json.dumps(
@@ -192,7 +199,7 @@ class CliTest(unittest.TestCase):
                     "branch": "codex/work-c",
                     "base_revision": "candidate-base",
                     "owner": "worker-task",
-                    "brief_artifact_ref_id": 1,
+                    "brief_artifact_ref_id": publication["artifact_ref_id"],
                 }
             ),
             encoding="utf-8",

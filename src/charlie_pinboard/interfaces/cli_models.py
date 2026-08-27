@@ -15,6 +15,7 @@ class CommandName(Enum):
     ACTIONS = "actions"
     INPUT_CONTRACT = "input-contract"
     BRIEF_SOURCES = "brief-sources"
+    BRIEF = "brief"
     INIT = "init"
     PROPOSAL = "proposal"
     TRANSITION = "transition"
@@ -40,6 +41,10 @@ class AttemptOperation(Enum):
     RELEASE = "release"
     REVOKE = "revoke"
     STATUS = "status"
+
+
+class BriefOperation(Enum):
+    PUBLISH = "publish"
 
 
 class CliArguments(argparse.Namespace):
@@ -75,6 +80,17 @@ class CliArguments(argparse.Namespace):
     reason: str
     max_batch_bytes: int
     emit_batch: int | None
+
+
+class BriefPublicationView(msgspec.Struct, frozen=True):
+    artifact_ref_id: int
+    kind: str
+    key: str
+    revision: int
+    selector: str
+    content_sha256: str
+    size_bytes: int
+    accepted_revision: int
 
 
 @dataclass(frozen=True, slots=True)

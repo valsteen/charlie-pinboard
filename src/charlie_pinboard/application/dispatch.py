@@ -101,7 +101,7 @@ def _review_publisher(
                     ArtifactKind.EVIDENCE,
                     f"{key}-rejected-{review_id}",
                     1,
-                    ".md",
+                    ".json",
                     candidate,
                 ),
             )
@@ -116,7 +116,7 @@ def _review_publisher(
                 DispatchErrorCode.DISPATCH_BRIEF_REVIEW_COLLISION,
                 f"Ready review already differs; later evidence is preserved at '{rejected.selector}'.",
             )
-        published = artifacts.publish(NewArtifact(ArtifactKind.EVIDENCE, key, 1, ".md", candidate))
+        published = artifacts.publish(NewArtifact(ArtifactKind.EVIDENCE, key, 1, ".json", candidate))
         accepted = store.accept_artifact_reference(
             artifacts.work_root,
             published,
@@ -178,6 +178,7 @@ def prepare_dispatch(
         environment,
         accepted_item_id=str(attempt.item_id),
         accepted_scope_revision=attempt.accepted_scope_revision,
+        accepted_scope_digest=attempt.accepted_scope_digest,
         supplied_prompt=supplied_prompt,
         brief_review=brief_review,
         review_id=review_id,

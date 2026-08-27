@@ -65,7 +65,7 @@ Expected rejection over constructed domain values is returned as a typed `Decisi
 | `stored_state.py`, `mutation_models.py`, `mutations.py`, `ports.py` | Complete persistence aggregate, closed mutation records, mutation projection, and transactional store capabilities |
 | `decision_projection.py`, `service.py` | Projection into domain decisions and locked mutation orchestration |
 | `actions.py`, `query_models.py`, `queries.py` | Legal-action discovery plus current overview and parallel-preview records and queries |
-| `artifacts.py`, `dispatch_models.py`, `dispatch.py` | Immutable artifact references, dispatch contracts, accepted evidence publication, dispatch eligibility, and prompt preparation |
+| `artifacts.py`, `artifact_publication.py`, `dispatch_models.py`, `dispatch.py` | Immutable artifact references and typed brief identity, application-owned artifact acceptance, activation and resume brief guards, dispatch contracts, accepted review publication, dispatch eligibility, and prompt preparation |
 | `errors.py` | Exact application exception families and their code enums |
 | `validation.py`, `transfer.py` | Whole-work-root validation and portable-copy workflow |
 
@@ -79,7 +79,7 @@ Adapters own concrete persistence and filesystem mechanics without deciding prod
 | --- | --- |
 | `files/root.py`, `files/file_io.py`, `files/models.py`, `files/errors.py` | Git-backed project discovery, durable-root resolution, file-operation records, exact failure families, directory creation, and atomic file publication |
 | `files/artifacts.py` | Immutable artifact naming, publication, digest verification, and reference resolution |
-| `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections |
+| `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections; interface composition supplies complete live-v2 brief projections |
 | `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, schema verification, connection records, transactions, backup, synchronization, and exact storage failures |
 | `sqlite/store.py` | Complete `StoredWorkState` loading and exhaustive accepted-mutation persistence |
 | `sqlite/registration.py` | Fresh initialization, safe reopen of SQLite, and initial view generation |
@@ -93,7 +93,8 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 | `cli_models.py`, `cli.py` | Command and presentation records plus the current command surface, argument decoding, authority-token comparison, SQLite composition, JSON/text conversion, and generated-view refresh |
 | `transition_models.py`, `transition_input.py` | Strict external transition payload records and conversion to typed command input |
 | `brief_source_models.py`, `brief_sources.py` | Strict source manifests, shared project-relative file and Markdown-heading selection, deterministic digests, overlap rejection, and context-bounded batch planning |
-| `dispatch_brief_models.py`, `dispatch_brief.py` | Closed brief record vocabulary plus canonical checkpoint parsing, architecture-impact validation, reviewed-authority and brief-review verification through shared source selection, and canonical launch prompt rendering |
+| `work_brief_models.py`, `work_briefs.py` | Strict v2 brief and review records, exact canonical codecs and semantic validation, digest computation, reviewed-authority checks, and complete Markdown rendering |
+| `dispatch_brief.py` | Typed accepted-brief identity checks, cross-boundary review validation, and canonical launch prompt rendering |
 | `proposal_models.py`, `proposals.py` | Strict proposal-file records and decoding into current SQLite intake input |
 | `errors.py` | Exact interface exception families and their code enums |
 
@@ -105,11 +106,11 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 
 ### Immutable artifacts
 
-Accepted requirements, briefs, results, reviews, and other evidence are immutable files below `.codex/work/artifacts/`. SQLite stores their kind, selector, revision, digest, size, and semantic relationships. Readers resolve artifacts through those accepted references and verify their bytes. The files do not independently own lifecycle state.
+Accepted requirements, briefs, results, reviews, and other evidence are immutable files below `.codex/work/artifacts/`. Canonical v2 work briefs and independent brief reviews are strict JSON; SQLite stores their kind, selector, revision, digest, size, and semantic relationships. The installed brief-publication path validates and canonicalizes a candidate, publishes immutable bytes, and accepts their reference without changing scheduling. Activation and resume separately validate that selected v2 brief identity against the locked ledger snapshot. Readers resolve artifacts through accepted references and verify their bytes. The files do not independently own lifecycle state.
 
 ### Generated views
 
-`.codex/work/views/` is human-readable output derived entirely from SQLite. A successful SQLite commit is authoritative before refresh begins. If view refresh fails, the command reports repair guidance without rolling back the accepted transition. `pinboard views rebuild` recreates the full projection, and validation distinguishes an authoritative defect from stale or missing generated output.
+`.codex/work/views/` is human-readable output derived from SQLite and its accepted artifact references. A live v2 attempt view contains a complete Markdown rendering of the canonical JSON brief; Pinboard is its only writer, and no runtime path reads it for brief semantics. A successful SQLite commit is authoritative before refresh begins. If view refresh fails, the command reports repair guidance without rolling back the accepted transition. `pinboard views rebuild` recreates the full projection, and validation distinguishes an authoritative defect from stale or missing generated output.
 
 ### Private topic evidence
 
@@ -123,7 +124,7 @@ Accepted requirements, briefs, results, reviews, and other evidence are immutabl
 
 ### Reads and validation
 
-Status, overview, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. They never parse generated Markdown. Validation verifies the database and every accepted artifact reference, then reports generated-view drift separately.
+Status, overview, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. They never parse generated Markdown. Validation verifies the database and every accepted artifact reference, validates live v2 brief identity and structure through the typed boundary, keeps historical terminal brief bytes opaque, then reports generated-view drift separately.
 
 ### Brief source planning
 
@@ -135,24 +136,24 @@ The CLI decodes command input into exact typed values and reselects the advertis
 
 ### Worker dispatch and review publication
 
-Dispatch reselects the current action, active attempt, and accepted brief reference from SQLite. `application.dispatch` passes the selected attempt's item and accepted scope revision into brief validation. The artifact adapter verifies the canonical brief bytes. `interfaces.dispatch_brief` validates the checkpoint boundary and architecture-impact declaration before any prompt is rendered. A cross-boundary checkpoint additionally verifies its seven-column contract, mandatory Verification entries, authorization-basis syntax and reference integrity, reviewed authority digests, coverage, lifecycle disposition, and independent READY review. Accepted-scope authorization must match the reselected attempt; source-derived authorization must name one exact reviewed authority family. The independent brief reviewer, not the parser, verifies that each source truthfully serves its claimed product-authority, repository-policy, or existing-consumer role and that each mandatory check's tool, threshold, platform, compatibility obligation, or hardening target is supported by accepted scope or selected source bytes.
+Dispatch reselects the current action, active attempt, and accepted JSON brief reference from SQLite. `application.dispatch` passes the selected attempt's item and accepted scope identity into brief validation. The artifact adapter verifies the canonical bytes, and `interfaces.dispatch_brief` decodes the strict record and checks attempt, item, branch, stable checkpoint ID, accepted scope, architecture impact, contracts, authorization bases, verification, reviewed-authority digests, coverage, lifecycle disposition, and independent ready review before rendering a prompt. Accepted-scope authorization must match the reselected attempt; source-derived authorization must name one exact reviewed authority family. The independent reviewer verifies that each selected source truthfully serves its claimed product-authority, repository-policy, or existing-consumer role and that each mandatory check's tool, threshold, platform, compatibility obligation, or hardening target is supported by accepted scope or selected source bytes.
 
-Review evidence is published as an immutable artifact and accepted through the application-owned SQLite workflow. The launch prompt only points the worker to the canonical brief and names the execution environment; it does not duplicate or reinterpret the task contract.
+Ready review evidence is strict JSON bound to the stable checkpoint ID, canonical checkpoint-record digest, and canonical ordered authority-set digest. It is published as an immutable artifact and accepted through the application-owned SQLite workflow. The launch prompt only points the worker to the canonical JSON brief and names the execution environment; it does not duplicate or reinterpret the task contract.
 
 ### Checkpoint and terminal acceptance
 
-An accepted nonterminal checkpoint preserves exact result and review evidence, pauses the same attempt, and fences its worker authority. Terminal completion records accepted evidence and removes the item from live work in the same SQLite transition. Review return keeps the same attempt and evidence while fencing the rejected worker lease.
+An accepted nonterminal checkpoint uses the brief's stable checkpoint ID, preserves exact result and review evidence, pauses the same attempt, and fences its worker authority. Terminal completion records accepted evidence and removes the item from live work in the same SQLite transition. Review return keeps the same attempt and evidence while fencing the rejected worker lease.
 
 ### Portable copy
 
-Portable copy requires a quiescent source. It backs up `state.sqlite3`, copies and verifies every referenced artifact, advances the destination revision and host epoch, neutralizes host-local leases, rebuilds views, synchronizes the staged tree, and atomically publishes the relocated work root. The source remains unchanged. Project-local source authorities named by accepted briefs are outside the portable work root and must be supplied by the relocated project when dispatch needs them.
+Portable copy requires a quiescent source. It backs up `state.sqlite3`, copies and verifies every referenced artifact without interpreting its brief schema, advances the destination revision and host epoch, neutralizes host-local leases, rebuilds views, synchronizes the staged tree, and atomically publishes the relocated work root. Live v2 JSON and historical terminal v1 bytes therefore retain exact reference and integrity evidence. The source remains unchanged. Project-local source authorities named by accepted briefs are outside the portable work root and must be supplied by the relocated project when dispatch needs them.
 
 ## Stored formats
 
-The `.codex/work` path is current. Proposal JSON uses `pinboard-proposal/v1`; accepted work briefs use `pinboard-work-brief/v1`; independent review evidence uses `pinboard-work-brief-review/v1`; dispatch environments use `pinboard-dispatch/v1`; brief-source manifests and plans use `pinboard-brief-sources/v1` and `pinboard-brief-source-plan/v1`; and read projections use `pinboard-overview/v1` and `pinboard-parallel-preview/v1`. Atomic file publication uses private `.pinboard-stage-*` names.
+The `.codex/work` path is current. Proposal JSON uses `pinboard-proposal/v1`; accepted work briefs use `pinboard-work-brief/v2`; independent review evidence uses `pinboard-work-brief-review/v2`; dispatch environments use `pinboard-dispatch/v1`; brief-source manifests and plans use `pinboard-brief-sources/v1` and `pinboard-brief-source-plan/v1`; and read projections use `pinboard-overview/v1` and `pinboard-parallel-preview/v1`. Historical terminal v1 brief artifacts remain opaque immutable evidence rather than a supported input format. Atomic file publication uses private `.pinboard-stage-*` names.
 
 ## Keeping this map current
 
-This document describes implemented ownership and dependency direction. Every implementation checkpoint declares its architecture impact before dispatch. A checkpoint that changes an owner or dependency direction names this file as `update-required` and includes the coherent documentation change in the same candidate. A `read-only` checkpoint names the authority it must conform to; `none` records why no architecture change occurs. Parser validation enforces the declaration shape, while brief and implementation review verify that the declaration is true for the sources and final diff.
+This document describes implemented ownership and dependency direction. Every implementation checkpoint declares its architecture impact before dispatch. A checkpoint that changes an owner or dependency direction names this file as `update-required` and includes the coherent documentation change in the same candidate. A `read-only` checkpoint names the authority it must conform to; `none` records why no architecture change occurs. Typed brief validation enforces the declaration shape, while brief and implementation review verify that the declaration is true for the sources and final diff.
 
 Future behavior belongs here only when its implementation is present. Delivery history, speculative modules, and deferred redesigns remain in private planning evidence until they change the current architecture.

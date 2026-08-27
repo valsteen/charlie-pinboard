@@ -313,7 +313,7 @@ class MutationPersistenceTest(unittest.TestCase):
             current,
             artifact_ref_id=ArtifactRefId(99),
             revision=current.revision + 1,
-            selector="artifacts/briefs/work-a/2.md",
+            selector="artifacts/briefs/work-a/2.json",
             content_sha256="b" * 64,
             size_bytes=23,
         )

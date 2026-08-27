@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from typing import assert_never
@@ -377,6 +378,7 @@ def execute(
     store: WorkStore,
     command: TransitionCommand,
     now: datetime,
+    transition_guard: Callable[[StoredWorkState, TransitionCommand], DecisionFailure | None] | None = None,
 ) -> DecisionResult[TransitionReceipt]:
     """Rediscover, decide, and persist one lifecycle mutation under one write lock."""
 
@@ -390,6 +392,8 @@ def execute(
         current = rediscover_action(snapshot, actor, supplied)
         if isinstance(current, DecisionFailure):
             return current
+        if transition_guard is not None and (failure := transition_guard(before, command)) is not None:
+            return failure
         decision = decide(snapshot, command, now)
         if isinstance(decision, DecisionFailure):
             return decision

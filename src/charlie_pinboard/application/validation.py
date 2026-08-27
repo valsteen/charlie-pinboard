@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -7,6 +8,7 @@ from charlie_pinboard.adapters.files.errors import ArtifactError
 from charlie_pinboard.adapters.files.views import expected_view_bytes
 from charlie_pinboard.adapters.sqlite.errors import StorageError
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
+from charlie_pinboard.domain.identifiers import AttemptId
 
 
 class Severity(Enum):
@@ -47,7 +49,10 @@ def _error(code: str, path: Path, message: str, hint: str | None = None) -> Diag
     return Diagnostic(code=code, severity=Severity.ERROR, path=path, message=message, hint=hint)
 
 
-def validate_work_state(work_root: Path) -> ValidationReport:
+def validate_work_state(
+    work_root: Path,
+    attempt_briefs: Mapping[AttemptId, bytes] | None = None,
+) -> ValidationReport:
     """Validate current SQLite authority and immutable artifacts without consulting generated views."""
 
     database = work_root / "state.sqlite3"
@@ -62,7 +67,7 @@ def validate_work_state(work_root: Path) -> ValidationReport:
         except ArtifactError as error:
             diagnostics.append(_error(error.code.value, work_root / reference.selector, str(error)))
     view_root = work_root / "views"
-    for selector, expected in expected_view_bytes(state).items():
+    for selector, expected in expected_view_bytes(state, attempt_briefs).items():
         path = view_root / selector
         try:
             current = path.read_bytes()

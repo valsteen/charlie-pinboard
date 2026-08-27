@@ -86,16 +86,21 @@ class BriefSourceError(ValueError):
         super().__init__(f"{code.value}: {message}")
 
 
-class HeaderErrorCode(Enum):
-    FIELD_DUPLICATE = "HEADER_FIELD_DUPLICATE"
-    FIELD_INVALID = "HEADER_FIELD_INVALID"
-    MISSING = "HEADER_MISSING"
-    UNTERMINATED = "HEADER_UNTERMINATED"
+class WorkBriefErrorCode(Enum):
+    BRIEF_INVALID = "WORK_BRIEF_INVALID"
+    BRIEF_NOT_CANONICAL = "WORK_BRIEF_NOT_CANONICAL"
+    REVIEW_INVALID = "WORK_BRIEF_REVIEW_INVALID"
+    REVIEW_NOT_CANONICAL = "WORK_BRIEF_REVIEW_NOT_CANONICAL"
+    REVIEW_NOT_INDEPENDENT = "WORK_BRIEF_REVIEW_NOT_INDEPENDENT"
+    REVIEW_NOT_READY = "WORK_BRIEF_REVIEW_NOT_READY"
+    REVIEW_STALE = "WORK_BRIEF_REVIEW_STALE"
 
 
-class HeaderError(ValueError):
-    code: HeaderErrorCode
+class WorkBriefError(ValueError):
+    code: WorkBriefErrorCode
+    message: str
 
-    def __init__(self, code: HeaderErrorCode, message: str) -> None:
+    def __init__(self, code: WorkBriefErrorCode, message: str) -> None:
         self.code = code
+        self.message = message
         super().__init__(f"{code.value}: {message}")

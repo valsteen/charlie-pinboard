@@ -1,6 +1,6 @@
 # Cross-boundary brief preservation
 
-Use this procedure only for a checkpoint declared `Checkpoint boundary: cross-boundary`. It makes projection from named architecture, plans, and accepted evidence into the execution brief reviewable before implementation. Local checkpoints do not add these tables, lifecycle declarations, or brief reviews.
+Use this procedure only for a typed `cross-boundary` checkpoint. It projects named architecture, plans, and accepted evidence into a reviewable execution contract before implementation. A `local` checkpoint does not add contracts, reviewed-authority coverage, lifecycle declarations, or an independent brief review.
 
 ## Plan authority loading
 
@@ -19,114 +19,80 @@ Resolve and measure the complete authority set before loading source bodies. Cre
 }
 ```
 
-Use one selector with several families instead of repeating or nesting the same selection. Run `pinboard brief-sources --file <manifest> --json` before reading any selected body. Correct `BRIEF_SOURCE_SELECTOR_OVERLAP` in the manifest. Inspect the returned selected byte counts, line spans, digests, and batches, then run `pinboard brief-sources --file <manifest> --emit-batch <index>` once for each batch in ascending order.
+Use one selector with several families instead of repeating or nesting the same selection. Run `pinboard brief-sources --file <manifest> --json` before reading any selected body. Correct overlap errors, inspect selected byte counts, spans, digests, and batches, then emit each batch once in ascending order.
 
-Preserve each selector and selected digest as its read receipt. Across corrections, reuse exact unchanged receipts and reread only changed owners plus neighboring rows whose meaning depends on them. If output truncates, continue from the first unread boundary without replaying returned content.
+Preserve each selector and selected digest as its read receipt. Across corrections, reuse exact unchanged receipts and reread only changed owners plus neighboring records whose meaning depends on them. If output truncates, continue from the first unread boundary without replaying returned content.
 
 If the complete authority set plus working headroom cannot fit, stop before compiling or reviewing the brief. Narrow selectors, split only a semantically independent checkpoint, or move mechanical comparison into validated tooling. Do not omit an accepted requirement, prohibition, lifecycle sibling, or consumer to fit context.
 
-## Compile the brief
+## Compile canonical JSON
 
-The canonical `attempt.md` front matter uses `kind: work-attempt` and `schema: pinboard-work-brief/v1`. Dispatch rejects missing, arbitrary, or stale brief format tags before interpreting either a local or cross-boundary checkpoint.
+Prepare a strict `pinboard-work-brief/v2` JSON candidate. Pinboard decodes it directly into frozen `msgspec.Struct` records with unknown fields forbidden, validates its cross-references, canonicalizes it with sorted object keys and one final LF, and publishes the immutable accepted `.json` artifact through `pinboard brief publish --file <candidate> --json`. This JSON artifact is the sole semantic brief. The generated Markdown attempt view is read-only output and must not be edited or parsed as input.
 
-1. Read the planned batches for the exact sources that own the checkpoint's relevant semantics. Keep semantic truth in those sources; the brief records durable selectors and the executable subset rather than copying source prose.
-2. Verify the checkpoint's one architecture declaration against those sources. `none` must explain why ownership and dependency direction are unchanged. `read-only` names the project-relative architecture authority implementation must conform to. `update-required` names the authority that must change in the same candidate; a later documentation task is not a valid substitute.
-3. Record `Checkpoint outcome: independently-buildable` and this seven-column `Contract table`:
+The root record contains:
 
-   | Invariant | Authority / owner | Required consumer or production observation | Failure classification | Exact verification | Preflight / final revalidation | Authorization basis |
-   | --- | --- | --- | --- | --- | --- | --- |
+- schema and artifact identity: `schema`, positive `artifact_revision`, `attempt_id`, `item_id`, `branch`, `base_revision`, and `owner_task_id`;
+- accepted scope: positive `revision` and lowercase SHA-256 `digest`;
+- human context: `title`, `outcome`, `supported_production_roots`, `product_decision_and_provenance`, `testing_strategy`, `scope`, `bootstrap`, `compatibility`, `non_goals`, and `remaining_work`;
+- one tagged `checkpoint` record.
 
-   Give every row exactly one authorization basis. Use `accepted-scope:<item>@<positive-scope-revision>` when the current accepted item owns the behavior. Use `authority:<authority-id>#<family>` for a reviewed product authority, `repository-policy:<authority-id>#<family>` for an applicable reviewed repository constraint, or `existing-consumer:<authority-id>#<family>` for a named reviewed production consumer. The latter three forms must reference an exact family in the `Reviewed authorities` table.
+Every checkpoint has a stable kebab-case `checkpoint_id`, separate human `title`, `outcome_description`, architecture impact, nonempty acceptance criteria, nonempty mandatory verification, and explicit deferrals. Its `boundary` tag selects one closed shape:
 
-   Dispatch checks syntax and reference integrity. For `accepted-scope`, it compares the token with the item and accepted scope revision reselected from the current SQLite attempt rather than trusting brief front matter. The independent reviewer owns semantic truth: it must reject a syntactically valid source used under the wrong role, such as code cited as repository policy, a validator cited as a production consumer, or newly written prose cited as product authority.
+- `local` contains the common fields only;
+- `cross-boundary` additionally requires `outcome: independently-buildable`, nonempty contracts, reviewed authorities, authoritative coverage, and one lifecycle partition.
 
-   Add one `Verification` section whose nonempty lines are mandatory checks in this exact form:
+Architecture impact is tagged by `kind`:
 
-   ```text
-   - `<authorization basis>` — `<concrete command or observation>`
-   ```
+- `none` records a reason ownership and dependency direction are unchanged;
+- `read-only` records one project-relative authority selector and conformance reason;
+- `update-required` records the authority selector that must change in the same candidate and why.
 
-   Reuse the same four authorization bases and reviewed-authority family references as the Contract table. Dispatch checks the line shape and reference integrity without executing commands. The independent reviewer must verify from accepted scope or the selected authority bytes that every named tool, threshold, platform, compatibility obligation, and hardening check is actually required. Keep proportionate exploratory checks outside this mandatory list; discovering a useful check does not make it an acceptance obligation.
-4. Add one `Reviewed authorities` table:
+Each contract records `invariant`, `authority`, `consumer`, `failure`, `verification`, `revalidation`, and a tagged `authorization_basis`. Each mandatory verification record has an `obligation` and the same authorization basis. Use exactly one basis:
 
-   | Authority ID | Selector | Reviewed SHA-256 | In-scope families |
-   | --- | --- | --- | --- |
+- `accepted-scope` with the current `item_id` and positive `scope_revision`;
+- `authority`, `repository-policy`, or `existing-consumer` with an exact reviewed `authority_id` and `family`.
 
-   Use a unique kebab-case authority ID. A selector is a project-relative file, optionally followed by `#` and one literal unique Markdown H1–H6 heading. The first `#` separates the path; later `#` characters are literal heading text. Hash whole-file bytes unchanged. For a heading selector, hash the heading through the line before the next heading of equal or higher level, serialized with LF line endings and one final LF. List one or more unique comma-separated kebab-case families per authority.
-5. Add one `Authoritative coverage` table:
+Dispatch checks basis reference integrity against the current SQLite attempt. The independent reviewer owns semantic truth: reject a syntactically valid source used under the wrong role, such as code cited as repository policy, a validator cited as a production consumer, or newly written prose cited as product authority. Verify that every mandatory tool, threshold, platform, compatibility obligation, and hardening check is required by accepted scope or selected authority bytes. Keep proportionate exploratory checks outside the mandatory list.
 
-   | Authority / invariant family | Required distinction | Required consumer / production observation | Disposition | Brief owner | Cheapest counterexample |
-   | --- | --- | --- | --- | --- | --- |
+Each reviewed authority records a unique kebab-case `authority_id`, exact `selector`, selected-byte `reviewed_sha256`, and one or more unique kebab-case `families`. A selector is a project-relative file, optionally followed by `#` and one literal unique Markdown H1–H6 heading. Whole-file digests use unchanged bytes. Heading digests use the heading through the line before the next heading of equal or higher level, with LF line endings and one final LF.
 
-   Give every declared family exactly one `authority:<id>#<family>` row. Name the distinction that projection could lose, every consumer that must observe it, and the cheapest case that would expose the loss. Use one of these dispositions and owners:
+Give every reviewed authority family exactly one coverage record. It names `authority_id`, `family`, `distinction`, `consumer`, `counterexample`, and one tagged `owner` disposition:
 
-   - `contract` with `contract:<exact Contract-row invariant>`;
-   - `acceptance` with `criterion:<exact acceptance-criterion number>`;
-   - `deferred` with `deferral:<label>`, where the checkpoint also has `Deferral: <label> — <reason> Reopen when: <condition>`;
-   - `not-applicable` with `reason:<nonempty explanation>`.
+- `contract` with an exact contract invariant;
+- `acceptance` with an exact criterion number;
+- `deferred` with an exact deferral ID;
+- `not-applicable` with a concrete reason.
 
-   Do not defer or mark an in-scope prohibition not applicable.
-6. Declare the lifecycle partition exactly once. Use `Lifecycle partition: not-applicable — <reason>` when the checkpoint does not add or change related lifecycle operations. When adjacent operations consume related states, use `Lifecycle partition: required` and add this table:
+Never defer or mark not applicable an in-scope prohibition. Missing coverage is a brief defect, not implementation discretion.
 
-   | Operation | Allowed source state | Required authority | Required observation / evidence | State and fencing effects | Nearest illegal sibling / stable rejection |
-   | --- | --- | --- | --- | --- | --- |
+Lifecycle partition is tagged by `kind`. Use `not-applicable` with a reason when the checkpoint changes no related lifecycle operations. Use `required` with one record per related operation when adjacent operations consume related states. Each record names `operation`, `source_state`, `authority`, `evidence`, `effects`, and one cheapest `illegal_sibling`.
 
-   Use one concrete unique kebab-case row per operation. Partition the relevant source-state classes so no neighboring operation silently owns the same class. The table stays bounded to the named lifecycle authority; do not expand it into a field Cartesian product.
+## Review the compiled contract
 
-## Review before dispatch
+Commission one read-only reviewer in fresh context after compiling the checkpoint and before implementation. The reviewer task identity must differ from the attempt owner. Give the reviewer the canonical checkpoint and the same source plan. It must:
 
-Commission one read-only reviewer in fresh context after the checkpoint is compiled and before implementation begins. The reviewer task identity must differ from the attempt owner, and both task identities must be canonical values without surrounding whitespace.
+- inspect every selected source exactly once;
+- verify every contract, criterion, mandatory verification basis, architecture declaration, and semantic source role;
+- trace every reviewed family to exactly one coverage owner;
+- test each cheapest counterexample and every lifecycle sibling;
+- reject unsupported, absent, ambiguous, or contradictory coverage rather than asking the implementer to infer it.
 
-Give the reviewer the canonical checkpoint and the same manifest or its complete `brief-sources --json` plan. The reviewer must:
-
-- recompute every selected-source digest;
-- compare each coverage distinction and owner with its named source;
-- verify every Contract authorization basis against its selected bytes, including wrong-role counterexamples for product authority, repository policy, and existing consumer claims;
-- verify every mandatory Verification basis against accepted scope or its selected bytes, and reject unsupported tools, thresholds, platforms, compatibility obligations, or hardening checks;
-- test the architecture declaration against the named authority and reject any hidden ownership or dependency-direction change;
-- test the cheapest counterexample for every coverage row;
-- verify a required lifecycle table partitions every relevant source-state class and rejects its nearest sibling;
-- return one complete correction package rather than stopping after the first missing or ambiguous row.
-
-Missing coverage is a brief defect. Correct `attempt.md`, create a new digest-bound review, and do not ask the implementer to infer the omitted rule. A correction review may reuse exact unchanged selector digests and owners, but it must re-read changed owners and sweep every changed or neighboring row.
+Correct the JSON candidate when coverage is incomplete, then produce a new digest-bound review. Reuse unchanged source receipts across corrections, but reread changed owners and sweep neighboring records.
 
 ## Publish review evidence
 
-Normalize the exact checkpoint section with LF line endings and one final LF, then compute its SHA-256. Compute the reviewed-authority-set SHA-256 over the exact LF-normalized `Reviewed authorities` table bytes, from its header row through its last data row, in source order and with one final LF.
+Canonical encoding uses msgspec JSON with sorted object keys. The brief artifact adds one final LF. Digest inputs do not add presentation bytes:
 
-Prepare a complete ready verdict for the canonical path:
+- `checkpoint_sha256` is SHA-256 of the canonical encoded checkpoint record;
+- `reviewed_authority_set_sha256` is SHA-256 of the canonical encoded ordered tuple of reviewed-authority records;
+- each `reviewed_sha256` remains the digest of the selected source bytes.
 
-```text
-attempts/<attempt>/brief-reviews/<checkpoint-sha256>.md
-```
+Prepare strict `pinboard-work-brief-review/v2` JSON with `attempt_id`, stable `checkpoint_id`, both digests, independent `reviewer_task_id`, `status: complete`, `verdict: ready`, and one coverage result per brief coverage record. Each result repeats the exact `authority_id`, `family`, and tagged owner, records `verdict: covered`, and states the concrete `counterexample_result`.
 
-Use this front matter:
+Pass the candidate to `pinboard dispatch` with `--brief-review <candidate-file> --review-id <kebab-case-review-id>`. Dispatch validates and canonicalizes it before application-owned publication. It creates the immutable artifact once, reuses byte-identical evidence, and preserves differing collisions as rejected evidence. Omit both publication arguments when exact accepted ready evidence already exists. Publication arguments are cross-boundary-only and never change the canonical prompt.
 
-```yaml
----
-kind: work-brief-review
-schema: pinboard-work-brief-review/v1
-attempt: <attempt>
-checkpoint: <exact checkpoint heading>
-checkpoint_sha256: <checkpoint sha256>
-reviewed_authority_set_sha256: <reviewed-authority-set sha256>
-reviewer_task_id: <independent reviewer task>
-status: complete
-verdict: ready
----
-```
-
-Its body contains exactly one result row per coverage row:
-
-| Authority / invariant family | Brief owner | Verdict | Cheapest counterexample result |
-| --- | --- | --- | --- |
-
-Copy the coverage reference and owner exactly, use `covered`, and record the concrete counterexample result. Keep the candidate outside the canonical ready path, then pass it to the existing dispatch command with `--brief-review <candidate-file> --review-id <kebab-case-review-id>`. Dispatch validates the candidate before publication through the SQLite artifact workflow. It creates the canonical artifact once, reuses byte-identical evidence, and never overwrites differing evidence. A differing ready collision is preserved as rejected evidence, then dispatch rejects with `DISPATCH_BRIEF_REVIEW_COLLISION`. Reusing that rejected identity is safe only for identical bytes.
-
-Preserve incomplete or rejected work directly under the rejected directory; never offer it as the ready candidate. A corrected checkpoint has a new digest and never overwrites prior evidence. Omit both publication arguments when validated ready evidence already exists. Publication arguments are cross-boundary-only and never change the canonical prompt.
-
-`pinboard dispatch` recomputes the checkpoint, authority-table, and selected-source digests and revalidates its SQLite action before returning. It rejects absent, stale, mismatched, incomplete, non-ready, or same-owner review evidence before rendering the canonical prompt.
+Dispatch reselects the current action and accepted brief, verifies the stable checkpoint ID, canonical checkpoint and ordered-authority digests, selected-source digests, reviewer independence, exact coverage, and immutable evidence before returning the launch prompt.
 
 ## Reuse during implementation review
 
-Use the compiled map again when reviewing the frozen implementation. Account for every acceptance criterion, Contract row and its authorization basis, mandatory Verification entry and its authorization basis, coverage row, and lifecycle sibling row. Every blocking finding must cite one of those accepted owners or an applicable reviewed repository rule. Classify anything else as a brief omission, authority contradiction, unresolved product decision, or new capability rather than turning it into an implementation defect. Compare the architecture declaration with the final diff, and require the named authority change in the same candidate when the declaration is `update-required`. Reuse exact unchanged selector hashes across correction rounds; re-read changed owners and sweep their neighboring rows. This review checks implementation against the already-compiled contract instead of rediscovering requirements from architecture.
+Use the compiled map again against the frozen candidate. Account for every criterion, contract and authorization basis, mandatory verification entry, coverage record, and lifecycle sibling. Every blocking finding must cite one accepted owner or applicable reviewed repository rule. Classify anything else as a brief omission, authority contradiction, unresolved product decision, or new capability. Compare the architecture declaration with the final diff, requiring the named authority change in the same candidate when it is `update-required`.

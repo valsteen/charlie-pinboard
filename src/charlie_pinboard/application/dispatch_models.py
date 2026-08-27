@@ -54,6 +54,7 @@ class DispatchBriefPreparer(Protocol):
         *,
         accepted_item_id: str | None = None,
         accepted_scope_revision: int | None = None,
+        accepted_scope_digest: str | None = None,
         supplied_prompt: bytes | None = None,
         brief_review: bytes | None = None,
         review_id: str | None = None,

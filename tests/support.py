@@ -91,7 +91,15 @@ def complete_sqlite_state() -> StoredWorkState:
     attempt_id = AttemptId("work-a-1")
     attempt_lease_id = LeaseId("attempt-lease-a")
     brief = ArtifactReference(
-        ArtifactRefId(1), "work-a-brief", 1, ArtifactKind.BRIEF, "artifacts/brief.md", SQLITE_DIGEST, 100, 3, SQLITE_NOW
+        ArtifactRefId(1),
+        "work-a-brief",
+        1,
+        ArtifactKind.BRIEF,
+        "artifacts/briefs/work-a-brief/1.opaque",
+        SQLITE_DIGEST,
+        100,
+        3,
+        SQLITE_NOW,
     )
     design = ArtifactReference(
         ArtifactRefId(2),

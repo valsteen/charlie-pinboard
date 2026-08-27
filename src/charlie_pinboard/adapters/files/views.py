@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from pathlib import Path
 
 from charlie_pinboard.adapters.files.errors import FileIOError
@@ -11,6 +12,7 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItem,
     StoredWorkState,
 )
+from charlie_pinboard.domain.identifiers import AttemptId
 
 NOTICE = "Generated projection; SQLite is authoritative."
 
@@ -74,7 +76,13 @@ def _item(state: StoredWorkState, item: StoredWorkItem) -> bytes:
     ).encode()
 
 
-def _attempt(state: StoredWorkState, attempt: StoredAttempt) -> bytes:
+def _attempt(
+    state: StoredWorkState,
+    attempt: StoredAttempt,
+    attempt_briefs: Mapping[AttemptId, bytes],
+) -> bytes:
+    if (brief := attempt_briefs.get(attempt.attempt_id)) is not None:
+        return brief
     return (
         _header("work-attempt-view", state.lifecycle.project.revision)
         + f"# Attempt {attempt.attempt_id}\n\n"
@@ -103,7 +111,12 @@ def _history(state: StoredWorkState) -> bytes:
     ).encode()
 
 
-def _write_views(work_root: Path, state: StoredWorkState, affected: AffectedViews) -> None:
+def _write_views(
+    work_root: Path,
+    state: StoredWorkState,
+    affected: AffectedViews,
+    attempt_briefs: Mapping[AttemptId, bytes],
+) -> None:
     view_root = ensure_child_directory(work_root, "views")
     item_root = ensure_child_directory(view_root, "items")
     attempt_root = ensure_child_directory(view_root, "attempts")
@@ -122,13 +135,18 @@ def _write_views(work_root: Path, state: StoredWorkState, affected: AffectedView
     for attempt_id in affected.attempts:
         attempt = attempts.get(attempt_id)
         if attempt is not None:
-            atomic_replace(attempt_root / f"{attempt_id}.md", _attempt(state, attempt))
+            atomic_replace(attempt_root / f"{attempt_id}.md", _attempt(state, attempt, attempt_briefs))
 
 
-def refresh(store: WorkStore, work_root: Path, affected: AffectedViews) -> ViewRefreshResult:
+def refresh(
+    store: WorkStore,
+    work_root: Path,
+    affected: AffectedViews,
+    attempt_briefs: Mapping[AttemptId, bytes] | None = None,
+) -> ViewRefreshResult:
     state = store.snapshot()
     try:
-        _write_views(work_root, state, affected)
+        _write_views(work_root, state, affected, attempt_briefs or {})
     except FileIOError as error:
         return ViewRefreshResult(
             state.lifecycle.project.revision,
@@ -140,7 +158,10 @@ def refresh(store: WorkStore, work_root: Path, affected: AffectedViews) -> ViewR
     return ViewRefreshResult(state.lifecycle.project.revision)
 
 
-def expected_view_bytes(state: StoredWorkState) -> dict[str, bytes]:
+def expected_view_bytes(
+    state: StoredWorkState,
+    attempt_briefs: Mapping[AttemptId, bytes] | None = None,
+) -> dict[str, bytes]:
     """Return every generated selector and its canonical bytes for one SQLite snapshot."""
 
     result = {
@@ -150,12 +171,17 @@ def expected_view_bytes(state: StoredWorkState) -> dict[str, bytes]:
     }
     result.update((f"items/{item.item_id}.md", _item(state, item)) for item in state.lifecycle.work_items)
     result.update(
-        (f"attempts/{attempt.attempt_id}.md", _attempt(state, attempt)) for attempt in state.lifecycle.attempts
+        (f"attempts/{attempt.attempt_id}.md", _attempt(state, attempt, attempt_briefs or {}))
+        for attempt in state.lifecycle.attempts
     )
     return result
 
 
-def rebuild(store: WorkStore, work_root: Path) -> ViewRefreshResult:
+def rebuild(
+    store: WorkStore,
+    work_root: Path,
+    attempt_briefs: Mapping[AttemptId, bytes] | None = None,
+) -> ViewRefreshResult:
     state = store.snapshot()
     try:
         _write_views(
@@ -168,6 +194,7 @@ def rebuild(store: WorkStore, work_root: Path) -> ViewRefreshResult:
                 items=tuple(item.item_id for item in state.lifecycle.work_items),
                 attempts=tuple(attempt.attempt_id for attempt in state.lifecycle.attempts),
             ),
+            attempt_briefs or {},
         )
     except FileIOError as error:
         return ViewRefreshResult(

@@ -85,7 +85,7 @@ Order checkpoints around semantic dependencies, not file count:
 
 Do not freeze the initial candidate list as the whole scope: recursive discovery is part of the accepted outcome. Keep newly exposed work inside the cleanup objective only when it is a direct dependent of an approved removal. Preserve materially different product decisions as separate findings.
 
-Use the project’s existing planning system when it has one; otherwise keep a proportionate repository plan with the same decisions, dependencies, evidence, and stopping condition. If the user chooses Pinboard, read [references/pinboard-planning.md](references/pinboard-planning.md) and translate this plan into its coordination model. Do not require Pinboard or read that reference for a standalone cleanup.
+Use the project’s existing planning system when it has one; otherwise keep a proportionate repository plan with the same decisions, dependencies, evidence, and stopping condition. If the user chooses Pinboard, read [references/pinboard-planning.md](references/pinboard-planning.md) and translate the plan and recursive dispositions into the canonical typed JSON brief; treat its generated Markdown view as read-only output. Do not require Pinboard or read that reference for a standalone cleanup.
 
 ## Remove one coherent family at a time
 
