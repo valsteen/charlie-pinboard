@@ -1,5 +1,6 @@
 import contextlib
 import io
+import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
@@ -30,6 +31,15 @@ def _mismatched_brief(project: Path) -> bytes:
 
 
 class SQLiteValidationTest(unittest.TestCase):
+    def run_git(self, cwd: Path, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=cwd,
+            check=True,
+            text=True,
+            capture_output=True,
+        ).stdout
+
     def run_cli(self, *arguments: str) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -53,7 +63,7 @@ class SQLiteValidationTest(unittest.TestCase):
         self.assertIn("pinboard views rebuild", stale.render())
 
     def test_missing_database_and_missing_accepted_artifacts_are_errors(self) -> None:
-        missing = Path(tempfile.mkdtemp()).resolve() / ".codex" / "work"
+        missing = Path(tempfile.mkdtemp()).resolve() / ".codex" / "pinboard"
         report = validate_work_state(missing)
         self.assertFalse(report.valid)
         self.assertIn("STORAGE_IO_ERROR", report.render())
@@ -73,6 +83,51 @@ class SQLiteValidationTest(unittest.TestCase):
         self.assertFalse(first.resumed)
         self.assertTrue(second.resumed)
         self.assertEqual(first.database_path, second.database_path)
+
+    def test_default_initialization_uses_private_root_and_exact_local_git_exclusion(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        self.run_git(project, "init", "-b", "main")
+        gitignore = project / ".gitignore"
+        gitignore.write_text("*.user-cache\n", encoding="utf-8")
+        config = project / ".codex" / "config.toml"
+        config.parent.mkdir()
+        config.write_text('model = "gpt-5"\n', encoding="utf-8")
+        self.run_git(project, "add", ".gitignore", ".codex/config.toml")
+        self.run_git(
+            project,
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "initial",
+        )
+        exclude = project / ".git" / "info" / "exclude"
+        original_exclude = exclude.read_bytes()
+        original_gitignore = gitignore.read_bytes()
+
+        first = initialize_work_state(project, now=SQLITE_NOW)
+        second = initialize_work_state(project, now=SQLITE_NOW)
+
+        self.assertEqual(project / ".codex" / "pinboard", first.work_root)
+        self.assertEqual(first.work_root, second.work_root)
+        self.assertEqual(original_exclude + b"/.codex/pinboard/\n", exclude.read_bytes())
+        self.assertEqual(1, exclude.read_text(encoding="utf-8").splitlines().count("/.codex/pinboard/"))
+        self.assertEqual(original_gitignore, gitignore.read_bytes())
+        self.assertEqual("", self.run_git(project, "status", "--short", "--untracked-files=all"))
+
+    def test_explicit_work_root_preserves_its_path_without_changing_git_excludes(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        self.run_git(project, "init", "-b", "main")
+        exclude = project / ".git" / "info" / "exclude"
+        original_exclude = exclude.read_bytes()
+        destination = Path(tempfile.mkdtemp()).resolve() / "selected-work-root"
+
+        receipt = initialize_work_state(project, destination, now=SQLITE_NOW)
+
+        self.assertEqual(destination, receipt.work_root)
+        self.assertEqual(original_exclude, exclude.read_bytes())
 
     def test_validation_rejects_malformed_and_mismatched_live_v2_briefs(self) -> None:
         for name, content_factory in (

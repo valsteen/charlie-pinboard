@@ -473,6 +473,10 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertTrue(external.database_path.exists())
         self.assertTrue(external.artifacts_root.is_dir())
 
+        (external_parent / ".codex").mkdir()
+        explicit_legacy = resolve_durable_roots(external_parent, external_parent / ".codex" / "work")
+        self.assertEqual(external_parent / ".codex" / "work", explicit_legacy.work_root)
+
         immutable = external.artifacts_root / "evidence.md"
         created = create_immutable(immutable, b"accepted evidence")
         self.assertEqual((17, b"accepted evidence"), (created.size, immutable.read_bytes()))

@@ -102,20 +102,19 @@ For concurrent work, open one chat per distinct outcome. Each chat claims only i
 Three ideas keep responsibilities clear:
 
 - the shared work list answers what the project may work on next;
-- topic folders hold research, designs, plans, and reports;
+- accepted artifacts preserve the execution contracts and evidence used by the ledger;
 - branches and worktrees belong to the concrete attempt to implement something.
 
 The project stores its private working state in ignored local files:
 
 ```text
-.codex/work/
+.codex/pinboard/
   state.sqlite3               # authoritative lifecycle, dependencies, leases, and history
   artifacts/                  # immutable briefs, evidence, proposals, and reviews
   views/                      # generated human-readable projections
-.codex/topics/
 ```
 
-SQLite is the sole current ledger authority. Immutable artifacts retain long-form evidence and execution contracts, while generated views remain convenient to inspect but never become fallback state. `pinboard` validates the database before changing it, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt.
+SQLite is the sole current ledger authority. Immutable artifacts retain long-form evidence and execution contracts, while generated views remain convenient to inspect but never become fallback state. The default root is ignored only through the repository-local `/.codex/pinboard/` Git exclude entry, so committed ignore files and unrelated `.codex` content remain untouched. An explicit `--work-root` keeps the exact path the user selected. `pinboard` validates the database before changing it, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt.
 
 The plugin contains:
 

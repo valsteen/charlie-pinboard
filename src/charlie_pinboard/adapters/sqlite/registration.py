@@ -3,6 +3,7 @@ from pathlib import Path
 
 from charlie_pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
 from charlie_pinboard.adapters.files.file_io import ensure_directory_chain, resolve_durable_roots
+from charlie_pinboard.adapters.files.root import ensure_default_git_exclude
 from charlie_pinboard.adapters.files.views import rebuild
 from charlie_pinboard.adapters.sqlite.database import initialize_database, open_database
 from charlie_pinboard.adapters.sqlite.models import InitReceipt, OpenMode
@@ -15,6 +16,8 @@ def initialize_work_state(
     *,
     now: datetime | None = None,
 ) -> InitReceipt:
+    if work_root is None:
+        ensure_default_git_exclude(project_root)
     roots = resolve_durable_roots(project_root, work_root)
     resumed = roots.database_path.exists()
     current = now or datetime.now(UTC)

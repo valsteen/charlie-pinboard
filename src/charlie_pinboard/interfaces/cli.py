@@ -12,7 +12,7 @@ import msgspec
 
 from charlie_pinboard import __version__
 from charlie_pinboard.adapters.files.artifacts import ArtifactRepository
-from charlie_pinboard.adapters.files.errors import ArtifactError, FileIOError, FileIOErrorCode, RootError
+from charlie_pinboard.adapters.files.errors import ArtifactError, FileIOError, FileIOErrorCode, RootError, RootErrorCode
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.files.models import AffectedViews
 from charlie_pinboard.adapters.files.root import resolve_project_root
@@ -462,9 +462,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _roots(arguments: CliArguments) -> tuple[Path, Path]:
     project_argument = arguments.project_root
-    project = project_argument.resolve() if project_argument is not None else resolve_project_root(Path.cwd())
+    if project_argument is None:
+        project = resolve_project_root(Path.cwd())
+    else:
+        try:
+            project = resolve_project_root(project_argument)
+        except RootError as error:
+            if error.code != RootErrorCode.PROJECT_GIT_ROOT_UNAVAILABLE:
+                raise
+            project = project_argument.resolve()
     work_argument = arguments.work_root
-    work = work_argument.resolve() if work_argument is not None else project / ".codex" / "work"
+    work = work_argument.resolve() if work_argument is not None else project / ".codex" / "pinboard"
     return project, work
 
 

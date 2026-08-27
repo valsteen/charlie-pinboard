@@ -5,26 +5,26 @@ description: Coordinate one pinboard for live status, next-work selection, safe 
 
 # Coordinate with the pinboard
 
-Coordinate shared work through one project-local ledger while keeping knowledge organized independently by topic and execution isolated by attempt. Support one chat and concurrent chats through the same lease protocol; never require a permanent master chat.
+Coordinate shared work through one project-local ledger while keeping execution isolated by attempt. Support one chat and concurrent chats through the same lease protocol; never require a permanent master chat.
 
 ## Start from executable state
 
 1. Resolve this plugin's executable relative to this file as `../../scripts/pinboard`.
 2. For ordinary orientation, run `pinboard overview --json` from the repository checkout and treat its revision-stamped result as the complete default input. When the user has already supplied an exact mutation and its semantic inputs, do not add an overview preflight merely because this skill triggered; use the narrow canonical command or action query directly.
-3. If `.codex/work` is absent, report `WORKFLOW_UNAVAILABLE`. Initialize it with `pinboard init` only when the user explicitly requests coordinated-work setup. Do not ask for a permanent coordinator identity.
+3. If the default `.codex/pinboard` root is absent, report `WORKFLOW_UNAVAILABLE`. Initialize it with `pinboard init` only when the user explicitly requests coordinated-work setup. An explicit `--work-root` remains an exact user-selected exception. Do not ask for a permanent coordinator identity.
 4. Require the returned authority to be exactly `sqlite-v1`. If validation fails or another authority is reported, stop state-consuming work and use the recovery procedure in `references/state-and-recovery.md`; never infer a fallback from generated views or archived files.
 5. Inspecting SQLite state needs no lease. For one graph-wide transition, prepare its semantic payload first, using `pinboard input-contract <action-kind> --json` when the fields are not already known. Then use `pinboard coordination apply --task-id <current-task> --host-id <current-host> --action-id <kind:subject> --payload <file>`; it validates the payload before borrowing coordination, uses a 60-second lease by default, applies one exact legal action, and releases authority before returning. The `close` convenience command has the same borrow-and-release shape for terminal human decisions.
 6. Acquire coordination manually only when an immediate sequence genuinely requires the same authority. Prepare every input first, perform no exploratory reads while holding the lease, query only the needed action with `pinboard actions --role coordinator --lease-id <coordination-lease> --generation <generation> --action-id <kind:subject>`, and release immediately after the atomic change. Before an attempt-local change, use that attempt's lease instead.
 
 Tell the user how to proceed from the chat they are using. In one-chat use, that chat borrows coordination and owns its attempt. In multi-chat use, recommend one chat per distinct outcome. If coordination or an attempt is busy, name the current holder and expiry, explain what can continue offline, and ask about revocation only when waiting is unsuitable.
 
-Do not infer work from arbitrary Markdown, historical plans, topic folders, unchecked boxes, branch names, or transcript memory. Do not directly edit canonical lifecycle fields when the executable can perform the transition.
+Do not infer work from arbitrary Markdown, historical plans, unchecked boxes, branch names, or transcript memory. Do not directly edit canonical lifecycle fields when the executable can perform the transition.
 
 ## Match detail to the question
 
 Keep Pinboard operationally invisible when it is working normally. User-facing progress and receipts describe the user's tasks, decisions, confidence, blockers, and next actions. Do not volunteer the storage backend, command mechanics, generated views, revisions, leases, routing, transport, validation steps, or unchanged coordination state. Include an implementation or process detail only when it changes the result, confidence, risk, requested action, or next step, or when the user asks to inspect or troubleshoot Pinboard itself.
 
-Default “where do we stand?”, “what remains?”, “quick status”, and equivalent orientation questions to the single `overview` result. Report the current focus, active attempts, live items, inbox, and immediate choices. Retain the revision stamp privately as freshness evidence; show it only when the user asks for it or when it materially explains stale or conflicting state. Do not read history, topic context, GitHub, branches, CI, delivery state, or old decisions for this default answer. Do not acquire a lease merely to explain the live picture.
+Default “where do we stand?”, “what remains?”, “quick status”, and equivalent orientation questions to the single `overview` result. Report the current focus, active attempts, live items, inbox, and immediate choices. Retain the revision stamp privately as freshness evidence; show it only when the user asks for it or when it materially explains stale or conflicting state. Do not read history, project notes, GitHub, branches, CI, delivery state, or old decisions for this default answer. Do not acquire a lease merely to explain the live picture.
 
 When continuing work from another Codex task, extract every named Pinboard item for which that task claims terminal completion and verify each claim with `pinboard item status --item-id <item-id> --json` before treating it as complete. Then use `overview` only to identify remaining live work. Absence from `overview` means only that the item is not currently live; never use that absence to report an item as missing, unrecorded, or unfinished without the exact item-status lookup. Exact item status proves the recorded item and attempt state, not acceptance of a nonterminal checkpoint.
 
@@ -37,7 +37,7 @@ Fetch only the selected expansion:
 - For a recommendation or deeper rationale, use the overview itself when it contains enough evidence. Otherwise read only the exact live item records that are plausible choices. Apply the ordering below only then.
 - For completed decisions, read terminal item history only. Do not add GitHub or delivery checks.
 - For delivery or CI, inspect Git and GitHub only. Do not reconstruct ledger history.
-- For full history, say that the answer will be slower, then read the complete relevant ledger and topic context. Add delivery state only if the user includes it.
+- For full history, say that the answer will be slower, then read the complete relevant ledger and accepted artifact context. Add delivery state only if the user includes it.
 
 When an expansion needs several known project files or headings, inspect their selected sizes with `pinboard brief-sources` before loading their bodies, then read each non-overlapping emitted batch once. For other known facts, use a bounded batch when the available tool supports it. If output truncates, continue at the first unread boundary without replaying returned content. Do not turn one requested layer into an exploratory command-per-item walk. If the user explicitly asks for a zero-tool or last-known answer, reuse the most recent overview from the current conversation and label it as not refreshed. Never present it as current. A requested expansion is not permission to preload the other layers.
 
@@ -49,7 +49,6 @@ This proportional behavior applies to mutation as well as status. After a succes
 - Let `views/` remain generated human-readable output. Never edit it as authority.
 - Let accepted brief and evidence artifacts own execution semantics and review receipts; resolve them through their SQLite artifact references.
 - Let immutable inbox rows hold proposals that have been delivered but not admitted.
-- Let `topics/` organize findings, designs, evidence, and human navigation without owning work state.
 - Let public project documentation own stable architecture and domain truth.
 
 One current coordination lease may authorize graph-wide transitions. Disjoint attempt leases may authorize item-local work concurrently. Expiry, release, revocation, and higher fencing generations invalidate retained actions.
@@ -118,7 +117,7 @@ Never describe a partial external launch as complete. Report one result per requ
 4. Run `pinboard transition` with those exact token fields and the prepared payload file.
 5. If either path returns `ACTION_NOT_AVAILABLE`, do not retry the same command, switch roles, or skip to another lifecycle state. Validate once and refresh only the same exact action under fresh authority. If it disappeared, explain the intervening state change. If it remains available with fresh tokens, report an executable contradiction, preserve current attempt evidence, and stop transition work until the command is corrected.
 6. If a task is interrupted before a receipt is visible, never replay its retained action. Follow the interrupted-transition recovery in `references/state-and-recovery.md`; authoritative state distinguishes no change from one complete committed transition, and a fresh lease generation fences the abandoned action.
-7. Report the practical effect of the returned transition. Keep its internal revision and command receipt private unless they materially affect confidence or the user's next action. Run `pinboard validate` immediately after any non-tool edit to supporting topic or attempt artifacts.
+7. Report the practical effect of the returned transition. Keep its internal revision and command receipt private unless they materially affect confidence or the user's next action. Run `pinboard validate` immediately after any non-tool edit to supporting attempt artifacts.
 
 The executable rejects stale subject scopes, expired or replaced lease holders, illegal states, invalid dependencies, and inconsistent references. It does not decide whether evidence is true, whether work is valuable, or what product behavior should mean.
 

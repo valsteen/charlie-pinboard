@@ -9,7 +9,7 @@ SQLite is the authority for the repository work ledger.
 One work root has three durable roles:
 
 ```text
-.codex/work/
+.codex/pinboard/
   state.sqlite3   # authoritative lifecycle, dependency, authority, and history state
   artifacts/      # immutable long-form bytes referenced by SQLite
   views/          # repairable Markdown projections generated from SQLite
@@ -77,7 +77,7 @@ Adapters own concrete persistence and filesystem mechanics without deciding prod
 
 | Owner group | Responsibility |
 | --- | --- |
-| `files/root.py`, `files/file_io.py`, `files/models.py`, `files/errors.py` | Git-backed project discovery, durable-root resolution, file-operation records, exact failure families, directory creation, and atomic file publication |
+| `files/root.py`, `files/file_io.py`, `files/models.py`, `files/errors.py` | Git-backed project discovery, repository-local exclusion of the default durable root, durable-root resolution, file-operation records, exact failure families, directory creation, and atomic file publication |
 | `files/artifacts.py` | Immutable artifact naming, publication, digest verification, and reference resolution |
 | `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections; interface composition supplies complete live-v2 brief projections |
 | `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, schema verification, connection records, transactions, backup, synchronization, and exact storage failures |
@@ -102,25 +102,25 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 
 ### Authoritative SQLite state
 
-`.codex/work/state.sqlite3` owns project revision and host epoch; item, attempt, focus, dependency, requirement, and proposal state; coordination and attempt authority; accepted artifact references; and transition history. A mutation opens a write transaction, reselects current state and authority, applies one accepted closed mutation, and advances the revision with its history receipt. A rejected or failed transition leaves the previous valid ledger intact, and stale actions or fencing tokens are rejected.
+`.codex/pinboard/state.sqlite3` owns project revision and host epoch; item, attempt, focus, dependency, requirement, and proposal state; coordination and attempt authority; accepted artifact references; and transition history. A mutation opens a write transaction, reselects current state and authority, applies one accepted closed mutation, and advances the revision with its history receipt. A rejected or failed transition leaves the previous valid ledger intact, and stale actions or fencing tokens are rejected.
 
 ### Immutable artifacts
 
-Accepted requirements, briefs, results, reviews, and other evidence are immutable files below `.codex/work/artifacts/`. Canonical v2 work briefs and independent brief reviews are strict JSON; SQLite stores their kind, selector, revision, digest, size, and semantic relationships. The installed brief-publication path validates and canonicalizes a candidate, publishes immutable bytes, and accepts their reference without changing scheduling. Activation and resume separately validate that selected v2 brief identity against the locked ledger snapshot. Readers resolve artifacts through accepted references and verify their bytes. The files do not independently own lifecycle state.
+Accepted requirements, briefs, results, reviews, and other evidence are immutable files below `.codex/pinboard/artifacts/`. Canonical v2 work briefs and independent brief reviews are strict JSON; SQLite stores their kind, selector, revision, digest, size, and semantic relationships. The installed brief-publication path validates and canonicalizes a candidate, publishes immutable bytes, and accepts their reference without changing scheduling. Activation and resume separately validate that selected v2 brief identity against the locked ledger snapshot. Readers resolve artifacts through accepted references and verify their bytes. The files do not independently own lifecycle state.
 
 ### Generated views
 
-`.codex/work/views/` is human-readable output derived from SQLite and its accepted artifact references. A live v2 attempt view contains a complete Markdown rendering of the canonical JSON brief; Pinboard is its only writer, and no runtime path reads it for brief semantics. A successful SQLite commit is authoritative before refresh begins. If view refresh fails, the command reports repair guidance without rolling back the accepted transition. `pinboard views rebuild` recreates the full projection, and validation distinguishes an authoritative defect from stale or missing generated output.
+`.codex/pinboard/views/` is human-readable output derived from SQLite and its accepted artifact references. A live v2 attempt view contains a complete Markdown rendering of the canonical JSON brief; Pinboard is its only writer, and no runtime path reads it for brief semantics. A successful SQLite commit is authoritative before refresh begins. If view refresh fails, the command reports repair guidance without rolling back the accepted transition. `pinboard views rebuild` recreates the full projection, and validation distinguishes an authoritative defect from stale or missing generated output.
 
-### Private topic evidence
+### Project evidence boundary
 
-`.codex/topics/` organizes ignored local working notes. It is not authoritative work state, is not a production dependency, and is not included in the package. Durable execution semantics enter the runtime only through accepted immutable artifact references.
+Pinboard does not require or produce a companion notes directory. Project documentation and other human-owned notes remain outside the installed runtime contract. Durable execution semantics enter Pinboard only through accepted immutable artifact references.
 
 ## Representative flows
 
 ### Initialization and reopen
 
-`pinboard init` resolves the durable roots and creates the SQLite schema when `state.sqlite3` is absent. When the database exists, it verifies and reopens that exact schema, ensures the artifact directories exist, and rebuilds views.
+`pinboard init` resolves the default `.codex/pinboard` root and idempotently adds only `/.codex/pinboard/` to the shared repository's local Git exclude file. It never edits a committed `.gitignore`, so unrelated `.codex` content remains visible. An explicit `--work-root` selects that exact path instead. Initialization creates the SQLite schema when `state.sqlite3` is absent; when the database exists, it verifies and reopens that exact schema, ensures the artifact directories exist, and rebuilds views.
 
 ### Reads and validation
 
@@ -146,11 +146,11 @@ An accepted nonterminal checkpoint uses the brief's stable checkpoint ID, preser
 
 ### Portable copy
 
-Portable copy requires a quiescent source. It backs up `state.sqlite3`, copies and verifies every referenced artifact without interpreting its brief schema, advances the destination revision and host epoch, neutralizes host-local leases, rebuilds views, synchronizes the staged tree, and atomically publishes the relocated work root. Live v2 JSON and historical terminal v1 bytes therefore retain exact reference and integrity evidence. The source remains unchanged. Project-local source authorities named by accepted briefs are outside the portable work root and must be supplied by the relocated project when dispatch needs them.
+Portable copy requires a quiescent source and preserves the exact explicit destination path. It backs up `state.sqlite3`, copies and verifies every referenced artifact without interpreting its brief schema, advances the destination revision and host epoch, neutralizes host-local leases, rebuilds views, synchronizes the staged tree, and atomically publishes the relocated work root. Live v2 JSON and historical terminal v1 bytes therefore retain exact reference and integrity evidence. The source remains unchanged. Project-local source authorities named by accepted briefs are outside the portable work root and must be supplied by the relocated project when dispatch needs them.
 
 ## Stored formats
 
-The `.codex/work` path is current. Proposal JSON uses `pinboard-proposal/v1`; accepted work briefs use `pinboard-work-brief/v2`; independent review evidence uses `pinboard-work-brief-review/v2`; dispatch environments use `pinboard-dispatch/v1`; brief-source manifests and plans use `pinboard-brief-sources/v1` and `pinboard-brief-source-plan/v1`; and read projections use `pinboard-overview/v1` and `pinboard-parallel-preview/v1`. Historical terminal v1 brief artifacts remain opaque immutable evidence rather than a supported input format. Atomic file publication uses private `.pinboard-stage-*` names.
+The default `.codex/pinboard` path is current; explicit work roots remain supported at their selected paths. Proposal JSON uses `pinboard-proposal/v1`; accepted work briefs use `pinboard-work-brief/v2`; independent review evidence uses `pinboard-work-brief-review/v2`; dispatch environments use `pinboard-dispatch/v1`; brief-source manifests and plans use `pinboard-brief-sources/v1` and `pinboard-brief-source-plan/v1`; and read projections use `pinboard-overview/v1` and `pinboard-parallel-preview/v1`. Historical terminal v1 brief artifacts remain opaque immutable evidence rather than a supported input format. Atomic file publication uses private `.pinboard-stage-*` names.
 
 ## Keeping this map current
 
