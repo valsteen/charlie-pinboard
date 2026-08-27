@@ -3,7 +3,6 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
-from enum import Enum
 from pathlib import Path
 from typing import assert_never
 
@@ -30,7 +29,6 @@ from charlie_pinboard.application.mutation_models import (
 )
 from charlie_pinboard.application.mutations import expected_stored_state
 from charlie_pinboard.application.stored_state import (
-    ArtifactKind,
     ArtifactReference,
     AttemptLeaseCounter,
     AttemptLeaseGeneration,
@@ -50,104 +48,72 @@ from charlie_pinboard.application.stored_state import (
     StoredProposal,
     StoredTransitionReceipt,
     StoredWorkItem,
-    StoredWorkItemState,
     StoredWorkState,
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
-from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
 from charlie_pinboard.domain.decision_models import TransitionReceipt
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
-    AttemptId,
     HistoryId,
     HistorySubjectId,
     HostId,
     ItemId,
-    LeaseId,
-    ProposalId,
     TaskId,
 )
-from charlie_pinboard.domain.work_models import (
-    ArtifactRole,
-    AttemptState,
-    CanonicalJson,
-    CoordinationLeaseStatus,
-    ProposalDispositionKind,
-    ProposalRelationKind,
-    Timing,
-)
+from charlie_pinboard.domain.work_models import ArtifactRole, CanonicalJson
 
 
-def _text(row: sqlite3.Row, key: str) -> str:
-    value = row[key]
-    if not isinstance(value, str):
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} must be text.")
-    return value
-
-
-def _optional_text(row: sqlite3.Row, key: str) -> str | None:
-    value = row[key]
-    if value is None or isinstance(value, str):
-        return value
-    raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} must be text or null.")
-
-
-def _integer(row: sqlite3.Row, key: str) -> int:
-    value = row[key]
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} must be an integer.")
-    return value
-
-
-def _optional_integer(row: sqlite3.Row, key: str) -> int | None:
-    value = row[key]
-    if value is None:
-        return None
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} must be an integer or null.")
-    return value
-
-
-def _time(row: sqlite3.Row, key: str) -> datetime:
+def _decode_row[Record](row: sqlite3.Row, record_type: type[Record]) -> Record:
     try:
-        return datetime.fromisoformat(_text(row, key))
-    except ValueError as error:
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has an invalid timestamp.") from error
+        return msgspec.convert(dict(row), type=record_type, strict=True)
+    except msgspec.ValidationError as error:
+        raise StorageError(StorageErrorCode.INVALID_STATE, f"Stored row is invalid: {error}") from error
 
 
-def _optional_time(row: sqlite3.Row, key: str) -> datetime | None:
-    value = _optional_text(row, key)
-    if value is None:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError as error:
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has an invalid timestamp.") from error
-
-
-def _stored_json(row: sqlite3.Row, key: str) -> CanonicalJson:
-    """Return JSON bytes whose canonical whitespace is owned by the stored history schema."""
-
-    encoded = _text(row, key).encode("utf-8")
+def _stored_json(column: str, value: str) -> CanonicalJson:
+    encoded = value.encode("utf-8")
     try:
         msgspec.json.decode(encoded, type=msgspec.Raw)
     except msgspec.DecodeError as error:
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has invalid JSON.") from error
+        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {column!r} has invalid JSON.") from error
     return CanonicalJson(encoded)
 
 
-def _enum_value[EnumValue: Enum](constructor: type[EnumValue], row: sqlite3.Row, key: str) -> EnumValue:
-    try:
-        return constructor(_text(row, key))
-    except ValueError as error:
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} has an unsupported value.") from error
+class _StoredTransitionRow(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    history_id: HistoryId
+    project_revision: int
+    action_id: ActionId
+    action_kind: TransitionHistoryActionKind
+    subject_id: HistorySubjectId
+    artifact_ref_id: ArtifactRefId | None
+    authorization: TransitionHistoryAuthorizationKind
+    actor_task_id: TaskId | None
+    actor_host_id: HostId | None
+    input_schema: str
+    input_json: str
+    outcome_schema: str
+    outcome_json: str
+    committed_at: datetime
 
-
-def _expect(row: sqlite3.Row, key: str, expected: str) -> None:
-    if _text(row, key) != expected:
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {key!r} must be {expected!r}.")
+    def receipt(self) -> StoredTransitionReceipt:
+        return StoredTransitionReceipt(
+            self.history_id,
+            self.project_revision,
+            self.action_id,
+            self.action_kind,
+            self.subject_id,
+            self.artifact_ref_id,
+            self.authorization,
+            self.actor_task_id,
+            self.actor_host_id,
+            self.input_schema,
+            _stored_json("input_json", self.input_json),
+            self.outcome_schema,
+            _stored_json("outcome_json", self.outcome_json),
+            self.committed_at,
+        )
 
 
 def _validate_attempt_authority(state: StoredWorkState, error_code: StorageErrorCode) -> None:
@@ -186,241 +152,169 @@ class _StoredStateReader:
         return state
 
     def _project(self) -> ProjectRecord:
-        rows = self._rows("SELECT * FROM project_meta ORDER BY singleton")
+        rows = self._rows(
+            """
+            SELECT application, schema_version, revision, host_epoch, created_at, updated_at
+            FROM project_meta
+            ORDER BY singleton
+            """
+        )
         if len(rows) != 1:
             raise StorageError(StorageErrorCode.INVALID_STATE, "The database must contain one project record.")
-        row = rows[0]
-        _expect(row, "application", APPLICATION)
-        if _integer(row, "schema_version") != SCHEMA_VERSION:
-            raise StorageError(StorageErrorCode.INVALID_STATE, "The opened database schema changed unexpectedly.")
-        return ProjectRecord(
-            APPLICATION,
-            1,
-            _integer(row, "revision"),
-            _integer(row, "host_epoch"),
-            _time(row, "created_at"),
-            _time(row, "updated_at"),
-        )
+        return _decode_row(rows[0], ProjectRecord)
 
     def _lifecycle(self) -> LifecycleRecords:
         items = tuple(
-            StoredWorkItem(
-                ItemId(_text(row, "item_id")),
-                _text(row, "user_label"),
-                _enum_value(StoredWorkItemState, row, "state"),
-                None if (timing := _optional_text(row, "timing")) is None else Timing(timing),
-                _optional_text(row, "source"),
-                _optional_text(row, "trigger"),
-                _optional_text(row, "why_it_matters"),
-                _optional_text(row, "effect"),
-                _optional_text(row, "unlock"),
-                _optional_text(row, "outcome_evidence"),
-                _optional_text(row, "next_action"),
-                _optional_text(row, "notes"),
-                _integer(row, "scope_revision"),
-                _text(row, "scope_digest"),
-                _integer(row, "subject_revision"),
-                _time(row, "recorded_at"),
-                _time(row, "updated_at"),
+            _decode_row(row, StoredWorkItem)
+            for row in self._rows(
+                """
+                SELECT item_id, user_label, state, timing, source, trigger, why_it_matters, effect, unlock,
+                       outcome_evidence, next_action, notes, scope_revision, scope_digest, subject_revision,
+                       recorded_at, updated_at
+                FROM work_items
+                ORDER BY item_id
+                """
             )
-            for row in self._rows("SELECT * FROM work_items ORDER BY item_id")
         )
         scopes = tuple(
-            ItemScopeRevision(
-                ItemId(_text(row, "item_id")),
-                _integer(row, "scope_revision"),
-                _text(row, "scope_digest"),
-                _integer(row, "accepted_project_revision"),
-                _time(row, "accepted_at"),
+            _decode_row(row, ItemScopeRevision)
+            for row in self._rows(
+                """
+                SELECT item_id, scope_revision AS revision, scope_digest AS digest,
+                       accepted_project_revision, accepted_at
+                FROM item_scope_revisions
+                ORDER BY item_id, scope_revision
+                """
             )
-            for row in self._rows("SELECT * FROM item_scope_revisions ORDER BY item_id, scope_revision")
         )
         dependencies = tuple(
-            ItemDependency(
-                ItemId(_text(row, "item_id")),
-                ItemId(_text(row, "dependency_id")),
-                _integer(row, "position"),
+            _decode_row(row, ItemDependency)
+            for row in self._rows(
+                "SELECT item_id, dependency_id, position FROM item_dependencies ORDER BY item_id, position"
             )
-            for row in self._rows("SELECT * FROM item_dependencies ORDER BY item_id, position")
         )
         item_artifacts = tuple(
-            ItemArtifactLink(
-                ItemId(_text(row, "item_id")),
-                ArtifactRefId(_integer(row, "artifact_ref_id")),
-                _enum_value(ArtifactRole, row, "role"),
-                _integer(row, "position"),
+            _decode_row(row, ItemArtifactLink)
+            for row in self._rows(
+                "SELECT item_id, artifact_ref_id, role, position FROM item_artifacts ORDER BY item_id, role, position"
             )
-            for row in self._rows("SELECT * FROM item_artifacts ORDER BY item_id, role, position")
         )
-        attempts: list[StoredAttempt] = []
-        for row in self._rows("SELECT * FROM attempts ORDER BY attempt_id"):
-            _expect(row, "brief_artifact_kind", "brief")
-            if _optional_integer(row, "result_artifact_ref_id") is not None:
-                _expect(row, "result_artifact_kind", "result")
-            if _optional_integer(row, "blocker_artifact_ref_id") is not None:
-                _expect(row, "blocker_artifact_kind", "blocker")
-            attempts.append(
-                StoredAttempt(
-                    AttemptId(_text(row, "attempt_id")),
-                    ItemId(_text(row, "item_id")),
-                    _enum_value(AttemptState, row, "state"),
-                    _text(row, "branch"),
-                    _text(row, "base_revision"),
-                    _text(row, "provenance"),
-                    ArtifactRefId(_integer(row, "brief_artifact_ref_id")),
-                    None
-                    if (result := _optional_integer(row, "result_artifact_ref_id")) is None
-                    else ArtifactRefId(result),
-                    None
-                    if (blocker := _optional_integer(row, "blocker_artifact_ref_id")) is None
-                    else ArtifactRefId(blocker),
-                    _optional_text(row, "candidate_revision"),
-                    _optional_time(row, "candidate_recorded_at"),
-                    _integer(row, "accepted_scope_revision"),
-                    _text(row, "accepted_scope_digest"),
-                    _integer(row, "subject_revision"),
-                    _time(row, "recorded_at"),
-                    _time(row, "updated_at"),
-                )
+        attempts = tuple(
+            _decode_row(row, StoredAttempt)
+            for row in self._rows(
+                """
+                SELECT attempt_id, item_id, state, branch, base_revision, provenance, brief_artifact_ref_id,
+                       result_artifact_ref_id, blocker_artifact_ref_id, candidate_revision, candidate_recorded_at,
+                       accepted_scope_revision, accepted_scope_digest, subject_revision, recorded_at, updated_at
+                FROM attempts
+                ORDER BY attempt_id
+                """
             )
-        return LifecycleRecords(self._project(), items, scopes, dependencies, item_artifacts, tuple(attempts))
+        )
+        return LifecycleRecords(self._project(), items, scopes, dependencies, item_artifacts, attempts)
 
     def _proposals(self) -> ProposalRecords:
         proposals = tuple(
-            StoredProposal(
-                ProposalId(_text(row, "proposal_id")),
-                _time(row, "created_at"),
-                _time(row, "recorded_at"),
-                TaskId(_text(row, "source_task_id")),
-                _text(row, "user_label"),
-                _text(row, "trigger"),
-                _text(row, "why_it_matters"),
-                _enum_value(ProposalRelationKind, row, "relation_kind"),
-                None if (relation := _optional_text(row, "relation_item_id")) is None else ItemId(relation),
-                _text(row, "effect"),
-                _text(row, "unlock"),
-                _text(row, "urgency_evidence"),
-                None
-                if (disposition := _optional_text(row, "disposition")) is None
-                else ProposalDispositionKind(disposition),
-                None if (target := _optional_text(row, "disposition_target_item_id")) is None else ItemId(target),
-                _optional_text(row, "disposition_reason"),
-                _integer(row, "subject_revision"),
-                _optional_time(row, "disposition_recorded_at"),
+            _decode_row(row, StoredProposal)
+            for row in self._rows(
+                """
+                SELECT proposal_id, created_at, recorded_at, source_task_id, user_label, trigger, why_it_matters,
+                       relation_kind AS relation, relation_item_id, effect, unlock, urgency_evidence, disposition,
+                       disposition_target_item_id, disposition_reason, subject_revision, disposition_recorded_at
+                FROM proposals
+                ORDER BY proposal_id
+                """
             )
-            for row in self._rows("SELECT * FROM proposals ORDER BY proposal_id")
         )
         evidence = tuple(
-            ProposalEvidence(ProposalId(_text(row, "proposal_id")), _integer(row, "position"), _text(row, "selector"))
-            for row in self._rows("SELECT * FROM proposal_evidence ORDER BY proposal_id, position")
+            _decode_row(row, ProposalEvidence)
+            for row in self._rows(
+                "SELECT proposal_id, position, selector FROM proposal_evidence ORDER BY proposal_id, position"
+            )
         )
         freshness = tuple(
-            ProposalFreshness(
-                ProposalId(_text(row, "proposal_id")), _integer(row, "position"), _text(row, "assumption")
+            _decode_row(row, ProposalFreshness)
+            for row in self._rows(
+                "SELECT proposal_id, position, assumption FROM proposal_freshness ORDER BY proposal_id, position"
             )
-            for row in self._rows("SELECT * FROM proposal_freshness ORDER BY proposal_id, position")
         )
         return ProposalRecords(proposals, evidence, freshness)
 
     def _artifacts(self) -> tuple[ArtifactReference, ...]:
         return tuple(
-            ArtifactReference(
-                ArtifactRefId(_integer(row, "artifact_ref_id")),
-                _text(row, "artifact_key"),
-                _integer(row, "artifact_revision"),
-                _enum_value(ArtifactKind, row, "kind"),
-                _text(row, "relative_path"),
-                _text(row, "content_sha256"),
-                _integer(row, "size_bytes"),
-                _integer(row, "accepted_revision"),
-                _time(row, "created_at"),
+            _decode_row(row, ArtifactReference)
+            for row in self._rows(
+                """
+                SELECT artifact_ref_id, artifact_key AS key, artifact_revision AS revision, kind,
+                       relative_path AS selector, content_sha256, size_bytes, accepted_revision, created_at
+                FROM artifact_refs
+                ORDER BY artifact_ref_id
+                """
             )
-            for row in self._rows("SELECT * FROM artifact_refs ORDER BY artifact_ref_id")
         )
 
     def _authority(self) -> AuthorityRecords:
-        coordination_rows = self._rows("SELECT * FROM coordination_lease ORDER BY singleton")
+        coordination_rows = self._rows(
+            """
+            SELECT lease_id, task_id, host_id, generation, acquired_at, expires_at, status AS state
+            FROM coordination_lease
+            ORDER BY singleton
+            """
+        )
         if len(coordination_rows) > 1:
             raise StorageError(StorageErrorCode.INVALID_STATE, "The database has multiple coordination leases.")
-        coordination = None
-        if coordination_rows:
-            row = coordination_rows[0]
-            coordination = StoredCoordinationLease(
-                LeaseId(_text(row, "lease_id")),
-                TaskId(_text(row, "task_id")),
-                HostId(_text(row, "host_id")),
-                _integer(row, "generation"),
-                _time(row, "acquired_at"),
-                _time(row, "expires_at"),
-                _enum_value(CoordinationLeaseStatus, row, "status"),
-            )
+        coordination = _decode_row(coordination_rows[0], StoredCoordinationLease) if coordination_rows else None
         counters = tuple(
-            AttemptLeaseCounter(AttemptId(_text(row, "attempt_id")), _integer(row, "generation_high_water"))
-            for row in self._rows("SELECT * FROM attempt_lease_counters ORDER BY attempt_id")
+            _decode_row(row, AttemptLeaseCounter)
+            for row in self._rows(
+                "SELECT attempt_id, generation_high_water FROM attempt_lease_counters ORDER BY attempt_id"
+            )
         )
         generations = tuple(
-            AttemptLeaseGeneration(
-                AttemptId(_text(row, "attempt_id")),
-                _integer(row, "generation"),
-                LeaseId(_text(row, "lease_id")),
-                TaskId(_text(row, "task_id")),
-                HostId(_text(row, "host_id")),
+            _decode_row(row, AttemptLeaseGeneration)
+            for row in self._rows(
+                """
+                SELECT attempt_id, generation, lease_id, task_id, host_id
+                FROM attempt_lease_generations
+                ORDER BY attempt_id, generation
+                """
             )
-            for row in self._rows("SELECT * FROM attempt_lease_generations ORDER BY attempt_id, generation")
         )
         leases = tuple(
-            StoredAttemptLease(
-                AttemptId(_text(row, "attempt_id")),
-                _integer(row, "generation"),
-                _time(row, "acquired_at"),
-                _time(row, "expires_at"),
-                _enum_value(AttemptLeaseStatus, row, "status"),
+            _decode_row(row, StoredAttemptLease)
+            for row in self._rows(
+                """
+                SELECT attempt_id, generation, acquired_at, expires_at, status AS state
+                FROM attempt_leases
+                ORDER BY attempt_id
+                """
             )
-            for row in self._rows("SELECT * FROM attempt_leases ORDER BY attempt_id")
         )
         return AuthorityRecords(coordination, counters, generations, leases)
 
     def _history(self) -> tuple[StoredTransitionReceipt, ...]:
-        receipts: list[StoredTransitionReceipt] = []
-        for row in self._rows("SELECT * FROM transition_history ORDER BY history_id"):
-            artifact_ref = _optional_integer(row, "artifact_ref_id")
-            if artifact_ref is not None:
-                _expect(row, "artifact_kind", "evidence")
-            elif _optional_text(row, "artifact_kind") is not None:
-                raise StorageError(StorageErrorCode.INVALID_STATE, "History artifact kind requires a reference.")
-            receipts.append(
-                StoredTransitionReceipt(
-                    HistoryId(_integer(row, "history_id")),
-                    _integer(row, "project_revision"),
-                    ActionId(_text(row, "action_id")),
-                    _enum_value(TransitionHistoryActionKind, row, "action_kind"),
-                    HistorySubjectId(_text(row, "subject_id")),
-                    None if artifact_ref is None else ArtifactRefId(artifact_ref),
-                    _enum_value(TransitionHistoryAuthorizationKind, row, "authorization_kind"),
-                    None if (task := _optional_text(row, "actor_task_id")) is None else TaskId(task),
-                    None if (host := _optional_text(row, "actor_host_id")) is None else HostId(host),
-                    _text(row, "input_schema"),
-                    _stored_json(row, "input_json"),
-                    _text(row, "outcome_schema"),
-                    _stored_json(row, "outcome_json"),
-                    _time(row, "committed_at"),
-                )
+        return tuple(
+            _decode_row(row, _StoredTransitionRow).receipt()
+            for row in self._rows(
+                """
+                SELECT history_id, project_revision, action_id, action_kind, subject_id, artifact_ref_id,
+                       authorization_kind AS authorization, actor_task_id, actor_host_id, input_schema,
+                       input_json, outcome_schema, outcome_json, committed_at
+                FROM transition_history
+                ORDER BY history_id
+                """
             )
-        return tuple(receipts)
+        )
 
     def _focus(self) -> StoredFocus:
-        rows = self._rows("SELECT * FROM current_focus ORDER BY singleton")
+        rows = self._rows(
+            "SELECT item_id, attempt_id, next_action, subject_revision FROM current_focus ORDER BY singleton"
+        )
         if len(rows) > 1:
             raise StorageError(StorageErrorCode.INVALID_STATE, "The database has multiple focus records.")
         if not rows:
             return StoredFocus(None, None, "select", 0)
-        row = rows[0]
-        return StoredFocus(
-            None if (item := _optional_text(row, "item_id")) is None else ItemId(item),
-            None if (attempt := _optional_text(row, "attempt_id")) is None else AttemptId(attempt),
-            _text(row, "next_action"),
-            _integer(row, "subject_revision"),
-        )
+        return _decode_row(rows[0], StoredFocus)
 
 
 def _timestamp(value: datetime | None) -> str | None:
@@ -442,8 +336,8 @@ class _StoredStateWriter:
                 StorageErrorCode.INVALID_STATE, "Stored state does not match the current application schema."
             )
         _validate_current_state(state, StorageErrorCode.INVARIANT_VIOLATION)
-        occupied = sum(
-            _integer(row, "count")
+        occupied_rows = (
+            row["count"]
             for table in (
                 "artifact_refs",
                 "work_items",
@@ -463,6 +357,10 @@ class _StoredStateWriter:
             )
             for row in self._connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchall()
         )
+        try:
+            occupied = sum(msgspec.convert(tuple(occupied_rows), type=tuple[int, ...], strict=True))
+        except msgspec.ValidationError as error:
+            raise StorageError(StorageErrorCode.INVALID_STATE, f"Stored row is invalid: {error}") from error
         current_revision = self._connection.execute("SELECT revision FROM project_meta WHERE singleton = 1").fetchone()
         if occupied != 0 or current_revision is None or current_revision[0] != 0:
             raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "Initial state requires a new empty database.")

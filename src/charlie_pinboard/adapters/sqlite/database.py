@@ -7,6 +7,8 @@ from functools import cache
 from pathlib import Path
 from urllib.parse import quote
 
+import msgspec
+
 from charlie_pinboard.adapters.files.errors import FileIOError
 from charlie_pinboard.adapters.files.file_io import DurableRoots, ensure_directory_chain
 from charlie_pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
@@ -71,9 +73,10 @@ def _required_meta(connection: sqlite3.Connection) -> tuple[str, int]:
         raise _translate_database_error(error, opening=True) from error
     if len(rows) != 1:
         raise StorageError(StorageErrorCode.INVALID_STATE, "The database must contain exactly one metadata row.")
-    application, version = rows[0]
-    if not isinstance(application, str) or not isinstance(version, int) or isinstance(version, bool):
-        raise StorageError(StorageErrorCode.INVALID_STATE, "The database metadata types are invalid.")
+    try:
+        application, version = msgspec.convert(tuple(rows[0]), type=tuple[str, int], strict=True)
+    except msgspec.ValidationError as error:
+        raise StorageError(StorageErrorCode.INVALID_STATE, "The database metadata types are invalid.") from error
     return application, version
 
 
@@ -86,18 +89,16 @@ def _schema_signature(connection: sqlite3.Connection) -> tuple[tuple[str, str, s
         ORDER BY type, name
         """
     ).fetchall()
-    signature: list[tuple[str, str, str, str | None]] = []
-    for row in rows:
-        object_type, name, table_name, sql = row
-        if (
-            not isinstance(object_type, str)
-            or not isinstance(name, str)
-            or not isinstance(table_name, str)
-            or (sql is not None and not isinstance(sql, str))
-        ):
-            raise StorageError(StorageErrorCode.INVALID_STATE, "The current SQLite schema metadata is malformed.")
-        signature.append((object_type, name, table_name, sql))
-    return tuple(signature)
+    try:
+        return msgspec.convert(
+            tuple(tuple(row) for row in rows),
+            type=tuple[tuple[str, str, str, str | None], ...],
+            strict=True,
+        )
+    except msgspec.ValidationError as error:
+        raise StorageError(
+            StorageErrorCode.INVALID_STATE, "The current SQLite schema metadata is malformed."
+        ) from error
 
 
 @cache

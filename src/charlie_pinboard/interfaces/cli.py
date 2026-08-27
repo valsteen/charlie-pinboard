@@ -1,11 +1,11 @@
 import argparse
 import sys
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import assert_never
+from typing import Literal, assert_never, cast
 from uuid import uuid4
 
 import msgspec
@@ -52,11 +52,17 @@ from charlie_pinboard.application.service import (
     create_proposal,
     execute,
 )
-from charlie_pinboard.application.stored_state import ArtifactKind
+from charlie_pinboard.application.stored_state import (
+    ArtifactKind,
+    StoredAttempt,
+    StoredCoordinationLease,
+    StoredWorkState,
+)
 from charlie_pinboard.application.validation import Diagnostic, Severity, ValidationReport, validate_work_state
 from charlie_pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
+    AttemptAuthorityOperation,
     ReleaseAttemptAuthority,
     ReleaseCoordinationAuthority,
     RenewAttemptAuthority,
@@ -100,26 +106,67 @@ from charlie_pinboard.interfaces.brief_sources import (
     plan_brief_sources,
     render_brief_source_batch,
 )
+from charlie_pinboard.interfaces.cli_commands import (
+    ActionsCommand,
+    AttemptAcquireCommand,
+    AttemptReleaseCommand,
+    AttemptRenewCommand,
+    AttemptRevokeCommand,
+    AttemptStatusCommand,
+    AttemptTransitionCommand,
+    BriefPublishCommand,
+    BriefSourcesEmitCommand,
+    BriefSourcesPlanCommand,
+    CliCommand,
+    CliInvocation,
+    CloseCommand,
+    CoordinatedAttemptAcquireCommand,
+    CoordinationAcquireCommand,
+    CoordinationApplyCommand,
+    CoordinationDispatchCommand,
+    CoordinationReleaseCommand,
+    CoordinationRenewCommand,
+    CoordinationReviewedDispatchCommand,
+    CoordinationRevokeCommand,
+    CoordinationStatusCommand,
+    CoordinationTransitionCommand,
+    CoordinatorDispatchCommand,
+    CoordinatorReviewedDispatchCommand,
+    CoordinatorTransitionCommand,
+    DispatchCommand,
+    InitializeCommand,
+    InputContractCommand,
+    ItemStatusCommand,
+    LeasedActionsCommand,
+    OverviewCommand,
+    ParallelPreviewCommand,
+    ProposalCommand,
+    RebuildViewsCommand,
+    ResolvedRoots,
+    RootCommand,
+    RootSelection,
+    StableActionId,
+    StableAttemptId,
+    StableHostId,
+    StableLeaseId,
+    StableTaskId,
+    StatusCommand,
+    TransitionCommand,
+    ValidateCommand,
+)
 from charlie_pinboard.interfaces.cli_models import (
     ActionsView,
     ActionView,
-    AttemptOperation,
-    BriefOperation,
     BriefPublicationView,
     BriefSourceBatchView,
     BriefSourcePlanView,
     BriefSourceSegmentView,
     BriefSourceView,
-    CliArguments,
     CloseView,
-    CommandContext,
-    CommandName,
     CoordinatedTransitionView,
-    CoordinationOperation,
     CoordinatorView,
     DiagnosticView,
     InputContractView,
-    ItemOperation,
     OverviewItemView,
     OverviewView,
     ParallelItemView,
@@ -281,9 +328,229 @@ def _parallel_preview_view(preview: ParallelPreview) -> ParallelPreviewView:
     )
 
 
+type RawCliValue = str | int | bool | Path | list[str] | None
+type RawCliValues = dict[str, RawCliValue]
+type CliCommandType = type[CliCommand]
+type CliDecoder = Callable[[RawCliValues], CliCommand]
+
+
+class _RawCliArguments(argparse.Namespace):
+    decoder: CliDecoder | None
+    selected_parser: argparse.ArgumentParser | None
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.decoder = None
+        self.selected_parser = None
+
+
+class _BriefSourcesArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    file: Path
+    max_batch_bytes: int
+    json: bool
+    emit_batch: int | None
+
+    def __post_init__(self) -> None:
+        if self.json == (self.emit_batch is not None):
+            raise ValueError("exactly one of --json or --emit-batch is required")
+
+
+class _ActionsArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    role: Role
+    lease_id: StableLeaseId | None
+    generation: int | None
+    action_id: StableActionId | None
+    json: bool
+
+    def __post_init__(self) -> None:
+        if (self.lease_id is None) != (self.generation is None):
+            raise ValueError("--lease-id and --generation must be supplied together")
+
+
+class _TransitionArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    action_id: StableActionId
+    expected_revision: str
+    generation: int
+    payload: Path
+    subject_revision: str | None
+    lease_id: StableLeaseId | None
+    authorization: Literal["coordinator", "coordination", "attempt"]
+
+    def __post_init__(self) -> None:
+        requires_lease = self.authorization != "coordinator"
+        if requires_lease != (self.lease_id is not None):
+            raise ValueError(f"--lease-id must be supplied exactly for {self.authorization} authorization")
+
+
+class _DispatchArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    action_id: StableActionId
+    expected_revision: str
+    generation: int
+    checkpoint: str
+    environment: Path
+    lease_id: StableLeaseId | None
+    prompt: Path | None
+    brief_review: Path | None
+    review_id: str | None
+
+    def __post_init__(self) -> None:
+        if self.brief_review is None and self.review_id is not None:
+            raise ValueError("--review-id is only valid with --brief-review")
+
+
+class _AttemptAcquireArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    attempt_id: StableAttemptId
+    task_id: StableTaskId
+    host_id: StableHostId
+    ttl_seconds: int
+    coordination_lease_id: StableLeaseId | None
+    coordination_generation: int | None
+    json: bool
+
+    def __post_init__(self) -> None:
+        if (self.coordination_lease_id is None) != (self.coordination_generation is None):
+            raise ValueError("--coordination-lease-id and --coordination-generation must be supplied together")
+
+
+def _decode_brief_sources(values: RawCliValues) -> BriefSourcesPlanCommand | BriefSourcesEmitCommand:
+    arguments = msgspec.convert(values, type=_BriefSourcesArguments, strict=True)
+    if arguments.emit_batch is None:
+        return BriefSourcesPlanCommand(file=arguments.file, max_batch_bytes=arguments.max_batch_bytes)
+    return BriefSourcesEmitCommand(
+        file=arguments.file,
+        emit_batch=arguments.emit_batch,
+        max_batch_bytes=arguments.max_batch_bytes,
+    )
+
+
+def _decode_actions(values: RawCliValues) -> ActionsCommand | LeasedActionsCommand:
+    arguments = msgspec.convert(values, type=_ActionsArguments, strict=True)
+    if arguments.lease_id is None or arguments.generation is None:
+        return ActionsCommand(role=arguments.role, action_id=arguments.action_id, json=arguments.json)
+    return LeasedActionsCommand(
+        role=arguments.role,
+        lease_id=arguments.lease_id,
+        generation=arguments.generation,
+        action_id=arguments.action_id,
+        json=arguments.json,
+    )
+
+
+def _decode_transition(values: RawCliValues) -> TransitionCommand:
+    arguments = msgspec.convert(values, type=_TransitionArguments, strict=True)
+    match arguments.authorization:
+        case "coordinator":
+            return CoordinatorTransitionCommand(
+                action_id=arguments.action_id,
+                expected_revision=arguments.expected_revision,
+                generation=arguments.generation,
+                payload=arguments.payload,
+                subject_revision=arguments.subject_revision,
+            )
+        case "coordination":
+            lease_id = cast("StableLeaseId", arguments.lease_id)
+            return CoordinationTransitionCommand(
+                action_id=arguments.action_id,
+                expected_revision=arguments.expected_revision,
+                generation=arguments.generation,
+                payload=arguments.payload,
+                lease_id=lease_id,
+                subject_revision=arguments.subject_revision,
+            )
+        case "attempt":
+            lease_id = cast("StableLeaseId", arguments.lease_id)
+            return AttemptTransitionCommand(
+                action_id=arguments.action_id,
+                expected_revision=arguments.expected_revision,
+                generation=arguments.generation,
+                payload=arguments.payload,
+                lease_id=lease_id,
+                subject_revision=arguments.subject_revision,
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _decode_dispatch(values: RawCliValues) -> DispatchCommand:
+    arguments = msgspec.convert(values, type=_DispatchArguments, strict=True)
+    if arguments.lease_id is None:
+        if arguments.brief_review is None:
+            return CoordinatorDispatchCommand(
+                action_id=arguments.action_id,
+                expected_revision=arguments.expected_revision,
+                generation=arguments.generation,
+                checkpoint=arguments.checkpoint,
+                environment=arguments.environment,
+                prompt=arguments.prompt,
+            )
+        return CoordinatorReviewedDispatchCommand(
+            action_id=arguments.action_id,
+            expected_revision=arguments.expected_revision,
+            generation=arguments.generation,
+            checkpoint=arguments.checkpoint,
+            environment=arguments.environment,
+            brief_review=arguments.brief_review,
+            prompt=arguments.prompt,
+            review_id=arguments.review_id,
+        )
+    if arguments.brief_review is None:
+        return CoordinationDispatchCommand(
+            action_id=arguments.action_id,
+            expected_revision=arguments.expected_revision,
+            generation=arguments.generation,
+            lease_id=arguments.lease_id,
+            checkpoint=arguments.checkpoint,
+            environment=arguments.environment,
+            prompt=arguments.prompt,
+        )
+    return CoordinationReviewedDispatchCommand(
+        action_id=arguments.action_id,
+        expected_revision=arguments.expected_revision,
+        generation=arguments.generation,
+        lease_id=arguments.lease_id,
+        checkpoint=arguments.checkpoint,
+        environment=arguments.environment,
+        brief_review=arguments.brief_review,
+        prompt=arguments.prompt,
+        review_id=arguments.review_id,
+    )
+
+
+def _decode_attempt_acquire(values: RawCliValues) -> AttemptAcquireCommand | CoordinatedAttemptAcquireCommand:
+    arguments = msgspec.convert(values, type=_AttemptAcquireArguments, strict=True)
+    if arguments.coordination_lease_id is None or arguments.coordination_generation is None:
+        return AttemptAcquireCommand(
+            attempt_id=arguments.attempt_id,
+            task_id=arguments.task_id,
+            host_id=arguments.host_id,
+            ttl_seconds=arguments.ttl_seconds,
+            json=arguments.json,
+        )
+    return CoordinatedAttemptAcquireCommand(
+        attempt_id=arguments.attempt_id,
+        task_id=arguments.task_id,
+        host_id=arguments.host_id,
+        ttl_seconds=arguments.ttl_seconds,
+        coordination_lease_id=arguments.coordination_lease_id,
+        coordination_generation=arguments.coordination_generation,
+        json=arguments.json,
+    )
+
+
+def _select(parser: argparse.ArgumentParser, command_type: CliCommandType) -> None:
+    def decode(values: RawCliValues) -> CliCommand:
+        return msgspec.convert(values, type=command_type, strict=True)
+
+    parser.set_defaults(decoder=decode, selected_parser=parser)
+
+
+def _select_decoder(parser: argparse.ArgumentParser, decoder: CliDecoder) -> None:
+    parser.set_defaults(decoder=decoder, selected_parser=parser)
+
+
 def _add_coordination_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     coordination = commands.add_parser("coordination", help="Borrow or manage temporary graph-wide authority.")
-    operations = coordination.add_subparsers(dest="operation", required=True)
+    operations = coordination.add_subparsers(required=True)
     apply = operations.add_parser("apply", help="Borrow coordination for one exact transition and release it.")
     apply.add_argument("--task-id", required=True)
     apply.add_argument("--host-id", required=True)
@@ -291,25 +558,35 @@ def _add_coordination_parser(commands: argparse._SubParsersAction[argparse.Argum
     apply.add_argument("--payload", required=True, type=Path)
     apply.add_argument("--ttl-seconds", type=int, default=60)
     apply.add_argument("--json", action="store_true")
+    _select(apply, CoordinationApplyCommand)
     acquire = operations.add_parser("acquire")
     acquire.add_argument("--task-id", required=True)
     acquire.add_argument("--host-id", required=True)
     acquire.add_argument("--ttl-seconds", required=True, type=int)
     acquire.add_argument("--json", action="store_true")
-    for operation in ("renew", "release"):
-        command = operations.add_parser(operation)
-        command.add_argument("--lease-id", required=True)
-        command.add_argument("--generation", required=True, type=int)
-        if operation == "renew":
-            command.add_argument("--ttl-seconds", required=True, type=int)
-        command.add_argument("--json", action="store_true")
-    operations.add_parser("revoke").add_argument("--json", action="store_true")
-    operations.add_parser("status").add_argument("--json", action="store_true")
+    _select(acquire, CoordinationAcquireCommand)
+    renew = operations.add_parser("renew")
+    renew.add_argument("--lease-id", required=True)
+    renew.add_argument("--generation", required=True, type=int)
+    renew.add_argument("--ttl-seconds", required=True, type=int)
+    renew.add_argument("--json", action="store_true")
+    _select(renew, CoordinationRenewCommand)
+    release = operations.add_parser("release")
+    release.add_argument("--lease-id", required=True)
+    release.add_argument("--generation", required=True, type=int)
+    release.add_argument("--json", action="store_true")
+    _select(release, CoordinationReleaseCommand)
+    revoke = operations.add_parser("revoke")
+    revoke.add_argument("--json", action="store_true")
+    _select(revoke, CoordinationRevokeCommand)
+    status = operations.add_parser("status")
+    status.add_argument("--json", action="store_true")
+    _select(status, CoordinationStatusCommand)
 
 
 def _add_attempt_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     attempt = commands.add_parser("attempt", help="Manage a renewable attempt ownership claim.")
-    operations = attempt.add_subparsers(dest="operation", required=True)
+    operations = attempt.add_subparsers(required=True)
     acquire = operations.add_parser("acquire")
     acquire.add_argument("--attempt-id", required=True)
     acquire.add_argument("--task-id", required=True)
@@ -318,14 +595,20 @@ def _add_attempt_parser(commands: argparse._SubParsersAction[argparse.ArgumentPa
     acquire.add_argument("--coordination-generation", type=int)
     acquire.add_argument("--ttl-seconds", required=True, type=int)
     acquire.add_argument("--json", action="store_true")
-    for operation in ("renew", "release"):
-        command = operations.add_parser(operation)
-        command.add_argument("--attempt-id", required=True)
-        command.add_argument("--lease-id", required=True)
-        command.add_argument("--generation", required=True, type=int)
-        if operation == "renew":
-            command.add_argument("--ttl-seconds", required=True, type=int)
-        command.add_argument("--json", action="store_true")
+    _select_decoder(acquire, _decode_attempt_acquire)
+    renew = operations.add_parser("renew")
+    renew.add_argument("--attempt-id", required=True)
+    renew.add_argument("--lease-id", required=True)
+    renew.add_argument("--generation", required=True, type=int)
+    renew.add_argument("--ttl-seconds", required=True, type=int)
+    renew.add_argument("--json", action="store_true")
+    _select(renew, AttemptRenewCommand)
+    release = operations.add_parser("release")
+    release.add_argument("--attempt-id", required=True)
+    release.add_argument("--lease-id", required=True)
+    release.add_argument("--generation", required=True, type=int)
+    release.add_argument("--json", action="store_true")
+    _select(release, AttemptReleaseCommand)
     revoke = operations.add_parser("revoke")
     revoke.add_argument("--attempt-id", required=True)
     revoke.add_argument("--lease-id", required=True)
@@ -333,46 +616,55 @@ def _add_attempt_parser(commands: argparse._SubParsersAction[argparse.ArgumentPa
     revoke.add_argument("--coordination-lease-id", required=True)
     revoke.add_argument("--coordination-generation", required=True, type=int)
     revoke.add_argument("--json", action="store_true")
+    _select(revoke, AttemptRevokeCommand)
     status = operations.add_parser("status")
     status.add_argument("--attempt-id", required=True)
     status.add_argument("--json", action="store_true")
+    _select(status, AttemptStatusCommand)
 
 
 def _add_item_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     item = commands.add_parser("item", help="Inspect one exact live or terminal item.")
-    operations = item.add_subparsers(dest="operation", required=True)
+    operations = item.add_subparsers(required=True)
     status = operations.add_parser("status", help="Show authoritative status for one exact item.")
     status.add_argument("--item-id", required=True)
     status.add_argument("--json", action="store_true")
+    _select(status, ItemStatusCommand)
 
 
 def _add_parallel_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parallel = commands.add_parser("parallel", help="Preview structurally independent work without launching it.")
-    operations = parallel.add_subparsers(dest="operation", required=True)
+    operations = parallel.add_subparsers(required=True)
     preview = operations.add_parser("preview")
     preview.add_argument("--item", action="append", default=[])
     preview.add_argument("--json", action="store_true")
+    _select(preview, ParallelPreviewCommand)
 
 
 def _add_chat_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     overview = commands.add_parser("overview", help="Show one coherent live-work snapshot.")
     overview.add_argument("--json", action="store_true")
+    _select(overview, OverviewCommand)
     close = commands.add_parser("close", help="Record a terminal decision for non-active work.")
     close.add_argument("item_id")
     close.add_argument("--outcome", choices=tuple(outcome.value for outcome in CloseOutcome), required=True)
     close.add_argument("--reason", required=True)
-    close.add_argument("--task-id")
-    close.add_argument("--host-id")
+    close.add_argument("--task-id", required=True)
+    close.add_argument("--host-id", required=True)
     close.add_argument("--ttl-seconds", type=int, default=60)
     close.add_argument("--json", action="store_true")
+    _select(close, CloseCommand)
 
 
 def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    commands.add_parser("root", help="Resolve the shared project and work roots.")
+    root = commands.add_parser("root", help="Resolve the shared project and work roots.")
+    _select(root, RootCommand)
     validate = commands.add_parser("validate", help="Validate work state without modifying it.")
     validate.add_argument("--json", action="store_true")
+    _select(validate, ValidateCommand)
     status = commands.add_parser("status", help="Show bounded current work facts.")
     status.add_argument("--json", action="store_true")
+    _select(status, StatusCommand)
     _add_chat_parser(commands)
     _add_item_parser(commands)
     actions = commands.add_parser("actions", help="List the legal contextual actions.")
@@ -381,11 +673,13 @@ def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.Argume
     actions.add_argument("--generation", type=int)
     actions.add_argument("--action-id", help="Return only this exact currently legal action.")
     actions.add_argument("--json", action="store_true")
+    _select_decoder(actions, _decode_actions)
     input_contract = commands.add_parser(
         "input-contract", help="Show the canonical JSON payload schema for one transition action kind."
     )
     input_contract.add_argument("action_kind", choices=TRANSITION_ACTION_KINDS)
     input_contract.add_argument("--json", action="store_true")
+    _select(input_contract, InputContractCommand)
     brief_sources = commands.add_parser(
         "brief-sources",
         help="Plan or emit deterministic context-bounded authority source batches.",
@@ -395,14 +689,16 @@ def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.Argume
     brief_source_output = brief_sources.add_mutually_exclusive_group(required=True)
     brief_source_output.add_argument("--json", action="store_true", help="Print the complete batch plan.")
     brief_source_output.add_argument("--emit-batch", type=int, help="Print exactly one zero-based planned batch.")
+    _select_decoder(brief_sources, _decode_brief_sources)
 
 
 def _add_brief_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     brief = commands.add_parser("brief", help="Publish canonical typed work briefs without scheduling them.")
-    operations = brief.add_subparsers(dest="operation", required=True)
+    operations = brief.add_subparsers(required=True)
     publish = operations.add_parser("publish", help="Validate and immutably publish one pinboard-work-brief/v2 file.")
     publish.add_argument("--file", type=Path, required=True)
     publish.add_argument("--json", action="store_true")
+    _select(publish, BriefPublishCommand)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -410,12 +706,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--project-root", type=Path)
     parser.add_argument("--work-root", type=Path)
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(required=True)
     _add_inspection_parsers(commands)
-    commands.add_parser("init", help="Create an empty current SQLite work state.")
+    initialize = commands.add_parser("init", help="Create an empty current SQLite work state.")
+    _select(initialize, InitializeCommand)
     _add_brief_parser(commands)
     proposal = commands.add_parser("proposal", help="Create one immutable inbox proposal.")
     proposal.add_argument("--file", type=Path, required=True)
+    _select(proposal, ProposalCommand)
     transition = commands.add_parser("transition", help="Apply one action returned by the actions command.")
     transition.add_argument("--action-id", required=True)
     transition.add_argument("--expected-revision", required=True)
@@ -426,6 +724,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--authorization", choices=("coordinator", "coordination", "attempt"), default="coordinator"
     )
     transition.add_argument("--payload", required=True, type=Path)
+    _select_decoder(transition, _decode_transition)
     dispatch = commands.add_parser("dispatch", help="Prepare or verify a canonical worker launch.")
     dispatch.add_argument("--action-id", required=True, help="Exact dispatch action returned by coordinator actions.")
     dispatch.add_argument("--expected-revision", required=True, help="Ledger revision from the dispatch action.")
@@ -452,16 +751,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--review-id",
         help="Kebab-case identity used only when preserving a differing later review.",
     )
+    _select_decoder(dispatch, _decode_dispatch)
     _add_coordination_parser(commands)
     _add_attempt_parser(commands)
     _add_parallel_parser(commands)
     views = commands.add_parser("views", help="Repair generated human-readable views.")
-    views.add_subparsers(dest="operation", required=True).add_parser("rebuild")
+    rebuild = views.add_subparsers(required=True).add_parser("rebuild")
+    _select(rebuild, RebuildViewsCommand)
     return parser
 
 
-def _roots(arguments: CliArguments) -> tuple[Path, Path]:
-    project_argument = arguments.project_root
+def _resolve_roots(selection: RootSelection) -> ResolvedRoots:
+    project_argument = selection.project_root
     if project_argument is None:
         project = resolve_project_root(Path.cwd())
     else:
@@ -471,15 +772,9 @@ def _roots(arguments: CliArguments) -> tuple[Path, Path]:
             if error.code != RootErrorCode.PROJECT_GIT_ROOT_UNAVAILABLE:
                 raise
             project = project_argument.resolve()
-    work_argument = arguments.work_root
+    work_argument = selection.work_root
     work = work_argument.resolve() if work_argument is not None else project / ".codex" / "pinboard"
-    return project, work
-
-
-def _stable_identifier(value: str, *, label: str) -> str:
-    if not value or value in {".", ".."} or "/" in value or "\x00" in value:
-        raise CommandError(CommandErrorCode.IDENTITY_INVALID, f"{label} must be one stable opaque identity.")
-    return value
+    return ResolvedRoots(project, work, work_argument is not None)
 
 
 def _diagnostic_view(report: ValidationReport) -> ValidationView:
@@ -498,10 +793,10 @@ def _diagnostic_view(report: ValidationReport) -> ValidationView:
     )
 
 
-def _brief_views(context: CommandContext, store: SQLiteWorkStore) -> dict[AttemptId, bytes]:
+def _brief_views(roots: ResolvedRoots, store: SQLiteWorkStore) -> dict[AttemptId, bytes]:
     return build_attempt_brief_views(
         store.snapshot(),
-        ArtifactRepository(resolve_durable_roots(context.project, context.work)),
+        ArtifactRepository(resolve_durable_roots(roots.project, roots.work)),
     )
 
 
@@ -536,24 +831,32 @@ def _status_value(work: Path, project: Path) -> StatusView:
     )
 
 
-def _action_from_values(
-    action_id: str,
-    expected_revision: str,
-    generation: int,
-    subject_revision: str | None,
-    authorization: str = "coordinator",
-    lease_id: str | None = None,
-) -> Action:
+def _action_from_command(command: TransitionCommand | DispatchCommand) -> Action:
+    action_id = command.action_id
     if ":" not in action_id:
         raise CommandError(CommandErrorCode.ACTION_ID_INVALID, "Action identity must be 'kind:subject'.")
     kind_value, subject = action_id.split(":", 1)
     try:
         kind = ActionKind(kind_value)
-        authorization_kind = AuthorizationKind(authorization)
     except ValueError as error:
-        raise CommandError(
-            CommandErrorCode.ACTION_ID_INVALID, f"Unknown action or authorization kind: {error}."
-        ) from error
+        raise CommandError(CommandErrorCode.ACTION_ID_INVALID, f"Unknown action kind: {error}.") from error
+    match command:
+        case CoordinatorTransitionCommand(subject_revision=subject_revision):
+            authorization = AuthorizationKind.COORDINATOR
+            lease_id = None
+        case CoordinationTransitionCommand(lease_id=lease_id, subject_revision=subject_revision):
+            authorization = AuthorizationKind.COORDINATION
+        case AttemptTransitionCommand(lease_id=lease_id, subject_revision=subject_revision):
+            authorization = AuthorizationKind.ATTEMPT
+        case CoordinatorDispatchCommand() | CoordinatorReviewedDispatchCommand():
+            authorization = AuthorizationKind.COORDINATOR
+            lease_id = None
+            subject_revision = None
+        case CoordinationDispatchCommand(lease_id=lease_id) | CoordinationReviewedDispatchCommand(lease_id=lease_id):
+            authorization = AuthorizationKind.COORDINATION
+            subject_revision = None
+        case _ as unreachable:
+            assert_never(unreachable)
     attempt_kinds = {
         ActionKind.ACCEPT_CHECKPOINT,
         ActionKind.BLOCK,
@@ -581,22 +884,22 @@ def _action_from_values(
     else:
         subject_id = ItemId(subject)
     return Action(
-        action_id=ActionId(action_id),
+        action_id=action_id,
         kind=kind,
         subject=subject_id,
-        label=action_id,
-        expected_revision=expected_revision,
-        coordinator_generation=generation,
+        label=str(action_id),
+        expected_revision=command.expected_revision,
+        coordinator_generation=command.generation,
         subject_revision=subject_revision,
-        authorization=authorization_kind,
-        lease_id=LeaseId(lease_id) if lease_id is not None else None,
+        authorization=authorization,
+        lease_id=lease_id,
     )
 
 
-def _reselect_action(context: CommandContext, supplied: Action, role: Role) -> Action:
+def _reselect_action(roots: ResolvedRoots, supplied: Action, role: Role) -> Action:
     try:
         available = discover_actions(
-            SQLiteWorkStore(context.work / "state.sqlite3"),
+            SQLiteWorkStore(roots.work / "state.sqlite3"),
             role,
             lease_id=supplied.lease_id,
             generation=supplied.coordinator_generation,
@@ -634,37 +937,37 @@ def _reselect_action(context: CommandContext, supplied: Action, role: Role) -> A
     return current
 
 
-def _root(context: CommandContext) -> int:
-    _write_json(RootView(str(context.project), str(context.work)))
+def _root(roots: ResolvedRoots, _command: RootCommand) -> int:
+    _write_json(RootView(str(roots.project), str(roots.work)))
     return 0
 
 
-def _validate(context: CommandContext) -> int:
-    store = SQLiteWorkStore(context.work / "state.sqlite3")
+def _validate(roots: ResolvedRoots, command: ValidateCommand) -> int:
+    store = SQLiteWorkStore(roots.work / "state.sqlite3")
     try:
-        attempt_briefs = _brief_views(context, store)
+        attempt_briefs = _brief_views(roots, store)
     except WorkBriefError as error:
-        report = validate_work_state(context.work)
+        report = validate_work_state(roots.work)
         report = ValidationReport(
             (
                 *report.diagnostics,
-                Diagnostic(error.code.value, Severity.ERROR, context.work, error.message),
+                Diagnostic(error.code.value, Severity.ERROR, roots.work, error.message),
             )
         )
     except ArtifactError, StorageError:
-        report = validate_work_state(context.work)
+        report = validate_work_state(roots.work)
     else:
-        report = validate_work_state(context.work, attempt_briefs)
-    if context.arguments.json:
+        report = validate_work_state(roots.work, attempt_briefs)
+    if command.json:
         _write_json(_diagnostic_view(report))
     else:
         print(report.render())
     return 0 if report.valid else 10
 
 
-def _status(context: CommandContext) -> int:
-    value = _status_value(context.work, context.project)
-    if context.arguments.json:
+def _status(roots: ResolvedRoots, command: StatusCommand) -> int:
+    value = _status_value(roots.work, roots.project)
+    if command.json:
         _write_json(value)
     else:
         print(f"OK WORK_STATE_VALID revision={value.revision}")
@@ -673,9 +976,9 @@ def _status(context: CommandContext) -> int:
     return 0
 
 
-def _overview(context: CommandContext) -> int:
-    overview = overview_from_state(SQLiteWorkStore(context.work / "state.sqlite3").snapshot())
-    if context.arguments.json:
+def _overview(roots: ResolvedRoots, command: OverviewCommand) -> int:
+    overview = overview_from_state(SQLiteWorkStore(roots.work / "state.sqlite3").snapshot())
+    if command.json:
         _write_json(_overview_view(overview))
         return 0
     print(f"OK WORK_OVERVIEW revision={overview.revision} authority={overview.authority}")
@@ -689,71 +992,68 @@ def _overview(context: CommandContext) -> int:
     return 0
 
 
-def _item(context: CommandContext) -> int:
-    operation = ItemOperation(context.arguments.operation)
-    match operation:
-        case ItemOperation.STATUS:
-            item_id = ItemId(_stable_identifier(context.arguments.item_id, label="Item identity"))
-            status = item_status(SQLiteWorkStore(context.work / "state.sqlite3"), item_id)
-            if context.arguments.json:
-                _write_json(status)
-                return 0
-            print(
-                f"OK ITEM_STATUS item={status.item_id} state={status.state.value} "
-                f"revision={status.revision} authority={status.authority}"
-            )
-            print(
-                f"label={status.label} timing={status.timing.value if status.timing is not None else 'none'} "
-                f"next_action={status.next_action or 'none'}"
-            )
-            print(f"outcome_evidence={status.outcome_evidence or 'none'} notes={status.notes or 'none'}")
-            if not status.attempts:
-                print("attempts=none")
-            for attempt in status.attempts:
-                print(
-                    f"attempt={attempt.attempt_id} state={attempt.state.value} "
-                    f"candidate={attempt.candidate_revision or 'none'}"
-                )
-            return 0
-        case _ as unreachable:
-            assert_never(unreachable)
-
-
-def _close(context: CommandContext) -> int:
-    if not context.arguments.task_id or not context.arguments.host_id:
-        raise CommandError(
-            CommandErrorCode.COORDINATION_IDENTITY_REQUIRED,
-            "Close requires --task-id and --host-id so the command can borrow coordination.",
-        )
-    payload = msgspec.json.encode(
-        {"outcome": context.arguments.outcome, "reason": context.arguments.reason}, order="sorted"
+def _item_status(roots: ResolvedRoots, command: ItemStatusCommand) -> int:
+    status = item_status(SQLiteWorkStore(roots.work / "state.sqlite3"), command.item_id)
+    if command.json:
+        _write_json(status)
+        return 0
+    print(
+        f"OK ITEM_STATUS item={status.item_id} state={status.state.value} "
+        f"revision={status.revision} authority={status.authority}"
     )
+    print(
+        f"label={status.label} timing={status.timing.value if status.timing is not None else 'none'} "
+        f"next_action={status.next_action or 'none'}"
+    )
+    print(f"outcome_evidence={status.outcome_evidence or 'none'} notes={status.notes or 'none'}")
+    if not status.attempts:
+        print("attempts=none")
+    for attempt in status.attempts:
+        print(
+            f"attempt={attempt.attempt_id} state={attempt.state.value} candidate={attempt.candidate_revision or 'none'}"
+        )
+    return 0
+
+
+def _close(roots: ResolvedRoots, command: CloseCommand) -> int:
+    payload = msgspec.json.encode({"outcome": command.outcome.value, "reason": command.reason}, order="sorted")
     revision = _execute_borrowed_coordination(
-        context,
-        f"close:{context.arguments.item_id}",
+        roots,
+        command.task_id,
+        command.host_id,
+        command.ttl_seconds,
+        ActionId(f"close:{command.item_id}"),
         payload,
     )
     value = CloseView(
-        context.arguments.item_id,
-        context.arguments.outcome,
-        context.arguments.reason,
+        command.item_id,
+        command.outcome.value,
+        command.reason,
         revision,
     )
-    if context.arguments.json:
+    if command.json:
         _write_json(value)
     else:
         print(f"OK WORK_ITEM_CLOSED item={value.item_id} outcome={value.outcome} revision={value.revision}")
     return 0
 
 
-def _actions(context: CommandContext) -> int:
+def _actions(roots: ResolvedRoots, command: ActionsCommand | LeasedActionsCommand) -> int:
+    match command:
+        case ActionsCommand():
+            lease_id = None
+            generation = None
+        case LeasedActionsCommand(lease_id=lease_id, generation=generation):
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
     available = discover_actions(
-        SQLiteWorkStore(context.work / "state.sqlite3"),
-        Role(context.arguments.role),
-        lease_id=LeaseId(context.arguments.lease_id) if context.arguments.lease_id is not None else None,
-        generation=context.arguments.generation,
+        SQLiteWorkStore(roots.work / "state.sqlite3"),
+        command.role,
+        lease_id=lease_id,
+        generation=generation,
     )
-    exact_action_id = context.arguments.action_id
+    exact_action_id = command.action_id
     if exact_action_id is not None:
         available = tuple(action for action in available if action.action_id == exact_action_id)
         if not available:
@@ -761,7 +1061,7 @@ def _actions(context: CommandContext) -> int:
                 CommandErrorCode.ACTION_NOT_AVAILABLE,
                 f"Action '{exact_action_id}' is not currently legal for this role and lease.",
             )
-    if context.arguments.json:
+    if command.json:
         _write_json(
             ActionsView(
                 tuple(
@@ -781,9 +1081,9 @@ def _actions(context: CommandContext) -> int:
     return 0
 
 
-def _input_contract(context: CommandContext) -> int:
-    value = _input_contract_view(context.arguments.action_kind)
-    if context.arguments.json:
+def _input_contract(_roots: ResolvedRoots, command: InputContractCommand) -> int:
+    value = _input_contract_view(command.action_kind.value)
+    if command.json:
         _write_json(value)
     else:
         print(f"OK INPUT_CONTRACT action_kind={value.action_kind}")
@@ -791,42 +1091,45 @@ def _input_contract(context: CommandContext) -> int:
     return 0
 
 
-def _brief_sources(context: CommandContext) -> int:
+def _brief_sources(
+    roots: ResolvedRoots,
+    command: BriefSourcesPlanCommand | BriefSourcesEmitCommand,
+) -> int:
     try:
-        raw_manifest = context.arguments.file.read_bytes()
+        raw_manifest = command.file.read_bytes()
     except OSError as error:
         raise BriefSourceError(
             BriefSourceErrorCode.MANIFEST_INVALID,
-            f"Cannot read brief source manifest '{context.arguments.file}': {error}",
+            f"Cannot read brief source manifest '{command.file}': {error}",
         ) from error
     plan = plan_brief_sources(
-        context.project,
+        roots.project,
         decode_brief_source_manifest(raw_manifest),
-        context.arguments.max_batch_bytes,
+        command.max_batch_bytes,
     )
-    batch_index = context.arguments.emit_batch
-    if batch_index is None:
-        _write_json(_brief_source_plan_view(plan))
-    else:
-        sys.stdout.write(render_brief_source_batch(plan, batch_index).decode("utf-8"))
+    match command:
+        case BriefSourcesPlanCommand():
+            _write_json(_brief_source_plan_view(plan))
+        case BriefSourcesEmitCommand(emit_batch=batch_index):
+            sys.stdout.write(render_brief_source_batch(plan, batch_index).decode("utf-8"))
+        case _ as unreachable:
+            assert_never(unreachable)
     return 0
 
 
-def _brief(context: CommandContext) -> int:
-    if BriefOperation(context.arguments.operation) != BriefOperation.PUBLISH:
-        raise WorkBriefError(WorkBriefErrorCode.BRIEF_INVALID, "Unknown brief operation.")
+def _brief_publish(roots: ResolvedRoots, command: BriefPublishCommand) -> int:
     try:
-        candidate = context.arguments.file.read_bytes()
+        candidate = command.file.read_bytes()
     except OSError as error:
         raise WorkBriefError(
             WorkBriefErrorCode.BRIEF_INVALID,
-            f"Cannot read work brief candidate '{context.arguments.file}': {error}",
+            f"Cannot read work brief candidate '{command.file}': {error}",
         ) from error
     brief = decode_work_brief(candidate)
-    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    store = SQLiteWorkStore(roots.work / "state.sqlite3")
     accepted = publish_accepted_artifact(
         store,
-        ArtifactRepository(resolve_durable_roots(context.project, context.work)),
+        ArtifactRepository(resolve_durable_roots(roots.project, roots.work)),
         NewArtifact(
             ArtifactKind.BRIEF,
             brief.attempt_id,
@@ -836,7 +1139,7 @@ def _brief(context: CommandContext) -> int:
         ),
         datetime.now(UTC),
     )
-    view_result = rebuild_views(store, context.work, _brief_views(context, store))
+    view_result = rebuild_views(store, roots.work, _brief_views(roots, store))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     view = BriefPublicationView(
@@ -849,7 +1152,7 @@ def _brief(context: CommandContext) -> int:
         accepted.size_bytes,
         accepted.accepted_revision,
     )
-    if context.arguments.json:
+    if command.json:
         _write_json(view)
     else:
         print(
@@ -859,22 +1162,21 @@ def _brief(context: CommandContext) -> int:
     return 0
 
 
-def _initialize(context: CommandContext) -> int:
-    selected_work = context.work if context.arguments.work_root is not None else None
-    receipt = initialize_work_state(context.project, selected_work)
+def _initialize(roots: ResolvedRoots, _command: InitializeCommand) -> int:
+    selected_work = roots.work if roots.explicit_work_root else None
+    receipt = initialize_work_state(roots.project, selected_work)
     initialized = receipt.work_root
     store = SQLiteWorkStore(receipt.database_path)
-    rebuilt = rebuild_views(
-        store, initialized, _brief_views(CommandContext(context.arguments, context.project, initialized), store)
-    )
+    initialized_roots = ResolvedRoots(roots.project, initialized, roots.explicit_work_root)
+    rebuilt = rebuild_views(store, initialized, _brief_views(initialized_roots, store))
     if rebuilt.warning is not None:
         raise FileIOError(FileIOErrorCode.VIEW_REFRESH_FAILED, rebuilt.warning.message)
     print(f"OK WORK_STATE_INITIALIZED {initialized}")
     return 0
 
 
-def _proposal(context: CommandContext) -> int:
-    path = context.arguments.file
+def _proposal(roots: ResolvedRoots, command: ProposalCommand) -> int:
+    path = command.file
     try:
         data = path.read_bytes()
     except OSError as error:
@@ -906,15 +1208,15 @@ def _proposal(context: CommandContext) -> int:
         proposal.evidence,
         proposal.freshness_assumptions,
     )
-    store = SQLiteWorkStore(context.work / "state.sqlite3")
+    store = SQLiteWorkStore(roots.work / "state.sqlite3")
     result = create_proposal(store, CreateProposalOperation(intake), datetime.now(UTC))
     if isinstance(result, DecisionFailure):
         raise ProposalError(ProposalErrorCode(result.code.value), result.message)
     view_result = refresh_views(
         store,
-        context.work,
+        roots.work,
         AffectedViews(queue=True, history=True),
-        _brief_views(context, store),
+        _brief_views(roots, store),
     )
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
@@ -922,16 +1224,9 @@ def _proposal(context: CommandContext) -> int:
     return 0
 
 
-def _transition(context: CommandContext) -> int:
-    payload_path = context.arguments.payload
-    action = _action_from_values(
-        context.arguments.action_id,
-        context.arguments.expected_revision,
-        context.arguments.generation,
-        context.arguments.subject_revision,
-        context.arguments.authorization,
-        context.arguments.lease_id,
-    )
+def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
+    payload_path = cli_command.payload
+    action = _action_from_command(cli_command)
     try:
         payload = payload_path.read_bytes()
     except OSError as error:
@@ -939,13 +1234,13 @@ def _transition(context: CommandContext) -> int:
             CommandErrorCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}"
         ) from error
     role = Role.WORKER if action.authorization == AuthorizationKind.ATTEMPT else Role.COORDINATOR
-    action = _reselect_action(context, action, role)
+    action = _reselect_action(roots, action, role)
     parsed = parse_transition_input(action.kind.value, payload)
     command = bind_transition(action, parsed)
     if isinstance(command, DecisionFailure):
         raise CommandError(CommandErrorCode(command.code.value), command.message)
-    store = SQLiteWorkStore(context.work / "state.sqlite3")
-    artifacts = ArtifactRepository(resolve_durable_roots(context.project, context.work))
+    store = SQLiteWorkStore(roots.work / "state.sqlite3")
+    artifacts = ArtifactRepository(resolve_durable_roots(roots.project, roots.work))
     result = execute(
         store,
         command,
@@ -969,7 +1264,7 @@ def _transition(context: CommandContext) -> int:
         if any(attempt.attempt_id == action.subject for attempt in state.lifecycle.attempts)
         else (),
     )
-    view_result = refresh_views(store, context.work, affected, _brief_views(context, store))
+    view_result = refresh_views(store, roots.work, affected, _brief_views(roots, store))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     revision = str(state.lifecycle.project.revision)
@@ -977,46 +1272,49 @@ def _transition(context: CommandContext) -> int:
     return 0
 
 
-def _prepare_dispatch(context: CommandContext) -> int:
-    environment = read_dispatch_environment(context.arguments.environment)
+def _prepare_dispatch(roots: ResolvedRoots, command: DispatchCommand) -> int:
+    environment = read_dispatch_environment(command.environment)
     supplied_prompt: bytes | None = None
-    if context.arguments.prompt is not None:
+    if command.prompt is not None:
         try:
-            supplied_prompt = context.arguments.prompt.read_bytes()
+            supplied_prompt = command.prompt.read_bytes()
         except OSError as error:
             raise DispatchError(
                 DispatchErrorCode.DISPATCH_PROMPT_UNREADABLE,
-                f"Cannot read '{context.arguments.prompt}': {error}",
+                f"Cannot read '{command.prompt}': {error}",
             ) from error
+    match command:
+        case CoordinatorReviewedDispatchCommand(brief_review=brief_review_path, review_id=review_id) | (
+            CoordinationReviewedDispatchCommand(brief_review=brief_review_path, review_id=review_id)
+        ):
+            pass
+        case CoordinatorDispatchCommand() | CoordinationDispatchCommand():
+            brief_review_path = None
+            review_id = None
+        case _ as unreachable:
+            assert_never(unreachable)
     brief_review: bytes | None = None
-    if context.arguments.brief_review is not None:
+    if brief_review_path is not None:
         try:
-            brief_review = context.arguments.brief_review.read_bytes()
+            brief_review = brief_review_path.read_bytes()
         except OSError as error:
             raise DispatchError(
                 DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID,
-                f"Cannot read '{context.arguments.brief_review}': {error}",
+                f"Cannot read '{brief_review_path}': {error}",
             ) from error
-    action = _action_from_values(
-        context.arguments.action_id,
-        context.arguments.expected_revision,
-        context.arguments.generation,
-        None,
-        "coordination" if context.arguments.lease_id is not None else "coordinator",
-        context.arguments.lease_id,
-    )
-    action = _reselect_action(context, action, Role.COORDINATOR)
+    action = _action_from_command(command)
+    action = _reselect_action(roots, action, Role.COORDINATOR)
     prompt = prepare_dispatch(
-        SQLiteWorkStore(context.work / "state.sqlite3"),
-        ArtifactRepository(resolve_durable_roots(context.project, context.work)),
+        SQLiteWorkStore(roots.work / "state.sqlite3"),
+        ArtifactRepository(resolve_durable_roots(roots.project, roots.work)),
         prepare_dispatch_from_artifact,
-        context.project,
+        roots.project,
         action,
-        context.arguments.checkpoint,
+        command.checkpoint,
         environment,
         supplied_prompt,
         brief_review,
-        context.arguments.review_id,
+        review_id,
     )
     if supplied_prompt is None:
         sys.stdout.write(prompt)
@@ -1025,8 +1323,8 @@ def _prepare_dispatch(context: CommandContext) -> int:
     return 0
 
 
-def _coordination_values(context: CommandContext) -> dict[str, str | int] | None:
-    state = SQLiteWorkStore(context.work / "state.sqlite3").snapshot()
+def _coordination_values(roots: ResolvedRoots) -> dict[str, str | int] | None:
+    state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
     value = state.authority.coordination
     if value is None:
         return None
@@ -1041,9 +1339,9 @@ def _coordination_values(context: CommandContext) -> dict[str, str | int] | None
     }
 
 
-def _emit_coordination(context: CommandContext) -> int:
-    values = _coordination_values(context)
-    if context.arguments.json:
+def _emit_coordination(roots: ResolvedRoots, *, json: bool) -> int:
+    values = _coordination_values(roots)
+    if json:
         _write_json({"lease": None} if values is None else values)
     elif values is None:
         print("OK COORDINATION_AVAILABLE")
@@ -1052,56 +1350,69 @@ def _emit_coordination(context: CommandContext) -> int:
     return 0
 
 
-def _current_coordination_token(
-    context: CommandContext,
-    *,
-    supplied_identity: bool = False,
-) -> CoordinationCommandAuthority:
-    state = SQLiteWorkStore(context.work / "state.sqlite3").snapshot()
+def _retained_coordination(state: StoredWorkState) -> StoredCoordinationLease:
     current = state.authority.coordination
     if current is None:
         raise CommandError(CommandErrorCode.COORDINATION_LEASE_REQUIRED, "Coordination authority does not exist.")
+    return current
+
+
+def _supplied_coordination_authority(
+    state: StoredWorkState,
+    current: StoredCoordinationLease,
+    lease_id: LeaseId,
+    generation: int,
+) -> CoordinationCommandAuthority:
     return CoordinationCommandAuthority(
         state.lifecycle.project.host_epoch,
         current.task_id,
         current.host_id,
-        LeaseId(context.arguments.lease_id or "") if supplied_identity else current.lease_id,
-        context.arguments.generation if supplied_identity else current.generation,
+        lease_id,
+        generation,
         current.expires_at,
     )
 
 
-def _coordination(context: CommandContext) -> int:
-    operation = CoordinationOperation(context.arguments.operation)
-    if operation == CoordinationOperation.STATUS:
-        return _emit_coordination(context)
-    if operation == CoordinationOperation.APPLY:
-        return _coordinated_transition(context)
-    store = SQLiteWorkStore(context.work / "state.sqlite3")
+def _coordination(
+    roots: ResolvedRoots,
+    command: (
+        CoordinationApplyCommand
+        | CoordinationAcquireCommand
+        | CoordinationRenewCommand
+        | CoordinationReleaseCommand
+        | CoordinationRevokeCommand
+        | CoordinationStatusCommand
+    ),
+) -> int:
+    if isinstance(command, CoordinationStatusCommand):
+        return _emit_coordination(roots, json=command.json)
+    if isinstance(command, CoordinationApplyCommand):
+        return _coordinated_transition(roots, command)
+    store = SQLiteWorkStore(roots.work / "state.sqlite3")
     state = store.snapshot()
     now = datetime.now(UTC)
-    match operation:
-        case CoordinationOperation.ACQUIRE:
+    match command:
+        case CoordinationAcquireCommand(task_id=task_id, host_id=host_id, ttl_seconds=ttl_seconds):
             authority_operation = AcquireCoordinationAuthority(
                 state.lifecycle.project.host_epoch,
-                TaskId(_stable_identifier(context.arguments.task_id, label="Task identity")),
-                HostId(_stable_identifier(context.arguments.host_id, label="Host identity")),
+                task_id,
+                host_id,
                 LeaseId(uuid4().hex),
                 now,
-                now + timedelta(seconds=context.arguments.ttl_seconds),
+                now + timedelta(seconds=ttl_seconds),
             )
-        case CoordinationOperation.RENEW:
+        case CoordinationRenewCommand(lease_id=lease_id, generation=generation, ttl_seconds=ttl_seconds):
             authority_operation = RenewCoordinationAuthority(
-                _current_coordination_token(context, supplied_identity=True),
+                _supplied_coordination_authority(state, _retained_coordination(state), lease_id, generation),
                 now,
-                now + timedelta(seconds=context.arguments.ttl_seconds),
+                now + timedelta(seconds=ttl_seconds),
             )
-        case CoordinationOperation.RELEASE:
+        case CoordinationReleaseCommand(lease_id=lease_id, generation=generation):
             authority_operation = ReleaseCoordinationAuthority(
-                _current_coordination_token(context, supplied_identity=True), now
+                _supplied_coordination_authority(state, _retained_coordination(state), lease_id, generation), now
             )
-        case CoordinationOperation.REVOKE:
-            current = _current_coordination_token(context)
+        case CoordinationRevokeCommand():
+            current = _retained_coordination(state)
             authority_operation = RevokeCoordinationAuthority(current.lease_id, current.generation, now)
         case _ as unreachable:
             assert_never(unreachable)
@@ -1110,44 +1421,58 @@ def _coordination(context: CommandContext) -> int:
         raise CommandError(CommandErrorCode(result.code.value), result.message)
     view_result = refresh_views(
         store,
-        context.work,
+        roots.work,
         AffectedViews(queue=True, current_focus=True, history=True),
-        _brief_views(context, store),
+        _brief_views(roots, store),
     )
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
-    return _emit_coordination(context)
+    return _emit_coordination(roots, json=command.json)
 
 
-def _coordinated_transition(context: CommandContext) -> int:
-    payload_path = context.arguments.payload
+def _coordinated_transition(roots: ResolvedRoots, command: CoordinationApplyCommand) -> int:
+    payload_path = command.payload
     try:
         payload = payload_path.read_bytes()
     except OSError as error:
         raise CommandError(
             CommandErrorCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}"
         ) from error
-    transition_revision = _execute_borrowed_coordination(context, context.arguments.action_id, payload)
-    value = CoordinatedTransitionView(context.arguments.action_id, transition_revision)
-    if context.arguments.json:
+    transition_revision = _execute_borrowed_coordination(
+        roots,
+        command.task_id,
+        command.host_id,
+        command.ttl_seconds,
+        command.action_id,
+        payload,
+    )
+    value = CoordinatedTransitionView(command.action_id, transition_revision)
+    if command.json:
         _write_json(value)
     else:
         print(f"OK COORDINATED_TRANSITION action={value.action_id} revision={value.revision}")
     return 0
 
 
-def _execute_borrowed_coordination(context: CommandContext, action_id: str, payload: bytes) -> str:
-    store = SQLiteWorkStore(context.work / "state.sqlite3")
-    artifacts = ArtifactRepository(resolve_durable_roots(context.project, context.work))
+def _execute_borrowed_coordination(
+    roots: ResolvedRoots,
+    task_id: TaskId,
+    host_id: HostId,
+    ttl_seconds: int,
+    action_id: ActionId,
+    payload: bytes,
+) -> str:
+    store = SQLiteWorkStore(roots.work / "state.sqlite3")
+    artifacts = ArtifactRepository(resolve_durable_roots(roots.project, roots.work))
     now = datetime.now(UTC)
     state = store.snapshot()
     acquire = AcquireCoordinationAuthority(
         state.lifecycle.project.host_epoch,
-        TaskId(_stable_identifier(context.arguments.task_id, label="Task identity")),
-        HostId(_stable_identifier(context.arguments.host_id, label="Host identity")),
+        task_id,
+        host_id,
         LeaseId(uuid4().hex),
         now,
-        now + timedelta(seconds=context.arguments.ttl_seconds),
+        now + timedelta(seconds=ttl_seconds),
     )
     acquired = change_coordination_authority(store, acquire)
     if isinstance(acquired, DecisionFailure):
@@ -1155,8 +1480,7 @@ def _execute_borrowed_coordination(context: CommandContext, action_id: str, payl
     transition_revision: str | None = None
     try:
         current_state = store.snapshot()
-        coordination = current_state.authority.coordination
-        assert coordination is not None
+        coordination = _retained_coordination(current_state)
         available = discover_actions(
             store,
             Role.COORDINATOR,
@@ -1206,135 +1530,15 @@ def _execute_borrowed_coordination(context: CommandContext, action_id: str, payl
             )
             if isinstance(released, DecisionFailure) and transition_revision is None:
                 raise CommandError(CommandErrorCode(released.code.value), released.message)
-    view_result = rebuild_views(store, context.work, _brief_views(context, store))
+    view_result = rebuild_views(store, roots.work, _brief_views(roots, store))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
-    assert transition_revision is not None
+    if transition_revision is None:
+        raise CommandError(CommandErrorCode.WORK_STATE_INVALID, "The coordinated transition produced no revision.")
     return transition_revision
 
 
-def _attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR0915 - closed authority lifecycle
-    attempt_id = AttemptId(_stable_identifier(context.arguments.attempt_id, label="Attempt identity"))
-    operation = AttemptOperation(context.arguments.operation)
-    store = SQLiteWorkStore(context.work / "state.sqlite3")
-    state = store.snapshot()
-    if operation != AttemptOperation.STATUS:
-        now = datetime.now(UTC)
-        snapshot = project_decision_snapshot(state)
-        attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
-        if attempt is None:
-            raise CommandError(CommandErrorCode.ATTEMPT_LEASE_REQUIRED, f"Attempt '{attempt_id}' is not current.")
-        retained = next((value for value in snapshot.command_attempt_authorities if value.attempt == attempt_id), None)
-        retained_record = next(
-            (value for value in state.authority.attempt_leases if value.attempt_id == attempt_id),
-            None,
-        )
-        match operation:
-            case AttemptOperation.ACQUIRE:
-                task_id = TaskId(_stable_identifier(context.arguments.task_id, label="Task identity"))
-                host_id = HostId(_stable_identifier(context.arguments.host_id, label="Host identity"))
-                lease_id = LeaseId(uuid4().hex)
-                if retained_record is None:
-                    authority_operation = AcquireInitialAttemptAuthority(
-                        state.lifecycle.project.host_epoch,
-                        attempt_id,
-                        attempt.item_id,
-                        task_id,
-                        host_id,
-                        lease_id,
-                        now,
-                        now + timedelta(seconds=context.arguments.ttl_seconds),
-                    )
-                else:
-                    inactive = project_inactive_attempt_authority(state, attempt_id, now)
-                    if isinstance(inactive, DecisionFailure):
-                        raise CommandError(CommandErrorCode(inactive.code.value), inactive.message)
-                    coordination = state.authority.coordination
-                    if coordination is None:
-                        raise CommandError(
-                            CommandErrorCode.COORDINATION_LEASE_REQUIRED, "Attempt reacquisition requires coordination."
-                        )
-                    if (
-                        context.arguments.coordination_lease_id is None
-                        or context.arguments.coordination_generation is None
-                    ):
-                        raise CommandError(
-                            CommandErrorCode.COORDINATION_LEASE_REQUIRED,
-                            "Attempt reacquisition requires the exact coordination lease and generation.",
-                        )
-                    authority_operation = TransferAttemptAuthority(
-                        inactive,
-                        CoordinationCommandAuthority(
-                            state.lifecycle.project.host_epoch,
-                            coordination.task_id,
-                            coordination.host_id,
-                            LeaseId(context.arguments.coordination_lease_id),
-                            context.arguments.coordination_generation,
-                            coordination.expires_at,
-                        ),
-                        task_id,
-                        host_id,
-                        lease_id,
-                        now,
-                        now + timedelta(seconds=context.arguments.ttl_seconds),
-                    )
-            case AttemptOperation.RENEW:
-                if retained is None:
-                    raise CommandError(CommandErrorCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
-                authority_operation = RenewAttemptAuthority(
-                    replace(
-                        retained,
-                        lease_id=LeaseId(context.arguments.lease_id or ""),
-                        generation=context.arguments.generation,
-                    ),
-                    now,
-                    now + timedelta(seconds=context.arguments.ttl_seconds),
-                )
-            case AttemptOperation.RELEASE:
-                if retained is None:
-                    raise CommandError(CommandErrorCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
-                authority_operation = ReleaseAttemptAuthority(
-                    replace(
-                        retained,
-                        lease_id=LeaseId(context.arguments.lease_id or ""),
-                        generation=context.arguments.generation,
-                    ),
-                    now,
-                )
-            case AttemptOperation.REVOKE:
-                coordination = state.authority.coordination
-                if coordination is None:
-                    raise CommandError(
-                        CommandErrorCode.COORDINATION_LEASE_REQUIRED, "Coordination authority is absent."
-                    )
-                authority_operation = RevokeAttemptAuthority(
-                    attempt_id,
-                    LeaseId(context.arguments.lease_id or ""),
-                    context.arguments.generation,
-                    CoordinationCommandAuthority(
-                        state.lifecycle.project.host_epoch,
-                        coordination.task_id,
-                        coordination.host_id,
-                        LeaseId(context.arguments.coordination_lease_id),
-                        context.arguments.coordination_generation,
-                        coordination.expires_at,
-                    ),
-                    now,
-                )
-            case _ as unreachable:
-                assert_never(unreachable)
-        result = change_attempt_authority(store, authority_operation)
-        if isinstance(result, DecisionFailure):
-            raise CommandError(CommandErrorCode(result.code.value), result.message)
-        refresh_result = refresh_views(
-            store,
-            context.work,
-            AffectedViews(queue=True, current_focus=True, history=True),
-            _brief_views(context, store),
-        )
-        if refresh_result.warning is not None:
-            print(refresh_result.warning.message, file=sys.stderr)
-        state = store.snapshot()
+def _emit_attempt_authority(state: StoredWorkState, attempt_id: AttemptId, *, json: bool) -> int:
     lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
     if lease is None:
         raise CommandError(
@@ -1360,11 +1564,181 @@ def _attempt(context: CommandContext) -> int:  # noqa: C901, PLR0912, PLR0915 - 
         "expires_at": lease.expires_at.isoformat(),
         "status": lease.state.value,
     }
-    if context.arguments.json:
+    if json:
         _write_json(values)
     else:
         print("OK " + " ".join(f"{key}={value}" for key, value in values.items()))
     return 0
+
+
+def _attempt_status(roots: ResolvedRoots, command: AttemptStatusCommand) -> int:
+    state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
+    return _emit_attempt_authority(state, command.attempt_id, json=command.json)
+
+
+def _current_attempt(state: StoredWorkState, attempt_id: AttemptId) -> StoredAttempt:
+    attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
+    if attempt is None:
+        raise CommandError(CommandErrorCode.ATTEMPT_LEASE_REQUIRED, f"Attempt '{attempt_id}' is not current.")
+    return attempt
+
+
+def _attempt_acquire_operation(
+    state: StoredWorkState,
+    attempt: StoredAttempt,
+    command: AttemptAcquireCommand | CoordinatedAttemptAcquireCommand,
+    now: datetime,
+) -> AttemptAuthorityOperation:
+    attempt_id = command.attempt_id
+    retained_record = next(
+        (value for value in state.authority.attempt_leases if value.attempt_id == attempt_id),
+        None,
+    )
+    lease_id = LeaseId(uuid4().hex)
+    if retained_record is None:
+        return AcquireInitialAttemptAuthority(
+            state.lifecycle.project.host_epoch,
+            attempt_id,
+            attempt.item_id,
+            command.task_id,
+            command.host_id,
+            lease_id,
+            now,
+            now + timedelta(seconds=command.ttl_seconds),
+        )
+    inactive = project_inactive_attempt_authority(state, attempt_id, now)
+    if isinstance(inactive, DecisionFailure):
+        raise CommandError(CommandErrorCode(inactive.code.value), inactive.message)
+    coordination = state.authority.coordination
+    if coordination is None:
+        raise CommandError(CommandErrorCode.COORDINATION_LEASE_REQUIRED, "Attempt reacquisition requires coordination.")
+    if isinstance(command, AttemptAcquireCommand):
+        raise CommandError(
+            CommandErrorCode.COORDINATION_LEASE_REQUIRED,
+            "Attempt reacquisition requires the exact coordination lease and generation.",
+        )
+    return TransferAttemptAuthority(
+        inactive,
+        CoordinationCommandAuthority(
+            state.lifecycle.project.host_epoch,
+            coordination.task_id,
+            coordination.host_id,
+            command.coordination_lease_id,
+            command.coordination_generation,
+            coordination.expires_at,
+        ),
+        command.task_id,
+        command.host_id,
+        lease_id,
+        now,
+        now + timedelta(seconds=command.ttl_seconds),
+    )
+
+
+def _attempt_renew_operation(
+    state: StoredWorkState,
+    command: AttemptRenewCommand,
+    now: datetime,
+) -> RenewAttemptAuthority:
+    retained = next(
+        (
+            value
+            for value in project_decision_snapshot(state).command_attempt_authorities
+            if value.attempt == command.attempt_id
+        ),
+        None,
+    )
+    if retained is None:
+        raise CommandError(CommandErrorCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
+    return RenewAttemptAuthority(
+        replace(retained, lease_id=command.lease_id, generation=command.generation),
+        now,
+        now + timedelta(seconds=command.ttl_seconds),
+    )
+
+
+def _attempt_release_operation(
+    state: StoredWorkState,
+    command: AttemptReleaseCommand,
+    now: datetime,
+) -> ReleaseAttemptAuthority:
+    retained = next(
+        (
+            value
+            for value in project_decision_snapshot(state).command_attempt_authorities
+            if value.attempt == command.attempt_id
+        ),
+        None,
+    )
+    if retained is None:
+        raise CommandError(CommandErrorCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
+    return ReleaseAttemptAuthority(
+        replace(retained, lease_id=command.lease_id, generation=command.generation),
+        now,
+    )
+
+
+def _attempt_revoke_operation(
+    state: StoredWorkState,
+    command: AttemptRevokeCommand,
+    now: datetime,
+) -> RevokeAttemptAuthority:
+    coordination = state.authority.coordination
+    if coordination is None:
+        raise CommandError(CommandErrorCode.COORDINATION_LEASE_REQUIRED, "Coordination authority is absent.")
+    return RevokeAttemptAuthority(
+        command.attempt_id,
+        command.lease_id,
+        command.generation,
+        CoordinationCommandAuthority(
+            state.lifecycle.project.host_epoch,
+            coordination.task_id,
+            coordination.host_id,
+            command.coordination_lease_id,
+            command.coordination_generation,
+            coordination.expires_at,
+        ),
+        now,
+    )
+
+
+def _change_attempt_authority(
+    roots: ResolvedRoots,
+    command: (
+        AttemptAcquireCommand
+        | CoordinatedAttemptAcquireCommand
+        | AttemptRenewCommand
+        | AttemptReleaseCommand
+        | AttemptRevokeCommand
+    ),
+) -> int:
+    store = SQLiteWorkStore(roots.work / "state.sqlite3")
+    state = store.snapshot()
+    attempt = _current_attempt(state, command.attempt_id)
+    now = datetime.now(UTC)
+    match command:
+        case AttemptAcquireCommand() | CoordinatedAttemptAcquireCommand():
+            authority_operation = _attempt_acquire_operation(state, attempt, command, now)
+        case AttemptRenewCommand():
+            authority_operation = _attempt_renew_operation(state, command, now)
+        case AttemptReleaseCommand():
+            authority_operation = _attempt_release_operation(state, command, now)
+        case AttemptRevokeCommand():
+            authority_operation = _attempt_revoke_operation(state, command, now)
+        case _ as unreachable:
+            assert_never(unreachable)
+    result = change_attempt_authority(store, authority_operation)
+    if isinstance(result, DecisionFailure):
+        raise CommandError(CommandErrorCode(result.code.value), result.message)
+    refresh_result = refresh_views(
+        store,
+        roots.work,
+        AffectedViews(queue=True, current_focus=True, history=True),
+        _brief_views(roots, store),
+    )
+    if refresh_result.warning is not None:
+        print(refresh_result.warning.message, file=sys.stderr)
+    return _emit_attempt_authority(store.snapshot(), command.attempt_id, json=command.json)
 
 
 def _print_parallel_group(title: str, items: tuple[ParallelItem, ...]) -> None:
@@ -1379,12 +1753,12 @@ def _print_parallel_group(title: str, items: tuple[ParallelItem, ...]) -> None:
         print(f"- {item.item_id} ({item.state.value}{attempt}){suffix}")
 
 
-def _parallel(context: CommandContext) -> int:
+def _parallel(roots: ResolvedRoots, command: ParallelPreviewCommand) -> int:
     preview = preview_parallel(
-        SQLiteWorkStore(context.work / "state.sqlite3"),
-        selected=tuple(context.arguments.item),
+        SQLiteWorkStore(roots.work / "state.sqlite3"),
+        selected=tuple(command.item),
     )
-    if context.arguments.json:
+    if command.json:
         _write_json(_parallel_preview_view(preview))
     else:
         print(
@@ -1396,63 +1770,104 @@ def _parallel(context: CommandContext) -> int:
     return 0
 
 
-def _views(context: CommandContext) -> int:
-    store = SQLiteWorkStore(context.work / "state.sqlite3")
-    result = rebuild_views(store, context.work, _brief_views(context, store))
+def _views(roots: ResolvedRoots, _command: RebuildViewsCommand) -> int:
+    store = SQLiteWorkStore(roots.work / "state.sqlite3")
+    result = rebuild_views(store, roots.work, _brief_views(roots, store))
     if result.warning is not None:
         raise FileIOError(FileIOErrorCode.VIEW_REFRESH_FAILED, result.warning.message)
     print(f"OK VIEWS_REBUILT revision={result.database_revision}")
     return 0
 
 
-def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhaustive closed command dispatch
-    project, work = _roots(arguments)
-    context = CommandContext(arguments, project, work)
-    match CommandName(arguments.command):
-        case CommandName.ROOT:
-            return _root(context)
-        case CommandName.VALIDATE:
-            return _validate(context)
-        case CommandName.STATUS:
-            return _status(context)
-        case CommandName.OVERVIEW:
-            return _overview(context)
-        case CommandName.ITEM:
-            return _item(context)
-        case CommandName.CLOSE:
-            return _close(context)
-        case CommandName.ACTIONS:
-            return _actions(context)
-        case CommandName.INPUT_CONTRACT:
-            return _input_contract(context)
-        case CommandName.BRIEF_SOURCES:
-            return _brief_sources(context)
-        case CommandName.BRIEF:
-            return _brief(context)
-        case CommandName.INIT:
-            return _initialize(context)
-        case CommandName.PROPOSAL:
-            return _proposal(context)
-        case CommandName.TRANSITION:
-            return _transition(context)
-        case CommandName.DISPATCH:
-            return _prepare_dispatch(context)
-        case CommandName.COORDINATION:
-            return _coordination(context)
-        case CommandName.ATTEMPT:
-            return _attempt(context)
-        case CommandName.PARALLEL:
-            return _parallel(context)
-        case CommandName.VIEWS:
-            return _views(context)
+def _decode_invocation(parser: argparse.ArgumentParser, raw: _RawCliArguments) -> CliInvocation:
+    decoder = raw.decoder
+    selected_parser = raw.selected_parser
+    if selected_parser is None or decoder is None:
+        parser.error("the selected command has no decoder")
+    untyped_values = vars(raw).copy()
+    for metadata_name in ("decoder", "selected_parser"):
+        untyped_values.pop(metadata_name, None)
+    values = cast("RawCliValues", untyped_values)
+    root_values: RawCliValues = {
+        "project_root": values.pop("project_root", None),
+        "work_root": values.pop("work_root", None),
+    }
+    try:
+        roots = msgspec.convert(root_values, type=RootSelection, strict=True)
+        command = decoder(values)
+    except msgspec.ValidationError as error:
+        selected_parser.error(str(error))
+    return CliInvocation(roots, command)
+
+
+def _dispatch(invocation: CliInvocation) -> int:  # noqa: C901, PLR0912 - exhaustive closed command dispatch
+    roots = _resolve_roots(invocation.roots)
+    match invocation.command:
+        case RootCommand() as command:
+            return _root(roots, command)
+        case ValidateCommand() as command:
+            return _validate(roots, command)
+        case StatusCommand() as command:
+            return _status(roots, command)
+        case OverviewCommand() as command:
+            return _overview(roots, command)
+        case ItemStatusCommand() as command:
+            return _item_status(roots, command)
+        case CloseCommand() as command:
+            return _close(roots, command)
+        case ActionsCommand() | LeasedActionsCommand() as command:
+            return _actions(roots, command)
+        case InputContractCommand() as command:
+            return _input_contract(roots, command)
+        case (BriefSourcesPlanCommand() | BriefSourcesEmitCommand()) as command:
+            return _brief_sources(roots, command)
+        case BriefPublishCommand() as command:
+            return _brief_publish(roots, command)
+        case InitializeCommand() as command:
+            return _initialize(roots, command)
+        case ProposalCommand() as command:
+            return _proposal(roots, command)
+        case (CoordinatorTransitionCommand() | CoordinationTransitionCommand() | AttemptTransitionCommand()) as command:
+            return _transition(roots, command)
+        case (
+            CoordinatorDispatchCommand()
+            | CoordinatorReviewedDispatchCommand()
+            | CoordinationDispatchCommand()
+            | CoordinationReviewedDispatchCommand()
+        ) as command:
+            return _prepare_dispatch(roots, command)
+        case (
+            CoordinationApplyCommand()
+            | CoordinationAcquireCommand()
+            | CoordinationRenewCommand()
+            | CoordinationReleaseCommand()
+            | CoordinationRevokeCommand()
+            | CoordinationStatusCommand()
+        ) as command:
+            return _coordination(roots, command)
+        case AttemptStatusCommand() as command:
+            return _attempt_status(roots, command)
+        case (
+            AttemptAcquireCommand()
+            | CoordinatedAttemptAcquireCommand()
+            | AttemptRenewCommand()
+            | AttemptReleaseCommand()
+            | AttemptRevokeCommand()
+        ) as command:
+            return _change_attempt_authority(roots, command)
+        case ParallelPreviewCommand() as command:
+            return _parallel(roots, command)
+        case RebuildViewsCommand() as command:
+            return _views(roots, command)
         case _ as unreachable:
             assert_never(unreachable)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = build_parser().parse_args(argv, namespace=CliArguments())
+    parser = build_parser()
+    raw = parser.parse_args(argv, namespace=_RawCliArguments())
     try:
-        return _dispatch(arguments)
+        return _dispatch(_decode_invocation(parser, raw))
     except (RootError, OSError) as error:
         print(str(error), file=sys.stderr)
         return 2

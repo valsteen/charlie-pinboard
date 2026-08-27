@@ -41,6 +41,13 @@ class CliTest(unittest.TestCase):
             self.fail("CLI JSON result must be an object")
         return value
 
+    def run_cli_parse_error(self, *arguments: str) -> str:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            main(arguments)
+        self.assertEqual(2, raised.exception.code)
+        return stderr.getvalue()
+
     def json_list(self, value: JsonValue) -> list[JsonValue]:
         if not isinstance(value, list):
             self.fail("JSON value must be a list")
@@ -448,7 +455,7 @@ class CliTest(unittest.TestCase):
                 self.assertNotEqual(0, result)
                 self.assertIn(code, stderr)
 
-        identifier_result, _identifier_stdout, identifier_stderr = self.run_cli(
+        identifier_stderr = self.run_cli_parse_error(
             *common,
             "coordination",
             "acquire",
@@ -459,8 +466,8 @@ class CliTest(unittest.TestCase):
             "--ttl-seconds",
             "60",
         )
-        self.assertEqual(11, identifier_result)
-        self.assertIn("IDENTITY_INVALID", identifier_stderr)
+        self.assertIn("pinboard coordination acquire", identifier_stderr)
+        self.assertIn("$.task_id", identifier_stderr)
 
     def test_direct_transition_reselects_exact_worker_capability(self) -> None:
         state = complete_sqlite_state()
@@ -542,7 +549,7 @@ class CliTest(unittest.TestCase):
         project, work, store = self.initialized_state(state)
         common = ("--project-root", str(project), "--work-root", str(work))
 
-        missing_result, _missing_stdout, missing_stderr = self.run_cli(
+        missing_stderr = self.run_cli_parse_error(
             *common,
             "close",
             "work-c",
@@ -551,8 +558,8 @@ class CliTest(unittest.TestCase):
             "--reason",
             "The prerequisite outcome is already complete.",
         )
-        self.assertEqual(11, missing_result)
-        self.assertIn("COORDINATION_IDENTITY_REQUIRED", missing_stderr)
+        self.assertIn("pinboard close", missing_stderr)
+        self.assertIn("--task-id, --host-id", missing_stderr)
 
         closed = self.run_json_cli(
             *common,
@@ -754,14 +761,125 @@ class CliTest(unittest.TestCase):
         common = ("--project-root", str(project), "--work-root", str(work))
 
         missing, _missing_stdout, missing_stderr = self.run_cli(*common, "item", "status", "--item-id", "missing-item")
-        malformed, _malformed_stdout, malformed_stderr = self.run_cli(
-            *common, "item", "status", "--item-id", "bad/item"
-        )
+        malformed_stderr = self.run_cli_parse_error(*common, "item", "status", "--item-id", "bad/item")
 
         self.assertEqual(11, missing)
         self.assertIn("ITEM_NOT_FOUND", missing_stderr)
-        self.assertEqual(11, malformed)
-        self.assertIn("IDENTITY_INVALID", malformed_stderr)
+        self.assertIn("pinboard item status", malformed_stderr)
+        self.assertIn("$.item_id", malformed_stderr)
+
+    def test_relational_cli_inputs_are_rejected_at_the_selected_leaf(self) -> None:
+        cases = (
+            (("actions", "--role", "worker", "--lease-id", "lease-a"), "pinboard actions"),
+            (
+                (
+                    "attempt",
+                    "acquire",
+                    "--attempt-id",
+                    "attempt-a",
+                    "--task-id",
+                    "task-a",
+                    "--host-id",
+                    "host-a",
+                    "--ttl-seconds",
+                    "60",
+                    "--coordination-lease-id",
+                    "coordination-a",
+                ),
+                "pinboard attempt acquire",
+            ),
+            (
+                (
+                    "transition",
+                    "--action-id",
+                    "pause:attempt-a",
+                    "--expected-revision",
+                    "1",
+                    "--generation",
+                    "1",
+                    "--authorization",
+                    "attempt",
+                    "--payload",
+                    "payload.json",
+                ),
+                "pinboard transition",
+            ),
+            (
+                (
+                    "dispatch",
+                    "--action-id",
+                    "dispatch:attempt-a",
+                    "--expected-revision",
+                    "1",
+                    "--generation",
+                    "1",
+                    "--checkpoint",
+                    "checkpoint-a",
+                    "--environment",
+                    "environment.json",
+                    "--review-id",
+                    "review-a",
+                ),
+                "pinboard dispatch",
+            ),
+        )
+        for arguments, route in cases:
+            with self.subTest(arguments=arguments):
+                stderr = self.run_cli_parse_error(*arguments)
+                self.assertIn(route, stderr)
+
+    def test_custom_command_decoders_preserve_identifier_constraints(self) -> None:
+        cases = (
+            (("actions", "--role", "observer", "--action-id", "bad/id"), "$.action_id"),
+            (
+                (
+                    "attempt",
+                    "acquire",
+                    "--attempt-id",
+                    "bad/id",
+                    "--task-id",
+                    "task-a",
+                    "--host-id",
+                    "host-a",
+                    "--ttl-seconds",
+                    "60",
+                ),
+                "$.attempt_id",
+            ),
+            (
+                (
+                    "transition",
+                    "--action-id",
+                    "bad/id",
+                    "--expected-revision",
+                    "1",
+                    "--generation",
+                    "1",
+                    "--payload",
+                    "payload.json",
+                ),
+                "$.action_id",
+            ),
+            (
+                (
+                    "dispatch",
+                    "--action-id",
+                    "bad/id",
+                    "--expected-revision",
+                    "1",
+                    "--generation",
+                    "1",
+                    "--checkpoint",
+                    "checkpoint-a",
+                    "--environment",
+                    "environment.json",
+                ),
+                "$.action_id",
+            ),
+        )
+        for arguments, field_path in cases:
+            with self.subTest(arguments=arguments):
+                self.assertIn(field_path, self.run_cli_parse_error(*arguments))
 
     def test_module_entrypoint_delegates_to_cli(self) -> None:
         with patch.object(sys, "argv", ["pinboard", "--version"]), self.assertRaises(SystemExit) as raised:

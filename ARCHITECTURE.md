@@ -90,7 +90,8 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 
 | Owner group | Responsibility |
 | --- | --- |
-| `cli_models.py`, `cli.py` | Command and presentation records plus the current command surface, argument decoding, authority-token comparison, SQLite composition, JSON/text conversion, and generated-view refresh |
+| `cli_commands.py`, `cli.py` | Exact leaf command records, parser-owned declarative decoding, exhaustive dispatch, authority-token comparison, SQLite composition, and generated-view refresh |
+| `cli_models.py` | JSON and text presentation records for the installed command surface |
 | `transition_models.py`, `transition_input.py` | Strict external transition payload records and conversion to typed command input |
 | `brief_source_models.py`, `brief_sources.py` | Strict source manifests, shared project-relative file and Markdown-heading selection, deterministic digests, overlap rejection, and context-bounded batch planning |
 | `work_brief_models.py`, `work_briefs.py` | Strict v2 brief and review records, exact canonical codecs and semantic validation, digest computation, reviewed-authority checks, and complete Markdown rendering |
@@ -124,7 +125,7 @@ Pinboard does not require or produce a companion notes directory. Project docume
 
 ### Reads and validation
 
-Status, overview, exact item status, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. They never parse generated Markdown. Validation verifies the database and every accepted artifact reference, validates live v2 brief identity and structure through the typed boundary, keeps historical terminal brief bytes opaque, then reports generated-view drift separately.
+Status, overview, exact item status, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. Each selected SQLite row is converted directly into its declared stored-state record; explicit storage checks are reserved for row cardinality, canonical history JSON, and relationships spanning records. These reads never parse generated Markdown. Validation verifies the database and every accepted artifact reference, validates live v2 brief identity and structure through the typed boundary, keeps historical terminal brief bytes opaque, then reports generated-view drift separately.
 
 ### Brief source planning
 
@@ -132,7 +133,7 @@ The installed `pinboard brief-sources` command reads a strict source manifest wi
 
 ### Mutations and proposal intake
 
-The CLI decodes command input into exact typed values and reselects the advertised action. `application.service` rechecks authority and legality inside the store transaction, then commits one closed mutation. Proposal intake follows the same SQLite transaction boundary: the proposal file is decoded at the interface, the immutable inbox decision rejects duplicates, and the accepted row is stored without changing scheduling state.
+Each argparse leaf selects its exact command record and parser before dispatch. The interface converts the raw namespace once, reports structural or coupled-option failures through that leaf parser, and dispatches a closed command union; handlers never receive a general argument namespace or reparse command and operation strings. The selected handler then reselects the advertised action. `application.service` rechecks authority and legality inside the store transaction, then commits one closed mutation. Proposal intake follows the same SQLite transaction boundary: the proposal file is decoded at the interface, the immutable inbox decision rejects duplicates, and the accepted row is stored without changing scheduling state.
 
 ### Worker dispatch and review publication
 
