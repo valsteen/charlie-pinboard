@@ -29,6 +29,7 @@ from charlie_pinboard.domain.work_models import (
     DeferInput,
     EvidenceInput,
     MergeProposalInput,
+    ProposalDispositionKind,
     ReasonInput,
     ResumeInput,
     SubmitReviewInput,
@@ -283,7 +284,6 @@ class ResumeAttemptChange:
 class ReviewSubmissionChange:
     item: ItemId
     attempt: AttemptId
-    protected_candidate_before: CandidateId | None
     protected_candidate_after: CandidateId
     candidate_observed_at: datetime
 
@@ -292,7 +292,6 @@ class ReviewSubmissionChange:
 class ReviewReturnChange:
     item: ItemId
     attempt: AttemptId
-    protected_candidate_before: CandidateId | None
     authority_change: AttemptAuthorityChange
 
 
@@ -357,15 +356,9 @@ class MergedProposalChange:
 
 
 @dataclass(frozen=True, slots=True)
-class ReturnedProposalChange:
+class ReasonedProposalDispositionChange:
     proposal: ProposalId
-    reason: str
-    disposed_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class RejectedProposalChange:
-    proposal: ProposalId
+    disposition: ProposalDispositionKind
     reason: str
     disposed_at: datetime
 
@@ -388,19 +381,12 @@ class CheckpointAcceptanceChange:
     checkpoint: CheckpointId
     attempt: AttemptId
     candidate: CandidateId
-    evidence: str
-    accepted_at: datetime
     authority_change: AttemptAuthorityChange
 
 
 @dataclass(frozen=True, slots=True)
 class CoordinatorTransferChange:
     authority_change: CoordinatorAuthorityChange
-
-
-@dataclass(frozen=True, slots=True)
-class NoTransitionChange:
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -424,11 +410,9 @@ type DecisionChange = (
     | AttemptClosureChange
     | AcceptedProposalChange
     | MergedProposalChange
-    | ReturnedProposalChange
-    | RejectedProposalChange
+    | ReasonedProposalDispositionChange
     | CheckpointAcceptanceChange
     | CoordinatorTransferChange
-    | NoTransitionChange
 )
 
 

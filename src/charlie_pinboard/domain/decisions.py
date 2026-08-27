@@ -33,14 +33,12 @@ from charlie_pinboard.domain.decision_models import (
     MarkReadyCommand,
     MergedProposalChange,
     MergeProposalCommand,
-    NoTransitionChange,
     PauseCommand,
-    RejectedProposalChange,
+    ReasonedProposalDispositionChange,
     RejectProposalCommand,
     ReopenCommand,
     ResumeAttemptChange,
     ResumeCommand,
-    ReturnedProposalChange,
     ReturnForCorrectionCommand,
     ReturnProposalCommand,
     ReviewReturnChange,
@@ -77,6 +75,7 @@ from charlie_pinboard.domain.work_models import (
     EvidenceInput,
     ItemScope,
     MergeProposalInput,
+    ProposalDispositionKind,
     ReasonInput,
     ResumeInput,
     ScopeDependency,
@@ -701,7 +700,6 @@ def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: 
         ReviewSubmissionChange(
             item.item,
             attempt_id,
-            attempt.protected_candidate_revision,
             value.candidate,
             now,
         ),
@@ -741,7 +739,6 @@ def _return_for_correction(
         ReviewReturnChange(
             item.item,
             attempt_id,
-            snapshot.attempts_by_id()[attempt_id].protected_candidate_revision,
             authority_change,
         ),
         item=item.item,
@@ -784,8 +781,6 @@ def _accept_checkpoint(
             value.checkpoint,
             attempt_id,
             value.candidate,
-            value.evidence,
-            now,
             authority_change,
         ),
         item=item.item,
@@ -939,15 +934,15 @@ def _dispose_proposal(
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
     match command:
         case ReturnProposalCommand(value=value):
-            change: DecisionChange = ReturnedProposalChange(proposal.proposal, value.reason, now)
+            disposition = ProposalDispositionKind.RETURNED
         case RejectProposalCommand(value=value):
-            change = RejectedProposalChange(proposal.proposal, value.reason, now)
+            disposition = ProposalDispositionKind.REJECTED
         case _ as unreachable:
             assert_never(unreachable)
     return _result(
         action,
         now,
-        change,
+        ReasonedProposalDispositionChange(proposal.proposal, disposition, value.reason, now),
         evidence=value.reason,
     )
 
@@ -960,7 +955,10 @@ def _transfer(snapshot: LedgerSnapshot, command: TransferCoordinatorCommand, now
         )
     before = snapshot.coordination_lease
     if before is None:
-        return _result(action, now, NoTransitionChange())
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
+            "The transferable coordination lease is unavailable.",
+        )
     if before.state != CoordinationLeaseStatus.ACTIVE or before.expires_at <= now:
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "The coordination lease is not active.")
     value = command.value

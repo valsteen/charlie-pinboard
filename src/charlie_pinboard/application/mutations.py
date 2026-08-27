@@ -49,10 +49,8 @@ from charlie_pinboard.domain.decision_models import (
     ItemClosureChange,
     ItemStateChange,
     MergedProposalChange,
-    NoTransitionChange,
-    RejectedProposalChange,
+    ReasonedProposalDispositionChange,
     ResumeAttemptChange,
-    ReturnedProposalChange,
     ReviewReturnChange,
     ReviewSubmissionChange,
 )
@@ -123,11 +121,9 @@ def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
                     | ItemClosureChange()
                     | ItemStateChange()
                     | MergedProposalChange()
-                    | NoTransitionChange()
-                    | RejectedProposalChange()
+                    | ReasonedProposalDispositionChange()
                     | ResumeAttemptChange()
                     | ReviewReturnChange()
-                    | ReturnedProposalChange()
                 ):
                     pass
                 case _ as unreachable:
@@ -287,22 +283,6 @@ def _proposal_creation_after(
     )
 
 
-def _terminal_item_state(value: str) -> StoredWorkItemState:
-    try:
-        state = StoredWorkItemState(value)
-    except ValueError as error:
-        raise MutationContractError(
-            MutationContractErrorCode.TERMINAL_STATE_INVALID,
-            "A terminal transition must name its exact stored item state.",
-        ) from error
-    if state not in {StoredWorkItemState.DONE, StoredWorkItemState.SUPERSEDED, StoredWorkItemState.DROPPED}:
-        raise MutationContractError(
-            MutationContractErrorCode.TERMINAL_STATE_INVALID,
-            "A terminal transition must name a terminal stored item state.",
-        )
-    return state
-
-
 def _item_state_after(
     lifecycle: LifecycleRecords,
     item_id: ItemId,
@@ -335,7 +315,7 @@ def _accepted_proposal_after(
     accepted = change.accepted_item
     if any(item.item_id == accepted.item for item in lifecycle.work_items):
         raise MutationContractError(
-            MutationContractErrorCode.ACCEPTED_PROPOSAL_INCOMPLETE,
+            MutationContractErrorCode.ACCEPTED_PROPOSAL_ITEM_EXISTS,
             "Item creation requires a new accepted-proposal identity.",
         )
     item = StoredWorkItem(
@@ -765,7 +745,7 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
             evidence=evidence,
         ):
             lifecycle = _item_state_after(
-                lifecycle, item, item_before, _terminal_item_state(terminal_state.value), revision, now, evidence
+                lifecycle, item, item_before, StoredWorkItemState(terminal_state.value), revision, now, evidence
             )
             terminal = True
         case AttemptClosureChange(
@@ -778,7 +758,7 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
             authority_change=authority_change,
         ):
             lifecycle = _item_state_after(
-                lifecycle, item, item_before, _terminal_item_state(terminal_state.value), revision, now, evidence
+                lifecycle, item, item_before, StoredWorkItemState(terminal_state.value), revision, now, evidence
             )
             lifecycle = _attempt_state_after(lifecycle, attempt, attempt_before, AttemptState.DONE, revision, now)
             if authority_change is not None:
@@ -794,14 +774,13 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
             result = _proposal_disposition_after(
                 result, proposal, ProposalDispositionKind.MERGED, disposed_at, revision, target_item=target
             )
-        case ReturnedProposalChange(proposal=proposal, reason=reason, disposed_at=disposed_at):
-            result = _proposal_disposition_after(
-                result, proposal, ProposalDispositionKind.RETURNED, disposed_at, revision, reason=reason
-            )
-        case RejectedProposalChange(proposal=proposal, reason=reason, disposed_at=disposed_at):
-            result = _proposal_disposition_after(
-                result, proposal, ProposalDispositionKind.REJECTED, disposed_at, revision, reason=reason
-            )
+        case ReasonedProposalDispositionChange(
+            proposal=proposal,
+            disposition=disposition,
+            reason=reason,
+            disposed_at=disposed_at,
+        ):
+            result = _proposal_disposition_after(result, proposal, disposition, disposed_at, revision, reason=reason)
         case CheckpointAcceptanceChange(item=item, attempt=attempt, authority_change=authority_change):
             lifecycle = _item_state_after(lifecycle, item, WorkState.REVIEW, StoredWorkItemState.PAUSED, revision, now)
             lifecycle = _attempt_state_after(
@@ -810,8 +789,6 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
             result = _transition_attempt_authority_after(authority_change, result, now)
         case CoordinatorTransferChange(authority_change=authority_change):
             result = _transition_coordinator_after(authority_change, result)
-        case NoTransitionChange():
-            pass
         case _ as unreachable:
             assert_never(unreachable)
     result = replace(result, lifecycle=lifecycle)

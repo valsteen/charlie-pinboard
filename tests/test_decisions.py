@@ -450,6 +450,13 @@ class LifecycleDecisionTest(unittest.TestCase):
                 EmptyInput(),
                 "TRANSITION_INPUT_INVALID",
             ),
+            (
+                LedgerSnapshot("r", 1, (), can_transfer_coordinator=True),
+                ActionKind.TRANSFER_COORDINATOR,
+                "ledger",
+                TransferCoordinatorInput("task", "host"),
+                "ACTION_NOT_AVAILABLE",
+            ),
             (LedgerSnapshot("r", 1, ()), ActionKind.INSPECT, "ledger", EmptyInput(), "ACTION_NOT_MUTATING"),
         )
         for snapshot, kind, subject, value, code in cases:
