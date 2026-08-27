@@ -26,6 +26,25 @@ class ProposalIntake:
     urgency_evidence: str
     evidence: tuple[str, ...]
     freshness_assumptions: tuple[str, ...]
+    position: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VisibleProposalItem:
+    item_id: ItemId
+    position: int
+    dependencies: tuple[ItemId, ...]
+    scope_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class PrerequisiteDependencyChange:
+    item_id: ItemId
+    dependency_id: ItemId
+    position: int
+    scope_revision: int
+    scope_digest_before: str
+    scope_digest_after: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,5 +55,7 @@ class CreateProposalOperation:
 @dataclass(frozen=True, slots=True)
 class ProposalCreationDecision:
     proposal: ProposalIntake
+    visible_item: VisibleProposalItem
+    prerequisite_change: PrerequisiteDependencyChange | None
     evidence: tuple[str, ...]
     freshness: tuple[str, ...]

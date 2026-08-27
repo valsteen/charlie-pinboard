@@ -156,7 +156,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual("sqlite-v1", self.run_json_cli(*common, "status")["authority"])
         overview = self.run_json_cli(*common, "overview")
         self.assertEqual("sqlite-v1", overview["authority"])
-        self.assertEqual("pinboard-overview/v1", overview["schema"])
+        self.assertEqual("pinboard-overview/v2", overview["schema"])
         actions = self.run_json_cli(*common, "actions", "--role", "observer")["actions"]
         self.assertIsInstance(actions, list)
         assert isinstance(actions, list)
@@ -596,7 +596,7 @@ class CliTest(unittest.TestCase):
                     "evidence": ["source:cli"],
                     "why_it_matters": "A filesystem writer cannot persist to SQLite authority.",
                     "relation": {"kind": "follow-up", "item": "work-c"},
-                    "effect": "The proposal appears once in the SQLite inbox.",
+                    "effect": "The proposal appears once as visible intake.",
                     "unlock": "Use the application proposal service.",
                     "urgency_evidence": "The installed command must remain current.",
                     "freshness_assumptions": ["SQLite remains authoritative."],
@@ -612,7 +612,17 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(0, result, stderr)
         self.assertIn("OK PROPOSAL_CREATED cli-sqlite-proposal", stdout)
-        self.assertEqual(before_revision + 1, store.snapshot().lifecycle.project.revision)
+        after = store.snapshot()
+        self.assertEqual(before_revision + 1, after.lifecycle.project.revision)
+        visible = next(value for value in after.lifecycle.work_items if str(value.item_id) == "cli-sqlite-proposal")
+        self.assertEqual((StoredWorkItemState.INTAKE, 5), (visible.state, visible.queue_position))
+        self.assertEqual(("work-a", "work-a-1"), (str(after.focus.item_id), str(after.focus.attempt_id)))
+        self.assertEqual(
+            ("work-c",),
+            tuple(
+                str(value.dependency_id) for value in after.lifecycle.dependencies if value.item_id == visible.item_id
+            ),
+        )
         self.assertEqual(13, duplicate_result)
         self.assertIn("PROPOSAL_ALREADY_EXISTS", duplicate_stderr)
 

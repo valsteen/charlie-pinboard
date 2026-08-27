@@ -130,6 +130,9 @@ def _validate_attempt_authority(state: StoredWorkState, error_code: StorageError
 
 def _validate_current_state(state: StoredWorkState, error_code: StorageErrorCode) -> None:
     _validate_attempt_authority(state, error_code)
+    positions = sorted(value.queue_position for value in state.lifecycle.work_items if value.queue_position is not None)
+    if positions != list(range(1, len(positions) + 1)):
+        raise StorageError(error_code, "Live work-item queue positions must be contiguous and one-based.")
 
 
 class _StoredStateReader:
@@ -170,7 +173,7 @@ class _StoredStateReader:
                 """
                 SELECT item_id, user_label, state, timing, source, trigger, why_it_matters, effect, unlock,
                        outcome_evidence, next_action, notes, scope_revision, scope_digest, subject_revision,
-                       recorded_at, updated_at
+                       recorded_at, updated_at, queue_position
                 FROM work_items
                 ORDER BY item_id
                 """
@@ -433,8 +436,8 @@ class _StoredStateWriter:
             INSERT INTO work_items (
                 item_id, user_label, state, timing, source, trigger, why_it_matters,
                 effect, unlock, outcome_evidence, next_action, notes, scope_revision, scope_digest,
-                subject_revision, recorded_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                subject_revision, recorded_at, updated_at, queue_position
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             tuple(
                 (
@@ -455,6 +458,7 @@ class _StoredStateWriter:
                     value.subject_revision,
                     value.recorded_at.isoformat(),
                     value.updated_at.isoformat(),
+                    value.queue_position,
                 )
                 for value in records.work_items
             ),

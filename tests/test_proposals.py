@@ -19,7 +19,7 @@ def proposal() -> JsonObject:
         "evidence": ["source:test"],
         "why_it_matters": "The behavior must persist through SQLite.",
         "relation": {"kind": "independent", "item": None},
-        "effect": "The proposal appears in the inbox.",
+        "effect": "The proposal appears as visible intake.",
         "unlock": "Current proposal intake remains usable.",
         "urgency_evidence": "The installed command exercises this boundary.",
         "freshness_assumptions": ["SQLite remains authoritative."],
@@ -30,6 +30,7 @@ class ProposalInputTest(unittest.TestCase):
     def test_current_proposal_decodes_exact_model(self) -> None:
         value = proposal()
         self.assertEqual("finding-1", parse_proposal(json.dumps(value)).proposal_id)
+        self.assertEqual(2, parse_proposal(json.dumps({**value, "position": 2})).position)
         with self.assertRaises(ProposalError):
             parse_proposal(json.dumps({**value, "unexpected": True}))
 
@@ -40,6 +41,7 @@ class ProposalInputTest(unittest.TestCase):
             ({**valid, "schema": "pinboard" + "-proposal/v2"}, "schema"),
             ({**valid, "proposal_id": "Not Valid"}, "proposal_id"),
             ({**valid, "trigger": ""}, "trigger"),
+            ({**valid, "position": 0}, "position"),
             ({**valid, "evidence": [""]}, "evidence[0]"),
             ({**valid, "relation": {"kind": "invented", "item": None}}, "relation.kind"),
         )

@@ -29,3 +29,4 @@ class Proposal(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     unlock: ProposalText
     urgency_evidence: ProposalText
     freshness_assumptions: tuple[NonEmptyString, ...]
+    position: Annotated[int, msgspec.Meta(ge=1)] | None = None

@@ -61,13 +61,15 @@ def _stored_item(
     *,
     outcome_evidence: str | None = None,
     sparse: bool = False,
+    queue_position: int | None = 1,
+    source: str | None = None,
 ) -> StoredWorkItem:
     return StoredWorkItem(
         item_id,
         f"Work {item_id}",
         state,
         None if sparse else Timing.MUST_NOW,
-        None if sparse else "accepted requirement",
+        source if source is not None else (None if sparse else "accepted requirement"),
         None if sparse else "A verified observation",
         None if sparse else "The workflow needs this fact.",
         None if sparse else "The state becomes explicit.",
@@ -80,6 +82,7 @@ def _stored_item(
         7,
         SQLITE_NOW,
         SQLITE_NOW,
+        queue_position,
     )
 
 
@@ -88,6 +91,7 @@ def complete_sqlite_state() -> StoredWorkState:
     item_b = ItemId("work-b")
     item_c = ItemId("work-c")
     intake_item = ItemId("intake-work")
+    proposal_item = ItemId("zz-proposal-a")
     attempt_id = AttemptId("work-a-1")
     attempt_lease_id = LeaseId("attempt-lease-a")
     brief = ArtifactReference(
@@ -126,15 +130,28 @@ def complete_sqlite_state() -> StoredWorkState:
     lifecycle = LifecycleRecords(
         ProjectRecord("charlie-pinboard", 1, 12, 2, SQLITE_NOW, SQLITE_NOW),
         (
-            _stored_item(intake_item, StoredWorkItemState.INTAKE, sparse=True),
-            _stored_item(item_a, StoredWorkItemState.ACTIVE),
-            _stored_item(item_b, StoredWorkItemState.SUPERSEDED, outcome_evidence="work-b superseded"),
-            _stored_item(item_c, StoredWorkItemState.READY),
+            _stored_item(intake_item, StoredWorkItemState.INTAKE, sparse=True, queue_position=1),
+            _stored_item(item_a, StoredWorkItemState.ACTIVE, queue_position=2),
+            _stored_item(
+                item_b,
+                StoredWorkItemState.SUPERSEDED,
+                outcome_evidence="work-b superseded",
+                queue_position=None,
+            ),
+            _stored_item(item_c, StoredWorkItemState.READY, queue_position=3),
+            _stored_item(
+                proposal_item,
+                StoredWorkItemState.INTAKE,
+                sparse=True,
+                queue_position=4,
+                source="proposal:zz-proposal-a",
+            ),
         ),
         tuple(
-            ItemScopeRevision(item, 1, SQLITE_DIGEST, 3, SQLITE_NOW) for item in (intake_item, item_a, item_b, item_c)
+            ItemScopeRevision(item, 1, SQLITE_DIGEST, 3, SQLITE_NOW)
+            for item in (intake_item, item_a, item_b, item_c, proposal_item)
         ),
-        (ItemDependency(item_a, item_c, 0),),
+        (ItemDependency(item_a, item_c, 0), ItemDependency(proposal_item, item_c, 0)),
         (ItemArtifactLink(item_a, design.artifact_ref_id, ArtifactRole.DESIGN, 0),),
         (
             StoredAttempt(
@@ -157,7 +174,7 @@ def complete_sqlite_state() -> StoredWorkState:
             ),
         ),
     )
-    proposal_id = ProposalId("proposal-a")
+    proposal_id = ProposalId(proposal_item)
     proposals = ProposalRecords(
         (
             StoredProposal(

@@ -4,6 +4,7 @@ from typing import assert_never
 from charlie_pinboard.application.errors import QueryError, QueryErrorCode
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.query_models import (
+    DependencyReason,
     ItemStatus,
     ItemStatusAttempt,
     ItemStatusState,
@@ -14,12 +15,12 @@ from charlie_pinboard.application.query_models import (
     ParallelReason,
     ParallelReasonCode,
     ParallelSelection,
+    ReviewFlag,
     WorkOverview,
 )
 from charlie_pinboard.application.stored_state import (
     ItemDependency,
     StoredAttempt,
-    StoredProposal,
     StoredWorkItem,
     StoredWorkItemState,
     StoredWorkState,
@@ -28,6 +29,8 @@ from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
 from charlie_pinboard.domain.identifiers import ItemId
 from charlie_pinboard.domain.work_models import (
     AttemptState,
+    ProposalDispositionKind,
+    ProposalRelationKind,
     WorkState,
 )
 
@@ -40,16 +43,12 @@ def _dependency_position(value: ItemDependency) -> int:
     return value.position
 
 
-def _item_key(value: StoredWorkItem) -> str:
-    return str(value.item_id)
+def _item_key(value: StoredWorkItem) -> tuple[int, str]:
+    return value.queue_position or 0, str(value.item_id)
 
 
 def _attempt_key(value: StoredAttempt) -> str:
     return str(value.attempt_id)
-
-
-def _proposal_key(value: StoredProposal) -> str:
-    return str(value.proposal_id)
 
 
 def _parallel_item_key(value: ParallelItem) -> str:
@@ -95,9 +94,9 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
         for attempt in state.lifecycle.attempts
         if attempt.state not in {AttemptState.DONE, AttemptState.CLOSED}
     }
-    dependencies = {
+    dependency_links = {
         item.item_id: tuple(
-            str(link.dependency_id)
+            link
             for link in sorted(
                 (candidate for candidate in state.lifecycle.dependencies if candidate.item_id == item.item_id),
                 key=_dependency_key,
@@ -105,13 +104,72 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
         )
         for item in state.lifecycle.work_items
     }
+    proposals = {ItemId(proposal.proposal_id): proposal for proposal in state.proposals.proposals}
+    live_ids = frozenset(item.item_id for item in state.lifecycle.work_items if item.state not in _TERMINAL_ITEM_STATES)
+
+    def dependency_reason(item_id: ItemId, link: ItemDependency) -> DependencyReason:
+        proposal = proposals.get(item_id)
+        if (
+            proposal is not None
+            and proposal.relation == ProposalRelationKind.FOLLOW_UP
+            and proposal.relation_item_id == link.dependency_id
+        ):
+            reason = f"Follow-up to {link.dependency_id}: {proposal.why_it_matters}"
+        else:
+            prerequisite = next(
+                (
+                    value
+                    for value in proposals.values()
+                    if value.relation == ProposalRelationKind.PREREQUISITE
+                    and value.relation_item_id == item_id
+                    and ItemId(value.proposal_id) == link.dependency_id
+                ),
+                None,
+            )
+            reason = (
+                f"Inferred prerequisite {link.dependency_id}: {prerequisite.why_it_matters}"
+                if prerequisite is not None
+                else "Recorded dependency."
+            )
+        return DependencyReason(str(link.dependency_id), reason)
+
+    def review_flags(item_id: ItemId) -> tuple[ReviewFlag, ...]:
+        proposal = proposals.get(item_id)
+        if proposal is None or proposal.disposition not in {None, ProposalDispositionKind.RETURNED}:
+            return ()
+        if proposal.disposition == ProposalDispositionKind.RETURNED:
+            return (
+                ReviewFlag(
+                    ProposalRelationKind.CLARIFICATION,
+                    str(proposal.relation_item_id) if proposal.relation_item_id is not None else None,
+                    proposal.disposition_reason or proposal.why_it_matters,
+                ),
+            )
+        if proposal.relation not in {
+            ProposalRelationKind.DUPLICATE,
+            ProposalRelationKind.CONTRADICTION,
+            ProposalRelationKind.CLARIFICATION,
+        }:
+            return ()
+        return (
+            ReviewFlag(
+                proposal.relation,
+                str(proposal.relation_item_id) if proposal.relation_item_id is not None else None,
+                proposal.why_it_matters,
+            ),
+        )
+
     items = tuple(
         OverviewItem(
             str(item.item_id),
             item.user_label,
             _work_state(item.state),
+            item.queue_position or 0,
+            not any(link.dependency_id in live_ids for link in dependency_links[item.item_id]),
             item.timing.value if item.timing is not None else None,
-            dependencies[item.item_id],
+            tuple(str(link.dependency_id) for link in dependency_links[item.item_id]),
+            tuple(dependency_reason(item.item_id, link) for link in dependency_links[item.item_id]),
+            review_flags(item.item_id),
             str(attempts[item.item_id]) if item.item_id in attempts else None,
             item.next_action,
             item.notes or "",
@@ -119,23 +177,17 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
         for item in sorted(state.lifecycle.work_items, key=_item_key)
         if item.state not in _TERMINAL_ITEM_STATES
     )
-    live_ids = frozenset(item.item_id for item in items)
     immediate = tuple(
         item.item_id
         for item in items
-        if item.state in {WorkState.INTAKE, WorkState.READY, WorkState.DEFERRED}
-        or (
-            item.state in {WorkState.PAUSED, WorkState.BLOCKED}
-            and not any(dependency in live_ids for dependency in item.depends_on)
+        if item.eligible
+        and (
+            item.state in {WorkState.INTAKE, WorkState.READY, WorkState.DEFERRED}
+            or item.state in {WorkState.PAUSED, WorkState.BLOCKED}
         )
     )
-    inbox = tuple(
-        str(proposal.proposal_id)
-        for proposal in sorted(state.proposals.proposals, key=_proposal_key)
-        if proposal.disposition is None
-    )
     return WorkOverview(
-        "pinboard-overview/v1",
+        "pinboard-overview/v2",
         "sqlite-v1",
         str(state.lifecycle.project.revision),
         str(state.focus.item_id) if state.focus.item_id is not None else None,
@@ -146,7 +198,6 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
             if attempt.state == AttemptState.ACTIVE
         ),
         items,
-        inbox,
         immediate,
     )
 

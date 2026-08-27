@@ -276,7 +276,7 @@ def create_proposal(
     operation: CreateProposalOperation,
     now: datetime,
 ) -> DecisionResult[TransitionReceipt]:
-    """Persist one immutable proposal under authority selected from the locked local store."""
+    """Persist immutable proposal facts and their visible intake item from one locked snapshot."""
 
     with store.write() as transaction:
         before = transaction.snapshot()
@@ -286,8 +286,7 @@ def create_proposal(
             authority,
             project.revision,
             project.host_epoch,
-            tuple(value.proposal_id for value in before.proposals.proposals),
-            tuple(value.item_id for value in before.lifecycle.work_items),
+            project_decision_snapshot(before),
             operation,
         )
         if isinstance(decision, DecisionFailure):

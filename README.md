@@ -19,7 +19,7 @@ Imagine you are building *Ashfall Keep*, a small action RPG. One Codex task is w
 
 Without shared project state, the original chat becomes an accidental backlog, useful conclusions disappear into old conversations, and a feature branch slowly turns into a migration branch. Charlie gives each discovery an explicit place and keeps the dragon work moving until evidence says it cannot.
 
-![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** The scout invokes `$pinboard-intake` to preserve the save-game finding as an immutable inbox proposal. Intake does not silently schedule, prioritize, or interrupt anything; a coordinating chat later decides whether the finding belongs on the live map.
+![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** The scout invokes `$pinboard-intake` to preserve the save-game finding as a visible intake candidate. It appears at the back of the live queue by default, while the current focus and active work remain unchanged. A coordinating chat later decides whether to mark it ready, defer it, merge it, or close it.
 
 ![Pixel-art folded adventure map](assets/map-fills-in.png) **The map fills in as the party travels.** The proposal keeps the exact trigger, evidence, consequence, and relationship to current work. The receipt stays compact:
 
@@ -46,7 +46,7 @@ Everything remains ordinary repository work: code, branches, worktrees, Markdown
 ## What Charlie keeps coherent
 
 - `$pinboard` reads the live map, explains legal next work, previews safe parallel work, and briefly borrows coordination when a shared decision must change.
-- `$pinboard-intake` lets any authorized task preserve one finding in the immutable inbox without changing the schedule.
+- `$pinboard-intake` lets any authorized task preserve one finding as visible intake without silently making it ready or active.
 - `$pinboard-deliver` executes one accepted attempt from its canonical brief and leaves verification evidence for independent review.
 - `$slop-cleanup` traces abandoned or repeatedly revised feature residue to provenance and production reachability, then recurses to a documented fixed point.
 - `pinboard` validates and updates the repository-local ledger, rejects stale actions, and keeps unrelated attempt ownership independent.
@@ -81,7 +81,7 @@ Start a Codex task in the repository and ask:
 
 When another task uncovers something worth keeping, ask it:
 
-> Add this to the repository work inbox: saving a boss fight currently captures temporary animation state. Include what you found and why it could block phase-two save support.
+> Add this to the repository work queue as intake: saving a boss fight currently captures temporary animation state. Include what you found and why it could block phase-two save support.
 
 For a quick current picture, ask:
 

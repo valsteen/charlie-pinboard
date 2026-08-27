@@ -116,6 +116,7 @@ def item(item_id: str, state: WorkState, *, attempt: str | None = None) -> WorkI
         "design",
         "continue",
         "",
+        1,
     )
 
 
@@ -409,18 +410,28 @@ class LifecycleDecisionTest(unittest.TestCase):
                 "PROPOSAL_NOT_FOUND",
             ),
             (
-                LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)),
+                LedgerSnapshot(
+                    "r",
+                    1,
+                    (item("proposal", WorkState.INTAKE),),
+                    proposals=(ProposalRecord("proposal", "p1"),),
+                ),
                 ActionKind.ACCEPT_PROPOSAL,
                 "proposal",
                 EmptyInput(),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
-                LedgerSnapshot("r", 1, (ready,), proposals=(ProposalRecord("proposal", "p1"),)),
+                LedgerSnapshot(
+                    "r",
+                    1,
+                    (ready, item("proposal", WorkState.INTAKE)),
+                    proposals=(ProposalRecord("proposal", "p1"),),
+                ),
                 ActionKind.ACCEPT_PROPOSAL,
                 "proposal",
                 AcceptProposalInput(item="target", state=AcceptedProposalState.READY, next_action="start"),
-                "ITEM_ALREADY_EXISTS",
+                "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)),

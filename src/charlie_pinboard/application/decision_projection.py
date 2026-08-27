@@ -130,6 +130,7 @@ def _work_item(value: StoredWorkItem, state: WorkState, attempt_by_item: dict[It
         value.source or "",
         value.next_action,
         value.notes or "",
+        value.queue_position if value.queue_position is not None else 0,
         value.outcome_evidence,
     )
 
@@ -202,6 +203,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             item.source,
             item.next_action,
             item.notes,
+            item.queue_position,
             item.outcome_evidence,
         )
         for item in live_items

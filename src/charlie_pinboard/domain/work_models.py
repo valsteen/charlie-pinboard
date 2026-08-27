@@ -61,6 +61,7 @@ class ProposalRelationKind(Enum):
     FOLLOW_UP = "follow-up"
     DUPLICATE = "duplicate"
     CONTRADICTION = "contradiction"
+    CLARIFICATION = "clarification"
 
 
 class ProposalDispositionKind(Enum):
@@ -80,6 +81,7 @@ class WorkItem:
     source: str
     next_action: str | None
     notes: str
+    queue_position: int
     outcome_evidence: str | None = None
 
 

@@ -94,7 +94,7 @@ from charlie_pinboard.domain.proposal_models import (
     CreateProposalOperation,
     ProposalIntake,
 )
-from charlie_pinboard.domain.work_models import CloseOutcome, CoordinationCommandAuthority
+from charlie_pinboard.domain.work_models import CloseOutcome, CoordinationCommandAuthority, WorkState
 from charlie_pinboard.interfaces.brief_source_models import (
     BriefSourceBatch,
     BriefSourcePlan,
@@ -165,6 +165,7 @@ from charlie_pinboard.interfaces.cli_models import (
     CloseView,
     CoordinatedTransitionView,
     CoordinatorView,
+    DependencyReasonView,
     DiagnosticView,
     InputContractView,
     OverviewItemView,
@@ -172,6 +173,7 @@ from charlie_pinboard.interfaces.cli_models import (
     ParallelItemView,
     ParallelPreviewView,
     ParallelReasonView,
+    ReviewFlagView,
     RootView,
     StatusView,
     ValidationView,
@@ -213,8 +215,12 @@ def _overview_item_view(item: OverviewItem) -> OverviewItemView:
         item.item_id,
         item.label,
         item.state.value,
+        item.position,
+        item.eligible,
         item.timing,
         item.depends_on,
+        tuple(DependencyReasonView(value.item_id, value.reason) for value in item.dependency_reasons),
+        tuple(ReviewFlagView(value.kind.value, value.related_item, value.reason) for value in item.review_flags),
         item.attempt_id,
         item.next_action,
         item.notes,
@@ -230,7 +236,6 @@ def _overview_view(overview: WorkOverview) -> OverviewView:
         overview.focus_attempt,
         overview.active_attempts,
         tuple(_overview_item_view(item) for item in overview.items),
-        overview.inbox,
         overview.immediate_options,
     )
 
@@ -711,7 +716,7 @@ def build_parser() -> argparse.ArgumentParser:
     initialize = commands.add_parser("init", help="Create an empty current SQLite work state.")
     _select(initialize, InitializeCommand)
     _add_brief_parser(commands)
-    proposal = commands.add_parser("proposal", help="Create one immutable inbox proposal.")
+    proposal = commands.add_parser("proposal", help="Create one visible intake candidate without activating it.")
     proposal.add_argument("--file", type=Path, required=True)
     _select(proposal, ProposalCommand)
     transition = commands.add_parser("transition", help="Apply one action returned by the actions command.")
@@ -814,7 +819,7 @@ def _status_value(work: Path, project: Path) -> StatusView:
         active_attempts=overview.active_attempts,
         next_action=state.focus.next_action,
         counts=dict(Counter(item.state.value for item in state.lifecycle.work_items)),
-        inbox_count=len(overview.inbox),
+        visible_candidate_count=sum(1 for item in overview.items if item.state == WorkState.INTAKE),
         coordinator=(
             CoordinatorView(
                 str(coordinator.task_id),
@@ -972,7 +977,7 @@ def _status(roots: ResolvedRoots, command: StatusCommand) -> int:
     else:
         print(f"OK WORK_STATE_VALID revision={value.revision}")
         print(f"focus_item={value.focus_item or 'none'} focus_attempt={value.focus_attempt or 'none'}")
-        print(f"next_action={value.next_action} inbox={value.inbox_count}")
+        print(f"next_action={value.next_action} visible_candidates={value.visible_candidate_count}")
     return 0
 
 
@@ -987,8 +992,14 @@ def _overview(roots: ResolvedRoots, command: OverviewCommand) -> int:
     for item in overview.items:
         attempt = f" attempt={item.attempt_id}" if item.attempt_id is not None else ""
         next_action = item.next_action or "none"
-        print(f"{item.item_id}\t{item.state.value}\tnext={next_action}{attempt}\t{item.label}")
-    print(f"inbox={len(overview.inbox)} immediate_options={len(overview.immediate_options)}")
+        print(
+            f"{item.position}\t{item.item_id}\t{item.state.value}\teligible={str(item.eligible).lower()}"
+            f"\tnext={next_action}{attempt}\t{item.label}"
+        )
+    print(
+        f"visible_candidates={sum(1 for item in overview.items if item.state == WorkState.INTAKE)} "
+        f"immediate_options={len(overview.immediate_options)}"
+    )
     return 0
 
 
@@ -1207,6 +1218,7 @@ def _proposal(roots: ResolvedRoots, command: ProposalCommand) -> int:
         proposal.urgency_evidence,
         proposal.evidence,
         proposal.freshness_assumptions,
+        proposal.position,
     )
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     result = create_proposal(store, CreateProposalOperation(intake), datetime.now(UTC))
@@ -1220,7 +1232,10 @@ def _proposal(roots: ResolvedRoots, command: ProposalCommand) -> int:
     )
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
-    print(f"OK PROPOSAL_CREATED {proposal.proposal_id}")
+    visible = next(
+        value for value in store.snapshot().lifecycle.work_items if str(value.item_id) == proposal.proposal_id
+    )
+    print(f"OK PROPOSAL_CREATED {proposal.proposal_id} position={visible.queue_position} state={visible.state.value}")
     return 0
 
 

@@ -48,8 +48,10 @@ CREATE TABLE work_items (
     subject_revision INTEGER NOT NULL CHECK (subject_revision >= 0),
     recorded_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    queue_position INTEGER UNIQUE CHECK (queue_position IS NULL OR queue_position >= 1),
     UNIQUE (item_id, state, outcome_evidence),
     CHECK ((state IN ('done', 'superseded', 'dropped')) = (outcome_evidence IS NOT NULL)),
+    CHECK ((state IN ('done', 'superseded', 'dropped')) = (queue_position IS NULL)),
     FOREIGN KEY (item_id, scope_revision, scope_digest)
         REFERENCES item_scope_revisions(item_id, scope_revision, scope_digest)
         DEFERRABLE INITIALLY DEFERRED
@@ -138,7 +140,7 @@ CREATE TABLE proposals (
     trigger TEXT NOT NULL,
     why_it_matters TEXT NOT NULL,
     relation_kind TEXT NOT NULL CHECK (relation_kind IN (
-        'independent', 'prerequisite', 'follow-up', 'duplicate', 'contradiction'
+        'independent', 'prerequisite', 'follow-up', 'duplicate', 'contradiction', 'clarification'
     )),
     relation_item_id TEXT REFERENCES work_items(item_id),
     effect TEXT NOT NULL,

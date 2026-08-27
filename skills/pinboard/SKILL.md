@@ -24,7 +24,7 @@ Do not infer work from arbitrary Markdown, historical plans, unchecked boxes, br
 
 Keep Pinboard operationally invisible when it is working normally. User-facing progress and receipts describe the user's tasks, decisions, confidence, blockers, and next actions. Do not volunteer the storage backend, command mechanics, generated views, revisions, leases, routing, transport, validation steps, or unchanged coordination state. Include an implementation or process detail only when it changes the result, confidence, risk, requested action, or next step, or when the user asks to inspect or troubleshoot Pinboard itself.
 
-Default “where do we stand?”, “what remains?”, “quick status”, and equivalent orientation questions to the single `overview` result. Report the current focus, active attempts, live items, inbox, and immediate choices. Retain the revision stamp privately as freshness evidence; show it only when the user asks for it or when it materially explains stale or conflicting state. Do not read history, project notes, GitHub, branches, CI, delivery state, or old decisions for this default answer. Do not acquire a lease merely to explain the live picture.
+Default “where do we stand?”, “what remains?”, “quick status”, and equivalent orientation questions to the single `overview` result. Report the current focus, active attempts, ordered live items, eligibility, dependency reasons, review flags, and immediate choices. Intake candidates already appear in that order; there is no separate hidden inbox to inspect. Retain the revision stamp privately as freshness evidence; show it only when the user asks for it or when it materially explains stale or conflicting state. Do not read history, project notes, GitHub, branches, CI, delivery state, or old decisions for this default answer. Do not acquire a lease merely to explain the live picture.
 
 When continuing work from another Codex task, extract every named Pinboard item for which that task claims terminal completion and verify each claim with `pinboard item status --item-id <item-id> --json` before treating it as complete. Then use `overview` only to identify remaining live work. Absence from `overview` means only that the item is not currently live; never use that absence to report an item as missing, unrecorded, or unfinished without the exact item-status lookup. Exact item status proves the recorded item and attempt state, not acceptance of a nonterminal checkpoint.
 
@@ -48,7 +48,7 @@ This proportional behavior applies to mutation as well as status. After a succes
 - Let `state.sqlite3` own lifecycle, focus, dependencies, attempts, leases, proposals, history, and accepted artifact references.
 - Let `views/` remain generated human-readable output. Never edit it as authority.
 - Let accepted brief and evidence artifacts own execution semantics and review receipts; resolve them through their SQLite artifact references.
-- Let immutable inbox rows hold proposals that have been delivered but not admitted.
+- Let immutable proposal rows preserve discovery facts while their same-identity work items own visible intake state and queue position.
 - Let public project documentation own stable architecture and domain truth.
 
 One current coordination lease may authorize graph-wide transitions. Disjoint attempt leases may authorize item-local work concurrently. Expiry, release, revocation, and higher fencing generations invalidate retained actions.
@@ -127,7 +127,7 @@ For an explicit terminal human decision about non-active live work, use one `pin
 
 Process newly delivered intake only after the current review, transition, commit, or other atomic repository action ends. Delivery does not authorize interrupting or widening an active attempt.
 
-Intake is scheduling-neutral. It persists an immutable proposal and may change the ledger revision, but it does not pause, activate, admit, reorder, focus, or complete work. When intake is embedded in ongoing coordination, keep a compact continuation anchor in the current task context before invoking it:
+Intake persists immutable proposal facts and a same-identity visible work item. It appends at the back by default or uses an explicitly requested one-based position, and relation semantics may add a dependency or review flag. It does not mark the candidate ready, create or activate an attempt, pause current work, change focus, or complete anything. When intake is embedded in ongoing coordination, keep a compact continuation anchor in the current task context before invoking it:
 
 - the pre-intake objective;
 - the next action already promised;

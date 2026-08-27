@@ -49,17 +49,32 @@ class StatusView(msgspec.Struct, frozen=True):
     active_attempts: tuple[str, ...]
     next_action: str
     counts: dict[str, int]
-    inbox_count: int
+    visible_candidate_count: int
     coordinator: CoordinatorView | None
     authority: str = "v1"
+
+
+class DependencyReasonView(msgspec.Struct, frozen=True):
+    item_id: str
+    reason: str
+
+
+class ReviewFlagView(msgspec.Struct, frozen=True):
+    kind: str
+    related_item: str | None
+    reason: str
 
 
 class OverviewItemView(msgspec.Struct, frozen=True):
     item_id: str
     label: str
     state: str
+    position: int
+    eligible: bool
     timing: str | None
     depends_on: tuple[str, ...]
+    dependency_reasons: tuple[DependencyReasonView, ...]
+    review_flags: tuple[ReviewFlagView, ...]
     attempt_id: str | None
     next_action: str | None
     notes: str
@@ -73,7 +88,6 @@ class OverviewView(msgspec.Struct, frozen=True):
     focus_attempt: str | None
     active_attempts: tuple[str, ...]
     items: tuple[OverviewItemView, ...]
-    inbox: tuple[str, ...]
     immediate_options: tuple[str, ...]
 
 

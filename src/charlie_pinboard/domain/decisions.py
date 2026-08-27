@@ -839,14 +839,30 @@ def _accept_proposal(
     proposal = snapshot.proposal(proposal_id)
     if proposal is None:
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
-    if value.item in snapshot.items_by_id() or value.item in snapshot.history_items:
-        return DecisionFailure(DecisionFailureCode.ITEM_ALREADY_EXISTS, f"Item '{value.item}' already exists.")
+    visible_item = snapshot.item(ItemId(proposal_id))
+    if visible_item is None or visible_item.state != WorkState.INTAKE or visible_item.attempt is not None:
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
+            "Only a current visible intake proposal can be accepted.",
+        )
+    if value.item != ItemId(proposal_id):
+        return DecisionFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
+            "A visible proposal must be accepted with its same work-item identity.",
+        )
+    current_item = snapshot.item(value.item)
+    if current_item is None or current_item.state != WorkState.INTAKE or current_item.attempt is not None:
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
+            "Only the proposal's current visible intake item can be accepted.",
+        )
+    dependencies = tuple(dict.fromkeys((*current_item.depends_on, *value.depends_on)))
     if (
         len(value.depends_on) != len(set(value.depends_on))
-        or value.item in value.depends_on
+        or value.item in dependencies
         or any(
             snapshot.item(dependency) is None and dependency not in snapshot.history_items
-            for dependency in value.depends_on
+            for dependency in dependencies
         )
     ):
         return DecisionFailure(
@@ -869,7 +885,7 @@ def _accept_proposal(
             proposal.why_it_matters,
             proposal.effect,
             proposal.unlock,
-            tuple(ScopeDependency(position, dependency) for position, dependency in enumerate(value.depends_on)),
+            tuple(ScopeDependency(position, dependency) for position, dependency in enumerate(dependencies)),
         )
         scope_digest = item_scope_digest(scope)
         if isinstance(scope_digest, DecisionFailure):
@@ -879,7 +895,7 @@ def _accept_proposal(
             WorkState(value.state.value),
             value.timing,
             value.next_action,
-            value.depends_on,
+            dependencies,
             proposal.user_label,
             f"proposal:{proposal.proposal}",
             proposal.trigger,
@@ -913,6 +929,12 @@ def _merge_proposal(
     proposal = snapshot.proposal(proposal_id)
     if proposal is None:
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
+    visible_item = snapshot.item(ItemId(proposal_id))
+    if visible_item is None or visible_item.state != WorkState.INTAKE or visible_item.attempt is not None:
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
+            "Only a current visible intake proposal can be merged.",
+        )
     if snapshot.item(value.target) is None and value.target not in snapshot.history_items:
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{value.target}' does not exist.")
     return _result(
@@ -932,6 +954,12 @@ def _dispose_proposal(
     proposal = snapshot.proposal(proposal_id)
     if proposal is None:
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
+    visible_item = snapshot.item(ItemId(proposal_id))
+    if visible_item is None or visible_item.state != WorkState.INTAKE or visible_item.attempt is not None:
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
+            "Only a current visible intake proposal can be returned or rejected.",
+        )
     match command:
         case ReturnProposalCommand(value=value):
             disposition = ReasonedProposalDispositionKind.RETURNED

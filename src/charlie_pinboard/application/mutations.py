@@ -246,8 +246,98 @@ def _proposal_creation_after(
         raise MutationContractError(
             MutationContractErrorCode.PROPOSAL_EXISTS, "Proposal creation identity already exists."
         )
+    visible = decision.visible_item
+    if any(value.item_id == visible.item_id for value in common.lifecycle.work_items):
+        raise MutationContractError(
+            MutationContractErrorCode.PROPOSAL_EXISTS, "Visible intake identity already exists."
+        )
+    now = mutation.receipt.transition.decided_at
+    revision = mutation.receipt.project_revision
+    items = [
+        replace(value, queue_position=value.queue_position + 1)
+        if value.queue_position is not None and value.queue_position >= visible.position
+        else value
+        for value in common.lifecycle.work_items
+    ]
+    items.append(
+        StoredWorkItem(
+            visible.item_id,
+            intake.user_label,
+            StoredWorkItemState.INTAKE,
+            None,
+            f"proposal:{intake.proposal_id}",
+            intake.trigger,
+            intake.why_it_matters,
+            intake.effect,
+            intake.unlock,
+            None,
+            intake.unlock,
+            intake.urgency_evidence,
+            1,
+            visible.scope_digest,
+            revision,
+            now,
+            now,
+            visible.position,
+        )
+    )
+    scope_revisions = [
+        *common.lifecycle.scope_revisions,
+        ItemScopeRevision(visible.item_id, 1, visible.scope_digest, revision, now),
+    ]
+    dependencies = [
+        *common.lifecycle.dependencies,
+        *(
+            ItemDependency(visible.item_id, dependency, position)
+            for position, dependency in enumerate(visible.dependencies)
+        ),
+    ]
+    if (prerequisite := decision.prerequisite_change) is not None:
+        target_index = next(
+            (index for index, value in enumerate(items) if value.item_id == prerequisite.item_id),
+            None,
+        )
+        if target_index is None:
+            raise MutationContractError(
+                MutationContractErrorCode.PROPOSAL_RELATION_TARGET_MISSING,
+                "A prerequisite relation requires its current target item.",
+            )
+        target = items[target_index]
+        if (
+            target.scope_revision != prerequisite.scope_revision
+            or target.scope_digest != prerequisite.scope_digest_before
+        ):
+            raise MutationContractError(
+                MutationContractErrorCode.ITEM_CHANGE_STALE,
+                "The prerequisite target scope changed before proposal creation.",
+            )
+        next_scope_revision = target.scope_revision + 1
+        items[target_index] = replace(
+            target,
+            scope_revision=next_scope_revision,
+            scope_digest=prerequisite.scope_digest_after,
+            subject_revision=revision,
+            updated_at=now,
+        )
+        dependencies.append(ItemDependency(prerequisite.item_id, prerequisite.dependency_id, prerequisite.position))
+        scope_revisions.append(
+            ItemScopeRevision(
+                prerequisite.item_id,
+                next_scope_revision,
+                prerequisite.scope_digest_after,
+                revision,
+                now,
+            )
+        )
+    lifecycle = replace(
+        common.lifecycle,
+        work_items=tuple(sorted(items, key=_work_item_key)),
+        scope_revisions=tuple(sorted(scope_revisions, key=_scope_revision_key)),
+        dependencies=tuple(sorted(dependencies, key=_dependency_key)),
+    )
     return replace(
         common,
+        lifecycle=lifecycle,
         proposals=replace(
             common.proposals,
             proposals=tuple(
@@ -297,12 +387,26 @@ def _item_state_after(
     index = next((position for position, item in enumerate(items) if item.item_id == item_id), None)
     if index is None or items[index].state.value != before.value:
         raise MutationContractError(MutationContractErrorCode.ITEM_CHANGE_STALE, "The transition item change is stale.")
+    queue_position = items[index].queue_position
+    terminal = after in {
+        StoredWorkItemState.DONE,
+        StoredWorkItemState.SUPERSEDED,
+        StoredWorkItemState.DROPPED,
+    }
+    if terminal and queue_position is not None:
+        items = [
+            replace(value, queue_position=value.queue_position - 1)
+            if value.item_id != item_id and value.queue_position is not None and value.queue_position > queue_position
+            else value
+            for value in items
+        ]
     items[index] = replace(
         items[index],
         state=after,
         outcome_evidence=outcome_evidence,
         subject_revision=revision,
         updated_at=now,
+        queue_position=None if terminal else queue_position,
     )
     return replace(lifecycle, work_items=tuple(items))
 
@@ -314,43 +418,53 @@ def _accepted_proposal_after(
     now: datetime,
 ) -> LifecycleRecords:
     accepted = change.accepted_item
-    if any(item.item_id == accepted.item for item in lifecycle.work_items):
+    items = list(lifecycle.work_items)
+    item_index = next((index for index, item in enumerate(items) if item.item_id == accepted.item), None)
+    if item_index is None or items[item_index].state != StoredWorkItemState.INTAKE:
         raise MutationContractError(
-            MutationContractErrorCode.ACCEPTED_PROPOSAL_ITEM_EXISTS,
-            "Item creation requires a new accepted-proposal identity.",
+            MutationContractErrorCode.ITEM_CHANGE_STALE,
+            "Proposal acceptance requires its existing visible intake item.",
         )
-    item = StoredWorkItem(
-        accepted.item,
-        accepted.user_label,
-        StoredWorkItemState(accepted.state.value),
-        accepted.timing,
-        accepted.source,
-        accepted.trigger,
-        accepted.why_it_matters,
-        accepted.effect,
-        accepted.unlock,
-        None,
-        accepted.next_action,
-        accepted.notes,
-        1,
-        accepted.scope_digest,
-        revision,
-        now,
-        now,
-    )
-    return replace(
-        lifecycle,
-        work_items=tuple(sorted((*lifecycle.work_items, item), key=_work_item_key)),
-        scope_revisions=tuple(
+    current = items[item_index]
+    scope_revision = current.scope_revision
+    scope_revisions = lifecycle.scope_revisions
+    if current.scope_digest != accepted.scope_digest:
+        scope_revision += 1
+        scope_revisions = tuple(
             sorted(
-                (*lifecycle.scope_revisions, ItemScopeRevision(accepted.item, 1, accepted.scope_digest, revision, now)),
+                (
+                    *scope_revisions,
+                    ItemScopeRevision(accepted.item, scope_revision, accepted.scope_digest, revision, now),
+                ),
                 key=_scope_revision_key,
             )
-        ),
+        )
+    items[item_index] = replace(
+        current,
+        user_label=accepted.user_label,
+        state=StoredWorkItemState(accepted.state.value),
+        timing=accepted.timing,
+        source=accepted.source,
+        trigger=accepted.trigger,
+        why_it_matters=accepted.why_it_matters,
+        effect=accepted.effect,
+        unlock=accepted.unlock,
+        next_action=accepted.next_action,
+        notes=accepted.notes,
+        scope_revision=scope_revision,
+        scope_digest=accepted.scope_digest,
+        subject_revision=revision,
+        updated_at=now,
+    )
+    dependencies = tuple(value for value in lifecycle.dependencies if value.item_id != accepted.item)
+    return replace(
+        lifecycle,
+        work_items=tuple(items),
+        scope_revisions=scope_revisions,
         dependencies=tuple(
             sorted(
                 (
-                    *lifecycle.dependencies,
+                    *dependencies,
                     *(
                         ItemDependency(accepted.item, dependency, position)
                         for position, dependency in enumerate(accepted.dependencies)
@@ -773,6 +887,15 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
                 result, proposal, ProposalDispositionKind.ACCEPTED, disposed_at, revision, target_item=item
             )
         case MergedProposalChange(proposal=proposal, target_item=target, disposed_at=disposed_at):
+            lifecycle = _item_state_after(
+                lifecycle,
+                ItemId(proposal),
+                WorkState.INTAKE,
+                StoredWorkItemState.SUPERSEDED,
+                revision,
+                now,
+                f"Merged into {target}.",
+            )
             result = _proposal_disposition_after(
                 result, proposal, ProposalDispositionKind.MERGED, disposed_at, revision, target_item=target
             )
@@ -787,6 +910,15 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
                     stored_disposition = ProposalDispositionKind.RETURNED
                 case ReasonedProposalDispositionKind.REJECTED:
                     stored_disposition = ProposalDispositionKind.REJECTED
+                    lifecycle = _item_state_after(
+                        lifecycle,
+                        ItemId(proposal),
+                        WorkState.INTAKE,
+                        StoredWorkItemState.DROPPED,
+                        revision,
+                        now,
+                        reason,
+                    )
                 case _ as unreachable:
                     assert_never(unreachable)
             result = _proposal_disposition_after(

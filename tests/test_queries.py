@@ -30,7 +30,7 @@ from charlie_pinboard.domain.identifiers import (
     ItemId,
     LeaseId,
 )
-from charlie_pinboard.domain.work_models import AttemptState, Timing
+from charlie_pinboard.domain.work_models import AttemptState, ProposalRelationKind, Timing
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -77,9 +77,44 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertEqual("12", overview.revision)
         self.assertEqual(("work-a-1",), overview.active_attempts)
         self.assertEqual(
-            tuple(sorted(item.item_id for item in overview.items)), tuple(item.item_id for item in overview.items)
+            ("intake-work", "work-a", "work-c", "zz-proposal-a"),
+            tuple(item.item_id for item in overview.items),
         )
+        proposal = overview.items[-1]
+        self.assertEqual((4, False, ("work-c",)), (proposal.position, proposal.eligible, proposal.depends_on))
+        self.assertEqual("work-c", proposal.dependency_reasons[0].item_id)
+        self.assertIn("Follow-up to work-c", proposal.dependency_reasons[0].reason)
+        self.assertEqual((), proposal.review_flags)
+        self.assertNotIn("zz-proposal-a", overview.immediate_options)
         self.assertEqual("12", preview.revision)
+
+    def test_overview_exposes_duplicate_contradiction_and_clarification_for_review(self) -> None:
+        for relation in (
+            ProposalRelationKind.DUPLICATE,
+            ProposalRelationKind.CONTRADICTION,
+            ProposalRelationKind.CLARIFICATION,
+        ):
+            state = complete_sqlite_state()
+            proposal = state.proposals.proposals[0]
+            related = None if relation == ProposalRelationKind.CLARIFICATION else ItemId("work-c")
+            changed = replace(proposal, relation=relation, relation_item_id=related)
+            dependencies = tuple(
+                value for value in state.lifecycle.dependencies if value.item_id != ItemId("zz-proposal-a")
+            )
+            store = self._store(
+                replace(
+                    state,
+                    lifecycle=replace(state.lifecycle, dependencies=dependencies),
+                    proposals=replace(state.proposals, proposals=(changed,)),
+                )
+            )
+
+            with self.subTest(relation=relation.value):
+                item = overview_from_state(store.snapshot()).items[-1]
+                self.assertEqual((), item.depends_on)
+                self.assertTrue(item.eligible)
+                self.assertEqual(relation, item.review_flags[0].kind)
+                self.assertEqual(None if related is None else "work-c", item.review_flags[0].related_item)
 
     def test_parallel_preview_reports_the_current_attempt_not_retained_terminal_history(self) -> None:
         state = complete_sqlite_state()

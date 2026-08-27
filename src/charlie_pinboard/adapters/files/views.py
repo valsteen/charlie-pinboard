@@ -5,6 +5,7 @@ from charlie_pinboard.adapters.files.errors import FileIOError
 from charlie_pinboard.adapters.files.file_io import atomic_replace, ensure_child_directory
 from charlie_pinboard.adapters.files.models import AffectedViews, ViewRefreshResult, ViewWarning
 from charlie_pinboard.application.ports import WorkStore
+from charlie_pinboard.application.queries import overview_from_state
 from charlie_pinboard.application.stored_state import (
     ItemDependency,
     StoredAttempt,
@@ -17,10 +18,6 @@ from charlie_pinboard.domain.identifiers import AttemptId
 NOTICE = "Generated projection; SQLite is authoritative."
 
 
-def _item_key(value: StoredWorkItem) -> str:
-    return str(value.item_id)
-
-
 def _dependency_key(value: ItemDependency) -> tuple[str, int]:
     return str(value.item_id), value.position
 
@@ -30,20 +27,21 @@ def _header(kind: str, revision: int) -> str:
 
 
 def _queue(state: StoredWorkState) -> bytes:
+    overview = overview_from_state(state)
     lines = [
         _header("work-queue-view", state.lifecycle.project.revision),
         "# Work Queue\n\n",
-        "| Item | State | Timing | Attempt | Next action |\n",
-        "| --- | --- | --- | --- | --- |\n",
+        "| Position | Item | State | Eligible | Review | Attempt | Next action |\n",
+        "| --- | --- | --- | --- | --- | --- | --- |\n",
     ]
-    attempts = {attempt.item_id: attempt.attempt_id for attempt in state.lifecycle.attempts}
     lines.extend(
         (
-            f"| {item.item_id} | {item.state.value} | "
-            f"{item.timing.value if item.timing is not None else '—'} | "
-            f"{attempts.get(item.item_id, '—')} | {item.next_action or '—'} |\n"
+            f"| {item.position} | {item.item_id} | {item.state.value} | "
+            f"{'yes' if item.eligible else 'no'} | "
+            f"{', '.join(flag.kind.value for flag in item.review_flags) or '—'} | "
+            f"{item.attempt_id or '—'} | {item.next_action or '—'} |\n"
         )
-        for item in sorted(state.lifecycle.work_items, key=_item_key)
+        for item in overview.items
     )
     return "".join(lines).encode()
 
@@ -65,13 +63,34 @@ def _item(state: StoredWorkState, item: StoredWorkItem) -> bytes:
         for value in sorted(state.lifecycle.dependencies, key=_dependency_key)
         if value.item_id == item.item_id
     )
+    overview_item = next(
+        (value for value in overview_from_state(state).items if value.item_id == str(item.item_id)),
+        None,
+    )
+    dependency_reasons = (
+        tuple(f"{value.item_id}: {value.reason}" for value in overview_item.dependency_reasons)
+        if overview_item is not None
+        else ()
+    )
+    review_flags = (
+        tuple(
+            f"{value.kind.value}{f' ({value.related_item})' if value.related_item is not None else ''}: {value.reason}"
+            for value in overview_item.review_flags
+        )
+        if overview_item is not None
+        else ()
+    )
     return (
         _header("work-item-view", state.lifecycle.project.revision)
         + f"# {item.user_label}\n\n"
         + f"- Item: {item.item_id}\n"
         + f"- State: {item.state.value}\n"
+        + f"- Queue position: {item.queue_position or 'none'}\n"
+        + f"- Eligible: {'yes' if overview_item is not None and overview_item.eligible else 'no'}\n"
         + f"- Subject revision: {item.subject_revision}\n"
         + f"- Dependencies: {', '.join(dependencies) if dependencies else 'none'}\n"
+        + f"- Dependency reasons: {'; '.join(dependency_reasons) if dependency_reasons else 'none'}\n"
+        + f"- Review flags: {'; '.join(review_flags) if review_flags else 'none'}\n"
         + f"- Outcome evidence: {item.outcome_evidence or 'none'}\n"
     ).encode()
 

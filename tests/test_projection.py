@@ -11,10 +11,11 @@ class DecisionProjectionTest(unittest.TestCase):
 
         self.assertEqual("12", snapshot.revision)
         self.assertEqual(
-            (ItemId("intake-work"), ItemId("work-a"), ItemId("work-c")),
+            (ItemId("intake-work"), ItemId("work-a"), ItemId("work-c"), ItemId("zz-proposal-a")),
             tuple(item.item for item in snapshot.items),
         )
         self.assertEqual((ItemId("work-c"),), snapshot.items_by_id()[ItemId("work-a")].depends_on)
+        self.assertEqual((1, 2, 3, 4), tuple(item.queue_position for item in snapshot.items))
         self.assertEqual(LeaseId("attempt-lease-a"), snapshot.attempt_authorities[0].lease_id)
         self.assertEqual(ItemId("work-a"), snapshot.focus_item)
 

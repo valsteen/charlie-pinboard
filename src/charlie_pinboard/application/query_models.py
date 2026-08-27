@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 import msgspec
 
-from charlie_pinboard.domain.work_models import AttemptState, Timing, WorkState
+from charlie_pinboard.domain.work_models import AttemptState, ProposalRelationKind, Timing, WorkState
 
 type ItemStatusSchema = Literal["pinboard-item-status/v1"]
 type ItemStatusAuthority = Literal["sqlite-v1"]
@@ -59,18 +59,33 @@ class ParallelReasonCode(Enum):
     STATE_NOT_LAUNCHABLE = "state-not-launchable"
 
 
-class OverviewItem(msgspec.Struct, frozen=True):
+class DependencyReason(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    item_id: str
+    reason: str
+
+
+class ReviewFlag(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    kind: ProposalRelationKind
+    related_item: str | None
+    reason: str
+
+
+class OverviewItem(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     item_id: str
     label: str
     state: WorkState
+    position: int
+    eligible: bool
     timing: str | None
     depends_on: tuple[str, ...]
+    dependency_reasons: tuple[DependencyReason, ...]
+    review_flags: tuple[ReviewFlag, ...]
     attempt_id: str | None
     next_action: str | None
     notes: str
 
 
-class WorkOverview(msgspec.Struct, frozen=True):
+class WorkOverview(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     schema: str
     authority: str
     revision: str
@@ -78,7 +93,6 @@ class WorkOverview(msgspec.Struct, frozen=True):
     focus_attempt: str | None
     active_attempts: tuple[str, ...]
     items: tuple[OverviewItem, ...]
-    inbox: tuple[str, ...]
     immediate_options: tuple[str, ...]
 
 

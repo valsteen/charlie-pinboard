@@ -51,7 +51,7 @@ Only distribution version lookup and command composition live at the package roo
 | `work_models.py`, `ledger.py`, `identifiers.py`, `errors.py` | Work-ledger values, read-only snapshot behavior, opaque identifiers, and expected decision failures |
 | `decision_models.py`, `decisions.py` | Closed item and attempt commands, explicit lifecycle-change variants, and lifecycle, focus, dependency, requirement, and review legality |
 | `authority_models.py`, `authority_decisions.py` | Closed authority operations plus coordination and attempt authority lifecycle and fencing |
-| `proposal_models.py`, `proposal_decisions.py` | Closed proposal intake values and immutable inbox intake decisions |
+| `proposal_models.py`, `proposal_decisions.py` | Closed proposal intake values, visible queue placement, and relation-derived dependency decisions |
 | `history.py` | Exact history scope records, canonical codecs, digests, and receipt relationships |
 
 Expected rejection over constructed domain values is returned as a typed `DecisionFailure`. Boundary decoding and infrastructure failures remain typed exceptions until input has become a valid domain value.
@@ -133,7 +133,7 @@ The installed `pinboard brief-sources` command reads a strict source manifest wi
 
 ### Mutations and proposal intake
 
-Each argparse leaf selects its exact command record and parser before dispatch. The interface converts the raw namespace once, reports structural or coupled-option failures through that leaf parser, and dispatches a closed command union; handlers never receive a general argument namespace or reparse command and operation strings. The selected handler then reselects the advertised action. `application.service` rechecks authority and legality inside the store transaction, then commits one closed mutation. Proposal intake follows the same SQLite transaction boundary: the proposal file is decoded at the interface, the immutable inbox decision rejects duplicates, and the accepted row is stored without changing scheduling state.
+Each argparse leaf selects its exact command record and parser before dispatch. The interface converts the raw namespace once, reports structural or coupled-option failures through that leaf parser, and dispatches a closed command union; handlers never receive a general argument namespace or reparse command and operation strings. The selected handler then reselects the advertised action. `application.service` rechecks authority and legality inside the store transaction, then commits one closed mutation. Proposal intake follows the same SQLite transaction boundary: the proposal file is decoded at the interface, duplicate identities and invalid positions are rejected, and one mutation stores both the immutable proposal facts and a same-identity `intake` work item. Queue positions are one-based and contiguous across live items. Intake appends by default or minimally shifts positions for an explicit insertion. Follow-up candidates depend on their related item; a prerequisite candidate becomes a dependency of its live related item. Intake never changes focus, creates an attempt, or activates work.
 
 ### Worker dispatch and review publication
 
@@ -151,7 +151,7 @@ Portable copy requires a quiescent source and preserves the exact explicit desti
 
 ## Stored formats
 
-The default `.codex/pinboard` path is current; explicit work roots remain supported at their selected paths. Proposal JSON uses `pinboard-proposal/v1`; accepted work briefs use `pinboard-work-brief/v2`; independent review evidence uses `pinboard-work-brief-review/v2`; dispatch environments use `pinboard-dispatch/v1`; brief-source manifests and plans use `pinboard-brief-sources/v1` and `pinboard-brief-source-plan/v1`; and read projections use `pinboard-overview/v1` and `pinboard-parallel-preview/v1`. Historical terminal v1 brief artifacts remain opaque immutable evidence rather than a supported input format. Atomic file publication uses private `.pinboard-stage-*` names.
+The default `.codex/pinboard` path is current; explicit work roots remain supported at their selected paths. Proposal JSON uses `pinboard-proposal/v1`; accepted work briefs use `pinboard-work-brief/v2`; independent review evidence uses `pinboard-work-brief-review/v2`; dispatch environments use `pinboard-dispatch/v1`; brief-source manifests and plans use `pinboard-brief-sources/v1` and `pinboard-brief-source-plan/v1`; and read projections use `pinboard-overview/v2` and `pinboard-parallel-preview/v1`. The overview orders every live item by its authoritative queue position and carries eligibility, dependency reasons, and review flags without a separate hidden proposal collection. Historical terminal v1 brief artifacts remain opaque immutable evidence rather than a supported input format. Atomic file publication uses private `.pinboard-stage-*` names.
 
 ## Keeping this map current
 

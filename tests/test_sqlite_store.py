@@ -652,7 +652,15 @@ class SQLiteStoreTest(unittest.TestCase):
                 items[1],
                 state=item_state,
                 outcome_evidence="accepted completion" if item_state == StoredWorkItemState.DONE else None,
+                queue_position=None if item_state == StoredWorkItemState.DONE else items[1].queue_position,
             )
+            if item_state == StoredWorkItemState.DONE:
+                items = [
+                    replace(value, queue_position=value.queue_position - 1)
+                    if value.queue_position is not None and value.queue_position > 2
+                    else value
+                    for value in items
+                ]
             attempt = replace(
                 state.lifecycle.attempts[0],
                 state=attempt_state,

@@ -519,7 +519,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(prior_attempt.generation + 1, current_attempt.generation)
         self.assertEqual(AttemptLeaseStatus.REVOKED, current_attempt.state)
 
-    def test_sqlite_proposal_intake_is_immutable_and_does_not_require_a_coordination_lease(self) -> None:
+    def test_sqlite_proposal_intake_is_visible_at_the_back_without_changing_current_work(self) -> None:
         state = complete_sqlite_state()
         state = replace(
             state,
@@ -527,6 +527,7 @@ class ServiceTest(unittest.TestCase):
             authority=replace(state.authority, coordination=None),
         )
         store, _database_path = self._store_with_state(state)
+        before = store.snapshot()
         created_at = SQLITE_NOW - timedelta(days=1)
         recorded_at = SQLITE_NOW + timedelta(seconds=1)
         intake = ProposalIntake(
@@ -557,10 +558,93 @@ class ServiceTest(unittest.TestCase):
         )
         self.assertEqual(("source:local",), tuple(value.selector for value in after.proposals.evidence))
         proposal = after.proposals.proposals[0]
+        visible = next(value for value in after.lifecycle.work_items if value.item_id == ItemId("sqlite-proposal"))
+        self.assertEqual(StoredWorkItemState.INTAKE, visible.state)
+        self.assertEqual(5, visible.queue_position)
+        self.assertEqual("proposal:sqlite-proposal", visible.source)
+        self.assertEqual(before.focus, after.focus)
+        self.assertEqual(before.lifecycle.attempts, after.lifecycle.attempts)
         self.assertEqual(created_at, proposal.created_at)
         self.assertEqual(recorded_at, proposal.recorded_at)
         self.assertEqual(recorded_at, after.lifecycle.project.updated_at)
         self.assertEqual(recorded_at, after.transition_receipts[-1].committed_at)
+
+    def test_proposal_requested_position_and_prerequisite_relation_update_one_transaction(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, proposals=replace(state.proposals, proposals=(), evidence=(), freshness=()))
+        store, _database_path = self._store_with_state(state)
+        before = store.snapshot()
+        target_before = next(value for value in before.lifecycle.work_items if value.item_id == ItemId("work-c"))
+        intake = ProposalIntake(
+            ProposalId("required-first"),
+            SQLITE_NOW,
+            TaskId("discovering-task"),
+            "Required first",
+            "Work C needs one newly discovered prerequisite.",
+            "The dependency must be visible before scheduling.",
+            "Record the prerequisite candidate and relationship.",
+            "A coordinator can evaluate it in queue order.",
+            ProposalRelationKind.PREREQUISITE,
+            ItemId("work-c"),
+            "The relationship is current.",
+            ("source:local",),
+            ("Work C remains live.",),
+            2,
+        )
+
+        receipt = create_proposal(store, CreateProposalOperation(intake), SQLITE_NOW + timedelta(seconds=1))
+
+        self.assertNotIsInstance(receipt, DecisionFailure)
+        after = store.snapshot()
+        positions = {
+            str(value.item_id): value.queue_position
+            for value in after.lifecycle.work_items
+            if value.queue_position is not None
+        }
+        self.assertEqual(
+            {
+                "intake-work": 1,
+                "required-first": 2,
+                "work-a": 3,
+                "work-c": 4,
+                "zz-proposal-a": 5,
+            },
+            positions,
+        )
+        target_after = next(value for value in after.lifecycle.work_items if value.item_id == ItemId("work-c"))
+        self.assertEqual(target_before.scope_revision + 1, target_after.scope_revision)
+        self.assertIn(
+            ItemId("required-first"),
+            tuple(value.dependency_id for value in after.lifecycle.dependencies if value.item_id == ItemId("work-c")),
+        )
+        self.assertEqual(before.focus, after.focus)
+
+    def test_proposal_position_outside_the_live_queue_is_rejected_atomically(self) -> None:
+        store = self._store()
+        intake = ProposalIntake(
+            ProposalId("invalid-position"),
+            SQLITE_NOW,
+            TaskId("discovering-task"),
+            "Invalid position",
+            "The requested queue position exceeds the live bounds.",
+            "Invalid insertion must not partially persist.",
+            "Reject the request before mutation.",
+            "Keep the prior queue intact.",
+            ProposalRelationKind.INDEPENDENT,
+            None,
+            "The queue currently contains four live items.",
+            (),
+            (),
+            6,
+        )
+        before = store.snapshot()
+
+        result = create_proposal(store, CreateProposalOperation(intake), SQLITE_NOW + timedelta(seconds=1))
+
+        self.assertIsInstance(result, DecisionFailure)
+        assert isinstance(result, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.PROPOSAL_INVALID, result.code)
+        self.assertEqual(before, store.snapshot())
 
     def test_sqlite_proposal_intake_rejects_a_missing_related_item_before_persistence(self) -> None:
         state = complete_sqlite_state()
@@ -595,7 +679,7 @@ class ServiceTest(unittest.TestCase):
         dependency_command = bind_transition(
             accept,
             AcceptProposalInput(
-                ItemId("accepted-proposal"),
+                ItemId("zz-proposal-a"),
                 AcceptedProposalState.INTAKE,
                 "review-intake",
                 Timing.SAFE_TO_DEFER,

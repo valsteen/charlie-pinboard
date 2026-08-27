@@ -125,6 +125,7 @@ class StoredWorkItem:
     subject_revision: int
     recorded_at: datetime
     updated_at: datetime
+    queue_position: int | None
 
 
 @dataclass(frozen=True, slots=True)

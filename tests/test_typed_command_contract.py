@@ -99,7 +99,7 @@ class TypedTransitionContractTest(unittest.TestCase):
         self.assertEqual(SQLITE_NOW, decision.change.candidate_observed_at)
 
     def test_activation_requires_one_existing_brief_artifact_reference(self) -> None:
-        ready = WorkItem(ItemId("ready-item"), WorkState.READY, None, (), None, "test", "activate", "")
+        ready = WorkItem(ItemId("ready-item"), WorkState.READY, None, (), None, "test", "activate", "", 1)
         snapshot = LedgerSnapshot(
             "project-revision",
             1,
@@ -151,6 +151,7 @@ class TypedTransitionContractTest(unittest.TestCase):
                     "test",
                     "resume",
                     "",
+                    1,
                 ),
             ),
             artifacts=(ArtifactRecord(ArtifactRefId(1), "brief"),),
@@ -172,6 +173,7 @@ class TypedTransitionContractTest(unittest.TestCase):
             "test",
             "resume",
             "",
+            1,
         )
         snapshot = LedgerSnapshot(
             "project-revision",

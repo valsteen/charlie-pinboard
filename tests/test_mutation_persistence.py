@@ -17,7 +17,7 @@ from charlie_pinboard.application.mutation_models import (
     MutationReceipt,
     ProposalCreationMutation,
 )
-from charlie_pinboard.application.mutations import project_transition_mutation
+from charlie_pinboard.application.mutations import expected_stored_state, project_transition_mutation
 from charlie_pinboard.application.ports import WorkStore, WorkTransaction
 from charlie_pinboard.application.stored_state import (
     StoredProposal,
@@ -66,6 +66,7 @@ from charlie_pinboard.domain.ledger import LedgerSnapshot
 from charlie_pinboard.domain.proposal_models import (
     ProposalCreationDecision,
     ProposalIntake,
+    VisibleProposalItem,
 )
 from charlie_pinboard.domain.work_models import (
     AcceptedProposalState,
@@ -85,7 +86,7 @@ from charlie_pinboard.domain.work_models import (
     TransitionInput,
 )
 from tests.domain_support import expect_success
-from tests.support import SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
 
 def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
@@ -162,7 +163,13 @@ class MutationPersistenceTest(unittest.TestCase):
                 (),
                 (),
             )
-        return ProposalCreationDecision(intake, intake.evidence, intake.freshness_assumptions)
+        return ProposalCreationDecision(
+            intake,
+            VisibleProposalItem(ItemId(intake.proposal_id), 5, (), SQLITE_DIGEST),
+            None,
+            intake.evidence,
+            intake.freshness_assumptions,
+        )
 
     def _coordination_decision(
         self,
@@ -360,11 +367,11 @@ class MutationPersistenceTest(unittest.TestCase):
             bind_transition(
                 action,
                 AcceptProposalInput(
-                    ItemId("accepted-proposal"),
+                    ItemId("zz-proposal-a"),
                     AcceptedProposalState.READY,
                     "activate",
                     timing=None,
-                    depends_on=(ItemId("work-c"), ItemId("intake-work")),
+                    depends_on=(ItemId("intake-work"),),
                 ),
             ),
             SQLITE_NOW + timedelta(seconds=1),
@@ -375,19 +382,21 @@ class MutationPersistenceTest(unittest.TestCase):
             transaction.commit(project_transition_mutation(transaction.snapshot(), decision))
 
         reopened = store.snapshot()
-        item = next(value for value in reopened.lifecycle.work_items if value.item_id == ItemId("accepted-proposal"))
+        item = next(value for value in reopened.lifecycle.work_items if value.item_id == ItemId("zz-proposal-a"))
         proposal = reopened.proposals.proposals[0]
         self.assertEqual(
             ("Proposal A", "A related observation", "Record the follow-up."),
             (item.user_label, item.trigger, item.effect),
         )
         self.assertEqual(StoredWorkItemState.READY, item.state)
+        self.assertEqual(4, item.queue_position)
+        self.assertEqual(5, len(reopened.lifecycle.work_items))
         self.assertEqual(
             (ItemId("work-c"), ItemId("intake-work")),
             tuple(value.dependency_id for value in reopened.lifecycle.dependencies if value.item_id == item.item_id),
         )
         self.assertEqual(ProposalDispositionKind.ACCEPTED, proposal.disposition)
-        self.assertEqual(ItemId("accepted-proposal"), proposal.disposition_target_item_id)
+        self.assertEqual(ItemId("zz-proposal-a"), proposal.disposition_target_item_id)
         self.assertEqual(13, reopened.lifecycle.project.revision)
         self.assertEqual(2, len(reopened.transition_receipts))
 
@@ -455,21 +464,21 @@ class MutationPersistenceTest(unittest.TestCase):
             13,
             None,
         )
-        after = replace(
-            after,
-            proposals=replace(before.proposals, proposals=(*before.proposals.proposals, proposal)),
-        )
-        mutation = ProposalCreationMutation(
+        draft = ProposalCreationMutation(
             before,
-            after,
+            before,
             self._mutation_receipt(receipt, after),
             self._proposal_decision(receipt.decided_at, proposal),
         )
+        mutation = replace(draft, after=expected_stored_state(draft))
         with store.write() as transaction:
             transaction.commit(mutation)
         with self.assertRaises(StorageError), store.write() as transaction:
             transaction.commit(mutation)
-        self.assertEqual(proposal, store.snapshot().proposals.proposals[-1])
+        self.assertEqual(
+            proposal,
+            next(value for value in store.snapshot().proposals.proposals if value.proposal_id == proposal.proposal_id),
+        )
 
     def test_authority_carriers_change_only_their_owned_rows(self) -> None:
         store = self._store()
