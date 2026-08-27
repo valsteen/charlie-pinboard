@@ -110,6 +110,7 @@ After deletion changes the graph, search for structures that used to distinguish
 - one-member enums or variants without an external serialized contract;
 - base classes or protocols with one implementation and no substitution role;
 - pass-through wrappers, single-use indirections, one-attribute accessors, and no-op conversions;
+- parallel tuples, dictionaries, projections, or field-by-field comparisons that reproduce an existing canonical typed value without owning a distinct external representation;
 - identical aliases, redundant unions, and a discriminator that duplicates the class hierarchy;
 - conditions whose alternatives now do the same thing, impossible branches, and commands that can only reject;
 - fields copied through layers without a current producer and consumer;
