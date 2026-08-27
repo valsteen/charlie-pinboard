@@ -79,9 +79,12 @@ class MarketplaceManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=Tru
     plugins: tuple[MarketplacePlugin, ...]
 
 
-class SkillFrontmatter(msgspec.Struct, frozen=True):
+class SkillFrontmatter(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     name: str
     description: str
+    license: str | None = None
+    allowed_tools: str | tuple[str, ...] | None = msgspec.field(name="allowed-tools", default=None)
+    metadata: dict[str, str | int | float | bool | tuple[str, ...] | None] | None = None
 
 
 class SkillInterface(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -103,14 +106,6 @@ def load_yaml(text: str, path: Path) -> YamlValue:
 
 def decode_skill_frontmatter(text: str, path: Path) -> SkillFrontmatter:
     value = load_yaml(text, path)
-    if not isinstance(value, dict):
-        raise ValueError(f"{path}: frontmatter must be a YAML mapping")
-    if not all(isinstance(field, str) for field in value):
-        raise ValueError(f"{path}: frontmatter field names must be strings")
-    allowed = {"name", "description", "license", "allowed-tools", "metadata"}
-    unexpected = set(value) - allowed
-    if unexpected:
-        raise ValueError(f"{path}: unexpected frontmatter fields: {', '.join(sorted(unexpected))}")
     try:
         return msgspec.convert(value, type=SkillFrontmatter, strict=True)
     except msgspec.ValidationError as error:

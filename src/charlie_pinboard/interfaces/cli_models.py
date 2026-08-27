@@ -1,90 +1,4 @@
-import argparse
-from dataclasses import dataclass
-from enum import Enum
-from pathlib import Path
-
 import msgspec
-
-
-class CommandName(Enum):
-    ROOT = "root"
-    VALIDATE = "validate"
-    STATUS = "status"
-    OVERVIEW = "overview"
-    ITEM = "item"
-    CLOSE = "close"
-    ACTIONS = "actions"
-    INPUT_CONTRACT = "input-contract"
-    BRIEF_SOURCES = "brief-sources"
-    BRIEF = "brief"
-    INIT = "init"
-    PROPOSAL = "proposal"
-    TRANSITION = "transition"
-    DISPATCH = "dispatch"
-    COORDINATION = "coordination"
-    ATTEMPT = "attempt"
-    PARALLEL = "parallel"
-    VIEWS = "views"
-
-
-class CoordinationOperation(Enum):
-    APPLY = "apply"
-    ACQUIRE = "acquire"
-    RENEW = "renew"
-    RELEASE = "release"
-    REVOKE = "revoke"
-    STATUS = "status"
-
-
-class AttemptOperation(Enum):
-    ACQUIRE = "acquire"
-    RENEW = "renew"
-    RELEASE = "release"
-    REVOKE = "revoke"
-    STATUS = "status"
-
-
-class ItemOperation(Enum):
-    STATUS = "status"
-
-
-class BriefOperation(Enum):
-    PUBLISH = "publish"
-
-
-class CliArguments(argparse.Namespace):
-    command: str
-    project_root: Path | None
-    work_root: Path | None
-    json: bool
-    role: str
-    host_id: str
-    file: Path
-    action_id: str
-    action_kind: str
-    expected_revision: str
-    generation: int
-    subject_revision: str | None
-    payload: Path
-    checkpoint: str
-    environment: Path
-    prompt: Path | None
-    brief_review: Path | None
-    review_id: str | None
-    operation: str
-    lease_id: str | None
-    authorization: str
-    task_id: str
-    ttl_seconds: int
-    attempt_id: str
-    coordination_lease_id: str
-    coordination_generation: int
-    item: list[str]
-    item_id: str
-    outcome: str
-    reason: str
-    max_batch_bytes: int
-    emit_batch: int | None
 
 
 class BriefPublicationView(msgspec.Struct, frozen=True):
@@ -96,13 +10,6 @@ class BriefPublicationView(msgspec.Struct, frozen=True):
     content_sha256: str
     size_bytes: int
     accepted_revision: int
-
-
-@dataclass(frozen=True, slots=True)
-class CommandContext:
-    arguments: CliArguments
-    project: Path
-    work: Path
 
 
 class RootView(msgspec.Struct, frozen=True):

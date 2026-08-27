@@ -1,11 +1,13 @@
 import json
 import os
 import shutil
-import sqlite3
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
+
+import msgspec
 
 from charlie_pinboard.adapters.files.artifacts import verify_reference, write_revision
 from charlie_pinboard.adapters.files.errors import ArtifactError, FileIOError
@@ -34,18 +36,13 @@ class PortableCopyReceipt:
     artifacts_copied: int
 
 
+class _PortableMetadata(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    revision: int
+    host_epoch: int
+
+
 def _canonical_json(value: dict[str, int]) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
-
-
-def _row_integer(row: sqlite3.Row, key: str | int) -> int:
-    value = row[key]
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise PortableCopyError(
-            PortableCopyErrorCode.WORK_STATE_INVALID,
-            "The copied database has invalid integer metadata.",
-        )
-    return value
 
 
 def _quiescent_source(store: SQLiteWorkStore) -> None:
@@ -117,8 +114,15 @@ def _neutralize(database: Path, now: datetime) -> tuple[int, int, int, int]:
                 PortableCopyErrorCode.WORK_STATE_INVALID,
                 "The copied database has no project metadata.",
             )
-        source_revision = _row_integer(row, "revision")
-        source_host_epoch = _row_integer(row, "host_epoch")
+        try:
+            metadata = msgspec.convert(dict(row), type=_PortableMetadata, strict=True)
+        except msgspec.ValidationError as error:
+            raise PortableCopyError(
+                PortableCopyErrorCode.WORK_STATE_INVALID,
+                f"The copied database has invalid metadata: {error}",
+            ) from error
+        source_revision = metadata.revision
+        source_host_epoch = metadata.host_epoch
         destination_revision = source_revision + 1
         destination_host_epoch = source_host_epoch + 1
         history_row = connection.execute("SELECT COALESCE(MAX(history_id), 0) FROM transition_history").fetchone()
@@ -127,7 +131,14 @@ def _neutralize(database: Path, now: datetime) -> tuple[int, int, int, int]:
                 PortableCopyErrorCode.WORK_STATE_INVALID,
                 "The copied database history could not be read.",
             )
-        history_id = _row_integer(history_row, 0) + 1
+        history_value = cast("int | float | str | bytes | None", history_row[0])
+        try:
+            history_id = msgspec.convert(history_value, type=int, strict=True) + 1
+        except msgspec.ValidationError as error:
+            raise PortableCopyError(
+                PortableCopyErrorCode.WORK_STATE_INVALID,
+                f"The copied database has invalid history metadata: {error}",
+            ) from error
         with write_transaction(connection):
             connection.execute("UPDATE coordination_lease SET status = 'released' WHERE status = 'active'")
             connection.execute("UPDATE attempt_leases SET status = 'released' WHERE status = 'active'")

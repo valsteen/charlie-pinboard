@@ -111,6 +111,7 @@ After deletion changes the graph, search for structures that used to distinguish
 - base classes or protocols with one implementation and no substitution role;
 - pass-through wrappers, single-use indirections, one-attribute accessors, and no-op conversions;
 - parallel tuples, dictionaries, projections, or field-by-field comparisons that reproduce an existing canonical typed value without owning a distinct external representation;
+- hand-written primitive validators or mapping walkers where one declarative boundary record can own conversion, constraints, unknown-field rejection, and error paths;
 - identical aliases, redundant unions, and a discriminator that duplicates the class hierarchy;
 - conditions whose alternatives now do the same thing, impossible branches, and commands that can only reject;
 - fields copied through layers without a current producer and consumer;
@@ -124,8 +125,9 @@ For structural boilerplate, use one repeatable pass:
 
 1. List collections traversed by neighboring projections. Group each collection once by the consumer key when repeated scans reconstruct the same relationship; keep the grouping local and explicit.
 2. List records whose optional fields serve different operations. Replace them with the smallest flat variants that make supported combinations concrete, then require producers to construct and consumers to match those variants exhaustively.
-3. Trace same-shaped values through every call and adapter. Fold pass-through layers that add no validation, policy, protocol, or independently reused operation into the nearest coherent owner.
-4. Re-run these three inventories after each fold. Stop only when a fresh pass finds no repeated traversal, nullable multi-operation record, or orphaned same-shaped call trail in the accepted scope.
+3. List mapping-shaped external values decoded field by field. Replace primitive accessor and validator families with one strict declarative record conversion when the format is structural; retain explicit code for custom grammars, relational state, and semantic policy.
+4. Trace same-shaped values through every call and adapter. Fold pass-through layers that add no validation, policy, protocol, or independently reused operation into the nearest coherent owner.
+5. Re-run these inventories after each fold. Stop only when a fresh pass finds no repeated traversal, nullable multi-operation record, hand-decoded structural mapping, or orphaned same-shaped call trail in the accepted scope.
 
 ## Handle persisted-state removal as a bridge burn
 
