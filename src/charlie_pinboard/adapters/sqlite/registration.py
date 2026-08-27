@@ -5,7 +5,11 @@ from charlie_pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
 from charlie_pinboard.adapters.files.file_io import ensure_directory_chain, resolve_durable_roots
 from charlie_pinboard.adapters.files.root import ensure_default_git_exclude
 from charlie_pinboard.adapters.files.views import rebuild
-from charlie_pinboard.adapters.sqlite.database import initialize_database, open_database
+from charlie_pinboard.adapters.sqlite.database import (
+    initialize_database,
+    open_database,
+    reconcile_database_publication,
+)
 from charlie_pinboard.adapters.sqlite.models import InitReceipt, OpenMode
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 
@@ -24,6 +28,7 @@ def initialize_work_state(
     if resumed:
         connection = open_database(roots.database_path, OpenMode.READ_WRITE)
         connection.close()
+        reconcile_database_publication(roots.database_path)
         ensure_directory_chain(roots)
     else:
         initialize_database(roots, current)

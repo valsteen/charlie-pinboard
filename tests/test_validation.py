@@ -11,6 +11,7 @@ from msgspec.structs import replace as struct_replace
 from charlie_pinboard.adapters.files.artifacts import write_revision
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
+from charlie_pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from charlie_pinboard.adapters.sqlite.registration import initialize_work_state
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
@@ -83,6 +84,56 @@ class SQLiteValidationTest(unittest.TestCase):
         self.assertFalse(first.resumed)
         self.assertTrue(second.resumed)
         self.assertEqual(first.database_path, second.database_path)
+
+    def test_initialization_reconciles_owned_publication_residue(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        first = initialize_work_state(project, now=SQLITE_NOW)
+        store = SQLiteWorkStore(first.database_path)
+        store.initialize_state(complete_sqlite_state())
+        before = store.snapshot()
+        staging = first.database_path.with_name(f".{first.database_path.name}.charlie-pinboard-stage")
+        staging.hardlink_to(first.database_path)
+        staging_journal = staging.with_name(f"{staging.name}-journal")
+        staging_journal.write_bytes(b"owned publication residue")
+
+        resumed = initialize_work_state(project, now=SQLITE_NOW)
+
+        self.assertTrue(resumed.resumed)
+        self.assertEqual(first.database_path, resumed.database_path)
+        self.assertEqual(before, SQLiteWorkStore(resumed.database_path).snapshot())
+        self.assertTrue(resumed.database_path.exists())
+        self.assertFalse(staging.exists())
+        self.assertFalse(staging_journal.exists())
+
+    def test_initialization_rejects_conflicting_publication_residue_without_mutation(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        receipt = initialize_work_state(project, now=SQLITE_NOW)
+        staging = receipt.database_path.with_name(f".{receipt.database_path.name}.charlie-pinboard-stage")
+        staging.write_bytes(b"different file")
+        database_before = receipt.database_path.read_bytes()
+        staging_before = staging.read_bytes()
+
+        with self.assertRaises(StorageError) as raised:
+            initialize_work_state(project, now=SQLITE_NOW)
+
+        self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, raised.exception.code)
+        self.assertEqual(database_before, receipt.database_path.read_bytes())
+        self.assertEqual(staging_before, staging.read_bytes())
+
+    def test_initialization_rejects_malformed_database_before_residue_cleanup(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        receipt = initialize_work_state(project, now=SQLITE_NOW)
+        staging = receipt.database_path.with_name(f".{receipt.database_path.name}.charlie-pinboard-stage")
+        staging.hardlink_to(receipt.database_path)
+        receipt.database_path.write_bytes(b"malformed database")
+        database_before = receipt.database_path.read_bytes()
+
+        with self.assertRaises(StorageError) as raised:
+            initialize_work_state(project, now=SQLITE_NOW)
+
+        self.assertEqual(StorageErrorCode.INVALID_STATE, raised.exception.code)
+        self.assertEqual(database_before, receipt.database_path.read_bytes())
+        self.assertEqual(database_before, staging.read_bytes())
 
     def test_default_initialization_uses_private_root_and_exact_local_git_exclusion(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

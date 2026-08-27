@@ -121,7 +121,7 @@ Pinboard does not require or produce a companion notes directory. Project docume
 
 ### Initialization and reopen
 
-`pinboard init` resolves the default `.codex/pinboard` root and idempotently adds only `/.codex/pinboard/` to the shared repository's local Git exclude file. It never edits a committed `.gitignore`, so unrelated `.codex` content remains visible. An explicit `--work-root` selects that exact path instead. Initialization creates the SQLite schema when `state.sqlite3` is absent; when the database exists, it verifies and reopens that exact schema, ensures the artifact directories exist, and rebuilds views.
+`pinboard init` resolves the default `.codex/pinboard` root and idempotently adds only `/.codex/pinboard/` to the shared repository's local Git exclude file. It never edits a committed `.gitignore`, so unrelated `.codex` content remains visible. An explicit `--work-root` selects that exact path instead. Initialization creates the SQLite schema when `state.sqlite3` is absent. When the database exists, initialization verifies that exact schema before reconciling the fixed publication staging path: a same-file staging alias left after publication is removed, while a different-file conflict is rejected without replacement. It then ensures the artifact directories exist and rebuilds views.
 
 ### Reads and validation
 

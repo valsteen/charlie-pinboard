@@ -220,6 +220,27 @@ def _prepare_database_publication(destination: Path) -> Path:
     return staging
 
 
+def reconcile_database_publication(destination: Path) -> None:
+    staging = _staging_path(destination)
+    try:
+        staging.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise StorageError(StorageErrorCode.IO_ERROR, "SQLite publication residue could not be inspected.") from error
+    try:
+        resumable = destination.samefile(staging)
+    except OSError as error:
+        raise StorageError(StorageErrorCode.IO_ERROR, "SQLite publication residue could not be inspected.") from error
+    if not resumable:
+        raise StorageError(
+            StorageErrorCode.INVARIANT_VIOLATION,
+            "SQLite publication residue conflicts with the current database.",
+        )
+    if not _cleanup_database_files(staging):
+        raise StorageError(StorageErrorCode.IO_ERROR, "SQLite publication residue could not be removed.")
+
+
 def _publish_database(staging: Path, destination: Path) -> None:
     published = False
     try:
