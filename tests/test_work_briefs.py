@@ -99,6 +99,15 @@ class WorkBriefBoundaryTest(unittest.TestCase):
 
         self.assertEqual(WorkBriefErrorCode.BRIEF_INVALID, raised.exception.code)
 
+    def test_checkpoint_identity_may_equal_item_identity(self) -> None:
+        value = example_work_brief()
+        changed = replace(
+            value,
+            checkpoint=replace(value.checkpoint, checkpoint_id=value.item_id),
+        )
+
+        self.assertEqual(changed, decode_work_brief(canonical_work_brief_bytes(changed)))
+
     def test_every_tagged_variant_decodes_through_the_strict_boundary(self) -> None:
         value = example_work_brief()
         checkpoint = value.checkpoint
@@ -241,6 +250,12 @@ class WorkBriefBoundaryTest(unittest.TestCase):
         rendered = render_work_brief_markdown(example_work_brief()).decode()
 
         self.assertIn("Generated projection; canonical JSON is authoritative.", rendered)
+        self.assertIn("item_id: make-canonical-briefs-typed-json", rendered)
+        self.assertIn("branch: codex/release-candidate", rendered)
+        self.assertIn("base_revision: 2f61739541738bdd8a9ba2d484ddcdf3ab38a218", rendered)
+        self.assertIn("owner_task_id: 01a04020-7d81-7602-a49e-b2d4f3ed6230", rendered)
+        self.assertIn("accepted_scope_revision: 1", rendered)
+        self.assertIn(f"accepted_scope_digest: {'b' * 64}", rendered)
         self.assertIn("typed-json-cutover", rendered)
         self.assertIn("Strict typed JSON remains canonical.", rendered)
         self.assertIn("uv run --locked pyrefly check", rendered)

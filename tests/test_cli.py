@@ -10,15 +10,17 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from charlie_pinboard.adapters.files.artifacts import write_revision
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.stored_state import StoredWorkState
+from charlie_pinboard.application.artifacts import NewArtifact
+from charlie_pinboard.application.stored_state import ArtifactKind, StoredWorkState
 from charlie_pinboard.interfaces.cli import build_parser, main
 from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 
 from .support import SQLITE_NOW, JsonObject, JsonValue, complete_sqlite_state
-from .work_brief_support import work_c_brief
+from .work_brief_support import work_a_brief, work_c_brief
 
 
 class CliTest(unittest.TestCase):
@@ -80,6 +82,22 @@ class CliTest(unittest.TestCase):
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
         if state is not None:
+            reference = state.artifact_references[0]
+            if reference.selector.endswith(".opaque"):
+                value = work_a_brief(project)
+                published = write_revision(
+                    roots,
+                    NewArtifact(ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)),
+                )
+                reference = replace(
+                    reference,
+                    key=published.key,
+                    revision=published.revision,
+                    selector=published.selector,
+                    content_sha256=published.content_sha256,
+                    size_bytes=published.size_bytes,
+                )
+                state = replace(state, artifact_references=(reference, *state.artifact_references[1:]))
             store.initialize_state(state)
         return project, roots.work_root, store
 

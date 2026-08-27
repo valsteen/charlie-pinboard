@@ -13,6 +13,7 @@ from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.stored_state import ArtifactKind
+from charlie_pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
 from charlie_pinboard.interfaces.work_briefs import build_attempt_brief_views, canonical_work_brief_bytes
 from tests.support import SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import work_a_brief
@@ -93,6 +94,16 @@ class GeneratedViewsTest(unittest.TestCase):
         path.unlink()
         rebuild(store, roots.work_root, build_attempt_brief_views(store.snapshot(), ArtifactRepository(roots)))
         self.assertEqual(text, path.read_text(encoding="utf-8"))
+
+    def test_live_attempt_rejects_a_non_json_accepted_brief(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+
+        with self.assertRaises(WorkBriefError) as raised:
+            build_attempt_brief_views(complete_sqlite_state(), ArtifactRepository(roots))
+
+        self.assertEqual(WorkBriefErrorCode.BRIEF_INVALID, raised.exception.code)
+        self.assertIn("work-a-1", raised.exception.message)
 
 
 if __name__ == "__main__":

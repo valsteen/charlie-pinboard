@@ -204,8 +204,6 @@ def _validate_checkpoint(brief: WorkBrief, checkpoint: WorkBriefCheckpoint) -> N
 
 
 def validate_work_brief(brief: WorkBrief) -> None:
-    if brief.checkpoint.checkpoint_id == brief.item_id:
-        raise _invalid("Checkpoint identity must be distinct from the item identity.")
     _validate_checkpoint(brief, brief.checkpoint)
 
 
@@ -365,6 +363,12 @@ def render_work_brief_markdown(brief: WorkBrief, database_revision: int | None =
         "kind: work-attempt-view",
         "authority: pinboard-work-brief/v2",
         f"attempt: {brief.attempt_id}",
+        f"item_id: {brief.item_id}",
+        f"branch: {brief.branch}",
+        f"base_revision: {brief.base_revision}",
+        f"owner_task_id: {brief.owner_task_id}",
+        f"accepted_scope_revision: {brief.accepted_scope.revision}",
+        f"accepted_scope_digest: {brief.accepted_scope.digest}",
         f"artifact_revision: {brief.artifact_revision}",
         *((f"database_revision: {database_revision}",) if database_revision is not None else ()),
         "---",
@@ -493,7 +497,7 @@ def build_attempt_brief_views(state: StoredWorkState, artifacts: ArtifactReader)
         if reference is None or reference.kind != ArtifactKind.BRIEF:
             raise _invalid(f"Live attempt '{attempt.attempt_id}' has no accepted brief reference.")
         if not reference.selector.endswith(".json"):
-            continue
+            raise _invalid(f"Live attempt '{attempt.attempt_id}' accepted brief is not canonical v2 JSON.")
         artifacts.verify(reference)
         brief = read_work_brief(artifacts.path(reference))
         expected = (
