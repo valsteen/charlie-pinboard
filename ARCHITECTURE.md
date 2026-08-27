@@ -60,10 +60,10 @@ The application layer is the home for top-level use-case sequencing below user-f
 | `mutations.py` | Closed typed persistence contract over lifecycle decisions, pure planning and resource decisions, and exact before/after carriers accepted by existing legality owners |
 | `decision_projection.py` | Pure projection from complete stored state into the narrower `LedgerSnapshot` consumed by domain decisions |
 | `ports.py` | `WorkStore` and `WorkTransaction` protocols over complete `StoredWorkState` reads and one closed accepted-mutation commit boundary |
-| `service.py` | Locked application orchestration that reselects typed authority, invokes the focused lifecycle, planning, or resource-intent decision owner, and commits one accepted mutation through `WorkStore` |
+| `service.py` | Locked application orchestration for the SQLite CLI's coordination authority, attempt authority, proposal intake, and lifecycle transitions |
 | `actions.py` | Current observer, coordinator, and worker action discovery over one `WorkStore` snapshot |
 | `artifacts.py` | Immutable artifact publication values and the accepted-reference storage capability |
-| `queries.py` | SQLite-independent overview, parallel-preview, plan-snapshot comparison, and resource-conflict read models over `WorkStore` |
+| `queries.py` | SQLite-independent overview, parallel-preview, and resource-conflict read models over `WorkStore` |
 | `dispatch.py` | Current-action reselection, resource-free dispatch eligibility, immutable review-evidence sequencing, and canonical prompt preparation through injected artifact and brief-parser capabilities |
 | `registration.py` | Stable initialization result and error values used by outer composition |
 
