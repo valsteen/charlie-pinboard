@@ -10,10 +10,13 @@ from charlie_pinboard.application.actions import discover_actions
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.application.errors import ActionQueryError, QueryError, QueryErrorCode
 from charlie_pinboard.application.queries import (
+    item_status,
     overview_from_state,
     preview_parallel,
 )
+from charlie_pinboard.application.query_models import ItemStatus, ItemStatusAttempt, ItemStatusState
 from charlie_pinboard.application.stored_state import (
+    StoredWorkItemState,
     StoredWorkState,
 )
 from charlie_pinboard.domain.decision_models import (
@@ -23,10 +26,11 @@ from charlie_pinboard.domain.decision_models import (
 from charlie_pinboard.domain.errors import DecisionFailureCode
 from charlie_pinboard.domain.history import item_scope_digest
 from charlie_pinboard.domain.identifiers import (
+    AttemptId,
     ItemId,
     LeaseId,
 )
-from charlie_pinboard.domain.work_models import AttemptState
+from charlie_pinboard.domain.work_models import AttemptState, Timing
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -87,6 +91,122 @@ class SQLiteQueriesTest(unittest.TestCase):
 
         selected = (*preview.launchable, *preview.excluded)[0]
         self.assertEqual("work-a-1", selected.attempt_id)
+
+    def test_item_status_returns_exact_live_and_done_shapes_while_overview_stays_live_only(self) -> None:
+        state = complete_sqlite_state()
+        active = state.lifecycle.attempts[0]
+        done_item = replace(
+            state.lifecycle.work_items[2],
+            state=StoredWorkItemState.DONE,
+            timing=Timing.SAFE_TO_DEFER,
+            outcome_evidence="accepted completion",
+            next_action=None,
+            notes=None,
+        )
+        done_attempts = (
+            replace(
+                active,
+                attempt_id=AttemptId("work-b-z"),
+                item_id=done_item.item_id,
+                state=AttemptState.DONE,
+                candidate_revision="candidate-z",
+                candidate_recorded_at=SQLITE_NOW,
+            ),
+            replace(
+                active,
+                attempt_id=AttemptId("work-b-a"),
+                item_id=done_item.item_id,
+                state=AttemptState.CLOSED,
+                candidate_revision=None,
+                candidate_recorded_at=None,
+            ),
+        )
+        store = self._store(
+            replace(
+                state,
+                lifecycle=replace(
+                    state.lifecycle,
+                    work_items=(*state.lifecycle.work_items[:2], done_item, *state.lifecycle.work_items[3:]),
+                    attempts=(*state.lifecycle.attempts, *done_attempts),
+                ),
+            )
+        )
+
+        live = item_status(store, ItemId("work-a"))
+        done = item_status(store, done_item.item_id)
+
+        self.assertEqual(
+            ItemStatus(
+                "pinboard-item-status/v1",
+                "sqlite-v1",
+                "12",
+                "work-a",
+                "Work work-a",
+                ItemStatusState.ACTIVE,
+                Timing.MUST_NOW,
+                None,
+                "continue",
+                "Current work remains bounded.",
+                (ItemStatusAttempt("work-a-1", AttemptState.ACTIVE, None),),
+            ),
+            live,
+        )
+        self.assertEqual(
+            ItemStatus(
+                "pinboard-item-status/v1",
+                "sqlite-v1",
+                "12",
+                "work-b",
+                "Work work-b",
+                ItemStatusState.DONE,
+                Timing.SAFE_TO_DEFER,
+                "accepted completion",
+                None,
+                "",
+                (
+                    ItemStatusAttempt("work-b-a", AttemptState.CLOSED, None),
+                    ItemStatusAttempt("work-b-z", AttemptState.DONE, "candidate-z"),
+                ),
+            ),
+            done,
+        )
+        self.assertNotIn("work-b", tuple(item.item_id for item in overview_from_state(store.snapshot()).items))
+
+    def test_item_status_returns_terminal_siblings_with_non_null_attempt_arrays(self) -> None:
+        state = complete_sqlite_state()
+        for terminal in (
+            StoredWorkItemState.SUPERSEDED,
+            StoredWorkItemState.DROPPED,
+        ):
+            terminal_item = replace(
+                state.lifecycle.work_items[2],
+                state=terminal,
+                outcome_evidence=f"{terminal.value} by decision",
+                notes=None,
+            )
+            store = self._store(
+                replace(
+                    state,
+                    lifecycle=replace(
+                        state.lifecycle,
+                        work_items=(*state.lifecycle.work_items[:2], terminal_item, *state.lifecycle.work_items[3:]),
+                    ),
+                )
+            )
+
+            with self.subTest(terminal=terminal.value):
+                status = item_status(store, terminal_item.item_id)
+                self.assertEqual(terminal.value, status.state.value)
+                self.assertEqual((), status.attempts)
+                self.assertEqual("", status.notes)
+
+    def test_item_status_rejects_an_unknown_canonical_identity(self) -> None:
+        store = self._store()
+
+        with self.assertRaises(QueryError) as missing:
+            item_status(store, ItemId("missing-item"))
+
+        self.assertEqual(QueryErrorCode.ITEM_NOT_FOUND, missing.exception.code)
 
     def test_action_and_query_failure_matrix_is_stable_and_read_only(self) -> None:
         state = self._valid_scope_digests(complete_sqlite_state())

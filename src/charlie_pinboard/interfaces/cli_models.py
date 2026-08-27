@@ -11,6 +11,7 @@ class CommandName(Enum):
     VALIDATE = "validate"
     STATUS = "status"
     OVERVIEW = "overview"
+    ITEM = "item"
     CLOSE = "close"
     ACTIONS = "actions"
     INPUT_CONTRACT = "input-contract"
@@ -40,6 +41,10 @@ class AttemptOperation(Enum):
     RENEW = "renew"
     RELEASE = "release"
     REVOKE = "revoke"
+    STATUS = "status"
+
+
+class ItemOperation(Enum):
     STATUS = "status"
 
 

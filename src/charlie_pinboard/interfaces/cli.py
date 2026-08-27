@@ -36,6 +36,7 @@ from charlie_pinboard.application.errors import (
     QueryError,
 )
 from charlie_pinboard.application.queries import (
+    item_status,
     overview_from_state,
     preview_parallel,
 )
@@ -118,6 +119,7 @@ from charlie_pinboard.interfaces.cli_models import (
     CoordinatorView,
     DiagnosticView,
     InputContractView,
+    ItemOperation,
     OverviewItemView,
     OverviewView,
     ParallelItemView,
@@ -336,6 +338,14 @@ def _add_attempt_parser(commands: argparse._SubParsersAction[argparse.ArgumentPa
     status.add_argument("--json", action="store_true")
 
 
+def _add_item_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    item = commands.add_parser("item", help="Inspect one exact live or terminal item.")
+    operations = item.add_subparsers(dest="operation", required=True)
+    status = operations.add_parser("status", help="Show authoritative status for one exact item.")
+    status.add_argument("--item-id", required=True)
+    status.add_argument("--json", action="store_true")
+
+
 def _add_parallel_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parallel = commands.add_parser("parallel", help="Preview structurally independent work without launching it.")
     operations = parallel.add_subparsers(dest="operation", required=True)
@@ -364,6 +374,7 @@ def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.Argume
     status = commands.add_parser("status", help="Show bounded current work facts.")
     status.add_argument("--json", action="store_true")
     _add_chat_parser(commands)
+    _add_item_parser(commands)
     actions = commands.add_parser("actions", help="List the legal contextual actions.")
     actions.add_argument("--role", choices=tuple(role.value for role in Role), required=True)
     actions.add_argument("--lease-id")
@@ -668,6 +679,36 @@ def _overview(context: CommandContext) -> int:
         print(f"{item.item_id}\t{item.state.value}\tnext={next_action}{attempt}\t{item.label}")
     print(f"inbox={len(overview.inbox)} immediate_options={len(overview.immediate_options)}")
     return 0
+
+
+def _item(context: CommandContext) -> int:
+    operation = ItemOperation(context.arguments.operation)
+    match operation:
+        case ItemOperation.STATUS:
+            item_id = ItemId(_stable_identifier(context.arguments.item_id, label="Item identity"))
+            status = item_status(SQLiteWorkStore(context.work / "state.sqlite3"), item_id)
+            if context.arguments.json:
+                _write_json(status)
+                return 0
+            print(
+                f"OK ITEM_STATUS item={status.item_id} state={status.state.value} "
+                f"revision={status.revision} authority={status.authority}"
+            )
+            print(
+                f"label={status.label} timing={status.timing.value if status.timing is not None else 'none'} "
+                f"next_action={status.next_action or 'none'}"
+            )
+            print(f"outcome_evidence={status.outcome_evidence or 'none'} notes={status.notes or 'none'}")
+            if not status.attempts:
+                print("attempts=none")
+            for attempt in status.attempts:
+                print(
+                    f"attempt={attempt.attempt_id} state={attempt.state.value} "
+                    f"candidate={attempt.candidate_revision or 'none'}"
+                )
+            return 0
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _close(context: CommandContext) -> int:
@@ -1368,6 +1409,8 @@ def _dispatch(arguments: CliArguments) -> int:  # noqa: C901, PLR0912 - exhausti
             return _status(context)
         case CommandName.OVERVIEW:
             return _overview(context)
+        case CommandName.ITEM:
+            return _item(context)
         case CommandName.CLOSE:
             return _close(context)
         case CommandName.ACTIONS:

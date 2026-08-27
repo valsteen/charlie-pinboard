@@ -64,7 +64,7 @@ Expected rejection over constructed domain values is returned as a typed `Decisi
 | --- | --- |
 | `stored_state.py`, `mutation_models.py`, `mutations.py`, `ports.py` | Complete persistence aggregate, closed mutation records, exhaustive relational-delta projection from domain lifecycle variants, and transactional store capabilities |
 | `decision_projection.py`, `service.py` | Shared-index projection of complete stored collections into domain decision facts and locked mutation orchestration |
-| `actions.py`, `query_models.py`, `queries.py` | Legal-action discovery plus current overview and parallel-preview records and queries |
+| `actions.py`, `query_models.py`, `queries.py` | Legal-action discovery plus current overview, exact item-status, and parallel-preview records and queries |
 | `artifacts.py`, `artifact_publication.py`, `dispatch_models.py`, `dispatch.py` | Immutable artifact references and typed brief identity, application-owned artifact acceptance, activation and resume brief guards, dispatch contracts, accepted review publication, dispatch eligibility, and prompt preparation |
 | `errors.py` | Exact application exception families and their code enums |
 | `validation.py`, `transfer.py` | Whole-work-root validation and portable-copy workflow |
@@ -124,7 +124,7 @@ Accepted requirements, briefs, results, reviews, and other evidence are immutabl
 
 ### Reads and validation
 
-Status, overview, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. They never parse generated Markdown. Validation verifies the database and every accepted artifact reference, validates live v2 brief identity and structure through the typed boundary, keeps historical terminal brief bytes opaque, then reports generated-view drift separately.
+Status, overview, exact item status, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. They never parse generated Markdown. Validation verifies the database and every accepted artifact reference, validates live v2 brief identity and structure through the typed boundary, keeps historical terminal brief bytes opaque, then reports generated-view drift separately.
 
 ### Brief source planning
 

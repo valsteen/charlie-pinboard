@@ -1,8 +1,12 @@
 from datetime import UTC, datetime
+from typing import assert_never
 
 from charlie_pinboard.application.errors import QueryError, QueryErrorCode
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.query_models import (
+    ItemStatus,
+    ItemStatusAttempt,
+    ItemStatusState,
     OverviewItem,
     ParallelItem,
     ParallelOutcome,
@@ -66,6 +70,25 @@ def _work_state(value: StoredWorkItemState) -> WorkState:
         raise QueryError(QueryErrorCode.WORK_STATE_INVALID, f"Item state {value.value!r} is not live.") from error
 
 
+def _item_status_state(value: StoredWorkItemState) -> ItemStatusState:
+    match value:
+        case (
+            StoredWorkItemState.INTAKE
+            | StoredWorkItemState.READY
+            | StoredWorkItemState.ACTIVE
+            | StoredWorkItemState.PAUSED
+            | StoredWorkItemState.BLOCKED
+            | StoredWorkItemState.DEFERRED
+            | StoredWorkItemState.REVIEW
+            | StoredWorkItemState.DONE
+            | StoredWorkItemState.SUPERSEDED
+            | StoredWorkItemState.DROPPED
+        ):
+            return ItemStatusState(value.value)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 def overview_from_state(state: StoredWorkState) -> WorkOverview:
     attempts = {
         attempt.item_id: attempt.attempt_id
@@ -125,6 +148,33 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
         items,
         inbox,
         immediate,
+    )
+
+
+def item_status(store: WorkStore, item_id: ItemId) -> ItemStatus:
+    state = store.snapshot()
+    item = next((candidate for candidate in state.lifecycle.work_items if candidate.item_id == item_id), None)
+    if item is None:
+        raise QueryError(QueryErrorCode.ITEM_NOT_FOUND, f"Item '{item_id}' was not found.")
+    attempts = tuple(
+        ItemStatusAttempt(str(attempt.attempt_id), attempt.state, attempt.candidate_revision)
+        for attempt in sorted(
+            (candidate for candidate in state.lifecycle.attempts if candidate.item_id == item_id),
+            key=_attempt_key,
+        )
+    )
+    return ItemStatus(
+        "pinboard-item-status/v1",
+        "sqlite-v1",
+        str(state.lifecycle.project.revision),
+        str(item.item_id),
+        item.user_label,
+        _item_status_state(item.state),
+        item.timing,
+        item.outcome_evidence,
+        item.next_action,
+        item.notes or "",
+        attempts,
     )
 
 

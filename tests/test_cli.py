@@ -15,7 +15,9 @@ from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
-from charlie_pinboard.application.stored_state import ArtifactKind, StoredWorkState
+from charlie_pinboard.application.stored_state import ArtifactKind, StoredWorkItemState, StoredWorkState
+from charlie_pinboard.domain.identifiers import AttemptId
+from charlie_pinboard.domain.work_models import AttemptState, Timing
 from charlie_pinboard.interfaces.cli import build_parser, main
 from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 
@@ -102,12 +104,14 @@ class CliTest(unittest.TestCase):
         return project, roots.work_root, store
 
     def test_current_command_surface_lists_every_command(self) -> None:
-        help_text = build_parser().format_help()
+        parser = build_parser()
+        help_text = parser.format_help()
         for retained in (
             "root",
             "validate",
             "status",
             "overview",
+            "item",
             "close",
             "actions",
             "input-contract",
@@ -123,6 +127,11 @@ class CliTest(unittest.TestCase):
             "views",
         ):
             self.assertIn(retained, help_text)
+        item_status_help = io.StringIO()
+        with contextlib.redirect_stdout(item_status_help), self.assertRaises(SystemExit) as raised:
+            parser.parse_args(("item", "status", "--help"))
+        self.assertEqual(0, raised.exception.code)
+        self.assertIn("--item-id", item_status_help.getvalue())
 
     def test_init_and_current_read_commands_need_no_filesystem_authority(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
@@ -660,6 +669,99 @@ class CliTest(unittest.TestCase):
         result, _, stderr = self.run_cli(*common, "parallel", "preview", "--item", "missing")
         self.assertEqual(11, result)
         self.assertIn("PARALLEL_SELECTION_INVALID", stderr)
+
+    def test_item_status_emits_exact_json_and_text_from_one_snapshot(self) -> None:
+        state = complete_sqlite_state()
+        active = state.lifecycle.attempts[0]
+        done_item = replace(
+            state.lifecycle.work_items[2],
+            state=StoredWorkItemState.DONE,
+            timing=Timing.SAFE_TO_DEFER,
+            outcome_evidence="accepted completion",
+            next_action=None,
+            notes=None,
+        )
+        done_attempt = replace(
+            active,
+            attempt_id=AttemptId("work-b-1"),
+            item_id=done_item.item_id,
+            state=AttemptState.DONE,
+            candidate_revision="candidate-b",
+            candidate_recorded_at=SQLITE_NOW,
+        )
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                work_items=(*state.lifecycle.work_items[:2], done_item, *state.lifecycle.work_items[3:]),
+                attempts=(*state.lifecycle.attempts, done_attempt),
+            ),
+        )
+        project, work, _store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        original_snapshot = SQLiteWorkStore.snapshot
+        calls = 0
+
+        def counted(store: SQLiteWorkStore) -> StoredWorkState:
+            nonlocal calls
+            calls += 1
+            return original_snapshot(store)
+
+        with patch.object(SQLiteWorkStore, "snapshot", counted):
+            status = self.run_json_cli(*common, "item", "status", "--item-id", "work-b")
+
+        self.assertEqual(1, calls)
+        self.assertEqual(
+            {
+                "schema": "pinboard-item-status/v1",
+                "authority": "sqlite-v1",
+                "revision": "12",
+                "item_id": "work-b",
+                "label": "Work work-b",
+                "state": "done",
+                "timing": "safe-to-defer",
+                "outcome_evidence": "accepted completion",
+                "next_action": None,
+                "notes": "",
+                "attempts": [{"attempt_id": "work-b-1", "state": "done", "candidate_revision": "candidate-b"}],
+            },
+            status,
+        )
+        self.assertEqual(
+            {
+                "schema": "pinboard-item-status/v1",
+                "authority": "sqlite-v1",
+                "revision": "12",
+                "item_id": "work-a",
+                "label": "Work work-a",
+                "state": "active",
+                "timing": "must-now",
+                "outcome_evidence": None,
+                "next_action": "continue",
+                "notes": "Current work remains bounded.",
+                "attempts": [{"attempt_id": "work-a-1", "state": "active", "candidate_revision": None}],
+            },
+            self.run_json_cli(*common, "item", "status", "--item-id", "work-a"),
+        )
+        result, stdout, stderr = self.run_cli(*common, "item", "status", "--item-id", "work-b")
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK ITEM_STATUS item=work-b state=done revision=12 authority=sqlite-v1", stdout)
+        self.assertIn("outcome_evidence=accepted completion", stdout)
+        self.assertIn("attempt=work-b-1 state=done candidate=candidate-b", stdout)
+
+    def test_item_status_rejects_missing_and_malformed_identities(self) -> None:
+        project, work, _store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        missing, _missing_stdout, missing_stderr = self.run_cli(*common, "item", "status", "--item-id", "missing-item")
+        malformed, _malformed_stdout, malformed_stderr = self.run_cli(
+            *common, "item", "status", "--item-id", "bad/item"
+        )
+
+        self.assertEqual(11, missing)
+        self.assertIn("ITEM_NOT_FOUND", missing_stderr)
+        self.assertEqual(11, malformed)
+        self.assertIn("IDENTITY_INVALID", malformed_stderr)
 
     def test_module_entrypoint_delegates_to_cli(self) -> None:
         with patch.object(sys, "argv", ["pinboard", "--version"]), self.assertRaises(SystemExit) as raised:

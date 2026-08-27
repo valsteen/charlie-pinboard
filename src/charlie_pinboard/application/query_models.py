@@ -1,8 +1,46 @@
 from enum import Enum
+from typing import Annotated, Literal
 
 import msgspec
 
-from charlie_pinboard.domain.work_models import WorkState
+from charlie_pinboard.domain.work_models import AttemptState, Timing, WorkState
+
+type ItemStatusSchema = Literal["pinboard-item-status/v1"]
+type ItemStatusAuthority = Literal["sqlite-v1"]
+type DecimalRevision = Annotated[str, msgspec.Meta(pattern=r"^[0-9]+$")]
+
+
+class ItemStatusState(Enum):
+    INTAKE = "intake"
+    READY = "ready"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    BLOCKED = "blocked"
+    DEFERRED = "deferred"
+    REVIEW = "review"
+    DONE = "done"
+    SUPERSEDED = "superseded"
+    DROPPED = "dropped"
+
+
+class ItemStatusAttempt(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    attempt_id: str
+    state: AttemptState
+    candidate_revision: str | None
+
+
+class ItemStatus(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: ItemStatusSchema
+    authority: ItemStatusAuthority
+    revision: DecimalRevision
+    item_id: str
+    label: str
+    state: ItemStatusState
+    timing: Timing | None
+    outcome_evidence: str | None
+    next_action: str | None
+    notes: str
+    attempts: tuple[ItemStatusAttempt, ...]
 
 
 class ParallelOutcome(Enum):
