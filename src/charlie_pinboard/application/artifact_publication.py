@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -7,7 +8,6 @@ from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.stored_state import ArtifactKind, ArtifactReference, StoredWorkState
 from charlie_pinboard.domain.decision_models import ActivateCommand, ResumeCommand, TransitionCommand
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
-from charlie_pinboard.domain.identifiers import ArtifactRefId
 
 
 class ArtifactPublisher(Protocol):
@@ -23,10 +23,6 @@ class ArtifactReader(Protocol):
     def path(self, reference: ArtifactReference) -> Path: ...
 
 
-class WorkBriefIdentityDecoder(Protocol):
-    def __call__(self, data: bytes) -> WorkBriefIdentity: ...
-
-
 def publish_accepted_artifact(
     store: WorkStore,
     publisher: ArtifactPublisher,
@@ -39,18 +35,11 @@ def publish_accepted_artifact(
     return store.accept_artifact_reference(publisher.work_root, published, accepted_at)
 
 
-def _brief_reference(state: StoredWorkState, artifact_ref_id: ArtifactRefId) -> ArtifactReference | None:
-    return next(
-        (reference for reference in state.artifact_references if reference.artifact_ref_id == artifact_ref_id),
-        None,
-    )
-
-
 def validate_transition_work_brief(
     state: StoredWorkState,
     command: TransitionCommand,
     artifacts: ArtifactReader,
-    decode_identity: WorkBriefIdentityDecoder,
+    decode_identity: Callable[[bytes], WorkBriefIdentity],
 ) -> DecisionFailure | None:
     """Validate activation or resume brief identity against the locked SQLite snapshot."""
 
@@ -79,7 +68,10 @@ def validate_transition_work_brief(
             return None
         case _:
             return None
-    reference = _brief_reference(state, artifact_ref_id)
+    reference = next(
+        (candidate for candidate in state.artifact_references if candidate.artifact_ref_id == artifact_ref_id),
+        None,
+    )
     if reference is None or reference.kind != ArtifactKind.BRIEF:
         return None
     artifacts.verify(reference)
@@ -93,7 +85,7 @@ def validate_transition_work_brief(
     item = next((candidate for candidate in state.lifecycle.work_items if str(candidate.item_id) == item_id), None)
     if item is None:
         return None
-    expected = (
+    expected = WorkBriefIdentity(
         attempt_id,
         item_id,
         branch,
@@ -101,15 +93,7 @@ def validate_transition_work_brief(
         item.scope_revision,
         item.scope_digest,
     )
-    observed = (
-        identity.attempt_id,
-        identity.item_id,
-        identity.branch,
-        identity.base_revision,
-        identity.accepted_scope_revision,
-        identity.accepted_scope_digest,
-    )
-    if observed != expected:
+    if identity != expected:
         return DecisionFailure(
             DecisionFailureCode.TRANSITION_INPUT_INVALID,
             "The selected brief artifact does not match the attempt, item, branch, base revision, and accepted scope.",
