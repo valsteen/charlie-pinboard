@@ -35,6 +35,7 @@ from charlie_pinboard.domain.decision_models import (
     MergeProposalCommand,
     PauseCommand,
     ReasonedProposalDispositionChange,
+    ReasonedProposalDispositionKind,
     RejectProposalCommand,
     ReopenCommand,
     ResumeAttemptChange,
@@ -75,7 +76,6 @@ from charlie_pinboard.domain.work_models import (
     EvidenceInput,
     ItemScope,
     MergeProposalInput,
-    ProposalDispositionKind,
     ReasonInput,
     ResumeInput,
     ScopeDependency,
@@ -934,9 +934,9 @@ def _dispose_proposal(
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
     match command:
         case ReturnProposalCommand(value=value):
-            disposition = ProposalDispositionKind.RETURNED
+            disposition = ReasonedProposalDispositionKind.RETURNED
         case RejectProposalCommand(value=value):
-            disposition = ProposalDispositionKind.REJECTED
+            disposition = ReasonedProposalDispositionKind.REJECTED
         case _ as unreachable:
             assert_never(unreachable)
     return _result(

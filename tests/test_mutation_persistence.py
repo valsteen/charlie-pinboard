@@ -10,6 +10,7 @@ from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.errors import StorageError
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
+from charlie_pinboard.application.errors import MutationContractError, MutationContractErrorCode
 from charlie_pinboard.application.mutation_models import (
     AttemptAuthorityMutation,
     CoordinationAuthorityMutation,
@@ -40,6 +41,8 @@ from charlie_pinboard.domain.decision_models import (
     ActorAuthority,
     AuthorizationKind,
     Decision,
+    ReasonedProposalDispositionChange,
+    ReasonedProposalDispositionKind,
     Role,
     TransitionCommand,
     TransitionReceipt,
@@ -517,14 +520,26 @@ class MutationPersistenceTest(unittest.TestCase):
         self.assertEqual(after, store.snapshot())
 
     def test_proposal_disposition_matrix_persists_each_closed_value(self) -> None:
-        for kind, payload, expected, target, reason in (
-            (ActionKind.MERGE_PROPOSAL, MergeProposalInput(ItemId("work-c")), "merged", ItemId("work-c"), None),
+        self.assertEqual(
+            (ReasonedProposalDispositionKind.RETURNED, ReasonedProposalDispositionKind.REJECTED),
+            tuple(ReasonedProposalDispositionKind),
+        )
+        for kind, payload, expected, target, reason, reasoned_disposition in (
+            (
+                ActionKind.MERGE_PROPOSAL,
+                MergeProposalInput(ItemId("work-c")),
+                "merged",
+                ItemId("work-c"),
+                None,
+                None,
+            ),
             (
                 ActionKind.RETURN_PROPOSAL,
                 ReasonInput("Clarify the evidence."),
                 "returned",
                 None,
                 "Clarify the evidence.",
+                ReasonedProposalDispositionKind.RETURNED,
             ),
             (
                 ActionKind.REJECT_PROPOSAL,
@@ -532,6 +547,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 "rejected",
                 None,
                 "The finding is obsolete.",
+                ReasonedProposalDispositionKind.REJECTED,
             ),
         ):
             with self.subTest(kind=kind):
@@ -540,6 +556,10 @@ class MutationPersistenceTest(unittest.TestCase):
                 actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
                 action = next(value for value in available_actions(snapshot, actor) if value.kind == kind)
                 decision = decide(snapshot, bind_transition(action, payload), SQLITE_NOW + timedelta(seconds=1))
+                if reasoned_disposition is not None:
+                    self.assertIsInstance(decision.change, ReasonedProposalDispositionChange)
+                    assert isinstance(decision.change, ReasonedProposalDispositionChange)
+                    self.assertEqual(reasoned_disposition, decision.change.disposition)
                 with store.write() as transaction:
                     transaction.commit(project_transition_mutation(transaction.snapshot(), decision))
                 proposal = store.snapshot().proposals.proposals[0]
@@ -548,6 +568,24 @@ class MutationPersistenceTest(unittest.TestCase):
                     (expected, target, reason),
                     (proposal.disposition.value, proposal.disposition_target_item_id, proposal.disposition_reason),
                 )
+
+    def test_attempt_transition_reports_the_missing_or_stale_before_state_invariant(self) -> None:
+        before = self._store().snapshot()
+        snapshot = project_decision_snapshot(before)
+        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
+        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.PAUSE)
+        decision = decide(
+            snapshot,
+            bind_transition(action, ReasonInput("Pause at a stable checkpoint.")),
+            SQLITE_NOW + timedelta(seconds=1),
+        )
+        without_attempt = replace(before, lifecycle=replace(before.lifecycle, attempts=()))
+
+        with self.assertRaises(MutationContractError) as raised:
+            project_transition_mutation(without_attempt, decision)
+
+        self.assertEqual(MutationContractErrorCode.ATTEMPT_MISSING_OR_BEFORE_STATE_STALE, raised.exception.code)
+        self.assertIn("stored attempt is missing or its before state is stale", str(raised.exception))
 
     def test_lifecycle_writer_rejects_invalid_terminal_receipt_atomically(self) -> None:
         store = self._store()

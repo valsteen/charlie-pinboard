@@ -50,6 +50,7 @@ from charlie_pinboard.domain.decision_models import (
     ItemStateChange,
     MergedProposalChange,
     ReasonedProposalDispositionChange,
+    ReasonedProposalDispositionKind,
     ResumeAttemptChange,
     ReviewReturnChange,
     ReviewSubmissionChange,
@@ -409,7 +410,8 @@ def _attempt_state_after(
     index = next((position for position, attempt in enumerate(attempts) if attempt.attempt_id == attempt_id), None)
     if index is None or attempts[index].state != before:
         raise MutationContractError(
-            MutationContractErrorCode.ATTEMPT_CHANGE_INCOMPLETE, "The transition attempt change is stale or incomplete."
+            MutationContractErrorCode.ATTEMPT_MISSING_OR_BEFORE_STATE_STALE,
+            "The stored attempt is missing or its before state is stale.",
         )
     clears_candidate = after.value in {"active", "paused", "blocked"}
     records_candidate = after == AttemptState.REVIEW
@@ -780,7 +782,21 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
             reason=reason,
             disposed_at=disposed_at,
         ):
-            result = _proposal_disposition_after(result, proposal, disposition, disposed_at, revision, reason=reason)
+            match disposition:
+                case ReasonedProposalDispositionKind.RETURNED:
+                    stored_disposition = ProposalDispositionKind.RETURNED
+                case ReasonedProposalDispositionKind.REJECTED:
+                    stored_disposition = ProposalDispositionKind.REJECTED
+                case _ as unreachable:
+                    assert_never(unreachable)
+            result = _proposal_disposition_after(
+                result,
+                proposal,
+                stored_disposition,
+                disposed_at,
+                revision,
+                reason=reason,
+            )
         case CheckpointAcceptanceChange(item=item, attempt=attempt, authority_change=authority_change):
             lifecycle = _item_state_after(lifecycle, item, WorkState.REVIEW, StoredWorkItemState.PAUSED, revision, now)
             lifecycle = _attempt_state_after(

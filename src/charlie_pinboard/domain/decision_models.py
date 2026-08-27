@@ -29,7 +29,6 @@ from charlie_pinboard.domain.work_models import (
     DeferInput,
     EvidenceInput,
     MergeProposalInput,
-    ProposalDispositionKind,
     ReasonInput,
     ResumeInput,
     SubmitReviewInput,
@@ -75,6 +74,11 @@ class Role(Enum):
     COORDINATOR = "coordinator"
     WORKER = "worker"
     OBSERVER = "observer"
+
+
+class ReasonedProposalDispositionKind(Enum):
+    RETURNED = "returned"
+    REJECTED = "rejected"
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,7 +362,7 @@ class MergedProposalChange:
 @dataclass(frozen=True, slots=True)
 class ReasonedProposalDispositionChange:
     proposal: ProposalId
-    disposition: ProposalDispositionKind
+    disposition: ReasonedProposalDispositionKind
     reason: str
     disposed_at: datetime
 
