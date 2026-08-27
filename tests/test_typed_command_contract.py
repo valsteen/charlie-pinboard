@@ -6,9 +6,12 @@ from charlie_pinboard.application.decision_projection import project_decision_sn
 from charlie_pinboard.domain.decision_models import (
     Action,
     ActionKind,
+    ActivationChange,
     ActorAuthority,
     AuthorizationKind,
     Decision,
+    ResumeAttemptChange,
+    ReviewSubmissionChange,
     Role,
     TransitionCommand,
 )
@@ -90,9 +93,10 @@ class TypedTransitionContractTest(unittest.TestCase):
         parsed = parse_transition_input("submit-review", b'{"candidate":"candidate-that-is-not-a-subject-revision"}')
         self.assertEqual(SubmitReviewInput(candidate), parsed)
         decision = decide(snapshot, bind_transition(submit, parsed), SQLITE_NOW)
-        assert decision.attempt_change is not None
-        self.assertEqual(candidate, decision.attempt_change.protected_candidate_after)
-        self.assertEqual(SQLITE_NOW, decision.attempt_change.candidate_observed_at)
+        self.assertIsInstance(decision.change, ReviewSubmissionChange)
+        assert isinstance(decision.change, ReviewSubmissionChange)
+        self.assertEqual(candidate, decision.change.protected_candidate_after)
+        self.assertEqual(SQLITE_NOW, decision.change.candidate_observed_at)
 
     def test_activation_requires_one_existing_brief_artifact_reference(self) -> None:
         ready = WorkItem(ItemId("ready-item"), WorkState.READY, None, (), None, "test", "activate", "")
@@ -129,8 +133,9 @@ class TypedTransitionContractTest(unittest.TestCase):
             ),
             SQLITE_NOW,
         )
-        assert accepted.attempt_change is not None
-        self.assertEqual(ArtifactRefId(1), accepted.attempt_change.brief_artifact_ref_id)
+        self.assertIsInstance(accepted.change, ActivationChange)
+        assert isinstance(accepted.change, ActivationChange)
+        self.assertEqual(ArtifactRefId(1), accepted.change.brief_artifact_ref_id)
 
     def test_resume_may_replace_the_attempt_brief_with_one_existing_brief_reference(self) -> None:
         without_attempt = LedgerSnapshot(
@@ -195,8 +200,9 @@ class TypedTransitionContractTest(unittest.TestCase):
                 self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
         accepted = decide(snapshot, bind_transition(resume, ResumeInput(ArtifactRefId(2))), SQLITE_NOW)
-        assert accepted.attempt_change is not None
-        self.assertEqual(ArtifactRefId(2), accepted.attempt_change.brief_artifact_ref_id)
+        self.assertIsInstance(accepted.change, ResumeAttemptChange)
+        assert isinstance(accepted.change, ResumeAttemptChange)
+        self.assertEqual(ArtifactRefId(2), accepted.change.brief_artifact_ref_id)
 
 
 class ExactMutationAuthorityTest(unittest.TestCase):

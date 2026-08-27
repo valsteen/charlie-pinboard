@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -21,12 +23,12 @@ from charlie_pinboard.domain.work_models import (
     AttemptState,
     BlockInput,
     CloseInput,
+    CloseOutcome,
     CommandAttemptAuthority,
     CoordinationLeaseAuthority,
     DeferInput,
     EvidenceInput,
     MergeProposalInput,
-    ProposalDispositionKind,
     ReasonInput,
     ResumeInput,
     SubmitReviewInput,
@@ -241,26 +243,86 @@ class ActorAuthority:
 
 
 @dataclass(frozen=True, slots=True)
-class ItemChange:
+class ItemStateChange:
     item: ItemId
-    before: WorkState | None
-    after: WorkState | None
-    attempt: AttemptId | None = None
-    outcome_evidence: str | None = None
+    before: WorkState
+    after: WorkState
 
 
 @dataclass(frozen=True, slots=True)
-class AttemptChange:
+class ActivationChange:
+    item: ItemId
+    item_before: WorkState
     attempt: AttemptId
-    before: AttemptState | None
-    after: AttemptState | None
-    brief_artifact_ref_id: ArtifactRefId | None = None
-    protected_candidate_before: CandidateId | None = None
-    protected_candidate_after: CandidateId | None = None
-    candidate_observed_at: datetime | None = None
-    branch: str | None = None
-    base_revision: str | None = None
-    owner: str | None = None
+    brief_artifact_ref_id: ArtifactRefId
+    branch: str
+    base_revision: str
+    owner: str
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptStateChange:
+    item: ItemId
+    item_before: WorkState
+    item_after: WorkState
+    attempt: AttemptId
+    attempt_before: AttemptState
+    attempt_after: AttemptState
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeAttemptChange:
+    item: ItemId
+    item_before: WorkState
+    attempt: AttemptId
+    attempt_before: AttemptState
+    brief_artifact_ref_id: ArtifactRefId | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewSubmissionChange:
+    item: ItemId
+    attempt: AttemptId
+    protected_candidate_before: CandidateId | None
+    protected_candidate_after: CandidateId
+    candidate_observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewReturnChange:
+    item: ItemId
+    attempt: AttemptId
+    protected_candidate_before: CandidateId | None
+    authority_change: AttemptAuthorityChange
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionChange:
+    item: ItemId
+    item_before: WorkState
+    attempt: AttemptId
+    attempt_before: AttemptState
+    evidence: str
+    authority_change: AttemptAuthorityChange | None
+
+
+@dataclass(frozen=True, slots=True)
+class ItemClosureChange:
+    item: ItemId
+    item_before: WorkState
+    terminal_state: CloseOutcome
+    evidence: str
+
+
+@dataclass(frozen=True, slots=True)
+class AttemptClosureChange:
+    item: ItemId
+    item_before: WorkState
+    terminal_state: CloseOutcome
+    evidence: str
+    attempt: AttemptId
+    attempt_before: AttemptState
+    authority_change: AttemptAuthorityChange | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,13 +343,31 @@ class AcceptedProposalItem:
 
 
 @dataclass(frozen=True, slots=True)
-class ProposalChange:
+class AcceptedProposalChange:
     proposal: ProposalId
-    disposition: ProposalDispositionKind
-    target_item: ItemId | None
-    reason: str | None
     disposed_at: datetime
-    accepted_item: AcceptedProposalItem | None = None
+    accepted_item: AcceptedProposalItem
+
+
+@dataclass(frozen=True, slots=True)
+class MergedProposalChange:
+    proposal: ProposalId
+    target_item: ItemId
+    disposed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnedProposalChange:
+    proposal: ProposalId
+    reason: str
+    disposed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedProposalChange:
+    proposal: ProposalId
+    reason: str
+    disposed_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,11 +384,23 @@ class CoordinatorAuthorityChange:
 
 @dataclass(frozen=True, slots=True)
 class CheckpointAcceptanceChange:
+    item: ItemId
     checkpoint: CheckpointId
     attempt: AttemptId
     candidate: CandidateId
     evidence: str
     accepted_at: datetime
+    authority_change: AttemptAuthorityChange
+
+
+@dataclass(frozen=True, slots=True)
+class CoordinatorTransferChange:
+    authority_change: CoordinatorAuthorityChange
+
+
+@dataclass(frozen=True, slots=True)
+class NoTransitionChange:
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,13 +412,28 @@ class TransitionReceipt:
     decided_at: datetime
 
 
+type DecisionChange = (
+    ItemStateChange
+    | ActivationChange
+    | AttemptStateChange
+    | ResumeAttemptChange
+    | ReviewSubmissionChange
+    | ReviewReturnChange
+    | CompletionChange
+    | ItemClosureChange
+    | AttemptClosureChange
+    | AcceptedProposalChange
+    | MergedProposalChange
+    | ReturnedProposalChange
+    | RejectedProposalChange
+    | CheckpointAcceptanceChange
+    | CoordinatorTransferChange
+    | NoTransitionChange
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Decision:
     action: Action
-    item_change: ItemChange | None
-    attempt_change: AttemptChange | None
+    change: DecisionChange
     receipt: TransitionReceipt
-    attempt_authority_change: AttemptAuthorityChange | None = None
-    checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None
-    proposal_change: ProposalChange | None = None
-    coordinator_authority_change: CoordinatorAuthorityChange | None = None

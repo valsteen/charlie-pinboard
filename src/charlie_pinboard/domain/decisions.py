@@ -4,34 +4,47 @@ from typing import assert_never
 
 from charlie_pinboard.domain.decision_models import (
     AcceptCheckpointCommand,
+    AcceptedProposalChange,
     AcceptedProposalItem,
     AcceptProposalCommand,
     Action,
     ActionCapability,
     ActionKind,
     ActivateCommand,
+    ActivationChange,
     ActorAuthority,
     AttemptAuthorityChange,
-    AttemptChange,
+    AttemptClosureChange,
+    AttemptStateChange,
     AuthorizationKind,
     BlockCommand,
     BlockItemCommand,
     CheckpointAcceptanceChange,
     CloseCommand,
     CompleteCommand,
+    CompletionChange,
     CoordinatorAuthorityChange,
+    CoordinatorTransferChange,
     Decision,
+    DecisionChange,
     DeferCommand,
-    ItemChange,
+    ItemClosureChange,
+    ItemStateChange,
     MarkReadyCommand,
+    MergedProposalChange,
     MergeProposalCommand,
+    NoTransitionChange,
     PauseCommand,
-    ProposalChange,
+    RejectedProposalChange,
     RejectProposalCommand,
     ReopenCommand,
+    ResumeAttemptChange,
     ResumeCommand,
+    ReturnedProposalChange,
     ReturnForCorrectionCommand,
     ReturnProposalCommand,
+    ReviewReturnChange,
+    ReviewSubmissionChange,
     Role,
     SubmitReviewCommand,
     TransferCoordinatorCommand,
@@ -64,7 +77,6 @@ from charlie_pinboard.domain.work_models import (
     EvidenceInput,
     ItemScope,
     MergeProposalInput,
-    ProposalDispositionKind,
     ReasonInput,
     ResumeInput,
     ScopeDependency,
@@ -450,26 +462,16 @@ def _receipt(
 def _result(
     action: Action,
     now: datetime,
+    change: DecisionChange,
     *,
     item: ItemId | None = None,
-    item_change: ItemChange | None = None,
-    attempt_change: AttemptChange | None = None,
-    attempt_authority_change: AttemptAuthorityChange | None = None,
-    checkpoint_acceptance_change: CheckpointAcceptanceChange | None = None,
-    proposal_change: ProposalChange | None = None,
-    coordinator_authority_change: CoordinatorAuthorityChange | None = None,
     outcome: str | None = None,
     evidence: str | None = None,
 ) -> Decision:
     return Decision(
         action,
-        item_change,
-        attempt_change,
+        change,
         _receipt(action, item, outcome or action.kind.value, evidence, now),
-        attempt_authority_change,
-        checkpoint_acceptance_change,
-        proposal_change,
-        coordinator_authority_change,
     )
 
 
@@ -496,17 +498,16 @@ def _activate(snapshot: LedgerSnapshot, command: ActivateCommand, now: datetime)
     return _result(
         action,
         now,
-        item=item.item,
-        item_change=ItemChange(item.item, item.state, WorkState.ACTIVE, value.attempt),
-        attempt_change=AttemptChange(
+        ActivationChange(
+            item.item,
+            item.state,
             value.attempt,
-            None,
-            AttemptState.ACTIVE,
-            brief_artifact_ref_id=value.brief_artifact_ref_id,
-            branch=value.branch,
-            base_revision=value.base_revision,
-            owner=value.owner,
+            value.brief_artifact_ref_id,
+            value.branch,
+            value.base_revision,
+            value.owner,
         ),
+        item=item.item,
     )
 
 
@@ -532,9 +533,15 @@ def _pause_or_block(
     return _result(
         action,
         now,
+        AttemptStateChange(
+            item.item,
+            item.state,
+            target,
+            attempt_id,
+            AttemptState.ACTIVE,
+            AttemptState(target.value),
+        ),
         item=item.item,
-        item_change=ItemChange(item.item, item.state, target, item.attempt),
-        attempt_change=AttemptChange(attempt_id, AttemptState.ACTIVE, AttemptState(target.value)),
     )
 
 
@@ -573,10 +580,8 @@ def _complete(snapshot: LedgerSnapshot, command: CompleteCommand, now: datetime)
     return _result(
         action,
         now,
+        CompletionChange(item.item, item.state, attempt_id, before, value.evidence, authority_change),
         item=item.item,
-        item_change=ItemChange(item.item, item.state, None, item.attempt, value.evidence),
-        attempt_change=AttemptChange(attempt_id, before, AttemptState.DONE),
-        attempt_authority_change=authority_change,
         evidence=value.evidence,
     )
 
@@ -596,18 +601,27 @@ def _close(snapshot: LedgerSnapshot, command: CloseCommand, now: datetime) -> De
         return DecisionFailure(DecisionFailureCode.LIVE_DEPENDENTS, f"Item '{item.item}' still has live dependents.")
     if item.item in snapshot.history_items:
         return DecisionFailure(DecisionFailureCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
-    attempt_change = None
-    if item.attempt is not None:
-        attempt = snapshot.attempts_by_id().get(item.attempt)
-        attempt_change = AttemptChange(item.attempt, None if attempt is None else attempt.state, AttemptState.DONE)
     authority_change = None if item.attempt is None else _fence_retained_attempt_authority(snapshot, item.attempt)
+    if item.attempt is None:
+        change: DecisionChange = ItemClosureChange(item.item, item.state, value.outcome, value.reason)
+    else:
+        attempt = snapshot.attempts_by_id().get(item.attempt)
+        if attempt is None:
+            return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{item.attempt}' does not exist.")
+        change = AttemptClosureChange(
+            item.item,
+            item.state,
+            value.outcome,
+            value.reason,
+            item.attempt,
+            attempt.state,
+            authority_change,
+        )
     return _result(
         action,
         now,
+        change,
         item=item.item,
-        item_change=ItemChange(item.item, item.state, None, item.attempt, value.reason),
-        attempt_change=attempt_change,
-        attempt_authority_change=authority_change,
         outcome=value.outcome.value,
         evidence=value.reason,
     )
@@ -644,21 +658,22 @@ def _resume(snapshot: LedgerSnapshot, command: ResumeCommand, now: datetime) -> 
                 "Resuming with a revised brief requires one existing brief artifact reference.",
             )
     target = WorkState.ACTIVE if item.attempt is not None else WorkState.READY
-    attempt_change = None
     if item.attempt is not None:
         before = AttemptState.PAUSED if item.state == WorkState.PAUSED else AttemptState.BLOCKED
-        attempt_change = AttemptChange(
+        change: DecisionChange = ResumeAttemptChange(
+            item.item,
+            item.state,
             item.attempt,
             before,
-            AttemptState.ACTIVE,
-            brief_artifact_ref_id=value.brief_artifact_ref_id,
+            value.brief_artifact_ref_id,
         )
+    else:
+        change = ItemStateChange(item.item, item.state, target)
     return _result(
         action,
         now,
+        change,
         item=item.item,
-        item_change=ItemChange(item.item, item.state, target, item.attempt),
-        attempt_change=attempt_change,
     )
 
 
@@ -683,16 +698,14 @@ def _submit_review(snapshot: LedgerSnapshot, command: SubmitReviewCommand, now: 
     return _result(
         action,
         now,
-        item=item.item,
-        item_change=ItemChange(item.item, item.state, WorkState.REVIEW, item.attempt),
-        attempt_change=AttemptChange(
+        ReviewSubmissionChange(
+            item.item,
             attempt_id,
-            AttemptState.ACTIVE,
-            AttemptState.REVIEW,
-            protected_candidate_before=attempt.protected_candidate_revision,
-            protected_candidate_after=value.candidate,
-            candidate_observed_at=now,
+            attempt.protected_candidate_revision,
+            value.candidate,
+            now,
         ),
+        item=item.item,
     )
 
 
@@ -725,15 +738,13 @@ def _return_for_correction(
     return _result(
         action,
         now,
-        item=item.item,
-        item_change=ItemChange(item.item, WorkState.REVIEW, WorkState.ACTIVE, item.attempt),
-        attempt_change=AttemptChange(
+        ReviewReturnChange(
+            item.item,
             attempt_id,
-            AttemptState.REVIEW,
-            AttemptState.ACTIVE,
-            protected_candidate_before=snapshot.attempts_by_id()[attempt_id].protected_candidate_revision,
+            snapshot.attempts_by_id()[attempt_id].protected_candidate_revision,
+            authority_change,
         ),
-        attempt_authority_change=authority_change,
+        item=item.item,
         evidence=value.reason,
     )
 
@@ -768,18 +779,17 @@ def _accept_checkpoint(
     return _result(
         action,
         now,
-        item=item.item,
-        item_change=ItemChange(item.item, WorkState.REVIEW, WorkState.PAUSED, item.attempt),
-        attempt_change=AttemptChange(attempt_id, AttemptState.REVIEW, AttemptState.PAUSED),
-        attempt_authority_change=authority_change,
-        evidence=value.evidence,
-        checkpoint_acceptance_change=CheckpointAcceptanceChange(
+        CheckpointAcceptanceChange(
+            item.item,
             value.checkpoint,
             attempt_id,
             value.candidate,
             value.evidence,
             now,
+            authority_change,
         ),
+        item=item.item,
+        evidence=value.evidence,
     )
 
 
@@ -809,7 +819,7 @@ def _simple_item_transition(
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot perform '{action.kind.value}' now."
         )
-    return _result(action, now, item=item.item, item_change=ItemChange(item.item, item.state, target))
+    return _result(action, now, ItemStateChange(item.item, item.state, target), item=item.item)
 
 
 def _defer(snapshot: LedgerSnapshot, command: DeferCommand, now: datetime) -> DecisionResult[Decision]:
@@ -820,7 +830,7 @@ def _defer(snapshot: LedgerSnapshot, command: DeferCommand, now: datetime) -> De
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
     if item.state not in {WorkState.INTAKE, WorkState.READY, WorkState.BLOCKED} or item.attempt is not None:
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot be deferred now.")
-    return _result(action, now, item=item.item, item_change=ItemChange(item.item, item.state, WorkState.DEFERRED))
+    return _result(action, now, ItemStateChange(item.item, item.state, WorkState.DEFERRED), item=item.item)
 
 
 def _accept_proposal(
@@ -848,7 +858,6 @@ def _accept_proposal(
             DecisionFailureCode.DEPENDENCY_NOT_SATISFIED,
             "Accepted proposal dependencies must be ordered unique existing identities other than their owner.",
         )
-    change = ItemChange(value.item, None, WorkState(value.state.value))
     accepted_item: AcceptedProposalItem | None = None
     if (
         proposal.user_label is not None
@@ -885,19 +894,16 @@ def _accept_proposal(
             proposal.urgency_evidence,
             scope_digest,
         )
+    if accepted_item is None:
+        return DecisionFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
+            "Accepted proposal semantics are incomplete.",
+        )
     return _result(
         action,
         now,
+        AcceptedProposalChange(proposal.proposal, now, accepted_item),
         item=value.item,
-        item_change=change,
-        proposal_change=ProposalChange(
-            proposal.proposal,
-            ProposalDispositionKind.ACCEPTED,
-            value.item,
-            None,
-            now,
-            accepted_item,
-        ),
     )
 
 
@@ -917,13 +923,7 @@ def _merge_proposal(
     return _result(
         action,
         now,
-        proposal_change=ProposalChange(
-            proposal.proposal,
-            ProposalDispositionKind.MERGED,
-            value.target,
-            None,
-            now,
-        ),
+        MergedProposalChange(proposal.proposal, value.target, now),
     )
 
 
@@ -933,22 +933,22 @@ def _dispose_proposal(
     now: datetime,
 ) -> DecisionResult[Decision]:
     action = command_action(command)
-    match command:
-        case ReturnProposalCommand(value=value):
-            disposition = ProposalDispositionKind.RETURNED
-        case RejectProposalCommand(value=value):
-            disposition = ProposalDispositionKind.REJECTED
-        case _ as unreachable:
-            assert_never(unreachable)
     proposal_id = ProposalId(action.subject)
     proposal = snapshot.proposal(proposal_id)
     if proposal is None:
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
+    match command:
+        case ReturnProposalCommand(value=value):
+            change: DecisionChange = ReturnedProposalChange(proposal.proposal, value.reason, now)
+        case RejectProposalCommand(value=value):
+            change = RejectedProposalChange(proposal.proposal, value.reason, now)
+        case _ as unreachable:
+            assert_never(unreachable)
     return _result(
         action,
         now,
+        change,
         evidence=value.reason,
-        proposal_change=ProposalChange(proposal.proposal, disposition, None, value.reason, now),
     )
 
 
@@ -960,16 +960,18 @@ def _transfer(snapshot: LedgerSnapshot, command: TransferCoordinatorCommand, now
         )
     before = snapshot.coordination_lease
     if before is None:
-        return _result(action, now)
+        return _result(action, now, NoTransitionChange())
     if before.state != CoordinationLeaseStatus.ACTIVE or before.expires_at <= now:
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "The coordination lease is not active.")
     value = command.value
     return _result(
         action,
         now,
-        coordinator_authority_change=CoordinatorAuthorityChange(
-            before,
-            replace(before, task_id=value.task_id, host_id=value.host_id, generation=before.generation + 1),
+        CoordinatorTransferChange(
+            CoordinatorAuthorityChange(
+                before,
+                replace(before, task_id=value.task_id, host_id=value.host_id, generation=before.generation + 1),
+            )
         ),
     )
 

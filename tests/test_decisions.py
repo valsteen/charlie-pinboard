@@ -8,6 +8,7 @@ from charlie_pinboard.domain.decision_models import (
     ActionKind,
     ActorAuthority,
     AuthorizationKind,
+    CompletionChange,
     Decision,
     Role,
     TransitionCommand,
@@ -181,7 +182,9 @@ class LifecycleDecisionTest(unittest.TestCase):
         completed_action = action(ActionKind.COMPLETE, "target-1")
         completed = decide(snapshot, bind_transition(completed_action, EvidenceInput("review accepted")), NOW)
         self.assertEqual("review accepted", completed.receipt.evidence)
-        self.assertEqual("review accepted", completed.item_change.outcome_evidence if completed.item_change else None)
+        self.assertIsInstance(completed.change, CompletionChange)
+        assert isinstance(completed.change, CompletionChange)
+        self.assertEqual("review accepted", completed.change.evidence)
 
         rejected = bind_transition_outcome(action(ActionKind.COMPLETE, "target-1"), EmptyInput())
         self.assertIsInstance(rejected, DecisionFailure)

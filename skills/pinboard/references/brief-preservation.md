@@ -43,6 +43,8 @@ Every checkpoint has a stable kebab-case `checkpoint_id`, separate human `title`
 - `local` contains the common fields only;
 - `cross-boundary` additionally requires `outcome: independently-buildable`, nonempty contracts, reviewed authorities, authoritative coverage, and one lifecycle partition.
 
+When a checkpoint owns structural cleanup, its typed scope and acceptance criteria must name the readable typed consolidation, the direct orphan families to recurse through, and the evidence from one fresh fixed-point pass. Reference the repository's recursive-cleanup procedure for the method instead of duplicating it here; the generated Markdown projection remains non-authoritative.
+
 Architecture impact is tagged by `kind`:
 
 - `none` records a reason ownership and dependency direction are unchanged;

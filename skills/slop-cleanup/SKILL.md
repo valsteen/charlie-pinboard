@@ -120,6 +120,13 @@ Regroup by current concepts. Separate declarations from logic when each side has
 
 Run an archaeology pass over names, comments, error codes, schema labels, help text, examples, documentation, and tests. Remove wording that describes a predecessor, migration phase, plural capability that is now singular, or behavior the code can no longer perform. Collapse documentation around the surviving concepts, remove pages, sections, examples, diagrams, badges, and setup instructions whose feature or workflow was removed, and keep parallel documents consistent rather than leaving one stale version behind. Every advertised feature must trace to a supported entry point or explicitly labeled current limitation; do not turn deleted or never-shipped implementation into present-tense documentation or an invented roadmap. Remove stale suppressions such as unused `noqa`, lint-disable, ignore, or coverage directives with the ecosystem’s unused-suppression check when available.
 
+For structural boilerplate, use one repeatable pass:
+
+1. List collections traversed by neighboring projections. Group each collection once by the consumer key when repeated scans reconstruct the same relationship; keep the grouping local and explicit.
+2. List records whose optional fields serve different operations. Replace them with the smallest flat variants that make supported combinations concrete, then require producers to construct and consumers to match those variants exhaustively.
+3. Trace same-shaped values through every call and adapter. Fold pass-through layers that add no validation, policy, protocol, or independently reused operation into the nearest coherent owner.
+4. Re-run these three inventories after each fold. Stop only when a fresh pass finds no repeated traversal, nullable multi-operation record, or orphaned same-shaped call trail in the accepted scope.
+
 ## Handle persisted-state removal as a bridge burn
 
 Before deleting a stored family or compatibility path, enumerate every known supported store and external consumer. When migration is authorized, prefer a temporary isolated migrator, recoverable backups, pre/post semantic equivalence, atomic replacement, verification through the installed product, and deletion of the migrator and obsolete compatibility code in the same cleanup outcome. Do not leave permanent archaeology for a predecessor that has no supported users.

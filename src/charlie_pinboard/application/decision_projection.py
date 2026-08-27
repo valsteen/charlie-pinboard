@@ -15,7 +15,7 @@ from charlie_pinboard.domain.authority_models import (
     InactiveAttemptAuthority,
 )
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
-from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, ItemId
+from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, ItemId, ProposalId
 from charlie_pinboard.domain.ledger import LedgerSnapshot
 from charlie_pinboard.domain.work_models import (
     ArtifactRecord,
@@ -82,20 +82,20 @@ def project_inactive_attempt_authority(
     )
 
 
-def _dependency_position(value: ItemDependency) -> int:
-    return value.position
+def _dependency_order(value: ItemDependency) -> tuple[str, int]:
+    return str(value.item_id), value.position
 
 
-def _artifact_position(value: ItemArtifactLink) -> tuple[str, int]:
-    return value.role.value, value.position
+def _artifact_order(value: ItemArtifactLink) -> tuple[str, str, int]:
+    return str(value.item_id), value.role.value, value.position
 
 
-def _proposal_evidence_position(value: ProposalEvidence) -> int:
-    return value.position
+def _proposal_evidence_order(value: ProposalEvidence) -> tuple[str, int]:
+    return str(value.proposal_id), value.position
 
 
-def _proposal_freshness_position(value: ProposalFreshness) -> int:
-    return value.position
+def _proposal_freshness_order(value: ProposalFreshness) -> tuple[str, int]:
+    return str(value.proposal_id), value.position
 
 
 def _live_state(state: StoredWorkItemState) -> WorkState | None:
@@ -147,19 +147,16 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         for item in state.lifecycle.work_items
         if (live_state := _live_state(item.state)) is not None
     )
-    dependencies_by_item = {
-        item.item_id: tuple(
-            ScopeDependency(link.position, link.dependency_id)
-            for link in sorted(
-                (candidate for candidate in state.lifecycle.dependencies if candidate.item_id == item.item_id),
-                key=_dependency_position,
-            )
-        )
-        for item in state.lifecycle.work_items
-    }
+    stored_items_by_id = {item.item_id: item for item in state.lifecycle.work_items}
+    dependency_groups: dict[ItemId, list[ScopeDependency]] = {item_id: [] for item_id in stored_items_by_id}
+    for link in sorted(state.lifecycle.dependencies, key=_dependency_order):
+        dependency_groups[link.item_id].append(ScopeDependency(link.position, link.dependency_id))
+    dependencies_by_item = {item_id: tuple(values) for item_id, values in dependency_groups.items()}
     artifact_by_id = {artifact.artifact_ref_id: artifact for artifact in state.artifact_references}
-    artifacts_by_item = {
-        item.item_id: tuple(
+    artifact_groups: dict[ItemId, list[ScopeArtifact]] = {item_id: [] for item_id in stored_items_by_id}
+    for link in sorted(state.lifecycle.item_artifacts, key=_artifact_order):
+        artifact = artifact_by_id[link.artifact_ref_id]
+        artifact_groups[link.item_id].append(
             ScopeArtifact(
                 link.role,
                 link.position,
@@ -169,13 +166,10 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
                 artifact.selector,
                 artifact.content_sha256,
             )
-            for link in sorted(
-                (candidate for candidate in state.lifecycle.item_artifacts if candidate.item_id == item.item_id),
-                key=_artifact_position,
-            )
-            for artifact in (artifact_by_id[link.artifact_ref_id],)
         )
-        for item in state.lifecycle.work_items
+    artifacts_by_item = {item_id: tuple(values) for item_id, values in artifact_groups.items()}
+    scope_revisions_by_identity = {
+        (anchor.item_id, anchor.revision, anchor.digest): anchor for anchor in state.lifecycle.scope_revisions
     }
     scopes = tuple(
         ScopeAnchor(
@@ -195,8 +189,8 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         )
         for item in state.lifecycle.work_items
         if _live_state(item.state) is not None
-        for anchor in state.lifecycle.scope_revisions
-        if (anchor.item_id, anchor.revision, anchor.digest) == (item.item_id, item.scope_revision, item.scope_digest)
+        for anchor in (scope_revisions_by_identity.get((item.item_id, item.scope_revision, item.scope_digest)),)
+        if anchor is not None
     )
     work_items = tuple(
         WorkItem(
@@ -230,13 +224,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         CommandAttemptAuthority(
             state.lifecycle.project.host_epoch,
             attempt_by_id[lease.attempt_id].item_id,
-            str(
-                next(
-                    item.subject_revision
-                    for item in state.lifecycle.work_items
-                    if item.item_id == attempt_by_id[lease.attempt_id].item_id
-                )
-            ),
+            str(stored_items_by_id[attempt_by_id[lease.attempt_id].item_id].subject_revision),
             lease.attempt_id,
             str(attempt_by_id[lease.attempt_id].subject_revision),
             anchor.task_id,
@@ -262,6 +250,15 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         and state.authority.coordination.state == CoordinationLeaseStatus.ACTIVE
         else None
     )
+    proposal_ids = tuple(proposal.proposal_id for proposal in state.proposals.proposals)
+    evidence_groups: dict[ProposalId, list[str]] = {proposal_id: [] for proposal_id in proposal_ids}
+    for evidence in sorted(state.proposals.evidence, key=_proposal_evidence_order):
+        evidence_groups[evidence.proposal_id].append(evidence.selector)
+    evidence_by_proposal = {proposal_id: tuple(values) for proposal_id, values in evidence_groups.items()}
+    freshness_groups: dict[ProposalId, list[str]] = {proposal_id: [] for proposal_id in proposal_ids}
+    for freshness in sorted(state.proposals.freshness, key=_proposal_freshness_order):
+        freshness_groups[freshness.proposal_id].append(freshness.assumption)
+    freshness_by_proposal = {proposal_id: tuple(values) for proposal_id, values in freshness_groups.items()}
 
     return LedgerSnapshot(
         revision=str(state.lifecycle.project.revision),
@@ -296,16 +293,8 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
                 proposal.effect,
                 proposal.unlock,
                 proposal.urgency_evidence,
-                tuple(
-                    value.selector
-                    for value in sorted(state.proposals.evidence, key=_proposal_evidence_position)
-                    if value.proposal_id == proposal.proposal_id
-                ),
-                tuple(
-                    value.assumption
-                    for value in sorted(state.proposals.freshness, key=_proposal_freshness_position)
-                    if value.proposal_id == proposal.proposal_id
-                ),
+                evidence_by_proposal.get(proposal.proposal_id, ()),
+                freshness_by_proposal.get(proposal.proposal_id, ()),
             )
             for proposal in state.proposals.proposals
             if proposal.disposition is None

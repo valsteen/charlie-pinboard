@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import datetime
 from typing import assert_never
 
 from charlie_pinboard.application.errors import MutationContractError, MutationContractErrorCode
@@ -33,21 +34,44 @@ from charlie_pinboard.domain.authority_models import (
     AttemptLeaseStatus,
 )
 from charlie_pinboard.domain.decision_models import (
+    AcceptedProposalChange,
     ActionKind,
+    ActivationChange,
+    AttemptAuthorityChange,
+    AttemptClosureChange,
+    AttemptStateChange,
     AuthorizationKind,
+    CheckpointAcceptanceChange,
+    CompletionChange,
+    CoordinatorAuthorityChange,
+    CoordinatorTransferChange,
     Decision,
+    ItemClosureChange,
+    ItemStateChange,
+    MergedProposalChange,
+    NoTransitionChange,
+    RejectedProposalChange,
+    ResumeAttemptChange,
+    ReturnedProposalChange,
+    ReviewReturnChange,
+    ReviewSubmissionChange,
 )
 from charlie_pinboard.domain.history import (
     HistoryOutcome,
     encode_transition_receipt_outcome,
 )
 from charlie_pinboard.domain.identifiers import (
+    ArtifactRefId,
+    AttemptId,
+    CandidateId,
     HistoryId,
     HistorySubjectId,
     HostId,
+    ItemId,
+    ProposalId,
     TaskId,
 )
-from charlie_pinboard.domain.work_models import CanonicalJson
+from charlie_pinboard.domain.work_models import AttemptState, CanonicalJson, ProposalDispositionKind, WorkState
 
 
 def _work_item_key(value: StoredWorkItem) -> str:
@@ -83,11 +107,31 @@ def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
         case TransitionMutation(decision=decision):
             checkpoint = None
             candidate = None
-            if decision.checkpoint_acceptance_change is not None:
-                checkpoint = str(decision.checkpoint_acceptance_change.checkpoint)
-                candidate = str(decision.checkpoint_acceptance_change.candidate)
-            if decision.attempt_change is not None and decision.attempt_change.protected_candidate_after is not None:
-                candidate = str(decision.attempt_change.protected_candidate_after)
+            match decision.change:
+                case CheckpointAcceptanceChange(checkpoint=value, candidate=accepted_candidate):
+                    checkpoint = str(value)
+                    candidate = str(accepted_candidate)
+                case ReviewSubmissionChange(protected_candidate_after=accepted_candidate):
+                    candidate = str(accepted_candidate)
+                case (
+                    AcceptedProposalChange()
+                    | ActivationChange()
+                    | AttemptStateChange()
+                    | AttemptClosureChange()
+                    | CompletionChange()
+                    | CoordinatorTransferChange()
+                    | ItemClosureChange()
+                    | ItemStateChange()
+                    | MergedProposalChange()
+                    | NoTransitionChange()
+                    | RejectedProposalChange()
+                    | ResumeAttemptChange()
+                    | ReviewReturnChange()
+                    | ReturnedProposalChange()
+                ):
+                    pass
+                case _ as unreachable:
+                    assert_never(unreachable)
             return HistoryOutcome(
                 "transition-receipt/v1",
                 encode_transition_receipt_outcome(
@@ -243,11 +287,9 @@ def _proposal_creation_after(
     )
 
 
-def _transition_item_state(decision: Decision) -> StoredWorkItemState:
-    if decision.action.kind == ActionKind.COMPLETE:
-        return StoredWorkItemState.DONE
+def _terminal_item_state(value: str) -> StoredWorkItemState:
     try:
-        state = StoredWorkItemState(decision.receipt.outcome)
+        state = StoredWorkItemState(value)
     except ValueError as error:
         raise MutationContractError(
             MutationContractErrorCode.TERMINAL_STATE_INVALID,
@@ -261,167 +303,153 @@ def _transition_item_state(decision: Decision) -> StoredWorkItemState:
     return state
 
 
-def _transition_item_after(
-    mutation: TransitionMutation,
+def _item_state_after(
     lifecycle: LifecycleRecords,
+    item_id: ItemId,
+    before: WorkState,
+    after: StoredWorkItemState,
+    revision: int,
+    now: datetime,
+    outcome_evidence: str | None = None,
 ) -> LifecycleRecords:
-    decision = mutation.decision
-    change = decision.item_change
-    if change is None:
-        return lifecycle
-    revision = mutation.receipt.project_revision
-    now = decision.receipt.decided_at
     items = list(lifecycle.work_items)
-    if change.before is None:
-        proposal_change = decision.proposal_change
-        accepted = None if proposal_change is None else proposal_change.accepted_item
-        if accepted is None or change.after != accepted.state:
-            raise MutationContractError(
-                MutationContractErrorCode.ACCEPTED_PROPOSAL_INCOMPLETE,
-                "Item creation requires one complete accepted-proposal decision.",
-            )
-        items.append(
-            StoredWorkItem(
-                accepted.item,
-                accepted.user_label,
-                StoredWorkItemState(accepted.state.value),
-                accepted.timing,
-                accepted.source,
-                accepted.trigger,
-                accepted.why_it_matters,
-                accepted.effect,
-                accepted.unlock,
-                None,
-                accepted.next_action,
-                accepted.notes,
-                1,
-                accepted.scope_digest,
-                revision,
-                now,
-                now,
-            )
-        )
-        return replace(
-            lifecycle,
-            work_items=tuple(sorted(items, key=_work_item_key)),
-            scope_revisions=tuple(
-                sorted(
-                    (
-                        *lifecycle.scope_revisions,
-                        ItemScopeRevision(accepted.item, 1, accepted.scope_digest, revision, now),
-                    ),
-                    key=_scope_revision_key,
-                )
-            ),
-            dependencies=tuple(
-                sorted(
-                    (
-                        *lifecycle.dependencies,
-                        *(
-                            ItemDependency(accepted.item, dependency, position)
-                            for position, dependency in enumerate(accepted.dependencies)
-                        ),
-                    ),
-                    key=_dependency_key,
-                )
-            ),
-        )
-    index = next((position for position, item in enumerate(items) if item.item_id == change.item), None)
-    if index is None or items[index].state.value != change.before.value:
+    index = next((position for position, item in enumerate(items) if item.item_id == item_id), None)
+    if index is None or items[index].state.value != before.value:
         raise MutationContractError(MutationContractErrorCode.ITEM_CHANGE_STALE, "The transition item change is stale.")
-    terminal = change.after is None
     items[index] = replace(
         items[index],
-        state=_transition_item_state(decision) if change.after is None else StoredWorkItemState(change.after.value),
-        outcome_evidence=change.outcome_evidence if terminal else None,
+        state=after,
+        outcome_evidence=outcome_evidence,
         subject_revision=revision,
         updated_at=now,
     )
     return replace(lifecycle, work_items=tuple(items))
 
 
-def _transition_attempt_after(
-    mutation: TransitionMutation,
+def _accepted_proposal_after(
+    change: AcceptedProposalChange,
     lifecycle: LifecycleRecords,
+    revision: int,
+    now: datetime,
 ) -> LifecycleRecords:
-    change = mutation.decision.attempt_change
-    if change is None:
-        return lifecycle
-    revision = mutation.receipt.project_revision
-    now = mutation.decision.receipt.decided_at
+    accepted = change.accepted_item
+    if any(item.item_id == accepted.item for item in lifecycle.work_items):
+        raise MutationContractError(
+            MutationContractErrorCode.ACCEPTED_PROPOSAL_INCOMPLETE,
+            "Item creation requires a new accepted-proposal identity.",
+        )
+    item = StoredWorkItem(
+        accepted.item,
+        accepted.user_label,
+        StoredWorkItemState(accepted.state.value),
+        accepted.timing,
+        accepted.source,
+        accepted.trigger,
+        accepted.why_it_matters,
+        accepted.effect,
+        accepted.unlock,
+        None,
+        accepted.next_action,
+        accepted.notes,
+        1,
+        accepted.scope_digest,
+        revision,
+        now,
+        now,
+    )
+    return replace(
+        lifecycle,
+        work_items=tuple(sorted((*lifecycle.work_items, item), key=_work_item_key)),
+        scope_revisions=tuple(
+            sorted(
+                (*lifecycle.scope_revisions, ItemScopeRevision(accepted.item, 1, accepted.scope_digest, revision, now)),
+                key=_scope_revision_key,
+            )
+        ),
+        dependencies=tuple(
+            sorted(
+                (
+                    *lifecycle.dependencies,
+                    *(
+                        ItemDependency(accepted.item, dependency, position)
+                        for position, dependency in enumerate(accepted.dependencies)
+                    ),
+                ),
+                key=_dependency_key,
+            )
+        ),
+    )
+
+
+def _activation_attempt_after(
+    change: ActivationChange,
+    lifecycle: LifecycleRecords,
+    revision: int,
+    now: datetime,
+) -> LifecycleRecords:
+    item = next((value for value in lifecycle.work_items if value.item_id == change.item), None)
+    if item is None:
+        raise MutationContractError(
+            MutationContractErrorCode.ATTEMPT_ITEM_MISSING, "Attempt creation requires its current item."
+        )
+    attempt = StoredAttempt(
+        change.attempt,
+        item.item_id,
+        AttemptState.ACTIVE,
+        change.branch,
+        change.base_revision,
+        change.owner,
+        change.brief_artifact_ref_id,
+        None,
+        None,
+        None,
+        None,
+        item.scope_revision,
+        item.scope_digest,
+        revision,
+        now,
+        now,
+    )
+    return replace(lifecycle, attempts=tuple(sorted((*lifecycle.attempts, attempt), key=_attempt_key)))
+
+
+def _attempt_state_after(
+    lifecycle: LifecycleRecords,
+    attempt_id: AttemptId,
+    before: AttemptState,
+    after: AttemptState,
+    revision: int,
+    now: datetime,
+    *,
+    brief_artifact_ref_id: ArtifactRefId | None = None,
+    protected_candidate_after: CandidateId | None = None,
+    candidate_observed_at: datetime | None = None,
+) -> LifecycleRecords:
     attempts = list(lifecycle.attempts)
-    if change.before is None:
-        if (
-            change.after is None
-            or change.brief_artifact_ref_id is None
-            or change.branch is None
-            or change.base_revision is None
-            or change.owner is None
-            or mutation.decision.item_change is None
-        ):
-            raise MutationContractError(
-                MutationContractErrorCode.ATTEMPT_CREATION_INCOMPLETE, "Attempt creation facts are incomplete."
-            )
-        item = next(
-            (value for value in lifecycle.work_items if value.item_id == mutation.decision.item_change.item),
-            None,
-        )
-        if item is None:
-            raise MutationContractError(
-                MutationContractErrorCode.ATTEMPT_ITEM_MISSING, "Attempt creation requires its current item."
-            )
-        attempts.append(
-            StoredAttempt(
-                change.attempt,
-                item.item_id,
-                change.after,
-                change.branch,
-                change.base_revision,
-                change.owner,
-                change.brief_artifact_ref_id,
-                None,
-                None,
-                None,
-                None,
-                item.scope_revision,
-                item.scope_digest,
-                revision,
-                now,
-                now,
-            )
-        )
-        return replace(lifecycle, attempts=tuple(sorted(attempts, key=_attempt_key)))
-    index = next((position for position, attempt in enumerate(attempts) if attempt.attempt_id == change.attempt), None)
-    if index is None or attempts[index].state != change.before or change.after is None:
+    index = next((position for position, attempt in enumerate(attempts) if attempt.attempt_id == attempt_id), None)
+    if index is None or attempts[index].state != before:
         raise MutationContractError(
             MutationContractErrorCode.ATTEMPT_CHANGE_INCOMPLETE, "The transition attempt change is stale or incomplete."
         )
-    clears_candidate = change.after.value in {"active", "paused", "blocked"}
-    records_candidate = change.after.value == "review"
-    if records_candidate and (change.protected_candidate_after is None or change.candidate_observed_at is None):
-        raise MutationContractError(
-            MutationContractErrorCode.REVIEW_PROVENANCE_MISSING,
-            "Review submission requires exact protected candidate provenance.",
-        )
+    clears_candidate = after.value in {"active", "paused", "blocked"}
+    records_candidate = after == AttemptState.REVIEW
     attempts[index] = replace(
         attempts[index],
-        state=change.after,
+        state=after,
         brief_artifact_ref_id=(
-            change.brief_artifact_ref_id
-            if change.brief_artifact_ref_id is not None
-            else attempts[index].brief_artifact_ref_id
+            brief_artifact_ref_id if brief_artifact_ref_id is not None else attempts[index].brief_artifact_ref_id
         ),
         candidate_revision=(
             None
             if clears_candidate
-            else str(change.protected_candidate_after)
+            else str(protected_candidate_after)
             if records_candidate
             else attempts[index].candidate_revision
         ),
         candidate_recorded_at=(
             None
             if clears_candidate
-            else change.candidate_observed_at
+            else candidate_observed_at
             if records_candidate
             else attempts[index].candidate_recorded_at
         ),
@@ -431,15 +459,18 @@ def _transition_attempt_after(
     return replace(lifecycle, attempts=tuple(attempts))
 
 
-def _transition_proposals_after(mutation: TransitionMutation, common: StoredWorkState) -> StoredWorkState:
-    change = mutation.decision.proposal_change
-    if change is None:
-        return common
-    disposition = change.disposition
+def _proposal_disposition_after(
+    common: StoredWorkState,
+    proposal_id: ProposalId,
+    disposition: ProposalDispositionKind,
+    disposed_at: datetime,
+    revision: int,
+    *,
+    target_item: ItemId | None = None,
+    reason: str | None = None,
+) -> StoredWorkState:
     proposals = list(common.proposals.proposals)
-    index = next(
-        (position for position, proposal in enumerate(proposals) if proposal.proposal_id == change.proposal), None
-    )
+    index = next((position for position, proposal in enumerate(proposals) if proposal.proposal_id == proposal_id), None)
     if index is None or proposals[index].disposition is not None:
         raise MutationContractError(
             MutationContractErrorCode.PROPOSAL_CHANGE_STALE, "The transition proposal change is stale."
@@ -447,18 +478,19 @@ def _transition_proposals_after(mutation: TransitionMutation, common: StoredWork
     proposals[index] = replace(
         proposals[index],
         disposition=disposition,
-        disposition_target_item_id=change.target_item,
-        disposition_reason=change.reason,
-        subject_revision=mutation.receipt.project_revision,
-        disposition_recorded_at=change.disposed_at,
+        disposition_target_item_id=target_item,
+        disposition_reason=reason,
+        subject_revision=revision,
+        disposition_recorded_at=disposed_at,
     )
     return replace(common, proposals=replace(common.proposals, proposals=tuple(proposals)))
 
 
-def _transition_attempt_authority_after(mutation: TransitionMutation, common: StoredWorkState) -> StoredWorkState:
-    change = mutation.decision.attempt_authority_change
-    if change is None:
-        return common
+def _transition_attempt_authority_after(
+    change: AttemptAuthorityChange,
+    common: StoredWorkState,
+    decided_at: datetime,
+) -> StoredWorkState:
     authority = common.authority
     counters = list(authority.attempt_counters)
     counter_index = next(
@@ -488,7 +520,7 @@ def _transition_attempt_authority_after(mutation: TransitionMutation, common: St
     leases[lease_index] = replace(
         leases[lease_index],
         generation=change.after.generation,
-        expires_at=mutation.decision.receipt.decided_at,
+        expires_at=decided_at,
         state=AttemptLeaseStatus.REVOKED,
     )
     generations = (
@@ -508,10 +540,10 @@ def _transition_attempt_authority_after(mutation: TransitionMutation, common: St
     )
 
 
-def _transition_coordinator_after(mutation: TransitionMutation, common: StoredWorkState) -> StoredWorkState:
-    change = mutation.decision.coordinator_authority_change
-    if change is None:
-        return common
+def _transition_coordinator_after(
+    change: CoordinatorAuthorityChange,
+    common: StoredWorkState,
+) -> StoredWorkState:
     retained = common.authority.coordination
     if retained is None or (
         retained.lease_id,
@@ -609,11 +641,14 @@ def _attempt_authority_carrier_after(
     )
 
 
-def _transition_focus_after(mutation: TransitionMutation, common: StoredWorkState) -> StoredWorkState:
-    change = mutation.decision.item_change
-    if change is None:
-        return common
-    terminal = change.after is None
+def _transition_focus_after(
+    mutation: TransitionMutation,
+    common: StoredWorkState,
+    item: ItemId,
+    attempt: AttemptId | None,
+    *,
+    terminal: bool = False,
+) -> StoredWorkState:
     kind = mutation.decision.action.kind
     if terminal:
         next_action = "select"
@@ -630,22 +665,159 @@ def _transition_focus_after(mutation: TransitionMutation, common: StoredWorkStat
     return replace(
         common,
         focus=StoredFocus(
-            None if terminal else change.item,
-            None if terminal else change.attempt,
+            None if terminal else item,
+            None if terminal else attempt,
             next_action,
             mutation.receipt.project_revision,
         ),
     )
 
 
-def _transition_after(mutation: TransitionMutation, common: StoredWorkState) -> StoredWorkState:
-    lifecycle = _transition_item_after(mutation, common.lifecycle)
-    lifecycle = _transition_attempt_after(mutation, lifecycle)
-    result = replace(common, lifecycle=lifecycle)
-    result = _transition_proposals_after(mutation, result)
-    result = _transition_coordinator_after(mutation, result)
-    result = _transition_attempt_authority_after(mutation, result)
-    return _transition_focus_after(mutation, result)
+def _transition_after(  # noqa: C901, PLR0912, PLR0915
+    mutation: TransitionMutation, common: StoredWorkState
+) -> StoredWorkState:
+    decision = mutation.decision
+    change = decision.change
+    revision = mutation.receipt.project_revision
+    now = decision.receipt.decided_at
+    lifecycle = common.lifecycle
+    result = common
+    item: ItemId | None = None
+    attempt: AttemptId | None = None
+    terminal = False
+    match change:
+        case ItemStateChange(item=item, before=before, after=after):
+            lifecycle = _item_state_after(lifecycle, item, before, StoredWorkItemState(after.value), revision, now)
+        case ActivationChange(item=item, item_before=before, attempt=attempt):
+            lifecycle = _item_state_after(lifecycle, item, before, StoredWorkItemState.ACTIVE, revision, now)
+            lifecycle = _activation_attempt_after(change, lifecycle, revision, now)
+        case AttemptStateChange(
+            item=item,
+            item_before=item_before,
+            item_after=item_after,
+            attempt=attempt,
+            attempt_before=attempt_before,
+            attempt_after=attempt_after,
+        ):
+            lifecycle = _item_state_after(
+                lifecycle, item, item_before, StoredWorkItemState(item_after.value), revision, now
+            )
+            lifecycle = _attempt_state_after(lifecycle, attempt, attempt_before, attempt_after, revision, now)
+        case ResumeAttemptChange(
+            item=item,
+            item_before=item_before,
+            attempt=attempt,
+            attempt_before=attempt_before,
+            brief_artifact_ref_id=brief,
+        ):
+            lifecycle = _item_state_after(lifecycle, item, item_before, StoredWorkItemState.ACTIVE, revision, now)
+            lifecycle = _attempt_state_after(
+                lifecycle,
+                attempt,
+                attempt_before,
+                AttemptState.ACTIVE,
+                revision,
+                now,
+                brief_artifact_ref_id=brief,
+            )
+        case ReviewSubmissionChange(
+            item=item,
+            attempt=attempt,
+            protected_candidate_after=candidate,
+            candidate_observed_at=observed_at,
+        ):
+            lifecycle = _item_state_after(lifecycle, item, WorkState.ACTIVE, StoredWorkItemState.REVIEW, revision, now)
+            lifecycle = _attempt_state_after(
+                lifecycle,
+                attempt,
+                AttemptState.ACTIVE,
+                AttemptState.REVIEW,
+                revision,
+                now,
+                protected_candidate_after=candidate,
+                candidate_observed_at=observed_at,
+            )
+        case ReviewReturnChange(item=item, attempt=attempt, authority_change=authority_change):
+            lifecycle = _item_state_after(lifecycle, item, WorkState.REVIEW, StoredWorkItemState.ACTIVE, revision, now)
+            lifecycle = _attempt_state_after(
+                lifecycle, attempt, AttemptState.REVIEW, AttemptState.ACTIVE, revision, now
+            )
+            result = _transition_attempt_authority_after(authority_change, result, now)
+        case CompletionChange(
+            item=item,
+            item_before=item_before,
+            attempt=attempt,
+            attempt_before=attempt_before,
+            evidence=evidence,
+            authority_change=authority_change,
+        ):
+            lifecycle = _item_state_after(
+                lifecycle, item, item_before, StoredWorkItemState.DONE, revision, now, evidence
+            )
+            lifecycle = _attempt_state_after(lifecycle, attempt, attempt_before, AttemptState.DONE, revision, now)
+            if authority_change is not None:
+                result = _transition_attempt_authority_after(authority_change, result, now)
+            terminal = True
+        case ItemClosureChange(
+            item=item,
+            item_before=item_before,
+            terminal_state=terminal_state,
+            evidence=evidence,
+        ):
+            lifecycle = _item_state_after(
+                lifecycle, item, item_before, _terminal_item_state(terminal_state.value), revision, now, evidence
+            )
+            terminal = True
+        case AttemptClosureChange(
+            item=item,
+            item_before=item_before,
+            terminal_state=terminal_state,
+            evidence=evidence,
+            attempt=attempt,
+            attempt_before=attempt_before,
+            authority_change=authority_change,
+        ):
+            lifecycle = _item_state_after(
+                lifecycle, item, item_before, _terminal_item_state(terminal_state.value), revision, now, evidence
+            )
+            lifecycle = _attempt_state_after(lifecycle, attempt, attempt_before, AttemptState.DONE, revision, now)
+            if authority_change is not None:
+                result = _transition_attempt_authority_after(authority_change, result, now)
+            terminal = True
+        case AcceptedProposalChange(accepted_item=accepted, proposal=proposal, disposed_at=disposed_at):
+            item = accepted.item
+            lifecycle = _accepted_proposal_after(change, lifecycle, revision, now)
+            result = _proposal_disposition_after(
+                result, proposal, ProposalDispositionKind.ACCEPTED, disposed_at, revision, target_item=item
+            )
+        case MergedProposalChange(proposal=proposal, target_item=target, disposed_at=disposed_at):
+            result = _proposal_disposition_after(
+                result, proposal, ProposalDispositionKind.MERGED, disposed_at, revision, target_item=target
+            )
+        case ReturnedProposalChange(proposal=proposal, reason=reason, disposed_at=disposed_at):
+            result = _proposal_disposition_after(
+                result, proposal, ProposalDispositionKind.RETURNED, disposed_at, revision, reason=reason
+            )
+        case RejectedProposalChange(proposal=proposal, reason=reason, disposed_at=disposed_at):
+            result = _proposal_disposition_after(
+                result, proposal, ProposalDispositionKind.REJECTED, disposed_at, revision, reason=reason
+            )
+        case CheckpointAcceptanceChange(item=item, attempt=attempt, authority_change=authority_change):
+            lifecycle = _item_state_after(lifecycle, item, WorkState.REVIEW, StoredWorkItemState.PAUSED, revision, now)
+            lifecycle = _attempt_state_after(
+                lifecycle, attempt, AttemptState.REVIEW, AttemptState.PAUSED, revision, now
+            )
+            result = _transition_attempt_authority_after(authority_change, result, now)
+        case CoordinatorTransferChange(authority_change=authority_change):
+            result = _transition_coordinator_after(authority_change, result)
+        case NoTransitionChange():
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
+    result = replace(result, lifecycle=lifecycle)
+    if item is None:
+        return result
+    return _transition_focus_after(mutation, result, item, attempt, terminal=terminal)
 
 
 def _carrier_after(mutation: StoredStateMutation, common: StoredWorkState) -> StoredWorkState:

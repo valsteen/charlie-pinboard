@@ -33,8 +33,10 @@ from charlie_pinboard.domain.authority_models import (
     CoordinationAuthorityDecision,
 )
 from charlie_pinboard.domain.decision_models import (
+    AcceptedProposalChange,
     Action,
     ActionKind,
+    ActivationChange,
     ActorAuthority,
     AuthorizationKind,
     Decision,
@@ -50,12 +52,10 @@ from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
     AttemptId,
-    CandidateId,
     HistoryId,
     HistorySubjectId,
     HostId,
     ItemId,
-    LeaseId,
     ProposalId,
     TaskId,
 )
@@ -78,7 +78,6 @@ from charlie_pinboard.domain.work_models import (
     ProposalRelationKind,
     ReasonInput,
     ResumeInput,
-    SubmitReviewInput,
     Timing,
     TransitionInput,
 )
@@ -283,14 +282,15 @@ class MutationPersistenceTest(unittest.TestCase):
             decided_at,
         )
 
-        assert decision.attempt_change is not None
+        self.assertIsInstance(decision.change, ActivationChange)
+        assert isinstance(decision.change, ActivationChange)
         self.assertEqual(
             ("codex/work-c", "base-c", "worker-c", ArtifactRefId(1)),
             (
-                decision.attempt_change.branch,
-                decision.attempt_change.base_revision,
-                decision.attempt_change.owner,
-                decision.attempt_change.brief_artifact_ref_id,
+                decision.change.branch,
+                decision.change.base_revision,
+                decision.change.owner,
+                decision.change.brief_artifact_ref_id,
             ),
         )
         with store.write() as transaction:
@@ -367,7 +367,7 @@ class MutationPersistenceTest(unittest.TestCase):
             SQLITE_NOW + timedelta(seconds=1),
         )
 
-        self.assertIsNotNone(decision.proposal_change)
+        self.assertIsInstance(decision.change, AcceptedProposalChange)
         with store.write() as transaction:
             transaction.commit(project_transition_mutation(transaction.snapshot(), decision))
 
@@ -549,7 +549,7 @@ class MutationPersistenceTest(unittest.TestCase):
                     (proposal.disposition.value, proposal.disposition_target_item_id, proposal.disposition_reason),
                 )
 
-    def test_lifecycle_writer_rejects_incomplete_or_invalid_typed_facts_atomically(self) -> None:
+    def test_lifecycle_writer_rejects_invalid_terminal_receipt_atomically(self) -> None:
         store = self._store()
         before = store.snapshot()
         snapshot = project_decision_snapshot(before)
@@ -594,90 +594,9 @@ class MutationPersistenceTest(unittest.TestCase):
                 transaction.commit(replace(project_transition_mutation(before, close), decision=invalid))
             self.assertEqual(before, store.snapshot())
 
-        store = self._store()
-        before = store.snapshot()
-        snapshot = project_decision_snapshot(before)
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
-        activation_action = next(
-            value for value in available_actions(snapshot, actor) if value.kind == ActionKind.ACTIVATE
-        )
-        activation = decide(
-            snapshot,
-            bind_transition(
-                activation_action,
-                ActivateInput(AttemptId("work-c-1"), "branch", "base", "owner", ArtifactRefId(1)),
-            ),
-            SQLITE_NOW + timedelta(seconds=1),
-        )
-        assert activation.attempt_change is not None
-        incomplete = replace(activation, attempt_change=replace(activation.attempt_change, branch=None))
-        with self.assertRaises(StorageError), store.write() as transaction:
-            transaction.commit(replace(project_transition_mutation(before, activation), decision=incomplete))
-        self.assertEqual(before, store.snapshot())
-
-        pause_action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.PAUSE)
-        pause = decide(
-            snapshot,
-            bind_transition(pause_action, ReasonInput("Pause for an invalid-attempt-shape probe.")),
-            SQLITE_NOW + timedelta(seconds=1),
-        )
-        assert pause.attempt_change is not None
-        missing_attempt_state = replace(pause, attempt_change=replace(pause.attempt_change, after=None))
-        with self.assertRaises(StorageError), store.write() as transaction:
-            transaction.commit(replace(project_transition_mutation(before, pause), decision=missing_attempt_state))
-        self.assertEqual(before, store.snapshot())
-
-        worker = ActorAuthority(
-            Role.WORKER,
-            AuthorizationKind.ATTEMPT,
-            3,
-            LeaseId("attempt-lease-a"),
-            (AttemptId("work-a-1"),),
-            False,
-        )
-        review_action = next(
-            value for value in available_actions(snapshot, worker) if value.kind == ActionKind.SUBMIT_REVIEW
-        )
-        review = decide(
-            snapshot,
-            bind_transition(review_action, SubmitReviewInput(CandidateId("candidate"))),
-            SQLITE_NOW + timedelta(seconds=1),
-        )
-        assert review.attempt_change is not None
-        missing_candidate = replace(
-            review,
-            attempt_change=replace(review.attempt_change, protected_candidate_after=None),
-        )
-        with self.assertRaises(StorageError), store.write() as transaction:
-            transaction.commit(replace(project_transition_mutation(before, review), decision=missing_candidate))
-        self.assertEqual(before, store.snapshot())
-
     def test_application_port_contract_is_importable_at_the_composition_boundary(self) -> None:
         self.assertTrue(hasattr(WorkTransaction, "commit"))
         self.assertTrue(hasattr(WorkStore, "write"))
-
-    def test_incomplete_proposal_creation_facts_are_rejected_atomically(self) -> None:
-        store = self._store()
-        before = store.snapshot()
-        snapshot = project_decision_snapshot(before)
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
-        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.ACCEPT_PROPOSAL)
-        accepted = decide(
-            snapshot,
-            bind_transition(
-                action,
-                AcceptProposalInput(ItemId("incomplete-item"), AcceptedProposalState.READY, "activate"),
-            ),
-            SQLITE_NOW + timedelta(seconds=1),
-        )
-        assert accepted.proposal_change is not None
-        incomplete = replace(
-            accepted,
-            proposal_change=replace(accepted.proposal_change, accepted_item=None),
-        )
-        with self.assertRaises(StorageError), store.write() as transaction:
-            transaction.commit(replace(project_transition_mutation(before, accepted), decision=incomplete))
-        self.assertEqual(before, store.snapshot())
 
     def test_defer_decision_persists_reopen_focus(self) -> None:
         store = self._store()

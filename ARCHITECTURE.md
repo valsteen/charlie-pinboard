@@ -49,7 +49,7 @@ Only distribution version lookup and command composition live at the package roo
 | Owner group | Responsibility |
 | --- | --- |
 | `work_models.py`, `ledger.py`, `identifiers.py`, `errors.py` | Work-ledger values, read-only snapshot behavior, opaque identifiers, and expected decision failures |
-| `decision_models.py`, `decisions.py` | Closed item and attempt commands plus lifecycle, focus, dependency, requirement, and review legality |
+| `decision_models.py`, `decisions.py` | Closed item and attempt commands, explicit lifecycle-change variants, and lifecycle, focus, dependency, requirement, and review legality |
 | `authority_models.py`, `authority_decisions.py` | Closed authority operations plus coordination and attempt authority lifecycle and fencing |
 | `proposal_models.py`, `proposal_decisions.py` | Closed proposal intake values and immutable inbox intake decisions |
 | `history.py` | Exact history scope records, canonical codecs, digests, and receipt relationships |
@@ -62,8 +62,8 @@ Expected rejection over constructed domain values is returned as a typed `Decisi
 
 | Owner group | Responsibility |
 | --- | --- |
-| `stored_state.py`, `mutation_models.py`, `mutations.py`, `ports.py` | Complete persistence aggregate, closed mutation records, mutation projection, and transactional store capabilities |
-| `decision_projection.py`, `service.py` | Projection into domain decisions and locked mutation orchestration |
+| `stored_state.py`, `mutation_models.py`, `mutations.py`, `ports.py` | Complete persistence aggregate, closed mutation records, exhaustive relational-delta projection from domain lifecycle variants, and transactional store capabilities |
+| `decision_projection.py`, `service.py` | Shared-index projection of complete stored collections into domain decision facts and locked mutation orchestration |
 | `actions.py`, `query_models.py`, `queries.py` | Legal-action discovery plus current overview and parallel-preview records and queries |
 | `artifacts.py`, `artifact_publication.py`, `dispatch_models.py`, `dispatch.py` | Immutable artifact references and typed brief identity, application-owned artifact acceptance, activation and resume brief guards, dispatch contracts, accepted review publication, dispatch eligibility, and prompt preparation |
 | `errors.py` | Exact application exception families and their code enums |
