@@ -1,8 +1,6 @@
 from dataclasses import replace
 from datetime import datetime
-from typing import Annotated, assert_never
-
-import msgspec
+from typing import assert_never
 
 from charlie_pinboard.application.decision_projection import (
     project_decision_snapshot,
@@ -74,41 +72,6 @@ from charlie_pinboard.domain.proposal_decisions import (
     SQLiteLocalIntakeAuthority,
     decide_proposal_creation,
 )
-from charlie_pinboard.domain.resource_decisions import (
-    AbandonmentForm,
-)
-
-type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
-type NonNegativeInteger = Annotated[int, msgspec.Meta(ge=0)]
-type PositiveInteger = Annotated[int, msgspec.Meta(ge=1)]
-type Sha256 = Annotated[str, msgspec.Meta(pattern=r"^[0-9a-f]{64}$")]
-
-ABANDON_MUTATION_INTENT_INPUT_SCHEMA = "abandon-mutation-intent/v1"
-
-
-class AbandonMutationIntentHistoryInput(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    accepted_observation_digest: Sha256
-    accepted_observation_generation: PositiveInteger
-    deciding_task_id: NonEmptyString
-    discovery_fingerprint: NonEmptyString
-    form: AbandonmentForm
-    intent_id: NonEmptyString
-    locator: msgspec.Raw
-    locator_schema: NonEmptyString
-    observation_digest: Sha256
-    observation_host_id: NonEmptyString
-    observed_at: datetime
-    prior_attempt_lease_generation: PositiveInteger
-    prior_attempt_lease_id: NonEmptyString
-    prior_task_id: NonEmptyString
-    prior_task_use_generation: PositiveInteger
-    prior_task_use_lease_id: NonEmptyString
-    reason: NonEmptyString
-    resource_instance_id: NonEmptyString
-    resource_kind: NonEmptyString
-    start_instance_subject_revision: NonNegativeInteger
-    start_observation_digest: Sha256
-    start_observation_generation: PositiveInteger
 
 
 def change_coordination_authority(

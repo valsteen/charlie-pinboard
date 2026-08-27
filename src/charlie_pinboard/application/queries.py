@@ -8,13 +8,9 @@ from charlie_pinboard.application.stored_state import (
     AttemptLeaseState,
     ItemDependency,
     ItemResourceRequirement,
-    ProposalEvidence,
-    ProposalFreshness,
     ReservationState,
     ResourceMutationIntent,
     StoredAttempt,
-    StoredPlanningObligation,
-    StoredPlanningReplacement,
     StoredProposal,
     StoredResourceUseLease,
     StoredWorkItem,
@@ -262,31 +258,11 @@ def _parallel_item_key(value: ParallelItem) -> str:
     return value.item_id
 
 
-def _obligation_key(value: StoredPlanningObligation) -> tuple[str, str]:
-    return str(value.impact_id), str(value.target_item_id)
-
-
-def _replacement_position(value: StoredPlanningReplacement) -> int:
-    return value.position
-
-
-def _proposal_evidence_position(value: ProposalEvidence) -> int:
-    return value.position
-
-
-def _proposal_freshness_position(value: ProposalFreshness) -> int:
-    return value.position
-
-
 _TERMINAL_ITEM_STATES = {
     StoredWorkItemState.DONE,
     StoredWorkItemState.SUPERSEDED,
     StoredWorkItemState.DROPPED,
 }
-
-
-def _canonical_bytes(value: msgspec.Struct) -> bytes:
-    return msgspec.json.encode(value, order="sorted") + b"\n"
 
 
 def _work_state(value: StoredWorkItemState) -> WorkState:

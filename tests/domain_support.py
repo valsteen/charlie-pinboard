@@ -1,7 +1,7 @@
 from dataclasses import replace as dataclass_replace
 from typing import Any, cast  # noqa: TID251 - fixture corruption intentionally crosses the typed boundary
 
-from charlie_pinboard.domain import history, planning_decisions, resource_decisions
+from charlie_pinboard.domain import history
 from charlie_pinboard.domain.decisions import Action as ActionValue
 from charlie_pinboard.domain.decisions import ActionKind
 from charlie_pinboard.domain.identifiers import (
@@ -22,8 +22,6 @@ from charlie_pinboard.domain.identifiers import (
 from charlie_pinboard.domain.model import (
     AcceptedProposalState,
     AttemptState,
-    LedgerSnapshot,
-    PlanningDisposition,
     ReservationState,
     ScopeArtifact,
     Timing,
@@ -84,7 +82,6 @@ from charlie_pinboard.domain.model import (
 from charlie_pinboard.domain.model import (
     TransferCoordinatorInput as TransferCoordinatorInputValue,
 )
-from charlie_pinboard.domain.resource_decisions import ResourceDecision
 from charlie_pinboard.domain.resource_decisions import ResourceToken as ResourceTokenValue
 
 
@@ -314,136 +311,7 @@ def transfer_coordinator_input(task_id: str, host_id: str) -> TransferCoordinato
 
 
 def advance_scope(previous: ScopeAnchorValue | None, item: str, scope: ItemScopeValue) -> ScopeAnchorValue:
-    return cast(ScopeAnchorValue, planning_decisions.advance_scope(previous, ItemId(item), scope))
-
-
-def planning_resolution_outcome(impact: PlanningImpactValue, target: str) -> history.HistoryOutcome:
-    return cast(history.HistoryOutcome, history.planning_resolution_outcome(impact, ItemId(target)))
-
-
-def resolve_planning_obligation(
-    snapshot: LedgerSnapshot,
-    impact: PlanningImpactValue,
-    target: str,
-    disposition: PlanningDisposition,
-    *,
-    reason: str,
-    resulting_scope_revision: int | None = None,
-    resulting_scope_digest: str | None = None,
-    replacements: tuple[str, ...] = (),
-    outcome_evidence: str | None = None,
-) -> PlanningImpactValue:
-    return cast(
-        PlanningImpactValue,
-        planning_decisions.resolve_planning_obligation(
-            snapshot,
-            impact,
-            ItemId(target),
-            disposition,
-            reason=reason,
-            resulting_scope_revision=resulting_scope_revision,
-            resulting_scope_digest=resulting_scope_digest,
-            replacements=tuple(ItemId(value) for value in replacements),
-            outcome_evidence=outcome_evidence,
-        ),
-    )
-
-
-def decide_planning_resolution(
-    snapshot: LedgerSnapshot,
-    impact: PlanningImpactValue,
-    target: str,
-    disposition: PlanningDisposition,
-    *,
-    reason: str,
-    resulting_scope_revision: int | None = None,
-    resulting_scope_digest: str | None = None,
-    replacements: tuple[str, ...] = (),
-    outcome_evidence: str | None = None,
-) -> planning_decisions.PlanningResolutionDecision:
-    return cast(
-        planning_decisions.PlanningResolutionDecision,
-        planning_decisions.decide_planning_resolution(
-            snapshot,
-            impact,
-            ItemId(target),
-            disposition,
-            reason=reason,
-            resulting_scope_revision=resulting_scope_revision,
-            resulting_scope_digest=resulting_scope_digest,
-            replacements=tuple(ItemId(value) for value in replacements),
-            outcome_evidence=outcome_evidence,
-        ),
-    )
-
-
-def assign_resource(
-    snapshot: LedgerSnapshot,
-    *,
-    reservation_id: str,
-    resource_id: str,
-    instance_id: str,
-    attempt: str,
-    generation: int,
-) -> ResourceDecision:
-    return cast(
-        ResourceDecision,
-        resource_decisions.assign_resource(
-            snapshot,
-            reservation_id=ReservationId(reservation_id),
-            resource_id=ResourceId(resource_id),
-            instance_id=ResourceInstanceId(instance_id),
-            attempt=AttemptId(attempt),
-            generation=generation,
-        ),
-    )
-
-
-def release_resource(snapshot: LedgerSnapshot, reservation_id: str) -> ResourceDecision:
-    return cast(ResourceDecision, resource_decisions.release_resource(snapshot, ReservationId(reservation_id)))
-
-
-def revoke_resource(snapshot: LedgerSnapshot, reservation_id: str, *, unresolved_intent: bool) -> ResourceDecision:
-    return cast(
-        ResourceDecision,
-        resource_decisions.revoke_resource(
-            snapshot, ReservationId(reservation_id), unresolved_intent=unresolved_intent
-        ),
-    )
-
-
-def reallocate_resource(
-    snapshot: LedgerSnapshot,
-    reservation_id: str,
-    *,
-    replacement_id: str,
-    instance_id: str,
-    generation: int,
-) -> ResourceDecision:
-    return cast(
-        ResourceDecision,
-        resource_decisions.reallocate_resource(
-            snapshot,
-            ReservationId(reservation_id),
-            replacement_id=ReservationId(replacement_id),
-            instance_id=ResourceInstanceId(instance_id),
-            generation=generation,
-        ),
-    )
-
-
-def validate_mutation_resources(
-    snapshot: LedgerSnapshot,
-    attempt: str,
-    required_resources: tuple[str, ...],
-    tokens: tuple[ResourceTokenValue, ...],
-) -> None:
-    if (
-        failure := resource_decisions.validate_mutation_resources(
-            snapshot,
-            AttemptId(attempt),
-            tuple(ResourceId(value) for value in required_resources),
-            tokens,
-        )
-    ) is not None:
-        raise AssertionError(f"Expected success, received {failure.code.value}: {failure.message}")
+    digest = cast(str, history.item_scope_digest(scope))
+    if previous is not None and previous.digest == digest:
+        return previous
+    return ScopeAnchorValue(ItemId(item), 1 if previous is None else previous.revision + 1, digest, scope)

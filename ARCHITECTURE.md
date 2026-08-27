@@ -36,7 +36,7 @@ Only identity and composition entry files sit at the package root.
 
 `domain` contains immutable values and pure decisions. It has no dependency on application, adapters, interfaces, filesystems, SQL, Markdown, CLI parsing, or legacy owners.
 
-Expected lifecycle, planning, resource, and history rejection over constructed domain models is part of each operation's return type. Operations return their accepted value or `DecisionFailure`; validators without an accepted value return `DecisionFailure | None`. `LedgerSnapshot` owns storage-independent read-only lookup and reports absence as `None`, leaving each decision operation to produce the failure that is meaningful for that call. Serialized history payloads decode directly into exact frozen `msgspec` records; field constraints, unknown-member rejection, and record post-init invariants run during that instantiation, while canonical sorted-byte comparison remains a codec check. Decode failures raise `HistoryOutcomeError`; only operations over constructed domain models use returned failures. Interfaces and transitional legacy owners may translate returned failures or boundary exceptions into their existing presentation or transaction error contract.
+Expected lifecycle, authority, proposal, and history rejection over constructed domain models is part of each operation's return type. Operations return their accepted value or `DecisionFailure`; validators without an accepted value return `DecisionFailure | None`. `LedgerSnapshot` owns storage-independent read-only lookup and reports absence as `None`, leaving each decision operation to produce the failure that is meaningful for that call. Serialized history payloads decode directly into exact frozen `msgspec` records; field constraints, unknown-member rejection, and record post-init invariants run during that instantiation, while canonical sorted-byte comparison remains a codec check. Decode failures raise `HistoryOutcomeError`; only operations over constructed domain models use returned failures. Interfaces and transitional legacy owners may translate returned failures or boundary exceptions into their existing presentation or transaction error contract.
 
 | Module | Current ownership |
 | --- | --- |
@@ -44,10 +44,9 @@ Expected lifecycle, planning, resource, and history rejection over constructed d
 | `errors.py` | Typed decision failures and their closed error codes |
 | `model.py` | Immutable ledger, lifecycle, resource, decoded transition-payload, and snapshot values |
 | `decisions.py` | Lifecycle and action-legality decisions |
-| `planning_decisions.py` | Pure planning-impact checks for item and attempt changes |
 | `authority_decisions.py` | Pure coordination, attempt, and task-use authority lifecycle and fencing decisions |
-| `proposal_decisions.py`, `scope_decisions.py`, `resource_definition_decisions.py` | Pure proposal intake, item-scope replacement, and portable resource-definition decisions |
-| `resource_decisions.py` | Pure resource reservation, claim, use-lease, and mutation-intent decisions |
+| `proposal_decisions.py` | Pure proposal-intake decisions |
+| `resource_decisions.py` | Resource transition records and current authorizing-grant lookup shared by lifecycle decisions |
 | `history.py` | Declared canonical scope and history records, direct typed codecs, digests, and receipt relationships |
 
 ### Application
@@ -57,7 +56,7 @@ The application layer is the home for top-level use-case sequencing below user-f
 | Module | Current ownership |
 | --- | --- |
 | `stored_state.py` | Complete immutable persistence aggregate, organized into lifecycle, proposal, planning, artifact, authority, resource, history, and focus records |
-| `mutations.py` | Closed typed persistence contract over lifecycle decisions, pure planning and resource decisions, and exact before/after carriers accepted by existing legality owners |
+| `mutations.py` | Closed typed persistence contract over lifecycle decisions, proposal intake, and coordination or attempt authority decisions |
 | `decision_projection.py` | Pure projection from complete stored state into the narrower `LedgerSnapshot` consumed by domain decisions |
 | `ports.py` | `WorkStore` and `WorkTransaction` protocols over complete `StoredWorkState` reads and one closed accepted-mutation commit boundary |
 | `service.py` | Locked application orchestration for the SQLite CLI's coordination authority, attempt authority, proposal intake, and lifecycle transitions |
@@ -86,7 +85,7 @@ Adapters own concrete filesystem and database mechanics without deciding lifecyc
 
 These owners provide the current runtime for fresh projects. SQLite is the sole authority once `state.sqlite3` exists; artifact files contain accepted long-form bytes, while generated views remain disposable projections.
 
-Pure lifecycle, planning, and resource modules continue to decide legality. The application mutation contract derives the exact relational delta for their accepted outputs, while proposal creation, dependency and requirement edits, authority changes, and reservation or task-use changes use typed before/after values bounded to their named record families. Every stored-state mutation carries the complete accepted history-receipt identity. Carrier-only variants add no policy; application orchestration constructs them only after current action and operation legality accepts the exact records. SQLite applies the closed union without importing raw input, Markdown, paths, or application orchestration.
+Pure lifecycle, proposal, and authority modules continue to decide legality. The application mutation contract derives the exact relational delta for their accepted outputs. Every stored-state mutation carries the complete accepted history-receipt identity. Carrier variants add no policy; application orchestration constructs them only after current action and operation legality accepts the exact records. SQLite applies the closed union without importing raw input, Markdown, paths, or application orchestration.
 
 ### Interfaces
 
