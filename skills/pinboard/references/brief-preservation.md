@@ -36,6 +36,8 @@ The root record contains:
 - human context: `title`, `outcome`, `supported_production_roots`, `product_decision_and_provenance`, `testing_strategy`, `scope`, `bootstrap`, `compatibility`, `non_goals`, and `remaining_work`;
 - one tagged `checkpoint` record.
 
+Use one built-in design lens while compiling the brief: prefer existing canonical typed values and direct composition. Introduce a helper, wrapper, protocol, projection, or conversion only when it owns a current semantic boundary, meaningful complexity, reuse, or genuine substitution. Do not recreate an existing concept as a parallel tuple, dictionary, or field-by-field mirror. This lens shapes the proposed implementation; make it a mandatory contract or verification only when accepted scope or reviewed repository policy authorizes it.
+
 Every checkpoint has a stable kebab-case `checkpoint_id`, separate human `title`, `outcome_description`, architecture impact, nonempty acceptance criteria, nonempty mandatory verification, and explicit deferrals. Its `boundary` tag selects one closed shape:
 
 - `local` contains the common fields only;
