@@ -1,3 +1,6 @@
+import contextlib
+import io
+import json
 import subprocess
 import tempfile
 import unittest
@@ -5,7 +8,7 @@ from contextlib import chdir
 from pathlib import Path
 
 from charlie_pinboard.adapters.files.errors import RootError
-from charlie_pinboard.adapters.files.root import resolve_project_root
+from charlie_pinboard.adapters.files.root import resolve_shared_repository_root, resolve_source_checkout_root
 from charlie_pinboard.interfaces.cli import main
 
 
@@ -19,7 +22,14 @@ class RootResolutionTest(unittest.TestCase):
             capture_output=True,
         ).stdout
 
-    def test_primary_checkout_and_linked_worktree_share_root(self) -> None:
+    def run_cli(self, *arguments: str) -> tuple[int, str, str]:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            result = main(arguments)
+        return result, stdout.getvalue(), stderr.getvalue()
+
+    def test_linked_worktree_owns_sources_while_the_repository_owns_the_default_ledger(self) -> None:
         temporary = Path(tempfile.mkdtemp())
         repository = temporary / "repository"
         linked = temporary / "linked"
@@ -39,8 +49,22 @@ class RootResolutionTest(unittest.TestCase):
         )
         self.run_git(repository, "worktree", "add", "-b", "linked", str(linked))
 
-        self.assertEqual(repository.resolve(), resolve_project_root(repository))
-        self.assertEqual(repository.resolve(), resolve_project_root(linked))
+        self.assertEqual(repository.resolve(), resolve_source_checkout_root(repository))
+        self.assertEqual(linked.resolve(), resolve_source_checkout_root(linked))
+        self.assertEqual(repository.resolve(), resolve_shared_repository_root(repository))
+        self.assertEqual(repository.resolve(), resolve_shared_repository_root(linked))
+
+        with chdir(linked):
+            result, stdout, stderr = self.run_cli("root")
+        self.assertEqual((0, ""), (result, stderr))
+        self.assertEqual(
+            {
+                "source_checkout_root": str(linked.resolve()),
+                "shared_repository_root": str(repository.resolve()),
+                "work_root": str(repository.resolve() / ".codex" / "pinboard"),
+            },
+            json.loads(stdout),
+        )
 
         original_exclude = (repository / ".git" / "info" / "exclude").read_bytes()
         with chdir(linked):
@@ -60,7 +84,9 @@ class RootResolutionTest(unittest.TestCase):
         directory = Path(tempfile.mkdtemp())
 
         with self.assertRaisesRegex(RootError, "PROJECT_GIT_ROOT_UNAVAILABLE"):
-            resolve_project_root(directory)
+            resolve_source_checkout_root(directory)
+        with self.assertRaisesRegex(RootError, "PROJECT_GIT_ROOT_UNAVAILABLE"):
+            resolve_shared_repository_root(directory)
 
 
 if __name__ == "__main__":

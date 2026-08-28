@@ -24,7 +24,8 @@ class RootSelection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 @dataclass(frozen=True, slots=True)
 class ResolvedRoots:
-    project: Path
+    source_checkout: Path
+    shared_repository: Path
     work: Path
     explicit_work_root: bool
 

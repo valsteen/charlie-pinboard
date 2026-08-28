@@ -28,15 +28,31 @@ def _resolve_git_common_directory(cwd: Path) -> Path:
     return common_directory
 
 
-def resolve_project_root(cwd: Path) -> Path:
+def resolve_source_checkout_root(cwd: Path) -> Path:
+    result = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--show-toplevel"],
+        cwd=cwd,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RootError(
+            RootErrorCode.PROJECT_GIT_ROOT_UNAVAILABLE,
+            result.stderr.strip() or f"'{cwd}' is not inside a Git checkout.",
+        )
+    return Path(result.stdout.strip()).resolve()
+
+
+def resolve_shared_repository_root(cwd: Path) -> Path:
     return _resolve_git_common_directory(cwd).parent
 
 
-def ensure_default_git_exclude(project_root: Path) -> None:
+def ensure_default_git_exclude(shared_repository_root: Path) -> None:
     """Exclude only the default Pinboard root from one repository's local status."""
 
     try:
-        common_directory = _resolve_git_common_directory(project_root)
+        common_directory = _resolve_git_common_directory(shared_repository_root)
     except RootError as error:
         if error.code == RootErrorCode.PROJECT_GIT_ROOT_UNAVAILABLE:
             return

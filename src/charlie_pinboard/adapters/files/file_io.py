@@ -42,16 +42,16 @@ def _validate_component(component: str) -> None:
         raise FileIOError(FileIOErrorCode.DIRECTORY_INVALID, f"Invalid durable-root component: {component!r}")
 
 
-def resolve_durable_roots(project_root: Path, external_work_root: Path | None = None) -> DurableRoots:
-    local_work_root = project_root.absolute() / ".codex" / "pinboard"
+def resolve_durable_roots(shared_repository_root: Path, external_work_root: Path | None = None) -> DurableRoots:
+    local_work_root = shared_repository_root.absolute() / ".codex" / "pinboard"
     if external_work_root is None or external_work_root.absolute() == local_work_root:
-        anchor = _verified_directory(project_root, label="Project root")
+        anchor = _verified_directory(shared_repository_root, label="Shared repository root")
         return DurableRoots(anchor, (".codex", "pinboard"))
 
     external = external_work_root.absolute()
     _validate_component(external.name)
     if external.parent == local_work_root.parent:
-        anchor = _verified_directory(project_root, label="Project root")
+        anchor = _verified_directory(shared_repository_root, label="Shared repository root")
         return DurableRoots(anchor, (".codex", external.name))
     anchor = _verified_directory(external.parent, label="External work-root parent")
     return DurableRoots(anchor, (external.name,))

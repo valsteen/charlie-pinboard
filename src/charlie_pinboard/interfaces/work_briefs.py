@@ -239,11 +239,11 @@ def canonical_reviewed_authority_set_bytes(authorities: tuple[ReviewedAuthority,
     return _canonical_bytes(authorities)
 
 
-def validate_reviewed_authority_digests(project_root: Path, authorities: tuple[ReviewedAuthority, ...]) -> None:
+def validate_reviewed_authority_digests(source_checkout_root: Path, authorities: tuple[ReviewedAuthority, ...]) -> None:
     for authority in authorities:
         try:
             selected = select_brief_source(
-                project_root,
+                source_checkout_root,
                 parse_authority_selector(authority.selector),
                 require_utf8=True,
             )

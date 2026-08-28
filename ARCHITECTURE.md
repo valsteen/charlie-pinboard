@@ -6,6 +6,8 @@ Charlie Pinboard is a local coordination system for one repository-owned work le
 
 SQLite is the authority for the repository work ledger.
 
+Each invocation resolves two Git-backed roots with different owners. The source checkout root is the current or explicitly selected checkout's exact top level, including a linked worktree, and owns project-file and authority reads for that attempt. The shared repository root is derived from the Git common directory and owns repository-shared Pinboard state and local Git exclude configuration. In a primary checkout the two roots are equal; in a linked worktree they are intentionally different.
+
 One work root has three durable roles:
 
 ```text
@@ -77,7 +79,7 @@ Adapters own concrete persistence and filesystem mechanics without deciding prod
 
 | Owner group | Responsibility |
 | --- | --- |
-| `files/root.py`, `files/file_io.py`, `files/models.py`, `files/errors.py` | Git-backed project discovery, repository-local exclusion of the default durable root, durable-root resolution, file-operation records, exact failure families, directory creation, and atomic file publication |
+| `files/root.py`, `files/file_io.py`, `files/models.py`, `files/errors.py` | Distinct Git-backed source-checkout and shared-repository discovery, repository-local exclusion of the default durable root, durable-root resolution, file-operation records, exact failure families, directory creation, and atomic file publication |
 | `files/artifacts.py` | Immutable artifact naming, publication, digest verification, and reference resolution |
 | `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections; interface composition supplies complete live-v2 brief projections |
 | `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, schema verification, connection records, transactions, backup, synchronization, and exact storage failures |
@@ -93,7 +95,7 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 | `cli_commands.py`, `cli.py` | Exact leaf command records, parser-owned declarative decoding, exhaustive dispatch, authority-token comparison, SQLite composition, and generated-view refresh |
 | `cli_models.py` | JSON and text presentation records for the installed command surface |
 | `transition_models.py`, `transition_input.py` | Strict external transition payload records and conversion to typed command input |
-| `brief_source_models.py`, `brief_sources.py` | Strict source manifests, shared project-relative file and Markdown-heading selection, deterministic digests, overlap rejection, and context-bounded batch planning |
+| `brief_source_models.py`, `brief_sources.py` | Strict source manifests, source-checkout-relative file and Markdown-heading selection, deterministic digests, overlap rejection, and context-bounded batch planning |
 | `work_brief_models.py`, `work_briefs.py` | Strict v2 brief and review records, exact canonical codecs and semantic validation, digest computation, reviewed-authority checks, and complete Markdown rendering |
 | `dispatch_brief.py` | Typed accepted-brief identity checks, cross-boundary review validation, and canonical launch prompt rendering |
 | `proposal_models.py`, `proposals.py` | Strict proposal-file records and decoding into current SQLite intake input |
@@ -121,7 +123,7 @@ Pinboard does not require or produce a companion notes directory. Project docume
 
 ### Initialization and reopen
 
-`pinboard init` resolves the default `.codex/pinboard` root and idempotently adds only `/.codex/pinboard/` to the shared repository's local Git exclude file. It never edits a committed `.gitignore`, so unrelated `.codex` content remains visible. An explicit `--work-root` selects that exact path instead. Initialization creates the SQLite schema when `state.sqlite3` is absent. When the database exists, initialization verifies that exact schema before reconciling the fixed publication staging path: a same-file staging alias left after publication is removed, while a different-file conflict is rejected without replacement. It then ensures the artifact directories exist and rebuilds views.
+`pinboard init` resolves the default `.codex/pinboard` root below the shared repository root and idempotently adds only `/.codex/pinboard/` to that repository's local Git exclude file. Invoking initialization from a linked worktree therefore reuses the repository ledger and does not create a worktree-local authority. It never edits a committed `.gitignore`, so unrelated `.codex` content remains visible. An explicit `--work-root` selects that exact path instead. Initialization creates the SQLite schema when `state.sqlite3` is absent. When the database exists, initialization verifies that exact schema before reconciling the fixed publication staging path: a same-file staging alias left after publication is removed, while a different-file conflict is rejected without replacement. It then ensures the artifact directories exist and rebuilds views.
 
 ### Reads and validation
 
@@ -129,7 +131,7 @@ Status, overview, exact item status, action discovery, and parallel preview open
 
 ### Brief source planning
 
-The installed `pinboard brief-sources` command reads a strict source manifest without opening work state. It resolves every project-relative whole-file or Markdown-heading selector before emitting content, rejects overlapping line spans, reports normalized selected-source digests, and assigns every selected UTF-8 byte to one consecutive segment and batch. Its heading selection is also used by dispatch when validating reviewed-authority digests. Planning is read-only and does not acquire authority or write project state.
+The installed `pinboard brief-sources` command reads a strict source manifest without opening work state. It resolves every source-checkout-relative whole-file or Markdown-heading selector before emitting content, rejects overlapping line spans, reports normalized selected-source digests, and assigns every selected UTF-8 byte to one consecutive segment and batch. Its heading selection is also used by dispatch against the same selected source checkout when validating reviewed-authority digests. Planning is read-only and does not acquire authority or write project state.
 
 ### Mutations and proposal intake
 
@@ -137,7 +139,7 @@ Each argparse leaf selects its exact command record and parser before dispatch. 
 
 ### Worker dispatch and review publication
 
-Dispatch reselects the current action, active attempt, and accepted JSON brief reference from SQLite. `application.dispatch` passes the selected attempt's item and accepted scope identity into brief validation. The artifact adapter verifies the canonical bytes, and `interfaces.dispatch_brief` decodes the strict record and checks attempt, item, branch, stable checkpoint ID, accepted scope, architecture impact, contracts, authorization bases, verification, reviewed-authority digests, coverage, lifecycle disposition, and independent ready review before rendering a prompt. Accepted-scope authorization must match the reselected attempt; source-derived authorization must name one exact reviewed authority family. The independent reviewer verifies that each selected source truthfully serves its claimed product-authority, repository-policy, or existing-consumer role and that each mandatory check's tool, threshold, platform, compatibility obligation, or hardening target is supported by accepted scope or selected source bytes.
+Dispatch reselects the current action, active attempt, and accepted JSON brief reference from the shared SQLite ledger. `application.dispatch` passes the selected attempt's item and accepted scope identity into brief validation. The artifact adapter verifies the canonical bytes, and `interfaces.dispatch_brief` requires the dispatch environment checkout to match the selected source checkout before it decodes the strict record and checks attempt, item, branch, stable checkpoint ID, accepted scope, architecture impact, contracts, authorization bases, verification, reviewed-authority digests, coverage, lifecycle disposition, and independent ready review. Reviewed-authority digests are recomputed from that source checkout rather than the shared repository root. Accepted-scope authorization must match the reselected attempt; source-derived authorization must name one exact reviewed authority family. The independent reviewer verifies that each selected source truthfully serves its claimed product-authority, repository-policy, or existing-consumer role and that each mandatory check's tool, threshold, platform, compatibility obligation, or hardening target is supported by accepted scope or selected source bytes.
 
 Ready review evidence is strict JSON bound to the stable checkpoint ID, canonical checkpoint-record digest, and canonical ordered authority-set digest. It is published as an immutable artifact and accepted through the application-owned SQLite workflow. The launch prompt only points the worker to the canonical JSON brief and names the execution environment; it does not duplicate or reinterpret the task contract.
 

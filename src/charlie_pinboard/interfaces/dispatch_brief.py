@@ -115,6 +115,7 @@ def _validate_dispatch_identity(
     accepted_item_id: str | None,
     accepted_scope_revision: int | None,
     accepted_scope_digest: str | None,
+    source_checkout_root: Path,
 ) -> None:
     if brief.attempt_id != attempt_id:
         raise DispatchError(DispatchErrorCode.DISPATCH_BRIEF_INVALID, "Canonical work brief names a different attempt.")
@@ -138,6 +139,11 @@ def _validate_dispatch_identity(
     checkout = Path(environment.checkout)
     if not checkout.is_dir():
         raise DispatchError(DispatchErrorCode.DISPATCH_CHECKOUT_MISSING, f"Checkout '{checkout}' is not a directory.")
+    if checkout.resolve() != source_checkout_root.resolve():
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_CHECKOUT_MISMATCH,
+            "The dispatch environment checkout must match the selected source checkout.",
+        )
     if brief.checkpoint.checkpoint_id != checkpoint_id:
         raise DispatchError(
             DispatchErrorCode.DISPATCH_CHECKPOINT_MISSING,
@@ -147,7 +153,7 @@ def _validate_dispatch_identity(
 
 def _validate_checkpoint_dispatch(
     brief: WorkBrief,
-    project_root: Path,
+    source_checkout_root: Path,
     brief_review: bytes | None,
     review_id: str | None,
     review_publisher: BriefReviewPublisher | None,
@@ -161,7 +167,7 @@ def _validate_checkpoint_dispatch(
                 )
         case CrossBoundaryCheckpoint(reviewed_authorities=authorities) as checkpoint:
             try:
-                validate_reviewed_authority_digests(project_root, authorities)
+                validate_reviewed_authority_digests(source_checkout_root, authorities)
             except WorkBriefError as error:
                 code = (
                     DispatchErrorCode.DISPATCH_AUTHORITY_STALE
@@ -178,7 +184,7 @@ def prepare_dispatch_from_artifact(
     attempt_path: Path,
     attempt_id: str,
     attempt_branch: str,
-    project_root: Path,
+    source_checkout_root: Path,
     checkpoint: str,
     environment: DispatchEnvironment,
     *,
@@ -205,8 +211,9 @@ def prepare_dispatch_from_artifact(
         accepted_item_id,
         accepted_scope_revision,
         accepted_scope_digest,
+        source_checkout_root,
     )
-    _validate_checkpoint_dispatch(brief, project_root, brief_review, review_id, review_publisher)
+    _validate_checkpoint_dispatch(brief, source_checkout_root, brief_review, review_id, review_publisher)
     prompt = _canonical_prompt(attempt_path, attempt_id, checkpoint, environment)
     if supplied_prompt is not None and supplied_prompt != prompt.encode():
         raise DispatchError(

@@ -79,12 +79,12 @@ def _selected_heading(lines: tuple[str, ...], heading: str, path: Path) -> tuple
 
 
 def select_brief_source(
-    project_root: Path,
+    source_checkout_root: Path,
     selector: AuthoritySelector,
     *,
     require_utf8: bool,
 ) -> SelectedBriefSource:
-    path = project_root / Path(*selector.relative_path.parts)
+    path = source_checkout_root / Path(*selector.relative_path.parts)
     try:
         raw = path.read_bytes()
     except OSError as error:
@@ -229,7 +229,7 @@ def _batches(segments: tuple[BriefSourceSegment, ...], max_batch_bytes: int) -> 
 
 
 def plan_brief_sources(
-    project_root: Path,
+    source_checkout_root: Path,
     manifest: BriefSourceManifest,
     max_batch_bytes: int,
 ) -> BriefSourcePlan:
@@ -239,7 +239,7 @@ def plan_brief_sources(
         (
             request,
             select_brief_source(
-                project_root,
+                source_checkout_root,
                 parse_authority_selector(request.selector),
                 require_utf8=True,
             ),

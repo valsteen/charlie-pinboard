@@ -2,8 +2,10 @@ import contextlib
 import hashlib
 import io
 import json
+import subprocess
 import tempfile
 import unittest
+from contextlib import chdir
 from pathlib import Path
 
 import msgspec
@@ -28,6 +30,9 @@ class BriefSourcesTest(unittest.TestCase):
 
     def manifest(self, *sources: BriefSourceRequest) -> BriefSourceManifest:
         return BriefSourceManifest(schema="pinboard-brief-sources/v1", sources=sources)
+
+    def run_git(self, cwd: Path, *arguments: str) -> None:
+        subprocess.run(["git", *arguments], cwd=cwd, check=True, capture_output=True)
 
     def test_manifest_boundary_rejects_unknown_fields_duplicates_and_unsafe_selectors(self) -> None:
         cases = (
@@ -135,6 +140,54 @@ class BriefSourcesTest(unittest.TestCase):
         self.assertEqual(15, missing_result)
         self.assertIn(BriefSourceErrorCode.BATCH_NOT_FOUND.value, missing_stderr)
         self.assertEqual(before, after)
+
+    def test_cli_reads_authority_bytes_from_the_selected_linked_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            linked = root / "linked"
+            repository.mkdir()
+            self.run_git(repository, "init", "-b", "main")
+            (repository / "authority.md").write_text("linked authority\n", encoding="utf-8")
+            self.run_git(repository, "add", "authority.md")
+            self.run_git(
+                repository,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            )
+            self.run_git(repository, "worktree", "add", "-b", "linked", str(linked))
+            (repository / "authority.md").write_text("dirty primary authority\n", encoding="utf-8")
+            manifest_path = linked / "manifest.json"
+            manifest_path.write_bytes(
+                msgspec.json.encode(
+                    self.manifest(BriefSourceRequest("authority", "authority.md", ("contract",))),
+                    order="sorted",
+                )
+            )
+
+            explicit_result, explicit_stdout, explicit_stderr = self.run_cli(
+                "--project-root",
+                str(linked),
+                "brief-sources",
+                "--file",
+                str(manifest_path),
+                "--json",
+            )
+            with chdir(linked):
+                default_result, default_stdout, default_stderr = self.run_cli(
+                    "brief-sources", "--file", str(manifest_path), "--json"
+                )
+
+        expected_digest = hashlib.sha256(b"linked authority\n").hexdigest()
+        self.assertEqual((0, ""), (explicit_result, explicit_stderr))
+        self.assertEqual((0, ""), (default_result, default_stderr))
+        self.assertEqual(expected_digest, json.loads(explicit_stdout)["sources"][0]["selected_sha256"])
+        self.assertEqual(expected_digest, json.loads(default_stdout)["sources"][0]["selected_sha256"])
 
 
 if __name__ == "__main__":

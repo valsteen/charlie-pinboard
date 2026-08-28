@@ -13,7 +13,8 @@ class BriefPublicationView(msgspec.Struct, frozen=True):
 
 
 class RootView(msgspec.Struct, frozen=True):
-    project_root: str
+    source_checkout_root: str
+    shared_repository_root: str
     work_root: str
 
 
@@ -41,7 +42,8 @@ class CoordinatorView(msgspec.Struct, frozen=True):
 
 class StatusView(msgspec.Struct, frozen=True):
     valid: bool
-    project_root: str
+    source_checkout_root: str
+    shared_repository_root: str
     work_root: str
     revision: str
     focus_item: str | None

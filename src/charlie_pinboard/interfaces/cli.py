@@ -15,7 +15,7 @@ from charlie_pinboard.adapters.files.artifacts import ArtifactRepository
 from charlie_pinboard.adapters.files.errors import ArtifactError, FileIOError, FileIOErrorCode, RootError, RootErrorCode
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
 from charlie_pinboard.adapters.files.models import AffectedViews
-from charlie_pinboard.adapters.files.root import resolve_project_root
+from charlie_pinboard.adapters.files.root import resolve_shared_repository_root, resolve_source_checkout_root
 from charlie_pinboard.adapters.files.views import rebuild as rebuild_views
 from charlie_pinboard.adapters.files.views import refresh as refresh_views
 from charlie_pinboard.adapters.sqlite.errors import StorageError
@@ -662,7 +662,7 @@ def _add_chat_parser(commands: argparse._SubParsersAction[argparse.ArgumentParse
 
 
 def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    root = commands.add_parser("root", help="Resolve the shared project and work roots.")
+    root = commands.add_parser("root", help="Resolve the source checkout, shared repository, and work roots.")
     _select(root, RootCommand)
     validate = commands.add_parser("validate", help="Validate work state without modifying it.")
     validate.add_argument("--json", action="store_true")
@@ -709,7 +709,7 @@ def _add_brief_parser(commands: argparse._SubParsersAction[argparse.ArgumentPars
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="pinboard", description="Inspect and transition one pinboard.")
     parser.add_argument("--version", action="version", version=__version__)
-    parser.add_argument("--project-root", type=Path)
+    parser.add_argument("--project-root", type=Path, help="Select the exact source checkout for authority reads.")
     parser.add_argument("--work-root", type=Path)
     commands = parser.add_subparsers(required=True)
     _add_inspection_parsers(commands)
@@ -768,18 +768,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _resolve_roots(selection: RootSelection) -> ResolvedRoots:
     project_argument = selection.project_root
-    if project_argument is None:
-        project = resolve_project_root(Path.cwd())
-    else:
-        try:
-            project = resolve_project_root(project_argument)
-        except RootError as error:
-            if error.code != RootErrorCode.PROJECT_GIT_ROOT_UNAVAILABLE:
-                raise
-            project = project_argument.resolve()
+    selected_checkout = Path.cwd() if project_argument is None else project_argument
+    try:
+        source_checkout = resolve_source_checkout_root(selected_checkout)
+        shared_repository = resolve_shared_repository_root(source_checkout)
+    except RootError as error:
+        if project_argument is None or error.code != RootErrorCode.PROJECT_GIT_ROOT_UNAVAILABLE:
+            raise
+        source_checkout = project_argument.resolve()
+        shared_repository = source_checkout
     work_argument = selection.work_root
-    work = work_argument.resolve() if work_argument is not None else project / ".codex" / "pinboard"
-    return ResolvedRoots(project, work, work_argument is not None)
+    work = work_argument.resolve() if work_argument is not None else shared_repository / ".codex" / "pinboard"
+    return ResolvedRoots(source_checkout, shared_repository, work, work_argument is not None)
 
 
 def _diagnostic_view(report: ValidationReport) -> ValidationView:
@@ -801,17 +801,18 @@ def _diagnostic_view(report: ValidationReport) -> ValidationView:
 def _brief_views(roots: ResolvedRoots, store: SQLiteWorkStore) -> dict[AttemptId, bytes]:
     return build_attempt_brief_views(
         store.snapshot(),
-        ArtifactRepository(resolve_durable_roots(roots.project, roots.work)),
+        ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work)),
     )
 
 
-def _status_value(work: Path, project: Path) -> StatusView:
+def _status_value(work: Path, source_checkout: Path, shared_repository: Path) -> StatusView:
     state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
     overview = overview_from_state(state)
     coordinator = state.authority.coordination
     return StatusView(
         valid=True,
-        project_root=str(project),
+        source_checkout_root=str(source_checkout),
+        shared_repository_root=str(shared_repository),
         work_root=str(work),
         revision=str(state.lifecycle.project.revision),
         focus_item=overview.focus_item,
@@ -943,7 +944,7 @@ def _reselect_action(roots: ResolvedRoots, supplied: Action, role: Role) -> Acti
 
 
 def _root(roots: ResolvedRoots, _command: RootCommand) -> int:
-    _write_json(RootView(str(roots.project), str(roots.work)))
+    _write_json(RootView(str(roots.source_checkout), str(roots.shared_repository), str(roots.work)))
     return 0
 
 
@@ -971,7 +972,7 @@ def _validate(roots: ResolvedRoots, command: ValidateCommand) -> int:
 
 
 def _status(roots: ResolvedRoots, command: StatusCommand) -> int:
-    value = _status_value(roots.work, roots.project)
+    value = _status_value(roots.work, roots.source_checkout, roots.shared_repository)
     if command.json:
         _write_json(value)
     else:
@@ -1114,7 +1115,7 @@ def _brief_sources(
             f"Cannot read brief source manifest '{command.file}': {error}",
         ) from error
     plan = plan_brief_sources(
-        roots.project,
+        roots.source_checkout,
         decode_brief_source_manifest(raw_manifest),
         command.max_batch_bytes,
     )
@@ -1140,7 +1141,7 @@ def _brief_publish(roots: ResolvedRoots, command: BriefPublishCommand) -> int:
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     accepted = publish_accepted_artifact(
         store,
-        ArtifactRepository(resolve_durable_roots(roots.project, roots.work)),
+        ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work)),
         NewArtifact(
             ArtifactKind.BRIEF,
             brief.attempt_id,
@@ -1175,10 +1176,15 @@ def _brief_publish(roots: ResolvedRoots, command: BriefPublishCommand) -> int:
 
 def _initialize(roots: ResolvedRoots, _command: InitializeCommand) -> int:
     selected_work = roots.work if roots.explicit_work_root else None
-    receipt = initialize_work_state(roots.project, selected_work)
+    receipt = initialize_work_state(roots.shared_repository, selected_work)
     initialized = receipt.work_root
     store = SQLiteWorkStore(receipt.database_path)
-    initialized_roots = ResolvedRoots(roots.project, initialized, roots.explicit_work_root)
+    initialized_roots = ResolvedRoots(
+        roots.source_checkout,
+        roots.shared_repository,
+        initialized,
+        roots.explicit_work_root,
+    )
     rebuilt = rebuild_views(store, initialized, _brief_views(initialized_roots, store))
     if rebuilt.warning is not None:
         raise FileIOError(FileIOErrorCode.VIEW_REFRESH_FAILED, rebuilt.warning.message)
@@ -1255,7 +1261,7 @@ def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
     if isinstance(command, DecisionFailure):
         raise CommandError(CommandErrorCode(command.code.value), command.message)
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
-    artifacts = ArtifactRepository(resolve_durable_roots(roots.project, roots.work))
+    artifacts = ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work))
     result = execute(
         store,
         command,
@@ -1321,9 +1327,9 @@ def _prepare_dispatch(roots: ResolvedRoots, command: DispatchCommand) -> int:
     action = _reselect_action(roots, action, Role.COORDINATOR)
     prompt = prepare_dispatch(
         SQLiteWorkStore(roots.work / "state.sqlite3"),
-        ArtifactRepository(resolve_durable_roots(roots.project, roots.work)),
+        ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work)),
         prepare_dispatch_from_artifact,
-        roots.project,
+        roots.source_checkout,
         action,
         command.checkpoint,
         environment,
@@ -1478,7 +1484,7 @@ def _execute_borrowed_coordination(
     payload: bytes,
 ) -> str:
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
-    artifacts = ArtifactRepository(resolve_durable_roots(roots.project, roots.work))
+    artifacts = ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work))
     now = datetime.now(UTC)
     state = store.snapshot()
     acquire = AcquireCoordinationAuthority(
