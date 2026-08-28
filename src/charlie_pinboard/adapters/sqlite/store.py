@@ -261,14 +261,16 @@ def _proposal_disposition_columns(
     match value:
         case None:
             return None, None, None, None
-        case work_models.AcceptedProposalDisposition(target=target, disposed_at=disposed_at):
-            return value.kind.value, target, None, disposed_at.isoformat()
-        case work_models.MergedProposalDisposition(target=target, disposed_at=disposed_at):
-            return value.kind.value, target, None, disposed_at.isoformat()
-        case work_models.ReturnedProposalDisposition(reason=reason, disposed_at=disposed_at):
-            return value.kind.value, None, reason, disposed_at.isoformat()
-        case work_models.RejectedProposalDisposition(reason=reason, disposed_at=disposed_at):
-            return value.kind.value, None, reason, disposed_at.isoformat()
+        case (
+            work_models.AcceptedProposalDisposition(kind=kind, target=target, disposed_at=disposed_at)
+            | work_models.MergedProposalDisposition(kind=kind, target=target, disposed_at=disposed_at)
+        ):
+            return kind.value, target, None, disposed_at.isoformat()
+        case (
+            work_models.ReturnedProposalDisposition(kind=kind, reason=reason, disposed_at=disposed_at)
+            | work_models.RejectedProposalDisposition(kind=kind, reason=reason, disposed_at=disposed_at)
+        ):
+            return kind.value, None, reason, disposed_at.isoformat()
         case _ as unreachable:
             assert_never(unreachable)
 
