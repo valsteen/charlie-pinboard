@@ -89,6 +89,7 @@ from charlie_pinboard.domain.proposal_models import (
     CreateProposalOperation,
     ProposalIntake,
 )
+from charlie_pinboard.interfaces import proposal_models
 from charlie_pinboard.interfaces.brief_source_models import (
     BriefSourceBatch,
     BriefSourcePlan,
@@ -249,9 +250,9 @@ def _blocker_descriptor_view(
 
 
 def _input_contract_view(kind: decision_models.ActionKind) -> InputContractView:
-    descriptor = kind.blocker_descriptor
+    descriptor = decision_models.blocker_action_descriptor(kind)
     try:
-        payload_schema = msgspec.Raw(encoded_transition_input_schema(kind.value))
+        payload_schema = msgspec.Raw(encoded_transition_input_schema(kind))
     except TransitionInputError as error:
         if descriptor is None or error.code != TransitionInputErrorCode.ACTION_NOT_MUTATING:
             raise
@@ -323,7 +324,7 @@ def _action_view(action: decision_models.Action, *, include_input_contract: bool
         subject_revision=capability.subject_revision or "",
         authorization=capability.authorization.value,
         lease_id=capability.lease_id or "",
-        semantics=_blocker_descriptor_view(action.kind.blocker_descriptor),
+        semantics=_blocker_descriptor_view(decision_models.blocker_action_descriptor(action.kind)),
         input_contract=input_contract,
     )
 
@@ -1247,6 +1248,24 @@ def _initialize(roots: ResolvedRoots, _command: InitializeCommand) -> int:
     return 0
 
 
+def _domain_proposal_relation(value: proposal_models.ProposalRelation) -> work_models.ProposalRelation:
+    match value:
+        case proposal_models.IndependentProposalRelation():
+            return work_models.IndependentProposalRelation()
+        case proposal_models.PrerequisiteProposalRelation(item=item):
+            return work_models.PrerequisiteProposalRelation(ItemId(item))
+        case proposal_models.FollowUpProposalRelation(item=item):
+            return work_models.FollowUpProposalRelation(ItemId(item))
+        case proposal_models.DuplicateProposalRelation(item=item):
+            return work_models.DuplicateProposalRelation(ItemId(item))
+        case proposal_models.ContradictionProposalRelation(item=item):
+            return work_models.ContradictionProposalRelation(ItemId(item))
+        case proposal_models.ClarificationProposalRelation():
+            return work_models.ClarificationProposalRelation()
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 def _proposal(roots: ResolvedRoots, command: ProposalCommand) -> int:
     path = command.file
     try:
@@ -1274,8 +1293,7 @@ def _proposal(roots: ResolvedRoots, command: ProposalCommand) -> int:
         proposal.why_it_matters,
         proposal.effect,
         proposal.unlock,
-        proposal.relation.kind,
-        None if proposal.relation.item is None else ItemId(proposal.relation.item),
+        _domain_proposal_relation(proposal.relation),
         proposal.urgency_evidence,
         proposal.evidence,
         proposal.freshness_assumptions,
@@ -1315,7 +1333,7 @@ def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
         else decision_models.Role.COORDINATOR
     )
     action = _reselect_action(roots, action, role)
-    parsed = parse_transition_input(action.kind.value, payload)
+    parsed = parse_transition_input(action.kind, payload)
     command = bind_transition(action, parsed)
     if isinstance(command, DecisionFailure):
         raise CommandError(CommandErrorCode(command.code.value), command.message)
@@ -1578,7 +1596,7 @@ def _execute_borrowed_coordination(
                 CommandErrorCode.ACTION_NOT_AVAILABLE,
                 f"Action '{selected_action_id}' is not currently legal.",
             )
-        parsed = parse_transition_input(action.kind.value, payload)
+        parsed = parse_transition_input(action.kind, payload)
         command = bind_transition(action, parsed)
         if isinstance(command, DecisionFailure):
             raise CommandError(CommandErrorCode(command.code.value), command.message)

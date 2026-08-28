@@ -33,7 +33,6 @@ from charlie_pinboard.domain.authority_models import (
     AcquireInitialAttemptAuthority,
     AttemptAuthorityOperation,
     AttemptLeaseAuthority,
-    AttemptLeaseStatus,
     CoordinationAuthorityOperation,
     ReleaseAttemptAuthority,
     ReleaseCoordinationAuthority,
@@ -164,7 +163,7 @@ def _retained_attempt_authority(
         lease.generation,
         lease.acquired_at,
         lease.expires_at,
-        AttemptLeaseStatus(lease.state.value),
+        lease.state,
     )
 
 
@@ -221,7 +220,7 @@ def change_attempt_authority(
             transferable_attempt=(
                 (attempt_id, attempt.item)
                 if (attempt := snapshot.attempt(attempt_id)) is not None
-                and attempt.state not in {work_models.AttemptState.DONE, work_models.AttemptState.CLOSED}
+                and attempt.state != work_models.AttemptState.DONE
                 else None
             ),
             project_host_epoch=snapshot.host_epoch,

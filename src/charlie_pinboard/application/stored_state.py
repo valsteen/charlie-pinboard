@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Literal, assert_never
 
 from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
@@ -40,6 +40,54 @@ class StoredWorkItemState(Enum):
     DONE = "done"
     SUPERSEDED = "superseded"
     DROPPED = "dropped"
+
+
+def live_work_state(value: StoredWorkItemState) -> work_models.WorkState | None:
+    match value:
+        case (
+            StoredWorkItemState.INTAKE
+            | StoredWorkItemState.READY
+            | StoredWorkItemState.ACTIVE
+            | StoredWorkItemState.PAUSED
+            | StoredWorkItemState.BLOCKED
+            | StoredWorkItemState.DEFERRED
+            | StoredWorkItemState.REVIEW
+        ):
+            return work_models.WorkState(value.value)
+        case StoredWorkItemState.DONE | StoredWorkItemState.SUPERSEDED | StoredWorkItemState.DROPPED:
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def stored_live_work_state(
+    value: work_models.WorkState | work_models.AcceptedProposalState,
+) -> StoredWorkItemState:
+    match value:
+        case (
+            work_models.WorkState.INTAKE
+            | work_models.WorkState.READY
+            | work_models.WorkState.ACTIVE
+            | work_models.WorkState.PAUSED
+            | work_models.WorkState.BLOCKED
+            | work_models.WorkState.DEFERRED
+            | work_models.WorkState.REVIEW
+            | work_models.AcceptedProposalState.INTAKE
+            | work_models.AcceptedProposalState.READY
+            | work_models.AcceptedProposalState.BLOCKED
+            | work_models.AcceptedProposalState.DEFERRED
+        ):
+            return StoredWorkItemState(value.value)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def stored_close_outcome(value: work_models.CloseOutcome) -> StoredWorkItemState:
+    match value:
+        case work_models.CloseOutcome.DONE | work_models.CloseOutcome.DROPPED:
+            return StoredWorkItemState(value.value)
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 class TransitionHistoryActionKind(Enum):
@@ -174,16 +222,12 @@ class StoredProposal:
     user_label: str
     trigger: str
     why_it_matters: str
-    relation: work_models.ProposalRelationKind
-    relation_item_id: ItemId | None
+    relation: work_models.ProposalRelation
     effect: str
     unlock: str
     urgency_evidence: str
-    disposition: work_models.ProposalDispositionKind | None
-    disposition_target_item_id: ItemId | None
-    disposition_reason: str | None
+    disposition: work_models.ProposalDisposition | None
     subject_revision: int
-    disposition_recorded_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)

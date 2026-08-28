@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import NewType
@@ -34,7 +34,6 @@ class AttemptState(Enum):
     BLOCKED = "blocked"
     REVIEW = "review"
     DONE = "done"
-    CLOSED = "closed"
 
 
 class AcceptedProposalState(Enum):
@@ -64,11 +63,90 @@ class ProposalRelationKind(Enum):
     CLARIFICATION = "clarification"
 
 
+@dataclass(frozen=True, slots=True)
+class IndependentProposalRelation:
+    item: None = None
+    kind: ProposalRelationKind = field(init=False, default=ProposalRelationKind.INDEPENDENT)
+
+
+@dataclass(frozen=True, slots=True)
+class PrerequisiteProposalRelation:
+    item: ItemId
+    kind: ProposalRelationKind = field(init=False, default=ProposalRelationKind.PREREQUISITE)
+
+
+@dataclass(frozen=True, slots=True)
+class FollowUpProposalRelation:
+    item: ItemId
+    kind: ProposalRelationKind = field(init=False, default=ProposalRelationKind.FOLLOW_UP)
+
+
+@dataclass(frozen=True, slots=True)
+class DuplicateProposalRelation:
+    item: ItemId
+    kind: ProposalRelationKind = field(init=False, default=ProposalRelationKind.DUPLICATE)
+
+
+@dataclass(frozen=True, slots=True)
+class ContradictionProposalRelation:
+    item: ItemId
+    kind: ProposalRelationKind = field(init=False, default=ProposalRelationKind.CONTRADICTION)
+
+
+@dataclass(frozen=True, slots=True)
+class ClarificationProposalRelation:
+    item: None = None
+    kind: ProposalRelationKind = field(init=False, default=ProposalRelationKind.CLARIFICATION)
+
+
+type ProposalRelation = (
+    IndependentProposalRelation
+    | PrerequisiteProposalRelation
+    | FollowUpProposalRelation
+    | DuplicateProposalRelation
+    | ContradictionProposalRelation
+    | ClarificationProposalRelation
+)
+
+
 class ProposalDispositionKind(Enum):
     ACCEPTED = "accepted"
     MERGED = "merged"
     RETURNED = "returned"
     REJECTED = "rejected"
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedProposalDisposition:
+    target: ItemId
+    disposed_at: datetime
+    kind: ProposalDispositionKind = field(init=False, default=ProposalDispositionKind.ACCEPTED)
+
+
+@dataclass(frozen=True, slots=True)
+class MergedProposalDisposition:
+    target: ItemId
+    disposed_at: datetime
+    kind: ProposalDispositionKind = field(init=False, default=ProposalDispositionKind.MERGED)
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnedProposalDisposition:
+    reason: str
+    disposed_at: datetime
+    kind: ProposalDispositionKind = field(init=False, default=ProposalDispositionKind.RETURNED)
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedProposalDisposition:
+    reason: str
+    disposed_at: datetime
+    kind: ProposalDispositionKind = field(init=False, default=ProposalDispositionKind.REJECTED)
+
+
+type ProposalDisposition = (
+    AcceptedProposalDisposition | MergedProposalDisposition | ReturnedProposalDisposition | RejectedProposalDisposition
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,16 +370,15 @@ class AttemptAuthority:
 class ProposalRecord:
     proposal: ProposalId
     revision: str
-    created_at: datetime | None = None
-    source_task_id: TaskId | None = None
-    user_label: str | None = None
-    trigger: str | None = None
-    why_it_matters: str | None = None
-    relation: ProposalRelationKind | None = None
-    relation_item_id: ItemId | None = None
-    effect: str | None = None
-    unlock: str | None = None
-    urgency_evidence: str | None = None
+    created_at: datetime
+    source_task_id: TaskId
+    user_label: str
+    trigger: str
+    why_it_matters: str
+    relation: ProposalRelation
+    effect: str
+    unlock: str
+    urgency_evidence: str
     evidence: tuple[str, ...] = ()
     freshness: tuple[str, ...] = ()
 

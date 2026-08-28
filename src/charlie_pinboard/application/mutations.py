@@ -29,6 +29,8 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkState,
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
+    stored_close_outcome,
+    stored_live_work_state,
 )
 from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.authority_models import (
@@ -104,7 +106,8 @@ def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
                     | decision_models.ItemClosureChange()
                     | decision_models.ItemStateChange()
                     | decision_models.MergedProposalChange()
-                    | decision_models.ReasonedProposalDispositionChange()
+                    | decision_models.ReturnedProposalChange()
+                    | decision_models.RejectedProposalChange()
                     | decision_models.ResumeAttemptChange()
                     | decision_models.ReviewReturnChange()
                 ):
@@ -166,6 +169,57 @@ def _stored_receipt(mutation: StoredStateMutation) -> StoredTransitionReceipt:
     )
 
 
+def _history_action_kind(value: decision_models.ActionKind) -> TransitionHistoryActionKind:
+    match value:
+        case (
+            decision_models.ActionKind.ACCEPT_CHECKPOINT
+            | decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE
+            | decision_models.ActionKind.ACCEPT_PROPOSAL
+            | decision_models.ActionKind.ACTIVATE
+            | decision_models.ActionKind.BLOCK
+            | decision_models.ActionKind.BLOCK_ITEM
+            | decision_models.ActionKind.COMPLETE
+            | decision_models.ActionKind.CLOSE
+            | decision_models.ActionKind.CONTINUE
+            | decision_models.ActionKind.DEFER
+            | decision_models.ActionKind.DISPATCH
+            | decision_models.ActionKind.INSPECT
+            | decision_models.ActionKind.MARK_READY
+            | decision_models.ActionKind.MERGE_PROPOSAL
+            | decision_models.ActionKind.PAUSE
+            | decision_models.ActionKind.REJECT_PROPOSAL
+            | decision_models.ActionKind.REOPEN
+            | decision_models.ActionKind.REPORT_BLOCKER
+            | decision_models.ActionKind.RESUME
+            | decision_models.ActionKind.RETURN_FOR_CORRECTION
+            | decision_models.ActionKind.RETURN_PROPOSAL
+            | decision_models.ActionKind.SUBMIT_REVIEW
+            | decision_models.ActionKind.TRANSFER_COORDINATOR
+        ):
+            return TransitionHistoryActionKind(value.value)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _history_authorization_kind(
+    value: decision_models.AuthorizationKind,
+) -> TransitionHistoryAuthorizationKind:
+    match value:
+        case (
+            decision_models.AuthorizationKind.COORDINATOR
+            | decision_models.AuthorizationKind.COORDINATION
+            | decision_models.AuthorizationKind.ATTEMPT
+        ):
+            return TransitionHistoryAuthorizationKind(value.value)
+        case decision_models.AuthorizationKind.OBSERVER:
+            raise MutationContractError(
+                MutationContractErrorCode.RECEIPT_MISMATCH,
+                "An observer action cannot produce mutation history.",
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 def _common_after(mutation: StoredStateMutation) -> StoredWorkState:
     before = mutation.before
     project = before.lifecycle.project
@@ -214,15 +268,11 @@ def _proposal_creation_after(
         intake.trigger,
         intake.why_it_matters,
         intake.relation,
-        intake.relation_item,
         intake.effect,
         intake.unlock,
         intake.urgency_evidence,
         None,
-        None,
-        None,
         mutation.receipt.project_revision,
-        None,
     )
     if any(value.proposal_id == intake.proposal_id for value in common.proposals.proposals):
         raise MutationContractError(
@@ -436,7 +486,7 @@ def _accepted_proposal_after(
     items[item_index] = replace(
         current,
         user_label=accepted.user_label,
-        state=StoredWorkItemState(accepted.state.value),
+        state=stored_live_work_state(accepted.state),
         timing=accepted.timing,
         source=accepted.source,
         trigger=accepted.trigger,
@@ -552,12 +602,8 @@ def _attempt_state_after(
 def _proposal_disposition_after(
     common: StoredWorkState,
     proposal_id: ProposalId,
-    disposition: work_models.ProposalDispositionKind,
-    disposed_at: datetime,
+    disposition: work_models.ProposalDisposition,
     revision: int,
-    *,
-    target_item: ItemId | None = None,
-    reason: str | None = None,
 ) -> StoredWorkState:
     proposals = list(common.proposals.proposals)
     index = next((position for position, proposal in enumerate(proposals) if proposal.proposal_id == proposal_id), None)
@@ -568,10 +614,7 @@ def _proposal_disposition_after(
     proposals[index] = replace(
         proposals[index],
         disposition=disposition,
-        disposition_target_item_id=target_item,
-        disposition_reason=reason,
         subject_revision=revision,
-        disposition_recorded_at=disposed_at,
     )
     return replace(common, proposals=replace(common.proposals, proposals=tuple(proposals)))
 
@@ -799,7 +842,7 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
     terminal = False
     match change:
         case decision_models.ItemStateChange(item=item, before=before, after=after):
-            lifecycle = _item_state_after(lifecycle, item, before, StoredWorkItemState(after.value), revision, now)
+            lifecycle = _item_state_after(lifecycle, item, before, stored_live_work_state(after), revision, now)
         case decision_models.ActivationChange(item=item, item_before=before, attempt=attempt):
             lifecycle = _item_state_after(lifecycle, item, before, StoredWorkItemState.ACTIVE, revision, now)
             lifecycle = _activation_attempt_after(change, lifecycle, revision, now)
@@ -812,7 +855,7 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
             attempt_after=attempt_after,
         ):
             lifecycle = _item_state_after(
-                lifecycle, item, item_before, StoredWorkItemState(item_after.value), revision, now
+                lifecycle, item, item_before, stored_live_work_state(item_after), revision, now
             )
             lifecycle = _attempt_state_after(lifecycle, attempt, attempt_before, attempt_after, revision, now)
         case decision_models.BlockAttemptChange(
@@ -901,7 +944,7 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
             evidence=evidence,
         ):
             lifecycle = _item_state_after(
-                lifecycle, item, item_before, StoredWorkItemState(terminal_state.value), revision, now, evidence
+                lifecycle, item, item_before, stored_close_outcome(terminal_state), revision, now, evidence
             )
             terminal = True
         case decision_models.AttemptClosureChange(
@@ -914,7 +957,7 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
             authority_change=authority_change,
         ):
             lifecycle = _item_state_after(
-                lifecycle, item, item_before, StoredWorkItemState(terminal_state.value), revision, now, evidence
+                lifecycle, item, item_before, stored_close_outcome(terminal_state), revision, now, evidence
             )
             lifecycle = _attempt_state_after(
                 lifecycle, attempt, attempt_before, work_models.AttemptState.DONE, revision, now
@@ -926,7 +969,7 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
             item = accepted.item
             lifecycle = _accepted_proposal_after(change, lifecycle, revision, now)
             result = _proposal_disposition_after(
-                result, proposal, work_models.ProposalDispositionKind.ACCEPTED, disposed_at, revision, target_item=item
+                result, proposal, work_models.AcceptedProposalDisposition(item, disposed_at), revision
             )
         case decision_models.MergedProposalChange(proposal=proposal, target_item=target, disposed_at=disposed_at):
             lifecycle = _item_state_after(
@@ -939,37 +982,30 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
                 f"Merged into {target}.",
             )
             result = _proposal_disposition_after(
-                result, proposal, work_models.ProposalDispositionKind.MERGED, disposed_at, revision, target_item=target
+                result, proposal, work_models.MergedProposalDisposition(target, disposed_at), revision
             )
-        case decision_models.ReasonedProposalDispositionChange(
-            proposal=proposal,
-            disposition=disposition,
-            reason=reason,
-            disposed_at=disposed_at,
-        ):
-            match disposition:
-                case decision_models.ReasonedProposalDispositionKind.RETURNED:
-                    stored_disposition = work_models.ProposalDispositionKind.RETURNED
-                case decision_models.ReasonedProposalDispositionKind.REJECTED:
-                    stored_disposition = work_models.ProposalDispositionKind.REJECTED
-                    lifecycle = _item_state_after(
-                        lifecycle,
-                        ItemId(proposal),
-                        work_models.WorkState.INTAKE,
-                        StoredWorkItemState.DROPPED,
-                        revision,
-                        now,
-                        reason,
-                    )
-                case _ as unreachable:
-                    assert_never(unreachable)
+        case decision_models.ReturnedProposalChange(proposal=proposal, reason=reason, disposed_at=disposed_at):
             result = _proposal_disposition_after(
                 result,
                 proposal,
-                stored_disposition,
-                disposed_at,
+                work_models.ReturnedProposalDisposition(reason, disposed_at),
                 revision,
-                reason=reason,
+            )
+        case decision_models.RejectedProposalChange(proposal=proposal, reason=reason, disposed_at=disposed_at):
+            lifecycle = _item_state_after(
+                lifecycle,
+                ItemId(proposal),
+                work_models.WorkState.INTAKE,
+                StoredWorkItemState.DROPPED,
+                revision,
+                now,
+                reason,
+            )
+            result = _proposal_disposition_after(
+                result,
+                proposal,
+                work_models.RejectedProposalDisposition(reason, disposed_at),
+                revision,
             )
         case decision_models.CheckpointAcceptanceChange(item=item, attempt=attempt, authority_change=authority_change):
             lifecycle = _item_state_after(
@@ -1100,10 +1136,10 @@ def project_transition_mutation(before: StoredWorkState, decision: decision_mode
         decision.receipt,
         HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
         before.lifecycle.project.revision + 1,
-        TransitionHistoryActionKind(action.kind.value),
+        _history_action_kind(action.kind),
         HistorySubjectId(capability.subject),
         None,
-        TransitionHistoryAuthorizationKind(capability.authorization.value),
+        _history_authorization_kind(capability.authorization),
         actor_task_id,
         actor_host_id,
         "decision/v1",

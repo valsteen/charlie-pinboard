@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from dataclasses import replace as dataclass_replace
+from datetime import UTC, datetime
 from typing import Any  # noqa: TID251 - fixture corruption intentionally crosses the typed boundary
 
 from charlie_pinboard.domain import decision_models, work_models
@@ -82,7 +83,19 @@ def scope_anchor(item: str, revision: int, digest: str, scope: work_models.ItemS
 
 
 def proposal_record(proposal: str, revision: str) -> work_models.ProposalRecord:
-    return work_models.ProposalRecord(ProposalId(proposal), revision)
+    return work_models.ProposalRecord(
+        ProposalId(proposal),
+        revision,
+        datetime(2026, 1, 1, tzinfo=UTC),
+        TaskId("proposal-source"),
+        "Proposal",
+        "A proposal was recorded.",
+        "The proposal remains relevant.",
+        work_models.IndependentProposalRelation(),
+        "Preserve the proposal.",
+        "The proposal can be evaluated.",
+        "No immediate scheduling effect.",
+    )
 
 
 def accept_proposal_input(

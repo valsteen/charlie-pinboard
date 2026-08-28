@@ -118,8 +118,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 "The mutation remains decision-backed.",
                 "Exercise the exact relational delta.",
                 "Invalid carrier shapes are rejected.",
-                work_models.ProposalRelationKind.INDEPENDENT,
-                None,
+                work_models.IndependentProposalRelation(),
                 "No scheduling effect.",
                 (),
                 (),
@@ -134,8 +133,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 proposal.why_it_matters,
                 proposal.effect,
                 proposal.unlock,
-                work_models.ProposalRelationKind(proposal.relation.value),
-                proposal.relation_item_id,
+                proposal.relation,
                 proposal.urgency_evidence,
                 (),
                 (),
@@ -390,8 +388,13 @@ class MutationPersistenceTest(unittest.TestCase):
             (ItemId("work-c"), ItemId("intake-work")),
             tuple(value.dependency_id for value in reopened.lifecycle.dependencies if value.item_id == item.item_id),
         )
-        self.assertEqual(work_models.ProposalDispositionKind.ACCEPTED, proposal.disposition)
-        self.assertEqual(ItemId("zz-proposal-a"), proposal.disposition_target_item_id)
+        self.assertEqual(
+            work_models.AcceptedProposalDisposition(
+                ItemId("zz-proposal-a"),
+                SQLITE_NOW + timedelta(seconds=1),
+            ),
+            proposal.disposition,
+        )
         self.assertEqual(13, reopened.lifecycle.project.revision)
         self.assertEqual(2, len(reopened.transition_receipts))
 
@@ -448,16 +451,12 @@ class MutationPersistenceTest(unittest.TestCase):
             "Proposal B",
             "A new observation",
             "The queue needs the observation.",
-            work_models.ProposalRelationKind.INDEPENDENT,
-            None,
+            work_models.IndependentProposalRelation(),
             "Preserve the proposal.",
             "A coordinator can assess it.",
             "Scheduling remains unchanged.",
             None,
-            None,
-            None,
             13,
-            None,
         )
         draft = ProposalCreationMutation(
             before,
@@ -524,37 +523,30 @@ class MutationPersistenceTest(unittest.TestCase):
         self.assertEqual(after, store.snapshot())
 
     def test_proposal_disposition_matrix_persists_each_closed_value(self) -> None:
-        self.assertEqual(
-            (
-                decision_models.ReasonedProposalDispositionKind.RETURNED,
-                decision_models.ReasonedProposalDispositionKind.REJECTED,
-            ),
-            tuple(decision_models.ReasonedProposalDispositionKind),
-        )
-        for kind, payload, expected, target, reason, reasoned_disposition in (
+        for kind, payload, expected in (
             (
                 decision_models.ActionKind.MERGE_PROPOSAL,
                 work_models.MergeProposalInput(ItemId("work-c")),
-                "merged",
-                ItemId("work-c"),
-                None,
-                None,
+                work_models.MergedProposalDisposition(
+                    ItemId("work-c"),
+                    SQLITE_NOW + timedelta(seconds=1),
+                ),
             ),
             (
                 decision_models.ActionKind.RETURN_PROPOSAL,
                 work_models.ReasonInput("Clarify the evidence."),
-                "returned",
-                None,
-                "Clarify the evidence.",
-                decision_models.ReasonedProposalDispositionKind.RETURNED,
+                work_models.ReturnedProposalDisposition(
+                    "Clarify the evidence.",
+                    SQLITE_NOW + timedelta(seconds=1),
+                ),
             ),
             (
                 decision_models.ActionKind.REJECT_PROPOSAL,
                 work_models.ReasonInput("The finding is obsolete."),
-                "rejected",
-                None,
-                "The finding is obsolete.",
-                decision_models.ReasonedProposalDispositionKind.REJECTED,
+                work_models.RejectedProposalDisposition(
+                    "The finding is obsolete.",
+                    SQLITE_NOW + timedelta(seconds=1),
+                ),
             ),
         ):
             with self.subTest(kind=kind):
@@ -565,18 +557,10 @@ class MutationPersistenceTest(unittest.TestCase):
                 )
                 action = next(value for value in available_actions(snapshot, actor) if value.kind == kind)
                 decision = decide(snapshot, bind_transition(action, payload), SQLITE_NOW + timedelta(seconds=1))
-                if reasoned_disposition is not None:
-                    self.assertIsInstance(decision.change, decision_models.ReasonedProposalDispositionChange)
-                    assert isinstance(decision.change, decision_models.ReasonedProposalDispositionChange)
-                    self.assertEqual(reasoned_disposition, decision.change.disposition)
                 with store.write() as transaction:
                     transaction.commit(project_transition_mutation(transaction.snapshot(), decision))
                 proposal = store.snapshot().proposals.proposals[0]
-                assert proposal.disposition is not None
-                self.assertEqual(
-                    (expected, target, reason),
-                    (proposal.disposition.value, proposal.disposition_target_item_id, proposal.disposition_reason),
-                )
+                self.assertEqual(expected, proposal.disposition)
 
     def test_attempt_transition_reports_the_missing_or_stale_before_state_invariant(self) -> None:
         before = self._store().snapshot()

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import assert_never
 
 from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.identifiers import (
@@ -56,71 +57,79 @@ class BlockerActionDescriptor:
 
 
 class ActionKind(Enum):
-    value: str
-    blocker_descriptor: BlockerActionDescriptor | None
-
-    def __new__(
-        cls,
-        value: str,
-        blocker_descriptor: BlockerActionDescriptor | None = None,
-    ) -> ActionKind:
-        member = object.__new__(cls)
-        member._value_ = value
-        member.blocker_descriptor = blocker_descriptor
-        return member
-
-    ACCEPT_CHECKPOINT = ("accept-checkpoint",)
-    ACCEPT_REVIEW_AND_CONTINUE = ("accept-review-and-continue",)
-    ACCEPT_PROPOSAL = ("accept-proposal",)
-    ACTIVATE = ("activate",)
-    BLOCK = (
-        "block",
-        BlockerActionDescriptor(
-            ActionEffect.MUTATING,
-            Role.COORDINATOR,
-            ActionSubjectKind.ATTEMPT,
-            ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
-        ),
-    )
-    BLOCK_ITEM = (
-        "block-item",
-        BlockerActionDescriptor(
-            ActionEffect.MUTATING,
-            Role.COORDINATOR,
-            ActionSubjectKind.ITEM,
-            ActionLifecyclePrecondition.INTAKE_ITEM,
-        ),
-    )
-    COMPLETE = ("complete",)
-    CLOSE = ("close",)
-    CONTINUE = ("continue",)
-    DEFER = ("defer",)
-    DISPATCH = ("dispatch",)
-    INSPECT = ("inspect",)
-    MARK_READY = ("mark-ready",)
-    MERGE_PROPOSAL = ("merge-proposal",)
-    PAUSE = ("pause",)
-    REJECT_PROPOSAL = ("reject-proposal",)
-    REOPEN = ("reopen",)
-    REPORT_BLOCKER = (
-        "report-blocker",
-        BlockerActionDescriptor(
-            ActionEffect.ADVISORY,
-            Role.WORKER,
-            ActionSubjectKind.ATTEMPT,
-            ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
-        ),
-    )
-    RESUME = ("resume",)
-    RETURN_FOR_CORRECTION = ("return-for-correction",)
-    RETURN_PROPOSAL = ("return-proposal",)
-    SUBMIT_REVIEW = ("submit-review",)
-    TRANSFER_COORDINATOR = ("transfer-coordinator",)
+    ACCEPT_CHECKPOINT = "accept-checkpoint"
+    ACCEPT_REVIEW_AND_CONTINUE = "accept-review-and-continue"
+    ACCEPT_PROPOSAL = "accept-proposal"
+    ACTIVATE = "activate"
+    BLOCK = "block"
+    BLOCK_ITEM = "block-item"
+    COMPLETE = "complete"
+    CLOSE = "close"
+    CONTINUE = "continue"
+    DEFER = "defer"
+    DISPATCH = "dispatch"
+    INSPECT = "inspect"
+    MARK_READY = "mark-ready"
+    MERGE_PROPOSAL = "merge-proposal"
+    PAUSE = "pause"
+    REJECT_PROPOSAL = "reject-proposal"
+    REOPEN = "reopen"
+    REPORT_BLOCKER = "report-blocker"
+    RESUME = "resume"
+    RETURN_FOR_CORRECTION = "return-for-correction"
+    RETURN_PROPOSAL = "return-proposal"
+    SUBMIT_REVIEW = "submit-review"
+    TRANSFER_COORDINATOR = "transfer-coordinator"
 
 
-class ReasonedProposalDispositionKind(Enum):
-    RETURNED = "returned"
-    REJECTED = "rejected"
+def blocker_action_descriptor(kind: ActionKind) -> BlockerActionDescriptor | None:
+    match kind:
+        case ActionKind.REPORT_BLOCKER:
+            return BlockerActionDescriptor(
+                ActionEffect.ADVISORY,
+                Role.WORKER,
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
+            )
+        case ActionKind.BLOCK:
+            return BlockerActionDescriptor(
+                ActionEffect.MUTATING,
+                Role.COORDINATOR,
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
+            )
+        case ActionKind.BLOCK_ITEM:
+            return BlockerActionDescriptor(
+                ActionEffect.MUTATING,
+                Role.COORDINATOR,
+                ActionSubjectKind.ITEM,
+                ActionLifecyclePrecondition.INTAKE_ITEM,
+            )
+        case (
+            ActionKind.ACCEPT_CHECKPOINT
+            | ActionKind.ACCEPT_REVIEW_AND_CONTINUE
+            | ActionKind.ACCEPT_PROPOSAL
+            | ActionKind.ACTIVATE
+            | ActionKind.CLOSE
+            | ActionKind.COMPLETE
+            | ActionKind.CONTINUE
+            | ActionKind.DEFER
+            | ActionKind.DISPATCH
+            | ActionKind.INSPECT
+            | ActionKind.MARK_READY
+            | ActionKind.MERGE_PROPOSAL
+            | ActionKind.PAUSE
+            | ActionKind.REJECT_PROPOSAL
+            | ActionKind.REOPEN
+            | ActionKind.RESUME
+            | ActionKind.RETURN_FOR_CORRECTION
+            | ActionKind.RETURN_PROPOSAL
+            | ActionKind.SUBMIT_REVIEW
+            | ActionKind.TRANSFER_COORDINATOR
+        ):
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,7 +283,7 @@ class TransferCoordinatorAction:
 
 
 type AdvisoryAction = ContinueAction | DispatchAction | InspectAction | ReportBlockerAction
-type TransitionAction = (
+type LifecycleAction = (
     AcceptCheckpointAction
     | AcceptReviewAndContinueAction
     | AcceptProposalAction
@@ -293,8 +302,8 @@ type TransitionAction = (
     | ReturnForCorrectionAction
     | ReturnProposalAction
     | SubmitReviewAction
-    | TransferCoordinatorAction
 )
+type TransitionAction = LifecycleAction | TransferCoordinatorAction
 type Action = TransitionAction | AdvisoryAction
 
 
@@ -557,7 +566,7 @@ class AttemptClosureChange:
 @dataclass(frozen=True, slots=True)
 class AcceptedProposalItem:
     item: ItemId
-    state: work_models.WorkState
+    state: work_models.AcceptedProposalState
     timing: work_models.Timing | None
     next_action: str
     dependencies: tuple[ItemId, ...]
@@ -586,9 +595,15 @@ class MergedProposalChange:
 
 
 @dataclass(frozen=True, slots=True)
-class ReasonedProposalDispositionChange:
+class ReturnedProposalChange:
     proposal: ProposalId
-    disposition: ReasonedProposalDispositionKind
+    reason: str
+    disposed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedProposalChange:
+    proposal: ProposalId
     reason: str
     disposed_at: datetime
 
@@ -643,7 +658,8 @@ type DecisionChange = (
     | AttemptClosureChange
     | AcceptedProposalChange
     | MergedProposalChange
-    | ReasonedProposalDispositionChange
+    | ReturnedProposalChange
+    | RejectedProposalChange
     | CheckpointAcceptanceChange
     | CoordinatorTransferChange
 )

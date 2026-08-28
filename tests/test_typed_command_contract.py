@@ -77,7 +77,10 @@ class TypedTransitionContractTest(unittest.TestCase):
         self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
         candidate = CandidateId("candidate-that-is-not-a-subject-revision")
-        parsed = parse_transition_input("submit-review", b'{"candidate":"candidate-that-is-not-a-subject-revision"}')
+        parsed = parse_transition_input(
+            decision_models.ActionKind.SUBMIT_REVIEW,
+            b'{"candidate":"candidate-that-is-not-a-subject-revision"}',
+        )
         self.assertEqual(work_models.SubmitReviewInput(candidate), parsed)
         decision = decide(snapshot, bind_transition(submit, parsed), SQLITE_NOW)
         self.assertIsInstance(decision.change, decision_models.ReviewSubmissionChange)

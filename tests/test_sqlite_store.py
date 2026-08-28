@@ -614,6 +614,25 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(state.lifecycle.attempts, portable_state.lifecycle.attempts)
         self.assertEqual((), portable_state.authority.attempt_leases)
 
+    def test_schema_rejects_removed_and_incomplete_closed_variants(self) -> None:
+        path, _store = self._store()
+        connection = sqlite3.connect(path)
+        try:
+            for statement in (
+                "UPDATE attempts SET state = 'closed' WHERE attempt_id = 'work-a-1'",
+                "UPDATE proposals SET relation_item_id = NULL WHERE proposal_id = 'zz-proposal-a'",
+                """
+                UPDATE proposals
+                SET disposition = 'accepted', disposition_recorded_at = '2026-08-28T00:00:00+00:00'
+                WHERE proposal_id = 'zz-proposal-a'
+                """,
+            ):
+                with self.subTest(statement=statement), self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(statement)
+                connection.rollback()
+        finally:
+            connection.close()
+
     def test_candidate_and_relational_acceptance_matrix(self) -> None:
         state = complete_sqlite_state()
         same_identity_other_kind = replace(

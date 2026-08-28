@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from typing import assert_never
 
 from charlie_pinboard.application.errors import QueryError, QueryErrorCode
 from charlie_pinboard.application.ports import WorkStore
@@ -7,7 +6,6 @@ from charlie_pinboard.application.query_models import (
     DependencyReason,
     ItemStatus,
     ItemStatusAttempt,
-    ItemStatusState,
     OverviewItem,
     ParallelItem,
     ParallelOutcome,
@@ -24,6 +22,7 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItem,
     StoredWorkItemState,
     StoredWorkState,
+    live_work_state,
 )
 from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
@@ -57,37 +56,18 @@ _TERMINAL_ITEM_STATES = {
 }
 
 
-def _work_state(value: StoredWorkItemState) -> work_models.WorkState:
-    try:
-        return work_models.WorkState(value.value)
-    except ValueError as error:
-        raise QueryError(QueryErrorCode.WORK_STATE_INVALID, f"Item state {value.value!r} is not live.") from error
-
-
-def _item_status_state(value: StoredWorkItemState) -> ItemStatusState:
-    match value:
-        case (
-            StoredWorkItemState.INTAKE
-            | StoredWorkItemState.READY
-            | StoredWorkItemState.ACTIVE
-            | StoredWorkItemState.PAUSED
-            | StoredWorkItemState.BLOCKED
-            | StoredWorkItemState.DEFERRED
-            | StoredWorkItemState.REVIEW
-            | StoredWorkItemState.DONE
-            | StoredWorkItemState.SUPERSEDED
-            | StoredWorkItemState.DROPPED
-        ):
-            return ItemStatusState(value.value)
-        case _ as unreachable:
-            assert_never(unreachable)
+def _required_live_work_state(value: StoredWorkItemState) -> work_models.WorkState:
+    state = live_work_state(value)
+    if state is None:
+        raise QueryError(QueryErrorCode.WORK_STATE_INVALID, f"Item state {value.value!r} is not live.")
+    return state
 
 
 def overview_from_state(state: StoredWorkState) -> WorkOverview:
     attempts = {
         attempt.item_id: attempt.attempt_id
         for attempt in state.lifecycle.attempts
-        if attempt.state not in {work_models.AttemptState.DONE, work_models.AttemptState.CLOSED}
+        if attempt.state != work_models.AttemptState.DONE
     }
     dependency_links = {
         item.item_id: tuple(
@@ -106,8 +86,8 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
         proposal = proposals.get(item_id)
         if (
             proposal is not None
-            and proposal.relation == work_models.ProposalRelationKind.FOLLOW_UP
-            and proposal.relation_item_id == link.dependency_id
+            and isinstance(proposal.relation, work_models.FollowUpProposalRelation)
+            and proposal.relation.item == link.dependency_id
         ):
             reason = f"Follow-up to {link.dependency_id}: {proposal.why_it_matters}"
         else:
@@ -115,8 +95,8 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
                 (
                     value
                     for value in proposals.values()
-                    if value.relation == work_models.ProposalRelationKind.PREREQUISITE
-                    and value.relation_item_id == item_id
+                    if isinstance(value.relation, work_models.PrerequisiteProposalRelation)
+                    and value.relation.item == item_id
                     and ItemId(value.proposal_id) == link.dependency_id
                 ),
                 None,
@@ -130,17 +110,19 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
 
     def review_flags(item_id: ItemId) -> tuple[ReviewFlag, ...]:
         proposal = proposals.get(item_id)
-        if proposal is None or proposal.disposition not in {None, work_models.ProposalDispositionKind.RETURNED}:
+        if proposal is None:
             return ()
-        if proposal.disposition == work_models.ProposalDispositionKind.RETURNED:
+        if isinstance(proposal.disposition, work_models.ReturnedProposalDisposition):
             return (
                 ReviewFlag(
                     work_models.ProposalRelationKind.CLARIFICATION,
-                    str(proposal.relation_item_id) if proposal.relation_item_id is not None else None,
-                    proposal.disposition_reason or proposal.why_it_matters,
+                    str(proposal.relation.item) if proposal.relation.item is not None else None,
+                    proposal.disposition.reason,
                 ),
             )
-        if proposal.relation not in {
+        if proposal.disposition is not None:
+            return ()
+        if proposal.relation.kind not in {
             work_models.ProposalRelationKind.DUPLICATE,
             work_models.ProposalRelationKind.CONTRADICTION,
             work_models.ProposalRelationKind.CLARIFICATION,
@@ -148,8 +130,8 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
             return ()
         return (
             ReviewFlag(
-                proposal.relation,
-                str(proposal.relation_item_id) if proposal.relation_item_id is not None else None,
+                proposal.relation.kind,
+                str(proposal.relation.item) if proposal.relation.item is not None else None,
                 proposal.why_it_matters,
             ),
         )
@@ -158,7 +140,7 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
         OverviewItem(
             str(item.item_id),
             item.user_label,
-            _work_state(item.state),
+            _required_live_work_state(item.state),
             item.queue_position or 0,
             not any(link.dependency_id in live_ids for link in dependency_links[item.item_id]),
             item.timing.value if item.timing is not None else None,
@@ -215,7 +197,7 @@ def item_status(store: WorkStore, item_id: ItemId) -> ItemStatus:
         str(state.lifecycle.project.revision),
         str(item.item_id),
         item.user_label,
-        _item_status_state(item.state),
+        item.state,
         item.timing,
         item.outcome_evidence,
         item.next_action,
@@ -304,14 +286,13 @@ def preview_parallel(
         value = ParallelItem(
             str(item.item_id),
             item.user_label,
-            _work_state(item.state),
+            _required_live_work_state(item.state),
             str(
                 next(
                     (
                         attempt.attempt_id
                         for attempt in state.lifecycle.attempts
-                        if attempt.item_id == item.item_id
-                        and attempt.state not in {work_models.AttemptState.DONE, work_models.AttemptState.CLOSED}
+                        if attempt.item_id == item.item_id and attempt.state != work_models.AttemptState.DONE
                     ),
                     "",
                 )

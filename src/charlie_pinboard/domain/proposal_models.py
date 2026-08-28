@@ -21,8 +21,7 @@ class ProposalIntake:
     why_it_matters: str
     effect: str
     unlock: str
-    relation: work_models.ProposalRelationKind
-    relation_item: ItemId | None
+    relation: work_models.ProposalRelation
     urgency_evidence: str
     evidence: tuple[str, ...]
     freshness_assumptions: tuple[str, ...]

@@ -60,6 +60,7 @@ from charlie_pinboard.domain.identifiers import (
     HistorySubjectId,
     HostId,
     ItemId,
+    ProposalId,
     TaskId,
 )
 
@@ -113,6 +114,163 @@ class _StoredTransitionRow(msgspec.Struct, frozen=True, forbid_unknown_fields=Tr
             _stored_json("outcome_json", self.outcome_json),
             self.committed_at,
         )
+
+
+class _StoredProposalRow(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    proposal_id: ProposalId
+    created_at: datetime
+    recorded_at: datetime
+    source_task_id: TaskId
+    user_label: str
+    trigger: str
+    why_it_matters: str
+    relation_kind: work_models.ProposalRelationKind
+    relation_item_id: ItemId | None
+    effect: str
+    unlock: str
+    urgency_evidence: str
+    disposition: work_models.ProposalDispositionKind | None
+    disposition_target_item_id: ItemId | None
+    disposition_reason: str | None
+    subject_revision: int
+    disposition_recorded_at: datetime | None
+
+    def proposal(self) -> StoredProposal:
+        relation = _stored_proposal_relation(self.relation_kind, self.relation_item_id)
+        disposition = _stored_proposal_disposition(
+            self.disposition,
+            self.disposition_target_item_id,
+            self.disposition_reason,
+            self.disposition_recorded_at,
+        )
+        return StoredProposal(
+            self.proposal_id,
+            self.created_at,
+            self.recorded_at,
+            self.source_task_id,
+            self.user_label,
+            self.trigger,
+            self.why_it_matters,
+            relation,
+            self.effect,
+            self.unlock,
+            self.urgency_evidence,
+            disposition,
+            self.subject_revision,
+        )
+
+
+def _required_relation_item(kind: work_models.ProposalRelationKind, item: ItemId | None) -> ItemId:
+    if item is None:
+        raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal has no related item.")
+    return item
+
+
+def _forbidden_relation_item(kind: work_models.ProposalRelationKind, item: ItemId | None) -> None:
+    if item is not None:
+        raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal has a related item.")
+
+
+def _stored_proposal_relation(
+    kind: work_models.ProposalRelationKind, item: ItemId | None
+) -> work_models.ProposalRelation:
+    match kind:
+        case work_models.ProposalRelationKind.INDEPENDENT:
+            _forbidden_relation_item(kind, item)
+            return work_models.IndependentProposalRelation()
+        case work_models.ProposalRelationKind.PREREQUISITE:
+            return work_models.PrerequisiteProposalRelation(_required_relation_item(kind, item))
+        case work_models.ProposalRelationKind.FOLLOW_UP:
+            return work_models.FollowUpProposalRelation(_required_relation_item(kind, item))
+        case work_models.ProposalRelationKind.DUPLICATE:
+            return work_models.DuplicateProposalRelation(_required_relation_item(kind, item))
+        case work_models.ProposalRelationKind.CONTRADICTION:
+            return work_models.ContradictionProposalRelation(_required_relation_item(kind, item))
+        case work_models.ProposalRelationKind.CLARIFICATION:
+            _forbidden_relation_item(kind, item)
+            return work_models.ClarificationProposalRelation()
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _required_disposition_target(kind: work_models.ProposalDispositionKind, target: ItemId | None) -> ItemId:
+    if target is None:
+        raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal disposition has no target item.")
+    return target
+
+
+def _required_disposition_reason(kind: work_models.ProposalDispositionKind, reason: str | None) -> str:
+    if reason is None:
+        raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal disposition has no reason.")
+    return reason
+
+
+def _required_disposition_time(kind: work_models.ProposalDispositionKind, value: datetime | None) -> datetime:
+    if value is None:
+        raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal disposition has no timestamp.")
+    return value
+
+
+def _forbid_disposition_value(kind: work_models.ProposalDispositionKind, name: str, value: ItemId | str | None) -> None:
+    if value is not None:
+        raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal disposition has a {name}.")
+
+
+def _stored_proposal_disposition(
+    kind: work_models.ProposalDispositionKind | None,
+    target: ItemId | None,
+    reason: str | None,
+    disposed_at: datetime | None,
+) -> work_models.ProposalDisposition | None:
+    match kind:
+        case None:
+            if target is not None or reason is not None or disposed_at is not None:
+                raise StorageError(StorageErrorCode.INVALID_STATE, "Open proposal has disposition details.")
+            return None
+        case work_models.ProposalDispositionKind.ACCEPTED:
+            _forbid_disposition_value(kind, "reason", reason)
+            return work_models.AcceptedProposalDisposition(
+                _required_disposition_target(kind, target),
+                _required_disposition_time(kind, disposed_at),
+            )
+        case work_models.ProposalDispositionKind.MERGED:
+            _forbid_disposition_value(kind, "reason", reason)
+            return work_models.MergedProposalDisposition(
+                _required_disposition_target(kind, target),
+                _required_disposition_time(kind, disposed_at),
+            )
+        case work_models.ProposalDispositionKind.RETURNED:
+            _forbid_disposition_value(kind, "target item", target)
+            return work_models.ReturnedProposalDisposition(
+                _required_disposition_reason(kind, reason),
+                _required_disposition_time(kind, disposed_at),
+            )
+        case work_models.ProposalDispositionKind.REJECTED:
+            _forbid_disposition_value(kind, "target item", target)
+            return work_models.RejectedProposalDisposition(
+                _required_disposition_reason(kind, reason),
+                _required_disposition_time(kind, disposed_at),
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _proposal_disposition_columns(
+    value: work_models.ProposalDisposition | None,
+) -> tuple[str | None, ItemId | None, str | None, str | None]:
+    match value:
+        case None:
+            return None, None, None, None
+        case work_models.AcceptedProposalDisposition(target=target, disposed_at=disposed_at):
+            return value.kind.value, target, None, disposed_at.isoformat()
+        case work_models.MergedProposalDisposition(target=target, disposed_at=disposed_at):
+            return value.kind.value, target, None, disposed_at.isoformat()
+        case work_models.ReturnedProposalDisposition(reason=reason, disposed_at=disposed_at):
+            return value.kind.value, None, reason, disposed_at.isoformat()
+        case work_models.RejectedProposalDisposition(reason=reason, disposed_at=disposed_at):
+            return value.kind.value, None, reason, disposed_at.isoformat()
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 def _validate_attempt_authority(state: StoredWorkState, error_code: StorageErrorCode) -> None:
@@ -217,11 +375,11 @@ class _StoredStateReader:
 
     def _proposals(self) -> ProposalRecords:
         proposals = tuple(
-            _decode_row(row, StoredProposal)
+            _decode_row(row, _StoredProposalRow).proposal()
             for row in self._rows(
                 """
                 SELECT proposal_id, created_at, recorded_at, source_task_id, user_label, trigger, why_it_matters,
-                       relation_kind AS relation, relation_item_id, effect, unlock, urgency_evidence, disposition,
+                       relation_kind, relation_item_id, effect, unlock, urgency_evidence, disposition,
                        disposition_target_item_id, disposition_reason, subject_revision, disposition_recorded_at
                 FROM proposals
                 ORDER BY proposal_id
@@ -531,7 +689,7 @@ class _StoredStateWriter:
                 proposal_id, created_at, recorded_at, source_task_id, user_label,
                 trigger, why_it_matters, relation_kind, relation_item_id, effect, unlock,
                 urgency_evidence, disposition, disposition_target_item_id, disposition_reason,
-                subject_revision, disposition_recorded_at
+                disposition_recorded_at, subject_revision
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             tuple(
@@ -543,16 +701,13 @@ class _StoredStateWriter:
                     value.user_label,
                     value.trigger,
                     value.why_it_matters,
-                    value.relation.value,
-                    value.relation_item_id,
+                    value.relation.kind.value,
+                    value.relation.item,
                     value.effect,
                     value.unlock,
                     value.urgency_evidence,
-                    None if value.disposition is None else value.disposition.value,
-                    value.disposition_target_item_id,
-                    value.disposition_reason,
+                    *_proposal_disposition_columns(value.disposition),
                     value.subject_revision,
-                    _timestamp(value.disposition_recorded_at),
                 )
                 for value in records.proposals
             ),

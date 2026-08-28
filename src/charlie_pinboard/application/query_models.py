@@ -3,24 +3,12 @@ from typing import Annotated, Literal
 
 import msgspec
 
+from charlie_pinboard.application.stored_state import StoredWorkItemState
 from charlie_pinboard.domain import work_models
 
 type ItemStatusSchema = Literal["pinboard-item-status/v1"]
 type ItemStatusAuthority = Literal["sqlite-v1"]
 type DecimalRevision = Annotated[str, msgspec.Meta(pattern=r"^[0-9]+$")]
-
-
-class ItemStatusState(Enum):
-    INTAKE = "intake"
-    READY = "ready"
-    ACTIVE = "active"
-    PAUSED = "paused"
-    BLOCKED = "blocked"
-    DEFERRED = "deferred"
-    REVIEW = "review"
-    DONE = "done"
-    SUPERSEDED = "superseded"
-    DROPPED = "dropped"
 
 
 class ItemStatusAttempt(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -35,7 +23,7 @@ class ItemStatus(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     revision: DecimalRevision
     item_id: str
     label: str
-    state: ItemStatusState
+    state: StoredWorkItemState
     timing: work_models.Timing | None
     outcome_evidence: str | None
     next_action: str | None

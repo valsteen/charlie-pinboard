@@ -14,7 +14,7 @@ from charlie_pinboard.application.queries import (
     overview_from_state,
     preview_parallel,
 )
-from charlie_pinboard.application.query_models import ItemStatus, ItemStatusAttempt, ItemStatusState
+from charlie_pinboard.application.query_models import ItemStatus, ItemStatusAttempt
 from charlie_pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
@@ -86,14 +86,13 @@ class SQLiteQueriesTest(unittest.TestCase):
 
     def test_overview_exposes_duplicate_contradiction_and_clarification_for_review(self) -> None:
         for relation in (
-            work_models.ProposalRelationKind.DUPLICATE,
-            work_models.ProposalRelationKind.CONTRADICTION,
-            work_models.ProposalRelationKind.CLARIFICATION,
+            work_models.DuplicateProposalRelation(ItemId("work-c")),
+            work_models.ContradictionProposalRelation(ItemId("work-c")),
+            work_models.ClarificationProposalRelation(),
         ):
             state = complete_sqlite_state()
             proposal = state.proposals.proposals[0]
-            related = None if relation == work_models.ProposalRelationKind.CLARIFICATION else ItemId("work-c")
-            changed = replace(proposal, relation=relation, relation_item_id=related)
+            changed = replace(proposal, relation=relation)
             dependencies = tuple(
                 value for value in state.lifecycle.dependencies if value.item_id != ItemId("zz-proposal-a")
             )
@@ -105,12 +104,12 @@ class SQLiteQueriesTest(unittest.TestCase):
                 )
             )
 
-            with self.subTest(relation=relation.value):
+            with self.subTest(relation=relation.kind.value):
                 item = overview_from_state(store.snapshot()).items[-1]
                 self.assertEqual((), item.depends_on)
                 self.assertTrue(item.eligible)
-                self.assertEqual(relation, item.review_flags[0].kind)
-                self.assertEqual(None if related is None else "work-c", item.review_flags[0].related_item)
+                self.assertEqual(relation.kind, item.review_flags[0].kind)
+                self.assertEqual(None if relation.item is None else "work-c", item.review_flags[0].related_item)
 
     def test_parallel_preview_reports_the_current_attempt_not_retained_terminal_history(self) -> None:
         state = complete_sqlite_state()
@@ -143,14 +142,6 @@ class SQLiteQueriesTest(unittest.TestCase):
                 candidate_revision="candidate-z",
                 candidate_recorded_at=SQLITE_NOW,
             ),
-            replace(
-                active,
-                attempt_id=AttemptId("work-b-a"),
-                item_id=done_item.item_id,
-                state=work_models.AttemptState.CLOSED,
-                candidate_revision=None,
-                candidate_recorded_at=None,
-            ),
         )
         store = self._store(
             replace(
@@ -173,7 +164,7 @@ class SQLiteQueriesTest(unittest.TestCase):
                 "12",
                 "work-a",
                 "Work work-a",
-                ItemStatusState.ACTIVE,
+                StoredWorkItemState.ACTIVE,
                 work_models.Timing.MUST_NOW,
                 None,
                 "continue",
@@ -189,15 +180,12 @@ class SQLiteQueriesTest(unittest.TestCase):
                 "12",
                 "work-b",
                 "Work work-b",
-                ItemStatusState.DONE,
+                StoredWorkItemState.DONE,
                 work_models.Timing.SAFE_TO_DEFER,
                 "accepted completion",
                 None,
                 "",
-                (
-                    ItemStatusAttempt("work-b-a", work_models.AttemptState.CLOSED, None),
-                    ItemStatusAttempt("work-b-z", work_models.AttemptState.DONE, "candidate-z"),
-                ),
+                (ItemStatusAttempt("work-b-z", work_models.AttemptState.DONE, "candidate-z"),),
             ),
             done,
         )

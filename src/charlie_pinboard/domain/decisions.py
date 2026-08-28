@@ -911,49 +911,33 @@ def _accept_proposal(
             DecisionFailureCode.DEPENDENCY_NOT_SATISFIED,
             "Accepted proposal dependencies must be ordered unique existing identities other than their owner.",
         )
-    accepted_item: decision_models.AcceptedProposalItem | None = None
-    if (
-        proposal.user_label is not None
-        and proposal.trigger is not None
-        and proposal.why_it_matters is not None
-        and proposal.effect is not None
-        and proposal.unlock is not None
-        and proposal.urgency_evidence is not None
-    ):
-        scope = work_models.ItemScope(
-            value.item,
-            proposal.user_label,
-            proposal.trigger,
-            proposal.why_it_matters,
-            proposal.effect,
-            proposal.unlock,
-            tuple(
-                work_models.ScopeDependency(position, dependency) for position, dependency in enumerate(dependencies)
-            ),
-        )
-        scope_digest = item_scope_digest(scope)
-        if isinstance(scope_digest, DecisionFailure):
-            return scope_digest
-        accepted_item = decision_models.AcceptedProposalItem(
-            value.item,
-            work_models.WorkState(value.state.value),
-            value.timing,
-            value.next_action,
-            dependencies,
-            proposal.user_label,
-            f"proposal:{proposal.proposal}",
-            proposal.trigger,
-            proposal.why_it_matters,
-            proposal.effect,
-            proposal.unlock,
-            proposal.urgency_evidence,
-            scope_digest,
-        )
-    if accepted_item is None:
-        return DecisionFailure(
-            DecisionFailureCode.TRANSITION_INPUT_INVALID,
-            "Accepted proposal semantics are incomplete.",
-        )
+    scope = work_models.ItemScope(
+        value.item,
+        proposal.user_label,
+        proposal.trigger,
+        proposal.why_it_matters,
+        proposal.effect,
+        proposal.unlock,
+        tuple(work_models.ScopeDependency(position, dependency) for position, dependency in enumerate(dependencies)),
+    )
+    scope_digest = item_scope_digest(scope)
+    if isinstance(scope_digest, DecisionFailure):
+        return scope_digest
+    accepted_item = decision_models.AcceptedProposalItem(
+        value.item,
+        value.state,
+        value.timing,
+        value.next_action,
+        dependencies,
+        proposal.user_label,
+        f"proposal:{proposal.proposal}",
+        proposal.trigger,
+        proposal.why_it_matters,
+        proposal.effect,
+        proposal.unlock,
+        proposal.urgency_evidence,
+        scope_digest,
+    )
     return _result(
         action,
         now,
@@ -1006,15 +990,17 @@ def _dispose_proposal(
         )
     match command:
         case decision_models.ReturnProposalCommand(value=value):
-            disposition = decision_models.ReasonedProposalDispositionKind.RETURNED
+            change: decision_models.ReturnedProposalChange | decision_models.RejectedProposalChange = (
+                decision_models.ReturnedProposalChange(proposal.proposal, value.reason, now)
+            )
         case decision_models.RejectProposalCommand(value=value):
-            disposition = decision_models.ReasonedProposalDispositionKind.REJECTED
+            change = decision_models.RejectedProposalChange(proposal.proposal, value.reason, now)
         case _ as unreachable:
             assert_never(unreachable)
     return _result(
         action,
         now,
-        decision_models.ReasonedProposalDispositionChange(proposal.proposal, disposition, value.reason, now),
+        change,
         evidence=value.reason,
     )
 

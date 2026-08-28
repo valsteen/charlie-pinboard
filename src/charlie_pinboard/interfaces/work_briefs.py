@@ -491,7 +491,7 @@ def build_attempt_brief_views(state: StoredWorkState, artifacts: ArtifactReader)
     result: dict[AttemptId, bytes] = {}
     references = {value.artifact_ref_id: value for value in state.artifact_references}
     for attempt in state.lifecycle.attempts:
-        if attempt.state in {work_models.AttemptState.DONE, work_models.AttemptState.CLOSED}:
+        if attempt.state == work_models.AttemptState.DONE:
             continue
         reference = references.get(attempt.brief_artifact_ref_id)
         if reference is None or reference.kind != ArtifactKind.BRIEF:

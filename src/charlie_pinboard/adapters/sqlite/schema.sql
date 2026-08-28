@@ -90,7 +90,7 @@ CREATE TABLE item_artifacts (
 CREATE TABLE attempts (
     attempt_id TEXT PRIMARY KEY,
     item_id TEXT NOT NULL REFERENCES work_items(item_id),
-    state TEXT NOT NULL CHECK (state IN ('active', 'paused', 'blocked', 'review', 'done', 'closed')),
+    state TEXT NOT NULL CHECK (state IN ('active', 'paused', 'blocked', 'review', 'done')),
     branch TEXT NOT NULL,
     base_revision TEXT NOT NULL,
     provenance TEXT NOT NULL,
@@ -123,13 +123,12 @@ CREATE TABLE attempts (
         (state = 'review' AND candidate_revision IS NOT NULL)
         OR state = 'done'
         OR (state IN ('active', 'paused', 'blocked') AND candidate_revision IS NULL)
-        OR state = 'closed'
     )
 ) STRICT;
 
 CREATE UNIQUE INDEX one_live_attempt_per_item
 ON attempts(item_id)
-WHERE state NOT IN ('done', 'closed');
+WHERE state != 'done';
 
 CREATE TABLE proposals (
     proposal_id TEXT PRIMARY KEY,
@@ -151,7 +150,16 @@ CREATE TABLE proposals (
     disposition_reason TEXT,
     subject_revision INTEGER NOT NULL CHECK (subject_revision >= 0),
     disposition_recorded_at TEXT,
-    CHECK ((disposition IS NULL) = (disposition_recorded_at IS NULL))
+    CHECK ((disposition IS NULL) = (disposition_recorded_at IS NULL)),
+    CHECK (
+        (disposition IS NULL AND disposition_target_item_id IS NULL AND disposition_reason IS NULL)
+        OR (disposition IN ('accepted', 'merged') AND disposition_target_item_id IS NOT NULL AND disposition_reason IS NULL)
+        OR (disposition IN ('returned', 'rejected') AND disposition_target_item_id IS NULL AND disposition_reason IS NOT NULL)
+    ),
+    CHECK (
+        (relation_kind IN ('independent', 'clarification') AND relation_item_id IS NULL)
+        OR (relation_kind IN ('prerequisite', 'follow-up', 'duplicate', 'contradiction') AND relation_item_id IS NOT NULL)
+    )
 ) STRICT;
 
 CREATE TABLE proposal_evidence (

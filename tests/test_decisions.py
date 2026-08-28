@@ -291,7 +291,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         for kind, (expected_action_id, label, semantics) in expected.items():
             with self.subTest(kind=kind):
                 action = selected[kind]
-                descriptor = action.kind.blocker_descriptor
+                descriptor = decision_models.blocker_action_descriptor(action.kind)
                 self.assertIsNotNone(descriptor)
                 assert descriptor is not None
                 self.assertEqual(expected_action_id, decision_models.action_id(action))

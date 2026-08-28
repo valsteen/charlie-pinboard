@@ -181,16 +181,18 @@ class ServiceTest(unittest.TestCase):
                 self.assertEqual(expected, item.state)
 
     def test_positive_attempt_state_variants_reload_from_fresh_stores(self) -> None:
-        for kind, payload, expected in (
+        for kind, payload, expected_attempt, expected_item in (
             (
                 decision_models.ActionKind.PAUSE,
                 work_models.ReasonInput("Pause at a stable point."),
                 work_models.AttemptState.PAUSED,
+                StoredWorkItemState.PAUSED,
             ),
             (
                 decision_models.ActionKind.BLOCK,
                 work_models.BlockInput("The attempt awaits a dependency."),
                 work_models.AttemptState.BLOCKED,
+                StoredWorkItemState.BLOCKED,
             ),
         ):
             with self.subTest(kind=kind):
@@ -206,8 +208,8 @@ class ServiceTest(unittest.TestCase):
                 attempt = next(
                     value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
                 )
-                self.assertEqual(StoredWorkItemState(expected.value), item.state)
-                self.assertEqual(expected, attempt.state)
+                self.assertEqual(expected_item, item.state)
+                self.assertEqual(expected_attempt, attempt.state)
 
     def test_checkpoint_acceptance_preserves_supplied_candidate_and_reloads_from_fresh_store(self) -> None:
         store, database_path = self._store_with_state(complete_sqlite_state())
@@ -589,8 +591,7 @@ class ServiceTest(unittest.TestCase):
             "The finding should be preserved immutably.",
             "A proposal row becomes available for disposition.",
             "The coordinator can inspect it later.",
-            work_models.ProposalRelationKind.INDEPENDENT,
-            None,
+            work_models.IndependentProposalRelation(),
             "The evidence is current.",
             ("source:local",),
             ("The current schema remains accepted.",),
@@ -634,8 +635,7 @@ class ServiceTest(unittest.TestCase):
             "The dependency must be visible before scheduling.",
             "Record the prerequisite candidate and relationship.",
             "A coordinator can evaluate it in queue order.",
-            work_models.ProposalRelationKind.PREREQUISITE,
-            ItemId("work-c"),
+            work_models.PrerequisiteProposalRelation(ItemId("work-c")),
             "The relationship is current.",
             ("source:local",),
             ("Work C remains live.",),
@@ -680,8 +680,7 @@ class ServiceTest(unittest.TestCase):
             "Invalid insertion must not partially persist.",
             "Reject the request before mutation.",
             "Keep the prior queue intact.",
-            work_models.ProposalRelationKind.INDEPENDENT,
-            None,
+            work_models.IndependentProposalRelation(),
             "The queue currently contains four live items.",
             (),
             (),
@@ -709,8 +708,7 @@ class ServiceTest(unittest.TestCase):
             "Storage must not be the first validator.",
             "The proposal is rejected without mutation.",
             "Return a typed item rejection.",
-            work_models.ProposalRelationKind.FOLLOW_UP,
-            ItemId("does-not-exist"),
+            work_models.FollowUpProposalRelation(ItemId("does-not-exist")),
             "The related item is absent.",
             (),
             (),

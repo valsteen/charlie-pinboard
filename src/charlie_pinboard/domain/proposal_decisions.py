@@ -20,7 +20,7 @@ def _proposal_text(value: str) -> bool:
     return bool(value) and value.strip() == value and "|" not in value and "\n" not in value
 
 
-def decide_proposal_creation(  # noqa: C901, PLR0912
+def decide_proposal_creation(  # noqa: C901
     authority: LocalIntakeAuthority,
     current_project_revision: int,
     current_host_epoch: int,
@@ -56,19 +56,10 @@ def decide_proposal_creation(  # noqa: C901, PLR0912
         set(intake.freshness_assumptions)
     ):
         return DecisionFailure(DecisionFailureCode.PROPOSAL_INVALID, "Proposal evidence must be ordered and unique.")
-    relation_without_item = intake.relation in {
-        work_models.ProposalRelationKind.INDEPENDENT,
-        work_models.ProposalRelationKind.CLARIFICATION,
-    }
-    if relation_without_item != (intake.relation_item is None):
-        return DecisionFailure(
-            DecisionFailureCode.PROPOSAL_INVALID,
-            "Independent and clarification proposals omit a related item; other relations require one.",
-        )
     if (
-        intake.relation_item is not None
-        and snapshot.item(intake.relation_item) is None
-        and intake.relation_item not in snapshot.history_items
+        intake.relation.item is not None
+        and snapshot.item(intake.relation.item) is None
+        and intake.relation.item not in snapshot.history_items
     ):
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, "The related work item does not exist.")
     live_count = len(snapshot.items)
@@ -78,11 +69,7 @@ def decide_proposal_creation(  # noqa: C901, PLR0912
             DecisionFailureCode.PROPOSAL_INVALID,
             f"Proposal position must be between 1 and {live_count + 1}.",
         )
-    dependencies = (
-        (intake.relation_item,)
-        if intake.relation == work_models.ProposalRelationKind.FOLLOW_UP and intake.relation_item is not None
-        else ()
-    )
+    dependencies = (intake.relation.item,) if isinstance(intake.relation, work_models.FollowUpProposalRelation) else ()
     scope = work_models.ItemScope(
         item_id,
         intake.user_label,
@@ -96,9 +83,9 @@ def decide_proposal_creation(  # noqa: C901, PLR0912
     if isinstance(digest, DecisionFailure):
         return digest
     prerequisite_change: PrerequisiteDependencyChange | None = None
-    if intake.relation == work_models.ProposalRelationKind.PREREQUISITE and intake.relation_item is not None:
-        target = snapshot.item(intake.relation_item)
-        anchor = next((value for value in snapshot.scopes if value.item == intake.relation_item), None)
+    if isinstance(intake.relation, work_models.PrerequisiteProposalRelation):
+        target = snapshot.item(intake.relation.item)
+        anchor = next((value for value in snapshot.scopes if value.item == intake.relation.item), None)
         if target is not None and anchor is not None:
             dependency_position = len(anchor.scope.dependencies)
             changed_scope = work_models.ItemScope(
@@ -115,7 +102,7 @@ def decide_proposal_creation(  # noqa: C901, PLR0912
             if isinstance(changed_digest, DecisionFailure):
                 return changed_digest
             prerequisite_change = PrerequisiteDependencyChange(
-                intake.relation_item,
+                intake.relation.item,
                 item_id,
                 dependency_position,
                 anchor.revision,
