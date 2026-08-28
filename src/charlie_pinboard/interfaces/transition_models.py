@@ -48,6 +48,11 @@ class AcceptCheckpointInputPayload(msgspec.Struct, frozen=True, forbid_unknown_f
     evidence: NonEmptyLine
 
 
+class AcceptReviewAndContinueInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    candidate: NonEmptyLine
+    evidence: NonEmptyLine
+
+
 class CloseInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     outcome: CloseOutcome
     reason: NonEmptyLine
@@ -84,6 +89,7 @@ type InputPayload = (
     | BlockInputPayload
     | EvidenceInputPayload
     | AcceptCheckpointInputPayload
+    | AcceptReviewAndContinueInputPayload
     | CloseInputPayload
     | DeferInputPayload
     | AcceptProposalInputPayload

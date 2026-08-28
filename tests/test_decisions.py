@@ -10,6 +10,7 @@ from charlie_pinboard.domain.decision_models import (
     AuthorizationKind,
     CompletionChange,
     Decision,
+    ReviewAcceptanceChange,
     Role,
     TransitionCommand,
 )
@@ -28,12 +29,15 @@ from charlie_pinboard.domain.identifiers import (
     AttemptId,
     CandidateId,
     ItemId,
+    LeaseId,
 )
 from charlie_pinboard.domain.ledger import LedgerSnapshot
 from charlie_pinboard.domain.work_models import (
     AcceptedProposalState,
+    AcceptReviewAndContinueInput,
     ActivateInput,
     ArtifactRole,
+    AttemptAuthority,
     AttemptState,
     BlockInput,
     CloseInput,
@@ -160,6 +164,86 @@ def native_scope(*, artifacts: tuple[ScopeArtifact, ...] | None = None) -> ItemS
 
 
 class LifecycleDecisionTest(unittest.TestCase):
+    def test_review_continuation_is_coordination_only_and_requires_the_protected_candidate(self) -> None:
+        review = item("target", WorkState.REVIEW, attempt="target-1")
+        attempt = AttemptRecord("target-1", "target", AttemptState.REVIEW, protected_candidate_revision="candidate-a")
+        authority = AttemptAuthority(AttemptId("target-1"), ItemId("target"), LeaseId("worker-lease"), 3)
+        snapshot = LedgerSnapshot(
+            "revision",
+            1,
+            (review,),
+            attempts=(attempt,),
+            attempt_authorities=(authority,),
+        )
+
+        coordinator_kinds = {
+            value.kind
+            for value in available_actions(
+                snapshot,
+                ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, 1),
+            )
+        }
+        coordination_actions = available_actions(
+            snapshot,
+            ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATION, 1),
+        )
+        self.assertNotIn(ActionKind.ACCEPT_REVIEW_AND_CONTINUE, coordinator_kinds)
+        selected = next(value for value in coordination_actions if value.kind == ActionKind.ACCEPT_REVIEW_AND_CONTINUE)
+
+        mismatch = decision_outcome(
+            snapshot,
+            bind_transition(selected, AcceptReviewAndContinueInput(CandidateId("candidate-b"), "accepted")),
+            NOW,
+        )
+        self.assertIsInstance(mismatch, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, mismatch.code)
+
+        accepted = decide(
+            snapshot,
+            bind_transition(selected, AcceptReviewAndContinueInput(CandidateId("candidate-a"), "accepted")),
+            NOW,
+        )
+        self.assertIsInstance(accepted.change, ReviewAcceptanceChange)
+        assert isinstance(accepted.change, ReviewAcceptanceChange)
+        self.assertEqual(CandidateId("candidate-a"), accepted.change.candidate)
+        self.assertEqual(4, accepted.change.authority_change.after.generation)
+        self.assertIsNone(accepted.change.authority_change.after.lease_id)
+        self.assertEqual("accepted", accepted.receipt.evidence)
+
+        for retained_authorities in ((), (authority, authority)):
+            with self.subTest(retained_authorities=len(retained_authorities)):
+                rejected = decision_outcome(
+                    replace_dataclass(snapshot, attempt_authorities=retained_authorities),
+                    bind_transition(
+                        selected,
+                        AcceptReviewAndContinueInput(CandidateId("candidate-a"), "accepted"),
+                    ),
+                    NOW,
+                )
+                self.assertIsInstance(rejected, DecisionFailure)
+                self.assertEqual(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, rejected.code)
+
+        inconsistent = replace_dataclass(
+            snapshot,
+            attempts=(replace_dataclass(attempt, state=AttemptState.ACTIVE),),
+        )
+        inconsistent_kinds = {
+            value.kind
+            for value in available_actions(
+                inconsistent,
+                ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATION, 1),
+            )
+        }
+        self.assertNotIn(ActionKind.ACCEPT_REVIEW_AND_CONTINUE, inconsistent_kinds)
+
+        empty_evidence = decision_outcome(
+            snapshot,
+            bind_transition(selected, AcceptReviewAndContinueInput(CandidateId("candidate-a"), "")),
+            NOW,
+        )
+        self.assertIsInstance(empty_evidence, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, empty_evidence.code)
+
     def test_missing_attempt_is_a_returned_failure(self) -> None:
         snapshot = LedgerSnapshot("revision", 1, ())
         command = bind_transition(action(ActionKind.PAUSE, "missing-attempt"), ReasonInput("pause"))

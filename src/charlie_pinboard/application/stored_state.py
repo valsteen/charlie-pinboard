@@ -52,6 +52,7 @@ class StoredWorkItemState(Enum):
 
 class TransitionHistoryActionKind(Enum):
     ACCEPT_CHECKPOINT = "accept-checkpoint"
+    ACCEPT_REVIEW_AND_CONTINUE = "accept-review-and-continue"
     ACCEPT_PROPOSAL = "accept-proposal"
     ACTIVATE = "activate"
     BLOCK = "block"

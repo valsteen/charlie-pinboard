@@ -7,6 +7,7 @@ from charlie_pinboard.domain.decision_models import (
     AcceptedProposalChange,
     AcceptedProposalItem,
     AcceptProposalCommand,
+    AcceptReviewAndContinueCommand,
     Action,
     ActionCapability,
     ActionKind,
@@ -42,6 +43,7 @@ from charlie_pinboard.domain.decision_models import (
     ResumeCommand,
     ReturnForCorrectionCommand,
     ReturnProposalCommand,
+    ReviewAcceptanceChange,
     ReviewReturnChange,
     ReviewSubmissionChange,
     Role,
@@ -64,6 +66,7 @@ from charlie_pinboard.domain.ledger import LedgerSnapshot
 from charlie_pinboard.domain.work_models import (
     AcceptCheckpointInput,
     AcceptProposalInput,
+    AcceptReviewAndContinueInput,
     ActivateInput,
     AttemptAuthority,
     AttemptState,
@@ -106,6 +109,8 @@ def command_action(command: TransitionCommand) -> Action:  # noqa: C901, PLR0912
     match command:
         case AcceptCheckpointCommand(capability=capability):
             kind = ActionKind.ACCEPT_CHECKPOINT
+        case AcceptReviewAndContinueCommand(capability=capability):
+            kind = ActionKind.ACCEPT_REVIEW_AND_CONTINUE
         case AcceptProposalCommand(capability=capability):
             kind = ActionKind.ACCEPT_PROPOSAL
         case ActivateCommand(capability=capability):
@@ -166,6 +171,8 @@ def bind_transition(  # noqa: C901, PLR0912
     match action.kind, value:
         case ActionKind.ACCEPT_CHECKPOINT, AcceptCheckpointInput():
             return AcceptCheckpointCommand(capability, value)
+        case ActionKind.ACCEPT_REVIEW_AND_CONTINUE, AcceptReviewAndContinueInput():
+            return AcceptReviewAndContinueCommand(capability, value)
         case ActionKind.ACTIVATE, ActivateInput():
             return ActivateCommand(capability, value)
         case ActionKind.PAUSE, ReasonInput():
@@ -209,6 +216,7 @@ def bind_transition(  # noqa: C901, PLR0912
             )
         case (
             ActionKind.ACCEPT_CHECKPOINT
+            | ActionKind.ACCEPT_REVIEW_AND_CONTINUE
             | ActionKind.ACCEPT_PROPOSAL
             | ActionKind.ACTIVATE
             | ActionKind.BLOCK
@@ -341,6 +349,7 @@ def _active_coordinator_actions(snapshot: LedgerSnapshot, factory: ActionFactory
         if not _scope_stale(snapshot, item):
             result.append(factory.make(ActionKind.COMPLETE, item.attempt, f"Accept and complete {item.item}"))
         if item.state == WorkState.REVIEW and factory.actor.authorization == AuthorizationKind.COORDINATION:
+            attempt = snapshot.attempt(item.attempt)
             result.extend(
                 (
                     factory.make(
@@ -355,6 +364,14 @@ def _active_coordinator_actions(snapshot: LedgerSnapshot, factory: ActionFactory
                     ),
                 )
             )
+            if attempt is not None and attempt.state == AttemptState.REVIEW:
+                result.append(
+                    factory.make(
+                        ActionKind.ACCEPT_REVIEW_AND_CONTINUE,
+                        item.attempt,
+                        f"Accept the review and continue {item.item}",
+                    )
+                )
     return result
 
 
@@ -788,6 +805,53 @@ def _accept_checkpoint(
     )
 
 
+def _accept_review_and_continue(
+    snapshot: LedgerSnapshot,
+    command: AcceptReviewAndContinueCommand,
+    now: datetime,
+) -> DecisionResult[Decision]:
+    action = command_action(command)
+    value = command.value
+    attempt_id = AttemptId(action.subject)
+    item = snapshot.item_for_attempt(attempt_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
+    if item.state != WorkState.REVIEW:
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
+            "Only an item in review can have its review accepted for continuation.",
+        )
+    attempt = snapshot.attempt(attempt_id)
+    if attempt is None or attempt.state != AttemptState.REVIEW:
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
+            "Only an attempt in review can have its review accepted for continuation.",
+        )
+    if not value.evidence or attempt.protected_candidate_revision != value.candidate:
+        return DecisionFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
+            "Review continuation requires nonempty evidence and the exact protected candidate.",
+        )
+    authorities = tuple(candidate for candidate in snapshot.attempt_authorities if candidate.attempt == attempt_id)
+    if len(authorities) != 1:
+        return DecisionFailure(
+            DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
+            "Review continuation requires exactly one current attempt-authority record to fence.",
+        )
+    authority = authorities[0]
+    authority_change = AttemptAuthorityChange(
+        authority,
+        replace(authority, lease_id=None, generation=authority.generation + 1),
+    )
+    return _result(
+        action,
+        now,
+        ReviewAcceptanceChange(item.item, attempt_id, value.candidate, authority_change),
+        item=item.item,
+        evidence=value.evidence,
+    )
+
+
 def _simple_item_transition(
     snapshot: LedgerSnapshot,
     command: ReopenCommand | MarkReadyCommand | BlockItemCommand,
@@ -1010,6 +1074,8 @@ def decide(  # noqa: C901, PLR0912
     match command:
         case AcceptCheckpointCommand():
             return _accept_checkpoint(snapshot, command, now)
+        case AcceptReviewAndContinueCommand():
+            return _accept_review_and_continue(snapshot, command, now)
         case ActivateCommand():
             return _activate(snapshot, command, now)
         case PauseCommand() | BlockCommand():

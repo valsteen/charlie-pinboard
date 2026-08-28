@@ -14,6 +14,7 @@ from charlie_pinboard.domain.identifiers import (
 from charlie_pinboard.domain.work_models import (
     AcceptCheckpointInput,
     AcceptProposalInput,
+    AcceptReviewAndContinueInput,
     ActivateInput,
     BlockInput,
     CloseInput,
@@ -32,6 +33,7 @@ from charlie_pinboard.interfaces.errors import TransitionInputError, TransitionI
 from charlie_pinboard.interfaces.transition_models import (
     AcceptCheckpointInputPayload,
     AcceptProposalInputPayload,
+    AcceptReviewAndContinueInputPayload,
     BlockInputPayload,
     CloseInputPayload,
     DeferInputPayload,
@@ -48,6 +50,7 @@ from charlie_pinboard.interfaces.transition_models import (
 
 TRANSITION_ACTION_KINDS: Final = (
     "accept-checkpoint",
+    "accept-review-and-continue",
     "accept-proposal",
     "activate",
     "block",
@@ -72,6 +75,8 @@ def _input_model(kind: str) -> InputModel:  # noqa: C901, PLR0912
     match kind:
         case "accept-checkpoint":
             return AcceptCheckpointInputPayload
+        case "accept-review-and-continue":
+            return AcceptReviewAndContinueInputPayload
         case "accept-proposal":
             return AcceptProposalInputPayload
         case "activate":
@@ -139,6 +144,8 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # 
             return EvidenceInput(evidence)
         case AcceptCheckpointInputPayload(checkpoint=checkpoint, candidate=candidate, evidence=evidence):
             return AcceptCheckpointInput(CheckpointId(checkpoint), CandidateId(candidate), evidence)
+        case AcceptReviewAndContinueInputPayload(candidate=candidate, evidence=evidence):
+            return AcceptReviewAndContinueInput(CandidateId(candidate), evidence)
         case CloseInputPayload(outcome=outcome, reason=reason):
             return CloseInput(outcome, reason)
         case DeferInputPayload(timing=timing, reopen_condition=reopen_condition):

@@ -145,7 +145,7 @@ Ready review evidence is strict JSON bound to the stable checkpoint ID, canonica
 
 ### Checkpoint and terminal acceptance
 
-An accepted nonterminal checkpoint uses the brief's stable checkpoint ID, preserves exact result and review evidence, pauses the same attempt, and fences its worker authority. Terminal completion records accepted evidence and removes the item from live work in the same SQLite transition. Review return keeps the same attempt and evidence while fencing the rejected worker lease.
+An accepted nonterminal checkpoint uses the brief's stable checkpoint ID, preserves exact result and review evidence, pauses the same attempt, and fences its worker authority. When review accepts the protected candidate but the current attempt should continue, review acceptance returns the item and attempt to active, clears the protected candidate, preserves the accepted candidate and evidence in the transition receipt, and fences the prior worker authority. Terminal completion records accepted evidence and removes the item from live work in the same SQLite transition. Review return keeps the same attempt and evidence while fencing the rejected worker lease.
 
 ### Portable copy
 
