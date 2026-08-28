@@ -25,14 +25,9 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
 )
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
 from charlie_pinboard.domain.identifiers import ItemId
-from charlie_pinboard.domain.work_models import (
-    AttemptState,
-    ProposalDispositionKind,
-    ProposalRelationKind,
-    WorkState,
-)
 
 
 def _dependency_key(value: ItemDependency) -> tuple[int, str]:
@@ -62,9 +57,9 @@ _TERMINAL_ITEM_STATES = {
 }
 
 
-def _work_state(value: StoredWorkItemState) -> WorkState:
+def _work_state(value: StoredWorkItemState) -> work_models.WorkState:
     try:
-        return WorkState(value.value)
+        return work_models.WorkState(value.value)
     except ValueError as error:
         raise QueryError(QueryErrorCode.WORK_STATE_INVALID, f"Item state {value.value!r} is not live.") from error
 
@@ -92,7 +87,7 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
     attempts = {
         attempt.item_id: attempt.attempt_id
         for attempt in state.lifecycle.attempts
-        if attempt.state not in {AttemptState.DONE, AttemptState.CLOSED}
+        if attempt.state not in {work_models.AttemptState.DONE, work_models.AttemptState.CLOSED}
     }
     dependency_links = {
         item.item_id: tuple(
@@ -111,7 +106,7 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
         proposal = proposals.get(item_id)
         if (
             proposal is not None
-            and proposal.relation == ProposalRelationKind.FOLLOW_UP
+            and proposal.relation == work_models.ProposalRelationKind.FOLLOW_UP
             and proposal.relation_item_id == link.dependency_id
         ):
             reason = f"Follow-up to {link.dependency_id}: {proposal.why_it_matters}"
@@ -120,7 +115,7 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
                 (
                     value
                     for value in proposals.values()
-                    if value.relation == ProposalRelationKind.PREREQUISITE
+                    if value.relation == work_models.ProposalRelationKind.PREREQUISITE
                     and value.relation_item_id == item_id
                     and ItemId(value.proposal_id) == link.dependency_id
                 ),
@@ -135,20 +130,20 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
 
     def review_flags(item_id: ItemId) -> tuple[ReviewFlag, ...]:
         proposal = proposals.get(item_id)
-        if proposal is None or proposal.disposition not in {None, ProposalDispositionKind.RETURNED}:
+        if proposal is None or proposal.disposition not in {None, work_models.ProposalDispositionKind.RETURNED}:
             return ()
-        if proposal.disposition == ProposalDispositionKind.RETURNED:
+        if proposal.disposition == work_models.ProposalDispositionKind.RETURNED:
             return (
                 ReviewFlag(
-                    ProposalRelationKind.CLARIFICATION,
+                    work_models.ProposalRelationKind.CLARIFICATION,
                     str(proposal.relation_item_id) if proposal.relation_item_id is not None else None,
                     proposal.disposition_reason or proposal.why_it_matters,
                 ),
             )
         if proposal.relation not in {
-            ProposalRelationKind.DUPLICATE,
-            ProposalRelationKind.CONTRADICTION,
-            ProposalRelationKind.CLARIFICATION,
+            work_models.ProposalRelationKind.DUPLICATE,
+            work_models.ProposalRelationKind.CONTRADICTION,
+            work_models.ProposalRelationKind.CLARIFICATION,
         }:
             return ()
         return (
@@ -182,8 +177,8 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
         for item in items
         if item.eligible
         and (
-            item.state in {WorkState.INTAKE, WorkState.READY, WorkState.DEFERRED}
-            or item.state in {WorkState.PAUSED, WorkState.BLOCKED}
+            item.state in {work_models.WorkState.INTAKE, work_models.WorkState.READY, work_models.WorkState.DEFERRED}
+            or item.state in {work_models.WorkState.PAUSED, work_models.WorkState.BLOCKED}
         )
     )
     return WorkOverview(
@@ -195,7 +190,7 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
         tuple(
             str(attempt.attempt_id)
             for attempt in sorted(state.lifecycle.attempts, key=_attempt_key)
-            if attempt.state == AttemptState.ACTIVE
+            if attempt.state == work_models.AttemptState.ACTIVE
         ),
         items,
         immediate,
@@ -266,7 +261,7 @@ def _parallel_reasons(
         (
             candidate
             for candidate in state.lifecycle.attempts
-            if candidate.item_id == item_id and candidate.state == AttemptState.ACTIVE
+            if candidate.item_id == item_id and candidate.state == work_models.AttemptState.ACTIVE
         ),
         None,
     )
@@ -316,7 +311,7 @@ def preview_parallel(
                         attempt.attempt_id
                         for attempt in state.lifecycle.attempts
                         if attempt.item_id == item.item_id
-                        and attempt.state not in {AttemptState.DONE, AttemptState.CLOSED}
+                        and attempt.state not in {work_models.AttemptState.DONE, work_models.AttemptState.CLOSED}
                     ),
                     "",
                 )

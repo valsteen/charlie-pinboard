@@ -13,30 +13,22 @@ from charlie_pinboard.application.dispatch_models import (
 from charlie_pinboard.application.errors import ActionQueryError, DispatchError, DispatchErrorCode
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.stored_state import ArtifactKind
-from charlie_pinboard.domain.decision_models import (
-    Action,
-    ActionKind,
-    Role,
-)
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.identifiers import AttemptId, ItemId, LeaseId
-from charlie_pinboard.domain.work_models import (
-    ArtifactRole,
-    AttemptState,
-)
 
 
-def _current_action(store: WorkStore, supplied: Action) -> Action:
+def _current_action(store: WorkStore, supplied: decision_models.Action) -> decision_models.Action:
     try:
         actions = discover_actions(
             store,
-            Role.COORDINATOR,
+            decision_models.Role.COORDINATOR,
             lease_id=supplied.lease_id,
             generation=supplied.coordinator_generation,
         )
     except ActionQueryError as error:
         raise DispatchError(DispatchErrorCode(error.code.value), str(error).partition(": ")[2]) from error
     current = next((value for value in actions if value.action_id == supplied.action_id), None)
-    if current is None or supplied.kind != ActionKind.DISPATCH:
+    if current is None or supplied.kind != decision_models.ActionKind.DISPATCH:
         raise DispatchError(
             DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE, f"Action '{supplied.action_id}' is not available."
         )
@@ -110,7 +102,7 @@ def _review_publisher(
                 rejected,
                 datetime.now(UTC),
                 item_id=item_id,
-                role=ArtifactRole.EVIDENCE,
+                role=work_models.ArtifactRole.EVIDENCE,
             )
             raise DispatchError(
                 DispatchErrorCode.DISPATCH_BRIEF_REVIEW_COLLISION,
@@ -122,7 +114,7 @@ def _review_publisher(
             published,
             datetime.now(UTC),
             item_id=item_id,
-            role=ArtifactRole.EVIDENCE,
+            role=work_models.ArtifactRole.EVIDENCE,
         )
         publication_revisions.append(accepted.accepted_revision)
         return candidate, str(artifacts.work_root / accepted.selector)
@@ -135,7 +127,7 @@ def prepare_dispatch(
     artifacts: DispatchArtifactPort,
     prepare_brief: DispatchBriefPreparer,
     source_checkout_root: Path,
-    action: Action,
+    action: decision_models.Action,
     checkpoint: str,
     environment: DispatchEnvironment,
     supplied_prompt: bytes | None = None,
@@ -146,7 +138,7 @@ def prepare_dispatch(
     state = store.snapshot()
     attempt_id = AttemptId(action.subject)
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
-    if attempt is None or attempt.state != AttemptState.ACTIVE:
+    if attempt is None or attempt.state != work_models.AttemptState.ACTIVE:
         raise DispatchError(DispatchErrorCode.DISPATCH_ATTEMPT_NOT_ACTIVE, f"Attempt '{attempt_id}' is not active.")
     reference = next(
         (
@@ -189,7 +181,7 @@ def prepare_dispatch(
             value
             for value in discover_actions(
                 store,
-                Role.COORDINATOR,
+                decision_models.Role.COORDINATOR,
                 lease_id=LeaseId(action.lease_id) if action.lease_id is not None else None,
                 generation=action.coordinator_generation,
             )

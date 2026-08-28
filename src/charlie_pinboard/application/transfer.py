@@ -23,8 +23,8 @@ from charlie_pinboard.adapters.sqlite.models import OpenMode
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.errors import PortableCopyError, PortableCopyErrorCode
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
-from charlie_pinboard.domain.work_models import CoordinationLeaseStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +48,7 @@ def _canonical_json(value: dict[str, int]) -> str:
 def _quiescent_source(store: SQLiteWorkStore) -> None:
     state = store.snapshot()
     coordination = state.authority.coordination
-    if coordination is not None and coordination.state == CoordinationLeaseStatus.ACTIVE:
+    if coordination is not None and coordination.state == work_models.CoordinationLeaseStatus.ACTIVE:
         raise PortableCopyError(
             PortableCopyErrorCode.PORTABLE_COPY_SOURCE_NOT_QUIESCENT,
             "The source has active coordination authority.",

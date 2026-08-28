@@ -31,16 +31,8 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkState,
     TransitionHistoryActionKind,
 )
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
-from charlie_pinboard.domain.decision_models import (
-    Action,
-    ActionKind,
-    ActorAuthority,
-    AuthorizationKind,
-    Decision,
-    Role,
-    TransitionCommand,
-)
 from charlie_pinboard.domain.decisions import available_actions as available_actions_outcome
 from charlie_pinboard.domain.decisions import bind_transition as bind_transition_outcome
 from charlie_pinboard.domain.decisions import decide as decision_outcome
@@ -52,26 +44,25 @@ from charlie_pinboard.domain.identifiers import (
     LeaseId,
 )
 from charlie_pinboard.domain.ledger import LedgerSnapshot
-from charlie_pinboard.domain.work_models import (
-    AttemptState,
-    EvidenceInput,
-    ReasonInput,
-    SubmitReviewInput,
-    TransitionInput,
-)
 from tests.domain_support import expect_success
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
 
-def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
+def available_actions(
+    snapshot: LedgerSnapshot, actor: decision_models.ActorAuthority
+) -> tuple[decision_models.Action, ...]:
     return expect_success(available_actions_outcome(snapshot, actor))
 
 
-def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand:
+def bind_transition(
+    action: decision_models.Action, value: work_models.TransitionInput
+) -> decision_models.TransitionCommand:
     return expect_success(bind_transition_outcome(action, value))
 
 
-def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:
+def decide(
+    snapshot: LedgerSnapshot, command: decision_models.TransitionCommand, now: datetime
+) -> decision_models.Decision:
     return expect_success(decision_outcome(snapshot, command, now))
 
 
@@ -582,7 +573,7 @@ class SQLiteStoreTest(unittest.TestCase):
         )
         review_items = list(state.lifecycle.work_items)
         review_items[1] = replace(review_items[1], state=StoredWorkItemState.REVIEW)
-        review_attempt = replace(state.lifecycle.attempts[0], state=AttemptState.REVIEW)
+        review_attempt = replace(state.lifecycle.attempts[0], state=work_models.AttemptState.REVIEW)
         review_without_candidate = replace(
             state,
             lifecycle=replace(state.lifecycle, work_items=tuple(review_items), attempts=(review_attempt,)),
@@ -639,13 +630,13 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(accepted_relational_state, accepted_store.snapshot())
 
         for item_state, attempt_state, candidate, accepted in (
-            (StoredWorkItemState.ACTIVE, AttemptState.ACTIVE, "candidate-a", False),
-            (StoredWorkItemState.PAUSED, AttemptState.PAUSED, "candidate-a", False),
-            (StoredWorkItemState.BLOCKED, AttemptState.BLOCKED, "candidate-a", False),
-            (StoredWorkItemState.REVIEW, AttemptState.REVIEW, None, False),
-            (StoredWorkItemState.REVIEW, AttemptState.REVIEW, "candidate-a", True),
-            (StoredWorkItemState.DONE, AttemptState.DONE, None, True),
-            (StoredWorkItemState.DONE, AttemptState.DONE, "candidate-a", True),
+            (StoredWorkItemState.ACTIVE, work_models.AttemptState.ACTIVE, "candidate-a", False),
+            (StoredWorkItemState.PAUSED, work_models.AttemptState.PAUSED, "candidate-a", False),
+            (StoredWorkItemState.BLOCKED, work_models.AttemptState.BLOCKED, "candidate-a", False),
+            (StoredWorkItemState.REVIEW, work_models.AttemptState.REVIEW, None, False),
+            (StoredWorkItemState.REVIEW, work_models.AttemptState.REVIEW, "candidate-a", True),
+            (StoredWorkItemState.DONE, work_models.AttemptState.DONE, None, True),
+            (StoredWorkItemState.DONE, work_models.AttemptState.DONE, "candidate-a", True),
         ):
             items = list(state.lifecycle.work_items)
             items[1] = replace(
@@ -683,11 +674,15 @@ class SQLiteStoreTest(unittest.TestCase):
         _path, store = self._store()
         initial = store.snapshot()
         snapshot = project_decision_snapshot(initial)
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
-        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.PAUSE)
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+        )
+        action = next(
+            value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.PAUSE
+        )
         decision = decide(
             snapshot,
-            bind_transition(action, ReasonInput("Pause at the checkpoint boundary.")),
+            bind_transition(action, work_models.ReasonInput("Pause at the checkpoint boundary.")),
             SQLITE_NOW,
         )
         mutation = project_transition_mutation(initial, decision)
@@ -696,10 +691,10 @@ class SQLiteStoreTest(unittest.TestCase):
             self.assertEqual(initial, transaction.snapshot())
             receipt = transaction.commit(mutation)
         committed = store.snapshot()
-        self.assertEqual(ActionKind.PAUSE.value, receipt.outcome)
+        self.assertEqual(decision_models.ActionKind.PAUSE.value, receipt.outcome)
         self.assertEqual(13, committed.lifecycle.project.revision)
         self.assertEqual(StoredWorkItemState.PAUSED, committed.lifecycle.work_items[1].state)
-        self.assertEqual(AttemptState.PAUSED, committed.lifecycle.attempts[0].state)
+        self.assertEqual(work_models.AttemptState.PAUSED, committed.lifecycle.attempts[0].state)
         self.assertEqual(TransitionHistoryActionKind.PAUSE, committed.transition_receipts[-1].action_kind)
 
         with self.assertRaises(StorageError) as stale, store.write() as transaction:
@@ -723,13 +718,17 @@ class SQLiteStoreTest(unittest.TestCase):
             value
             for value in available_actions(
                 failed_snapshot,
-                ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, failed_snapshot.generation),
+                decision_models.ActorAuthority(
+                    decision_models.Role.COORDINATOR,
+                    decision_models.AuthorizationKind.COORDINATOR,
+                    failed_snapshot.generation,
+                ),
             )
-            if value.kind == ActionKind.PAUSE
+            if value.kind == decision_models.ActionKind.PAUSE
         )
         failed_decision = decide(
             failed_snapshot,
-            bind_transition(failed_action, ReasonInput("This write is interrupted.")),
+            bind_transition(failed_action, work_models.ReasonInput("This write is interrupted.")),
             SQLITE_NOW,
         )
         failed_mutation = project_transition_mutation(failed_initial, failed_decision)
@@ -758,11 +757,15 @@ class SQLiteStoreTest(unittest.TestCase):
         _path, store = self._store()
         before = store.snapshot()
         snapshot = project_decision_snapshot(before)
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
-        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.COMPLETE)
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+        )
+        action = next(
+            value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.COMPLETE
+        )
         decision = decide(
             snapshot,
-            bind_transition(action, EvidenceInput("accepted direct completion")),
+            bind_transition(action, work_models.EvidenceInput("accepted direct completion")),
             SQLITE_NOW + timedelta(seconds=1),
         )
 
@@ -775,7 +778,8 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(("complete", "accepted direct completion"), (receipt.outcome, receipt.evidence))
         self.assertEqual((StoredWorkItemState.DONE, "accepted direct completion"), (item.state, item.outcome_evidence))
         self.assertEqual(
-            (AttemptState.DONE, None, None), (attempt.state, attempt.candidate_revision, attempt.candidate_recorded_at)
+            (work_models.AttemptState.DONE, None, None),
+            (attempt.state, attempt.candidate_revision, attempt.candidate_recorded_at),
         )
         self.assertEqual(4, completed.authority.attempt_counters[0].generation_high_water)
         self.assertEqual(AttemptLeaseStatus.REVOKED, completed.authority.attempt_leases[0].state)
@@ -786,19 +790,23 @@ class SQLiteStoreTest(unittest.TestCase):
         _path, store = self._store()
         before = store.snapshot()
         snapshot = project_decision_snapshot(before)
-        actor = ActorAuthority(
-            Role.WORKER,
-            AuthorizationKind.ATTEMPT,
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.WORKER,
+            decision_models.AuthorizationKind.ATTEMPT,
             3,
             LeaseId("attempt-lease-a"),
             (AttemptId("work-a-1"),),
             False,
         )
-        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.SUBMIT_REVIEW)
+        action = next(
+            value
+            for value in available_actions(snapshot, actor)
+            if value.kind == decision_models.ActionKind.SUBMIT_REVIEW
+        )
         candidate = CandidateId("candidate-from-caller")
         decision = decide(
             snapshot,
-            bind_transition(action, SubmitReviewInput(candidate)),
+            bind_transition(action, work_models.SubmitReviewInput(candidate)),
             SQLITE_NOW + timedelta(seconds=1),
         )
 
@@ -807,7 +815,7 @@ class SQLiteStoreTest(unittest.TestCase):
 
         committed = store.snapshot()
         attempt = committed.lifecycle.attempts[0]
-        self.assertEqual((AttemptState.REVIEW, candidate), (attempt.state, attempt.candidate_revision))
+        self.assertEqual((work_models.AttemptState.REVIEW, candidate), (attempt.state, attempt.candidate_revision))
         self.assertEqual(SQLITE_NOW + timedelta(seconds=1), attempt.candidate_recorded_at)
         self.assertIn(b'"candidate":"candidate-from-caller"', committed.transition_receipts[-1].outcome_payload)
 
@@ -817,7 +825,7 @@ class SQLiteStoreTest(unittest.TestCase):
         items[1] = replace(items[1], state=StoredWorkItemState.REVIEW)
         attempt = replace(
             state.lifecycle.attempts[0],
-            state=AttemptState.REVIEW,
+            state=work_models.AttemptState.REVIEW,
             candidate_revision="candidate-a",
             candidate_recorded_at=SQLITE_NOW,
         )
@@ -830,18 +838,20 @@ class SQLiteStoreTest(unittest.TestCase):
         snapshot = project_decision_snapshot(store.snapshot())
         coordination = review_state.authority.coordination
         assert coordination is not None
-        actor = ActorAuthority(
-            Role.COORDINATOR,
-            AuthorizationKind.COORDINATION,
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR,
+            decision_models.AuthorizationKind.COORDINATION,
             coordination.generation,
             coordination.lease_id,
         )
         action = next(
-            value for value in available_actions(snapshot, actor) if value.kind == ActionKind.RETURN_FOR_CORRECTION
+            value
+            for value in available_actions(snapshot, actor)
+            if value.kind == decision_models.ActionKind.RETURN_FOR_CORRECTION
         )
         decision = decide(
             snapshot,
-            bind_transition(action, ReasonInput("Address the review findings.")),
+            bind_transition(action, work_models.ReasonInput("Address the review findings.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
 
@@ -851,7 +861,7 @@ class SQLiteStoreTest(unittest.TestCase):
         returned = store.snapshot()
         returned_attempt = returned.lifecycle.attempts[0]
         self.assertEqual(
-            (AttemptState.ACTIVE, None, None),
+            (work_models.AttemptState.ACTIVE, None, None),
             (
                 returned_attempt.state,
                 returned_attempt.candidate_revision,

@@ -19,10 +19,7 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
 )
-from charlie_pinboard.domain.decision_models import (
-    ActionKind,
-    Role,
-)
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.errors import DecisionFailureCode
 from charlie_pinboard.domain.history import item_scope_digest
 from charlie_pinboard.domain.identifiers import (
@@ -30,7 +27,6 @@ from charlie_pinboard.domain.identifiers import (
     ItemId,
     LeaseId,
 )
-from charlie_pinboard.domain.work_models import AttemptState, ProposalRelationKind, Timing
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -90,13 +86,13 @@ class SQLiteQueriesTest(unittest.TestCase):
 
     def test_overview_exposes_duplicate_contradiction_and_clarification_for_review(self) -> None:
         for relation in (
-            ProposalRelationKind.DUPLICATE,
-            ProposalRelationKind.CONTRADICTION,
-            ProposalRelationKind.CLARIFICATION,
+            work_models.ProposalRelationKind.DUPLICATE,
+            work_models.ProposalRelationKind.CONTRADICTION,
+            work_models.ProposalRelationKind.CLARIFICATION,
         ):
             state = complete_sqlite_state()
             proposal = state.proposals.proposals[0]
-            related = None if relation == ProposalRelationKind.CLARIFICATION else ItemId("work-c")
+            related = None if relation == work_models.ProposalRelationKind.CLARIFICATION else ItemId("work-c")
             changed = replace(proposal, relation=relation, relation_item_id=related)
             dependencies = tuple(
                 value for value in state.lifecycle.dependencies if value.item_id != ItemId("zz-proposal-a")
@@ -119,7 +115,7 @@ class SQLiteQueriesTest(unittest.TestCase):
     def test_parallel_preview_reports_the_current_attempt_not_retained_terminal_history(self) -> None:
         state = complete_sqlite_state()
         active = state.lifecycle.attempts[0]
-        historical = replace(active, attempt_id=type(active.attempt_id)("aaa-old"), state=AttemptState.DONE)
+        historical = replace(active, attempt_id=type(active.attempt_id)("aaa-old"), state=work_models.AttemptState.DONE)
         store = self._store(replace(state, lifecycle=replace(state.lifecycle, attempts=(historical, active))))
 
         preview = preview_parallel(store, selected=("work-a",), now=SQLITE_NOW)
@@ -133,7 +129,7 @@ class SQLiteQueriesTest(unittest.TestCase):
         done_item = replace(
             state.lifecycle.work_items[2],
             state=StoredWorkItemState.DONE,
-            timing=Timing.SAFE_TO_DEFER,
+            timing=work_models.Timing.SAFE_TO_DEFER,
             outcome_evidence="accepted completion",
             next_action=None,
             notes=None,
@@ -143,7 +139,7 @@ class SQLiteQueriesTest(unittest.TestCase):
                 active,
                 attempt_id=AttemptId("work-b-z"),
                 item_id=done_item.item_id,
-                state=AttemptState.DONE,
+                state=work_models.AttemptState.DONE,
                 candidate_revision="candidate-z",
                 candidate_recorded_at=SQLITE_NOW,
             ),
@@ -151,7 +147,7 @@ class SQLiteQueriesTest(unittest.TestCase):
                 active,
                 attempt_id=AttemptId("work-b-a"),
                 item_id=done_item.item_id,
-                state=AttemptState.CLOSED,
+                state=work_models.AttemptState.CLOSED,
                 candidate_revision=None,
                 candidate_recorded_at=None,
             ),
@@ -178,11 +174,11 @@ class SQLiteQueriesTest(unittest.TestCase):
                 "work-a",
                 "Work work-a",
                 ItemStatusState.ACTIVE,
-                Timing.MUST_NOW,
+                work_models.Timing.MUST_NOW,
                 None,
                 "continue",
                 "Current work remains bounded.",
-                (ItemStatusAttempt("work-a-1", AttemptState.ACTIVE, None),),
+                (ItemStatusAttempt("work-a-1", work_models.AttemptState.ACTIVE, None),),
             ),
             live,
         )
@@ -194,13 +190,13 @@ class SQLiteQueriesTest(unittest.TestCase):
                 "work-b",
                 "Work work-b",
                 ItemStatusState.DONE,
-                Timing.SAFE_TO_DEFER,
+                work_models.Timing.SAFE_TO_DEFER,
                 "accepted completion",
                 None,
                 "",
                 (
-                    ItemStatusAttempt("work-b-a", AttemptState.CLOSED, None),
-                    ItemStatusAttempt("work-b-z", AttemptState.DONE, "candidate-z"),
+                    ItemStatusAttempt("work-b-a", work_models.AttemptState.CLOSED, None),
+                    ItemStatusAttempt("work-b-z", work_models.AttemptState.DONE, "candidate-z"),
                 ),
             ),
             done,
@@ -249,36 +245,36 @@ class SQLiteQueriesTest(unittest.TestCase):
         coordination = state.authority.coordination
         assert coordination is not None
 
-        observer = discover_actions(store, Role.OBSERVER, now=SQLITE_NOW)
+        observer = discover_actions(store, decision_models.Role.OBSERVER, now=SQLITE_NOW)
         coordinator = discover_actions(
             store,
-            Role.COORDINATOR,
+            decision_models.Role.COORDINATOR,
             lease_id=coordination.lease_id,
             generation=coordination.generation,
             now=SQLITE_NOW,
         )
         worker = discover_actions(
             store,
-            Role.WORKER,
+            decision_models.Role.WORKER,
             lease_id=LeaseId("attempt-lease-a"),
             generation=3,
             now=SQLITE_NOW,
         )
 
-        self.assertEqual((ActionKind.INSPECT,), tuple(action.kind for action in observer))
-        self.assertTrue(any(action.kind == ActionKind.DISPATCH for action in coordinator))
-        self.assertTrue(any(action.kind == ActionKind.CONTINUE for action in worker))
+        self.assertEqual((decision_models.ActionKind.INSPECT,), tuple(action.kind for action in observer))
+        self.assertTrue(any(action.kind == decision_models.ActionKind.DISPATCH for action in coordinator))
+        self.assertTrue(any(action.kind == decision_models.ActionKind.CONTINUE for action in worker))
         with self.assertRaises(ActionQueryError) as stale_coordination:
             discover_actions(
                 store,
-                Role.COORDINATOR,
+                decision_models.Role.COORDINATOR,
                 lease_id=LeaseId("wrong"),
                 generation=coordination.generation,
                 now=SQLITE_NOW,
             )
         self.assertEqual(DecisionFailureCode.COORDINATION_LEASE_REQUIRED, stale_coordination.exception.code)
         with self.assertRaises(ActionQueryError) as missing_worker:
-            discover_actions(store, Role.WORKER, now=SQLITE_NOW)
+            discover_actions(store, decision_models.Role.WORKER, now=SQLITE_NOW)
         self.assertEqual(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, missing_worker.exception.code)
         self.assertEqual(state, store.snapshot())
 

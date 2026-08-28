@@ -2,12 +2,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.identifiers import AttemptId, HostId, ItemId, LeaseId, TaskId
-from charlie_pinboard.domain.work_models import (
-    CommandAttemptAuthority,
-    CoordinationCommandAuthority,
-    CoordinationLeaseAuthority,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,14 +18,14 @@ class AcquireCoordinationAuthority:
 
 @dataclass(frozen=True, slots=True)
 class RenewCoordinationAuthority:
-    authority: CoordinationCommandAuthority
+    authority: work_models.CoordinationCommandAuthority
     renewed_at: datetime
     expires_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
 class ReleaseCoordinationAuthority:
-    authority: CoordinationCommandAuthority
+    authority: work_models.CoordinationCommandAuthority
     released_at: datetime
 
 
@@ -50,8 +46,8 @@ type CoordinationAuthorityOperation = (
 
 @dataclass(frozen=True, slots=True)
 class CoordinationAuthorityDecision:
-    before: CoordinationLeaseAuthority | None
-    after: CoordinationLeaseAuthority
+    before: work_models.CoordinationLeaseAuthority | None
+    after: work_models.CoordinationLeaseAuthority
 
 
 class AttemptLeaseStatus(Enum):
@@ -103,7 +99,7 @@ class AcquireInitialAttemptAuthority:
 @dataclass(frozen=True, slots=True)
 class TransferAttemptAuthority:
     current: InactiveAttemptAuthority
-    coordination: CoordinationCommandAuthority
+    coordination: work_models.CoordinationCommandAuthority
     task_id: TaskId
     host_id: HostId
     lease_id: LeaseId
@@ -113,14 +109,14 @@ class TransferAttemptAuthority:
 
 @dataclass(frozen=True, slots=True)
 class RenewAttemptAuthority:
-    current: CommandAttemptAuthority
+    current: work_models.CommandAttemptAuthority
     renewed_at: datetime
     expires_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
 class ReleaseAttemptAuthority:
-    current: CommandAttemptAuthority
+    current: work_models.CommandAttemptAuthority
     released_at: datetime
 
 
@@ -129,7 +125,7 @@ class RevokeAttemptAuthority:
     attempt: AttemptId
     lease_id: LeaseId
     generation: int
-    coordination: CoordinationCommandAuthority
+    coordination: work_models.CoordinationCommandAuthority
     revoked_at: datetime
 
 

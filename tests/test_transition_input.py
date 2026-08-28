@@ -5,13 +5,8 @@ import msgspec
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId, CandidateId
-from charlie_pinboard.domain.work_models import (
-    AcceptCheckpointInput,
-    AcceptReviewAndContinueInput,
-    ActivateInput,
-    ResumeInput,
-)
 from charlie_pinboard.interfaces.errors import TransitionInputError
 from charlie_pinboard.interfaces.transition_input import (
     TRANSITION_ACTION_KINDS,
@@ -36,24 +31,26 @@ class TransitionInputTest(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            ActivateInput(AttemptId("attempt-1"), "codex/attempt-1", "abc123", "worker", ArtifactRefId(7)),
+            work_models.ActivateInput(AttemptId("attempt-1"), "codex/attempt-1", "abc123", "worker", ArtifactRefId(7)),
             activation,
         )
-        self.assertEqual(ResumeInput(), parse_transition_input("resume", "{}"))
-        self.assertEqual(ResumeInput(ArtifactRefId(8)), parse_transition_input("resume", '{"brief_artifact_ref_id":8}'))
+        self.assertEqual(work_models.ResumeInput(), parse_transition_input("resume", "{}"))
+        self.assertEqual(
+            work_models.ResumeInput(ArtifactRefId(8)), parse_transition_input("resume", '{"brief_artifact_ref_id":8}')
+        )
 
         checkpoint = parse_transition_input(
             "accept-checkpoint",
             '{"checkpoint":"design-accepted","candidate":"sha256:candidate","evidence":"accepted"}',
         )
-        self.assertIsInstance(checkpoint, AcceptCheckpointInput)
+        self.assertIsInstance(checkpoint, work_models.AcceptCheckpointInput)
 
         continuation = parse_transition_input(
             "accept-review-and-continue",
             '{"candidate":"sha256:candidate","evidence":"review accepted"}',
         )
         self.assertEqual(
-            AcceptReviewAndContinueInput(CandidateId("sha256:candidate"), "review accepted"),
+            work_models.AcceptReviewAndContinueInput(CandidateId("sha256:candidate"), "review accepted"),
             continuation,
         )
 

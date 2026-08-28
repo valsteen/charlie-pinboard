@@ -16,8 +16,8 @@ from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.stored_state import ArtifactKind, StoredWorkItemState, StoredWorkState
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.identifiers import AttemptId, ItemId
-from charlie_pinboard.domain.work_models import AttemptState, Timing
 from charlie_pinboard.interfaces.cli import build_parser, main
 from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 
@@ -616,7 +616,7 @@ class CliTest(unittest.TestCase):
             value for value in blocked.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
         )
         self.assertEqual(StoredWorkItemState.BLOCKED, blocked_item.state)
-        self.assertEqual(AttemptState.BLOCKED, blocked_attempt.state)
+        self.assertEqual(work_models.AttemptState.BLOCKED, blocked_attempt.state)
         self.assertEqual(
             ("intake-work",),
             tuple(
@@ -673,7 +673,7 @@ class CliTest(unittest.TestCase):
             value for value in resumed.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
         )
         self.assertEqual(StoredWorkItemState.ACTIVE, resumed_item.state)
-        self.assertEqual(AttemptState.ACTIVE, resumed_attempt.state)
+        self.assertEqual(work_models.AttemptState.ACTIVE, resumed_attempt.state)
 
     def test_blocker_skill_guidance_names_advisory_and_mutating_responsibilities(self) -> None:
         repository = Path(__file__).resolve().parents[1]
@@ -811,7 +811,7 @@ class CliTest(unittest.TestCase):
                 attempts=tuple(
                     replace(
                         value,
-                        state=AttemptState.REVIEW,
+                        state=work_models.AttemptState.REVIEW,
                         candidate_revision="candidate-cli-review",
                         candidate_recorded_at=now,
                     )
@@ -861,7 +861,7 @@ class CliTest(unittest.TestCase):
         self.assertIn("OK TRANSITION_APPLIED accept-review-and-continue:work-a-1", stdout)
         reloaded = store.snapshot()
         attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
-        self.assertEqual(AttemptState.ACTIVE, attempt.state)
+        self.assertEqual(work_models.AttemptState.ACTIVE, attempt.state)
         self.assertIsNone(attempt.candidate_revision)
 
     def test_close_borrows_sqlite_coordination_and_records_terminal_history(self) -> None:
@@ -1014,7 +1014,7 @@ class CliTest(unittest.TestCase):
         done_item = replace(
             state.lifecycle.work_items[2],
             state=StoredWorkItemState.DONE,
-            timing=Timing.SAFE_TO_DEFER,
+            timing=work_models.Timing.SAFE_TO_DEFER,
             outcome_evidence="accepted completion",
             next_action=None,
             notes=None,
@@ -1023,7 +1023,7 @@ class CliTest(unittest.TestCase):
             active,
             attempt_id=AttemptId("work-b-1"),
             item_id=done_item.item_id,
-            state=AttemptState.DONE,
+            state=work_models.AttemptState.DONE,
             candidate_revision="candidate-b",
             candidate_recorded_at=SQLITE_NOW,
         )

@@ -2,6 +2,7 @@ from typing import Final, assert_never
 
 import msgspec
 
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
@@ -10,24 +11,6 @@ from charlie_pinboard.domain.identifiers import (
     HostId,
     ItemId,
     TaskId,
-)
-from charlie_pinboard.domain.work_models import (
-    AcceptCheckpointInput,
-    AcceptProposalInput,
-    AcceptReviewAndContinueInput,
-    ActivateInput,
-    BlockInput,
-    CloseInput,
-    DeferInput,
-    EmptyInput,
-    EvidenceInput,
-    MergeProposalInput,
-    ReasonInput,
-    ResumeInput,
-    SubmitReviewInput,
-    Timing,
-    TransferCoordinatorInput,
-    TransitionInput,
 )
 from charlie_pinboard.interfaces.errors import TransitionInputError, TransitionInputErrorCode
 from charlie_pinboard.interfaces.transition_models import (
@@ -107,7 +90,7 @@ def _input_model(kind: str) -> InputModel:  # noqa: C901, PLR0912
             )
 
 
-def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # noqa: C901, PLR0912
+def parse_transition_input(kind: str, data: bytes | str) -> work_models.TransitionInput:  # noqa: C901, PLR0912
     model = _input_model(kind)
     try:
         payload = msgspec.json.decode(data, type=model)
@@ -118,9 +101,11 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # 
         ) from error
     match payload:
         case EmptyInputPayload():
-            return EmptyInput()
+            return work_models.EmptyInput()
         case ResumeInputPayload(brief_artifact_ref_id=brief_artifact_ref_id):
-            return ResumeInput(None if brief_artifact_ref_id is None else ArtifactRefId(brief_artifact_ref_id))
+            return work_models.ResumeInput(
+                None if brief_artifact_ref_id is None else ArtifactRefId(brief_artifact_ref_id)
+            )
         case StoredActivateInputPayload(
             attempt=attempt,
             branch=branch,
@@ -128,7 +113,7 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # 
             owner=owner,
             brief_artifact_ref_id=brief_artifact_ref_id,
         ):
-            return ActivateInput(
+            return work_models.ActivateInput(
                 AttemptId(attempt),
                 branch,
                 base_revision,
@@ -136,21 +121,21 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # 
                 ArtifactRefId(brief_artifact_ref_id),
             )
         case SubmitReviewInputPayload(candidate=candidate):
-            return SubmitReviewInput(CandidateId(candidate))
+            return work_models.SubmitReviewInput(CandidateId(candidate))
         case ReasonInputPayload(reason=reason):
-            return ReasonInput(reason)
+            return work_models.ReasonInput(reason)
         case BlockInputPayload(reason=reason, depends_on=depends_on):
-            return BlockInput(reason, tuple(ItemId(value) for value in depends_on))
+            return work_models.BlockInput(reason, tuple(ItemId(value) for value in depends_on))
         case EvidenceInputPayload(evidence=evidence):
-            return EvidenceInput(evidence)
+            return work_models.EvidenceInput(evidence)
         case AcceptCheckpointInputPayload(checkpoint=checkpoint, candidate=candidate, evidence=evidence):
-            return AcceptCheckpointInput(CheckpointId(checkpoint), CandidateId(candidate), evidence)
+            return work_models.AcceptCheckpointInput(CheckpointId(checkpoint), CandidateId(candidate), evidence)
         case AcceptReviewAndContinueInputPayload(candidate=candidate, evidence=evidence):
-            return AcceptReviewAndContinueInput(CandidateId(candidate), evidence)
+            return work_models.AcceptReviewAndContinueInput(CandidateId(candidate), evidence)
         case CloseInputPayload(outcome=outcome, reason=reason):
-            return CloseInput(outcome, reason)
+            return work_models.CloseInput(outcome, reason)
         case DeferInputPayload(timing=timing, reopen_condition=reopen_condition):
-            return DeferInput(Timing(timing), reopen_condition)
+            return work_models.DeferInput(work_models.Timing(timing), reopen_condition)
         case AcceptProposalInputPayload(
             item=item,
             state=state,
@@ -158,17 +143,17 @@ def parse_transition_input(kind: str, data: bytes | str) -> TransitionInput:  # 
             timing=timing,
             depends_on=depends_on,
         ):
-            return AcceptProposalInput(
+            return work_models.AcceptProposalInput(
                 ItemId(item),
                 state,
                 next_action,
-                Timing(timing) if timing is not None else None,
+                work_models.Timing(timing) if timing is not None else None,
                 tuple(ItemId(value) for value in depends_on),
             )
         case MergeProposalInputPayload(target=target):
-            return MergeProposalInput(ItemId(target))
+            return work_models.MergeProposalInput(ItemId(target))
         case TransferCoordinatorInputPayload(task_id=task_id, host_id=host_id):
-            return TransferCoordinatorInput(TaskId(task_id), HostId(host_id))
+            return work_models.TransferCoordinatorInput(TaskId(task_id), HostId(host_id))
         case _ as unreachable:
             assert_never(unreachable)
 

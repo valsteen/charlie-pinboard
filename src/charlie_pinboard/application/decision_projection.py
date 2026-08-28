@@ -10,6 +10,7 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
 )
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.authority_models import (
     AttemptLeaseStatus,
     InactiveAttemptAuthority,
@@ -17,24 +18,6 @@ from charlie_pinboard.domain.authority_models import (
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from charlie_pinboard.domain.identifiers import AttemptId, CandidateId, ItemId, ProposalId
 from charlie_pinboard.domain.ledger import LedgerSnapshot
-from charlie_pinboard.domain.work_models import (
-    ArtifactRecord,
-    AttemptAuthority,
-    AttemptRecord,
-    CommandAttemptAuthority,
-    CoordinationCommandAuthority,
-    CoordinationLeaseAuthority,
-    CoordinationLeaseStatus,
-    ItemScope,
-    ProposalRecord,
-    ProposalRelationKind,
-    ScopeAnchor,
-    ScopeArtifact,
-    ScopeDependency,
-    SubjectRevision,
-    WorkItem,
-    WorkState,
-)
 
 
 def project_inactive_attempt_authority(
@@ -98,30 +81,32 @@ def _proposal_freshness_order(value: ProposalFreshness) -> tuple[str, int]:
     return str(value.proposal_id), value.position
 
 
-def _live_state(state: StoredWorkItemState) -> WorkState | None:
+def _live_state(state: StoredWorkItemState) -> work_models.WorkState | None:
     match state:
         case StoredWorkItemState.INTAKE:
-            return WorkState.INTAKE
+            return work_models.WorkState.INTAKE
         case StoredWorkItemState.READY:
-            return WorkState.READY
+            return work_models.WorkState.READY
         case StoredWorkItemState.ACTIVE:
-            return WorkState.ACTIVE
+            return work_models.WorkState.ACTIVE
         case StoredWorkItemState.PAUSED:
-            return WorkState.PAUSED
+            return work_models.WorkState.PAUSED
         case StoredWorkItemState.BLOCKED:
-            return WorkState.BLOCKED
+            return work_models.WorkState.BLOCKED
         case StoredWorkItemState.DEFERRED:
-            return WorkState.DEFERRED
+            return work_models.WorkState.DEFERRED
         case StoredWorkItemState.REVIEW:
-            return WorkState.REVIEW
+            return work_models.WorkState.REVIEW
         case StoredWorkItemState.DONE | StoredWorkItemState.SUPERSEDED | StoredWorkItemState.DROPPED:
             return None
         case _ as unreachable:
             assert_never(unreachable)
 
 
-def _work_item(value: StoredWorkItem, state: WorkState, attempt_by_item: dict[ItemId, AttemptId]) -> WorkItem:
-    return WorkItem(
+def _work_item(
+    value: StoredWorkItem, state: work_models.WorkState, attempt_by_item: dict[ItemId, AttemptId]
+) -> work_models.WorkItem:
+    return work_models.WorkItem(
         value.item_id,
         state,
         value.timing.value if value.timing is not None else None,
@@ -149,16 +134,16 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         if (live_state := _live_state(item.state)) is not None
     )
     stored_items_by_id = {item.item_id: item for item in state.lifecycle.work_items}
-    dependency_groups: dict[ItemId, list[ScopeDependency]] = {item_id: [] for item_id in stored_items_by_id}
+    dependency_groups: dict[ItemId, list[work_models.ScopeDependency]] = {item_id: [] for item_id in stored_items_by_id}
     for link in sorted(state.lifecycle.dependencies, key=_dependency_order):
-        dependency_groups[link.item_id].append(ScopeDependency(link.position, link.dependency_id))
+        dependency_groups[link.item_id].append(work_models.ScopeDependency(link.position, link.dependency_id))
     dependencies_by_item = {item_id: tuple(values) for item_id, values in dependency_groups.items()}
     artifact_by_id = {artifact.artifact_ref_id: artifact for artifact in state.artifact_references}
-    artifact_groups: dict[ItemId, list[ScopeArtifact]] = {item_id: [] for item_id in stored_items_by_id}
+    artifact_groups: dict[ItemId, list[work_models.ScopeArtifact]] = {item_id: [] for item_id in stored_items_by_id}
     for link in sorted(state.lifecycle.item_artifacts, key=_artifact_order):
         artifact = artifact_by_id[link.artifact_ref_id]
         artifact_groups[link.item_id].append(
-            ScopeArtifact(
+            work_models.ScopeArtifact(
                 link.role,
                 link.position,
                 artifact.kind.value,
@@ -173,11 +158,11 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         (anchor.item_id, anchor.revision, anchor.digest): anchor for anchor in state.lifecycle.scope_revisions
     }
     scopes = tuple(
-        ScopeAnchor(
+        work_models.ScopeAnchor(
             item.item_id,
             anchor.revision,
             anchor.digest,
-            ItemScope(
+            work_models.ItemScope(
                 item.item_id,
                 item.user_label,
                 item.trigger,
@@ -194,7 +179,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         if anchor is not None
     )
     work_items = tuple(
-        WorkItem(
+        work_models.WorkItem(
             item.item,
             item.state,
             item.timing,
@@ -212,7 +197,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
     attempt_by_id = {attempt.attempt_id: attempt for attempt in state.lifecycle.attempts}
     attempt_anchors = {(anchor.attempt_id, anchor.generation): anchor for anchor in state.authority.attempt_generations}
     attempt_authorities = tuple(
-        AttemptAuthority(
+        work_models.AttemptAuthority(
             lease.attempt_id,
             attempt_by_id[lease.attempt_id].item_id,
             attempt_anchors[(lease.attempt_id, lease.generation)].lease_id
@@ -223,7 +208,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         for lease in state.authority.attempt_leases
     )
     command_attempt_authorities = tuple(
-        CommandAttemptAuthority(
+        work_models.CommandAttemptAuthority(
             state.lifecycle.project.host_epoch,
             attempt_by_id[lease.attempt_id].item_id,
             str(stored_items_by_id[attempt_by_id[lease.attempt_id].item_id].subject_revision),
@@ -240,7 +225,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         for anchor in (attempt_anchors[(lease.attempt_id, lease.generation)],)
     )
     coordination_authority = (
-        CoordinationCommandAuthority(
+        work_models.CoordinationCommandAuthority(
             state.lifecycle.project.host_epoch,
             state.authority.coordination.task_id,
             state.authority.coordination.host_id,
@@ -249,7 +234,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             state.authority.coordination.expires_at,
         )
         if state.authority.coordination is not None
-        and state.authority.coordination.state == CoordinationLeaseStatus.ACTIVE
+        and state.authority.coordination.state == work_models.CoordinationLeaseStatus.ACTIVE
         else None
     )
     proposal_ids = tuple(proposal.proposal_id for proposal in state.proposals.proposals)
@@ -267,7 +252,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         generation=state.authority.coordination.generation if state.authority.coordination is not None else 0,
         items=work_items,
         attempts=tuple(
-            AttemptRecord(
+            work_models.AttemptRecord(
                 attempt.attempt_id,
                 attempt.item_id,
                 attempt.state,
@@ -279,10 +264,11 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             for attempt in state.lifecycle.attempts
         ),
         artifacts=tuple(
-            ArtifactRecord(artifact.artifact_ref_id, artifact.kind.value) for artifact in state.artifact_references
+            work_models.ArtifactRecord(artifact.artifact_ref_id, artifact.kind.value)
+            for artifact in state.artifact_references
         ),
         proposals=tuple(
-            ProposalRecord(
+            work_models.ProposalRecord(
                 proposal.proposal_id,
                 str(proposal.subject_revision),
                 proposal.created_at,
@@ -290,7 +276,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
                 proposal.user_label,
                 proposal.trigger,
                 proposal.why_it_matters,
-                ProposalRelationKind(proposal.relation.value),
+                work_models.ProposalRelationKind(proposal.relation.value),
                 proposal.relation_item_id,
                 proposal.effect,
                 proposal.unlock,
@@ -302,13 +288,14 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             if proposal.disposition is None
         ),
         subject_revisions=tuple(
-            SubjectRevision(item.item_id, str(item.subject_revision)) for item in state.lifecycle.work_items
+            work_models.SubjectRevision(item.item_id, str(item.subject_revision)) for item in state.lifecycle.work_items
         )
         + tuple(
-            SubjectRevision(attempt.attempt_id, str(attempt.subject_revision)) for attempt in state.lifecycle.attempts
+            work_models.SubjectRevision(attempt.attempt_id, str(attempt.subject_revision))
+            for attempt in state.lifecycle.attempts
         )
         + tuple(
-            SubjectRevision(proposal.proposal_id, str(proposal.subject_revision))
+            work_models.SubjectRevision(proposal.proposal_id, str(proposal.subject_revision))
             for proposal in state.proposals.proposals
         ),
         attempt_authorities=attempt_authorities,
@@ -321,7 +308,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         focus_attempt=state.focus.attempt_id,
         can_transfer_coordinator=coordination_authority is not None,
         coordination_lease=(
-            CoordinationLeaseAuthority(
+            work_models.CoordinationLeaseAuthority(
                 state.lifecycle.project.host_epoch,
                 coordination.task_id,
                 coordination.host_id,
@@ -329,7 +316,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
                 coordination.generation,
                 coordination.acquired_at,
                 coordination.expires_at,
-                CoordinationLeaseStatus(coordination.state.value),
+                work_models.CoordinationLeaseStatus(coordination.state.value),
             )
             if (coordination := state.authority.coordination) is not None
             else None

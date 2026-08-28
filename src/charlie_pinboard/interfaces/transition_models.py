@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 
 import msgspec
 
-from charlie_pinboard.domain.work_models import AcceptedProposalState, CloseOutcome
+from charlie_pinboard.domain import work_models
 
 type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
 type Identity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
@@ -54,7 +54,7 @@ class AcceptReviewAndContinueInputPayload(msgspec.Struct, frozen=True, forbid_un
 
 
 class CloseInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    outcome: CloseOutcome
+    outcome: work_models.CloseOutcome
     reason: NonEmptyLine
 
 
@@ -65,7 +65,7 @@ class DeferInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True)
 
 class AcceptProposalInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True, kw_only=True):
     item: Identity
-    state: AcceptedProposalState
+    state: work_models.AcceptedProposalState
     next_action: NonEmptyLine
     timing: TimingPayload | None = None
     depends_on: tuple[Identity, ...] = ()

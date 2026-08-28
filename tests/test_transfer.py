@@ -17,16 +17,13 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
 )
 from charlie_pinboard.application.transfer import create_portable_copy
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.authority_models import (
     AttemptLeaseStatus,
     RenewAttemptAuthority,
 )
 from charlie_pinboard.domain.errors import DecisionFailure
 from charlie_pinboard.domain.identifiers import ArtifactRefId
-from charlie_pinboard.domain.work_models import (
-    CommandAttemptAuthority,
-    CoordinationLeaseStatus,
-)
 from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 from tests.support import SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import work_a_brief
@@ -88,7 +85,7 @@ class PortableCopyTest(unittest.TestCase):
                     state.authority,
                     coordination=replace(
                         state.authority.coordination,
-                        state=CoordinationLeaseStatus.RELEASED,
+                        state=work_models.CoordinationLeaseStatus.RELEASED,
                     ),
                     attempt_leases=tuple(
                         replace(lease, state=AttemptLeaseStatus.RELEASED) for lease in state.authority.attempt_leases
@@ -126,7 +123,7 @@ class PortableCopyTest(unittest.TestCase):
         self.assertEqual(source_state.artifact_references, copied.artifact_references)
         self.assertTrue(
             copied.authority.coordination is None
-            or copied.authority.coordination.state != CoordinationLeaseStatus.ACTIVE
+            or copied.authority.coordination.state != work_models.CoordinationLeaseStatus.ACTIVE
         )
         self.assertTrue(all(lease.state != AttemptLeaseStatus.ACTIVE for lease in copied.authority.attempt_leases))
         self.assertEqual(source_state.lifecycle.project.host_epoch + 1, copied.lifecycle.project.host_epoch)
@@ -143,7 +140,7 @@ class PortableCopyTest(unittest.TestCase):
 
         source_attempt = source_state.lifecycle.attempts[0]
         source_item = next(item for item in source_state.lifecycle.work_items if item.item_id == source_attempt.item_id)
-        stale = CommandAttemptAuthority(
+        stale = work_models.CommandAttemptAuthority(
             source_state.lifecycle.project.host_epoch,
             source_attempt.item_id,
             str(source_item.subject_revision),

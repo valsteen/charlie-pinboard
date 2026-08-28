@@ -2,7 +2,7 @@ from typing import Annotated, Literal
 
 import msgspec
 
-from charlie_pinboard.domain.work_models import ProposalRelationKind
+from charlie_pinboard.domain import work_models
 
 type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
 type ProposalSchema = Literal["pinboard-proposal/v1"]
@@ -11,7 +11,7 @@ type ProposalText = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^|\n]*
 
 
 class ProposalRelation(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    kind: ProposalRelationKind
+    kind: work_models.ProposalRelationKind
     item: ProposalIdentity | None
 
 

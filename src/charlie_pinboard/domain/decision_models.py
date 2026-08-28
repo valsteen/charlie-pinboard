@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import assert_never
 
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -15,28 +16,6 @@ from charlie_pinboard.domain.identifiers import (
     LeaseId,
     ProposalId,
     SubjectId,
-)
-from charlie_pinboard.domain.work_models import (
-    AcceptCheckpointInput,
-    AcceptProposalInput,
-    AcceptReviewAndContinueInput,
-    ActivateInput,
-    AttemptAuthority,
-    AttemptState,
-    BlockInput,
-    CloseInput,
-    CloseOutcome,
-    CommandAttemptAuthority,
-    CoordinationLeaseAuthority,
-    DeferInput,
-    EvidenceInput,
-    MergeProposalInput,
-    ReasonInput,
-    ResumeInput,
-    SubmitReviewInput,
-    Timing,
-    TransferCoordinatorInput,
-    WorkState,
 )
 
 
@@ -168,7 +147,7 @@ class Action:
     subject_revision: str | None = None
     authorization: AuthorizationKind = AuthorizationKind.COORDINATOR
     lease_id: LeaseId | None = None
-    command_authority: CommandAttemptAuthority | None = None
+    command_authority: work_models.CommandAttemptAuthority | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,121 +159,121 @@ class ActionCapability:
     subject_revision: str | None
     authorization: AuthorizationKind
     lease_id: LeaseId | None
-    command_authority: CommandAttemptAuthority | None
+    command_authority: work_models.CommandAttemptAuthority | None
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptCheckpointCommand:
     capability: ActionCapability
-    value: AcceptCheckpointInput
+    value: work_models.AcceptCheckpointInput
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptReviewAndContinueCommand:
     capability: ActionCapability
-    value: AcceptReviewAndContinueInput
+    value: work_models.AcceptReviewAndContinueInput
 
 
 @dataclass(frozen=True, slots=True)
 class ActivateCommand:
     capability: ActionCapability
-    value: ActivateInput
+    value: work_models.ActivateInput
 
 
 @dataclass(frozen=True, slots=True)
 class PauseCommand:
     capability: ActionCapability
-    value: ReasonInput
+    value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class BlockCommand:
     capability: ActionCapability
-    value: BlockInput
+    value: work_models.BlockInput
 
 
 @dataclass(frozen=True, slots=True)
 class CompleteCommand:
     capability: ActionCapability
-    value: EvidenceInput
+    value: work_models.EvidenceInput
 
 
 @dataclass(frozen=True, slots=True)
 class CloseCommand:
     capability: ActionCapability
-    value: CloseInput
+    value: work_models.CloseInput
 
 
 @dataclass(frozen=True, slots=True)
 class ResumeCommand:
     capability: ActionCapability
-    value: ResumeInput
+    value: work_models.ResumeInput
 
 
 @dataclass(frozen=True, slots=True)
 class SubmitReviewCommand:
     capability: ActionCapability
-    value: SubmitReviewInput
+    value: work_models.SubmitReviewInput
 
 
 @dataclass(frozen=True, slots=True)
 class ReturnForCorrectionCommand:
     capability: ActionCapability
-    value: ReasonInput
+    value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class ReopenCommand:
     capability: ActionCapability
-    value: EvidenceInput
+    value: work_models.EvidenceInput
 
 
 @dataclass(frozen=True, slots=True)
 class MarkReadyCommand:
     capability: ActionCapability
-    value: ReasonInput
+    value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class BlockItemCommand:
     capability: ActionCapability
-    value: BlockInput
+    value: work_models.BlockInput
 
 
 @dataclass(frozen=True, slots=True)
 class DeferCommand:
     capability: ActionCapability
-    value: DeferInput
+    value: work_models.DeferInput
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptProposalCommand:
     capability: ActionCapability
-    value: AcceptProposalInput
+    value: work_models.AcceptProposalInput
 
 
 @dataclass(frozen=True, slots=True)
 class MergeProposalCommand:
     capability: ActionCapability
-    value: MergeProposalInput
+    value: work_models.MergeProposalInput
 
 
 @dataclass(frozen=True, slots=True)
 class ReturnProposalCommand:
     capability: ActionCapability
-    value: ReasonInput
+    value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class RejectProposalCommand:
     capability: ActionCapability
-    value: ReasonInput
+    value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class TransferCoordinatorCommand:
     capability: ActionCapability
-    value: TransferCoordinatorInput
+    value: work_models.TransferCoordinatorInput
 
 
 type TransitionCommand = (
@@ -333,14 +312,14 @@ class ActorAuthority:
 @dataclass(frozen=True, slots=True)
 class ItemStateChange:
     item: ItemId
-    before: WorkState
-    after: WorkState
+    before: work_models.WorkState
+    after: work_models.WorkState
 
 
 @dataclass(frozen=True, slots=True)
 class ActivationChange:
     item: ItemId
-    item_before: WorkState
+    item_before: work_models.WorkState
     attempt: AttemptId
     brief_artifact_ref_id: ArtifactRefId
     branch: str
@@ -351,35 +330,35 @@ class ActivationChange:
 @dataclass(frozen=True, slots=True)
 class AttemptStateChange:
     item: ItemId
-    item_before: WorkState
-    item_after: WorkState
+    item_before: work_models.WorkState
+    item_after: work_models.WorkState
     attempt: AttemptId
-    attempt_before: AttemptState
-    attempt_after: AttemptState
+    attempt_before: work_models.AttemptState
+    attempt_after: work_models.AttemptState
 
 
 @dataclass(frozen=True, slots=True)
 class BlockAttemptChange:
     item: ItemId
-    item_before: WorkState
+    item_before: work_models.WorkState
     attempt: AttemptId
-    attempt_before: AttemptState
+    attempt_before: work_models.AttemptState
     dependencies_after: tuple[ItemId, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class BlockItemChange:
     item: ItemId
-    item_before: WorkState
+    item_before: work_models.WorkState
     dependencies_after: tuple[ItemId, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class ResumeAttemptChange:
     item: ItemId
-    item_before: WorkState
+    item_before: work_models.WorkState
     attempt: AttemptId
-    attempt_before: AttemptState
+    attempt_before: work_models.AttemptState
     brief_artifact_ref_id: ArtifactRefId | None
 
 
@@ -409,9 +388,9 @@ class ReviewAcceptanceChange:
 @dataclass(frozen=True, slots=True)
 class CompletionChange:
     item: ItemId
-    item_before: WorkState
+    item_before: work_models.WorkState
     attempt: AttemptId
-    attempt_before: AttemptState
+    attempt_before: work_models.AttemptState
     evidence: str
     authority_change: AttemptAuthorityChange | None
 
@@ -419,27 +398,27 @@ class CompletionChange:
 @dataclass(frozen=True, slots=True)
 class ItemClosureChange:
     item: ItemId
-    item_before: WorkState
-    terminal_state: CloseOutcome
+    item_before: work_models.WorkState
+    terminal_state: work_models.CloseOutcome
     evidence: str
 
 
 @dataclass(frozen=True, slots=True)
 class AttemptClosureChange:
     item: ItemId
-    item_before: WorkState
-    terminal_state: CloseOutcome
+    item_before: work_models.WorkState
+    terminal_state: work_models.CloseOutcome
     evidence: str
     attempt: AttemptId
-    attempt_before: AttemptState
+    attempt_before: work_models.AttemptState
     authority_change: AttemptAuthorityChange | None
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptedProposalItem:
     item: ItemId
-    state: WorkState
-    timing: Timing | None
+    state: work_models.WorkState
+    timing: work_models.Timing | None
     next_action: str
     dependencies: tuple[ItemId, ...]
     user_label: str
@@ -476,14 +455,14 @@ class ReasonedProposalDispositionChange:
 
 @dataclass(frozen=True, slots=True)
 class AttemptAuthorityChange:
-    before: AttemptAuthority
-    after: AttemptAuthority
+    before: work_models.AttemptAuthority
+    after: work_models.AttemptAuthority
 
 
 @dataclass(frozen=True, slots=True)
 class CoordinatorAuthorityChange:
-    before: CoordinationLeaseAuthority
-    after: CoordinationLeaseAuthority
+    before: work_models.CoordinationLeaseAuthority
+    after: work_models.CoordinationLeaseAuthority
 
 
 @dataclass(frozen=True, slots=True)

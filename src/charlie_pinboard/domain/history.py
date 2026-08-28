@@ -4,18 +4,13 @@ from typing import Annotated, Literal, assert_never
 
 import msgspec
 
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.errors import (
     DecisionFailure,
     DecisionFailureCode,
     DecisionResult,
     HistoryRecordError,
     HistoryRecordErrorCode,
-)
-from charlie_pinboard.domain.work_models import (
-    ArtifactRole,
-    ItemScope,
-    ScopeArtifact,
-    ScopeDependency,
 )
 
 type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
@@ -155,35 +150,39 @@ def _positioned(positions: list[int], identities: list[str], field: str) -> Deci
     return None
 
 
-def _artifact_sort_key(artifact: ScopeArtifact) -> tuple[str, int, str, str, int]:
+def _artifact_sort_key(artifact: work_models.ScopeArtifact) -> tuple[str, int, str, str, int]:
     return (artifact.role.value, artifact.position, artifact.kind, artifact.key, artifact.revision)
 
 
-def _dependency_sort_key(value: ScopeDependency) -> tuple[int, str]:
+def _dependency_sort_key(value: work_models.ScopeDependency) -> tuple[int, str]:
     return (value.position, value.dependency_id)
 
 
-def _semantic_role(role: ArtifactRole) -> SemanticArtifactRole | None:
+def _semantic_role(role: work_models.ArtifactRole) -> SemanticArtifactRole | None:
     match role:
-        case ArtifactRole.DESIGN:
+        case work_models.ArtifactRole.DESIGN:
             return "design"
-        case ArtifactRole.PLAN:
+        case work_models.ArtifactRole.PLAN:
             return "plan"
-        case ArtifactRole.REQUIREMENTS:
+        case work_models.ArtifactRole.REQUIREMENTS:
             return "requirements"
-        case ArtifactRole.EVIDENCE:
+        case work_models.ArtifactRole.EVIDENCE:
             return None
         case _ as unreachable:
             assert_never(unreachable)
 
 
 def _semantic_artifacts(  # noqa: C901, PLR0912
-    scope: ItemScope,
+    scope: work_models.ItemScope,
 ) -> DecisionResult[tuple[ScopeArtifactRecord, ...]]:
-    semantic_roles = {ArtifactRole.REQUIREMENTS, ArtifactRole.PLAN, ArtifactRole.DESIGN}
+    semantic_roles = {
+        work_models.ArtifactRole.REQUIREMENTS,
+        work_models.ArtifactRole.PLAN,
+        work_models.ArtifactRole.DESIGN,
+    }
     artifacts = tuple(value for value in scope.artifacts if value.role in semantic_roles)
     identities: set[tuple[str, str, int]] = set()
-    role_positions: dict[ArtifactRole, list[int]] = {}
+    role_positions: dict[work_models.ArtifactRole, list[int]] = {}
     for artifact in artifacts:
         if artifact.position < 0:
             return DecisionFailure(DecisionFailureCode.ITEM_SCOPE_INVALID, "Artifact positions must be non-negative.")
@@ -244,7 +243,7 @@ def _semantic_artifacts(  # noqa: C901, PLR0912
     return tuple(records)
 
 
-def _item_scope_record(scope: ItemScope) -> DecisionResult[ItemScopeRecord]:
+def _item_scope_record(scope: work_models.ItemScope) -> DecisionResult[ItemScopeRecord]:
     for field, value in (("item ID", scope.item_id), ("user label", scope.user_label)):
         if (failure := _nonempty(value, field)) is not None:
             return failure
@@ -283,14 +282,14 @@ def _item_scope_record(scope: ItemScope) -> DecisionResult[ItemScopeRecord]:
     )
 
 
-def item_scope_bytes(scope: ItemScope) -> DecisionResult[bytes]:
+def item_scope_bytes(scope: work_models.ItemScope) -> DecisionResult[bytes]:
     record = _item_scope_record(scope)
     if isinstance(record, DecisionFailure):
         return record
     return _encoded_record(record)
 
 
-def item_scope_digest(scope: ItemScope) -> DecisionResult[str]:
+def item_scope_digest(scope: work_models.ItemScope) -> DecisionResult[str]:
     payload = item_scope_bytes(scope)
     if isinstance(payload, DecisionFailure):
         return payload

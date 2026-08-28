@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.identifiers import ItemId, ProposalId, TaskId
-from charlie_pinboard.domain.work_models import ProposalRelationKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,7 +21,7 @@ class ProposalIntake:
     why_it_matters: str
     effect: str
     unlock: str
-    relation: ProposalRelationKind
+    relation: work_models.ProposalRelationKind
     relation_item: ItemId | None
     urgency_evidence: str
     evidence: tuple[str, ...]

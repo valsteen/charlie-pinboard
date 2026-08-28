@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 import msgspec
 
-from charlie_pinboard.domain.work_models import AttemptState, ProposalRelationKind, Timing, WorkState
+from charlie_pinboard.domain import work_models
 
 type ItemStatusSchema = Literal["pinboard-item-status/v1"]
 type ItemStatusAuthority = Literal["sqlite-v1"]
@@ -25,7 +25,7 @@ class ItemStatusState(Enum):
 
 class ItemStatusAttempt(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     attempt_id: str
-    state: AttemptState
+    state: work_models.AttemptState
     candidate_revision: str | None
 
 
@@ -36,7 +36,7 @@ class ItemStatus(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     item_id: str
     label: str
     state: ItemStatusState
-    timing: Timing | None
+    timing: work_models.Timing | None
     outcome_evidence: str | None
     next_action: str | None
     notes: str
@@ -65,7 +65,7 @@ class DependencyReason(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class ReviewFlag(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    kind: ProposalRelationKind
+    kind: work_models.ProposalRelationKind
     related_item: str | None
     reason: str
 
@@ -73,7 +73,7 @@ class ReviewFlag(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 class OverviewItem(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     item_id: str
     label: str
-    state: WorkState
+    state: work_models.WorkState
     position: int
     eligible: bool
     timing: str | None
@@ -104,7 +104,7 @@ class ParallelReason(msgspec.Struct, frozen=True):
 class ParallelItem(msgspec.Struct, frozen=True):
     item_id: str
     label: str
-    state: WorkState
+    state: work_models.WorkState
     attempt_id: str | None
     outcome: ParallelOutcome
     reasons: tuple[ParallelReason, ...] = ()

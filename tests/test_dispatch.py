@@ -21,7 +21,7 @@ from charlie_pinboard.application.dispatch import prepare_dispatch
 from charlie_pinboard.application.dispatch_models import DispatchEnvironment, DispatchPermission
 from charlie_pinboard.application.errors import DispatchError, DispatchErrorCode
 from charlie_pinboard.application.stored_state import ArtifactKind
-from charlie_pinboard.domain.decision_models import Action, ActionKind, Role
+from charlie_pinboard.domain import decision_models
 from charlie_pinboard.interfaces.cli import main
 from charlie_pinboard.interfaces.dispatch_brief import prepare_dispatch_from_artifact, read_dispatch_environment
 from charlie_pinboard.interfaces.work_brief_models import (
@@ -63,7 +63,9 @@ class DispatchTest(unittest.TestCase):
         self,
         project: Path | None = None,
         roots: DurableRoots | None = None,
-    ) -> tuple[Path, DurableRoots, SQLiteWorkStore, WorkBrief, Callable[[], Action], DispatchEnvironment]:
+    ) -> tuple[
+        Path, DurableRoots, SQLiteWorkStore, WorkBrief, Callable[[], decision_models.Action], DispatchEnvironment
+    ]:
         project = Path(tempfile.mkdtemp()).resolve() if project is None else project
         roots = resolve_durable_roots(project) if roots is None else roots
         initialize_database(roots, SQLITE_NOW)
@@ -101,16 +103,16 @@ class DispatchTest(unittest.TestCase):
         store = SQLiteWorkStore(roots.database_path)
         store.initialize_state(state)
 
-        def action() -> Action:
+        def action() -> decision_models.Action:
             return next(
                 candidate
                 for candidate in discover_actions(
                     store,
-                    Role.COORDINATOR,
+                    decision_models.Role.COORDINATOR,
                     lease_id=coordination.lease_id,
                     generation=coordination.generation,
                 )
-                if candidate.kind == ActionKind.DISPATCH
+                if candidate.kind == decision_models.ActionKind.DISPATCH
             )
 
         return project, roots, store, brief, action, self.environment(project)

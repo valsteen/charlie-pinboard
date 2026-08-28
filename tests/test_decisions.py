@@ -3,19 +3,7 @@ import unittest
 from dataclasses import replace as replace_dataclass
 from datetime import UTC, datetime
 
-from charlie_pinboard.domain.decision_models import (
-    Action,
-    ActionKind,
-    ActorAuthority,
-    AuthorizationKind,
-    BlockAttemptChange,
-    CompletionChange,
-    Decision,
-    ReviewAcceptanceChange,
-    Role,
-    TransitionCommand,
-    blocker_action_descriptor,
-)
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.decisions import available_actions as available_actions_outcome
 from charlie_pinboard.domain.decisions import bind_transition as bind_transition_outcome
 from charlie_pinboard.domain.decisions import decide as decision_outcome
@@ -34,27 +22,6 @@ from charlie_pinboard.domain.identifiers import (
     LeaseId,
 )
 from charlie_pinboard.domain.ledger import LedgerSnapshot
-from charlie_pinboard.domain.work_models import (
-    AcceptedProposalState,
-    AcceptReviewAndContinueInput,
-    ActivateInput,
-    ArtifactRole,
-    AttemptAuthority,
-    AttemptState,
-    BlockInput,
-    CloseInput,
-    CloseOutcome,
-    EmptyInput,
-    EvidenceInput,
-    ItemScope,
-    ReasonInput,
-    ResumeInput,
-    ScopeArtifact,
-    SubmitReviewInput,
-    TransitionInput,
-    WorkItem,
-    WorkState,
-)
 from tests.domain_support import (
     accept_proposal_input as AcceptProposalInput,
 )
@@ -92,28 +59,34 @@ DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64
 
 
-def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
+def available_actions(
+    snapshot: LedgerSnapshot, actor: decision_models.ActorAuthority
+) -> tuple[decision_models.Action, ...]:
     return expect_success(available_actions_outcome(snapshot, actor))
 
 
-def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand:
+def bind_transition(
+    action: decision_models.Action, value: work_models.TransitionInput
+) -> decision_models.TransitionCommand:
     return expect_success(bind_transition_outcome(action, value))
 
 
-def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:
+def decide(
+    snapshot: LedgerSnapshot, command: decision_models.TransitionCommand, now: datetime
+) -> decision_models.Decision:
     return expect_success(decision_outcome(snapshot, command, now))
 
 
-def item_scope_bytes(scope: ItemScope) -> bytes:
+def item_scope_bytes(scope: work_models.ItemScope) -> bytes:
     return expect_success(item_scope_bytes_outcome(scope))
 
 
-def item_scope_digest(scope: ItemScope) -> str:
+def item_scope_digest(scope: work_models.ItemScope) -> str:
     return expect_success(item_scope_digest_outcome(scope))
 
 
-def item(item_id: str, state: WorkState, *, attempt: str | None = None) -> WorkItem:
-    return WorkItem(
+def item(item_id: str, state: work_models.WorkState, *, attempt: str | None = None) -> work_models.WorkItem:
+    return work_models.WorkItem(
         ItemId(item_id),
         state,
         None,
@@ -126,11 +99,11 @@ def item(item_id: str, state: WorkState, *, attempt: str | None = None) -> WorkI
     )
 
 
-def action(kind: ActionKind, subject: str) -> Action:
-    return replace_dataclass(make_action(kind, subject), authorization=AuthorizationKind.COORDINATOR)
+def action(kind: decision_models.ActionKind, subject: str) -> decision_models.Action:
+    return replace_dataclass(make_action(kind, subject), authorization=decision_models.AuthorizationKind.COORDINATOR)
 
 
-def native_scope(*, artifacts: tuple[ScopeArtifact, ...] | None = None) -> ItemScope:
+def native_scope(*, artifacts: tuple[work_models.ScopeArtifact, ...] | None = None) -> work_models.ItemScope:
     return make_item_scope(
         item_id="build-map",
         user_label="Build the map",
@@ -142,9 +115,11 @@ def native_scope(*, artifacts: tuple[ScopeArtifact, ...] | None = None) -> ItemS
         artifacts=artifacts
         if artifacts is not None
         else (
-            ScopeArtifact(ArtifactRole.PLAN, 0, "plan", "route-plan", 2, "artifacts/plans/route-plan/2.md", DIGEST_B),
-            ScopeArtifact(
-                ArtifactRole.REQUIREMENTS,
+            work_models.ScopeArtifact(
+                work_models.ArtifactRole.PLAN, 0, "plan", "route-plan", 2, "artifacts/plans/route-plan/2.md", DIGEST_B
+            ),
+            work_models.ScopeArtifact(
+                work_models.ArtifactRole.REQUIREMENTS,
                 0,
                 "requirements",
                 "route-needs",
@@ -152,8 +127,8 @@ def native_scope(*, artifacts: tuple[ScopeArtifact, ...] | None = None) -> ItemS
                 "artifacts/requirements/route-needs/1.md",
                 DIGEST_A,
             ),
-            ScopeArtifact(
-                ArtifactRole.DESIGN,
+            work_models.ScopeArtifact(
+                work_models.ArtifactRole.DESIGN,
                 0,
                 "design",
                 "route-design",
@@ -167,9 +142,11 @@ def native_scope(*, artifacts: tuple[ScopeArtifact, ...] | None = None) -> ItemS
 
 class LifecycleDecisionTest(unittest.TestCase):
     def test_review_continuation_is_coordination_only_and_requires_the_protected_candidate(self) -> None:
-        review = item("target", WorkState.REVIEW, attempt="target-1")
-        attempt = AttemptRecord("target-1", "target", AttemptState.REVIEW, protected_candidate_revision="candidate-a")
-        authority = AttemptAuthority(AttemptId("target-1"), ItemId("target"), LeaseId("worker-lease"), 3)
+        review = item("target", work_models.WorkState.REVIEW, attempt="target-1")
+        attempt = AttemptRecord(
+            "target-1", "target", work_models.AttemptState.REVIEW, protected_candidate_revision="candidate-a"
+        )
+        authority = work_models.AttemptAuthority(AttemptId("target-1"), ItemId("target"), LeaseId("worker-lease"), 3)
         snapshot = LedgerSnapshot(
             "revision",
             1,
@@ -182,19 +159,27 @@ class LifecycleDecisionTest(unittest.TestCase):
             value.kind
             for value in available_actions(
                 snapshot,
-                ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, 1),
+                decision_models.ActorAuthority(
+                    decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, 1
+                ),
             )
         }
         coordination_actions = available_actions(
             snapshot,
-            ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATION, 1),
+            decision_models.ActorAuthority(
+                decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATION, 1
+            ),
         )
-        self.assertNotIn(ActionKind.ACCEPT_REVIEW_AND_CONTINUE, coordinator_kinds)
-        selected = next(value for value in coordination_actions if value.kind == ActionKind.ACCEPT_REVIEW_AND_CONTINUE)
+        self.assertNotIn(decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE, coordinator_kinds)
+        selected = next(
+            value
+            for value in coordination_actions
+            if value.kind == decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE
+        )
 
         mismatch = decision_outcome(
             snapshot,
-            bind_transition(selected, AcceptReviewAndContinueInput(CandidateId("candidate-b"), "accepted")),
+            bind_transition(selected, work_models.AcceptReviewAndContinueInput(CandidateId("candidate-b"), "accepted")),
             NOW,
         )
         self.assertIsInstance(mismatch, DecisionFailure)
@@ -202,11 +187,11 @@ class LifecycleDecisionTest(unittest.TestCase):
 
         accepted = decide(
             snapshot,
-            bind_transition(selected, AcceptReviewAndContinueInput(CandidateId("candidate-a"), "accepted")),
+            bind_transition(selected, work_models.AcceptReviewAndContinueInput(CandidateId("candidate-a"), "accepted")),
             NOW,
         )
-        self.assertIsInstance(accepted.change, ReviewAcceptanceChange)
-        assert isinstance(accepted.change, ReviewAcceptanceChange)
+        self.assertIsInstance(accepted.change, decision_models.ReviewAcceptanceChange)
+        assert isinstance(accepted.change, decision_models.ReviewAcceptanceChange)
         self.assertEqual(CandidateId("candidate-a"), accepted.change.candidate)
         self.assertEqual(4, accepted.change.authority_change.after.generation)
         self.assertIsNone(accepted.change.authority_change.after.lease_id)
@@ -218,7 +203,7 @@ class LifecycleDecisionTest(unittest.TestCase):
                     replace_dataclass(snapshot, attempt_authorities=retained_authorities),
                     bind_transition(
                         selected,
-                        AcceptReviewAndContinueInput(CandidateId("candidate-a"), "accepted"),
+                        work_models.AcceptReviewAndContinueInput(CandidateId("candidate-a"), "accepted"),
                     ),
                     NOW,
                 )
@@ -227,47 +212,51 @@ class LifecycleDecisionTest(unittest.TestCase):
 
         inconsistent = replace_dataclass(
             snapshot,
-            attempts=(replace_dataclass(attempt, state=AttemptState.ACTIVE),),
+            attempts=(replace_dataclass(attempt, state=work_models.AttemptState.ACTIVE),),
         )
         inconsistent_kinds = {
             value.kind
             for value in available_actions(
                 inconsistent,
-                ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATION, 1),
+                decision_models.ActorAuthority(
+                    decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATION, 1
+                ),
             )
         }
-        self.assertNotIn(ActionKind.ACCEPT_REVIEW_AND_CONTINUE, inconsistent_kinds)
+        self.assertNotIn(decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE, inconsistent_kinds)
 
         empty_evidence = decision_outcome(
             snapshot,
-            bind_transition(selected, AcceptReviewAndContinueInput(CandidateId("candidate-a"), "")),
+            bind_transition(selected, work_models.AcceptReviewAndContinueInput(CandidateId("candidate-a"), "")),
             NOW,
         )
         self.assertIsInstance(empty_evidence, DecisionFailure)
         self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, empty_evidence.code)
 
     def test_blocker_actions_expose_distinct_roles_subjects_preconditions_and_effects(self) -> None:
-        active = item("target", WorkState.ACTIVE, attempt="target-1")
-        intake = item("unstarted", WorkState.INTAKE)
-        prerequisite = item("prerequisite", WorkState.READY)
+        active = item("target", work_models.WorkState.ACTIVE, attempt="target-1")
+        intake = item("unstarted", work_models.WorkState.INTAKE)
+        prerequisite = item("prerequisite", work_models.WorkState.READY)
         snapshot = LedgerSnapshot(
             "revision",
             1,
             (active, intake, prerequisite),
-            attempts=(AttemptRecord("target-1", "target", AttemptState.ACTIVE),),
+            attempts=(AttemptRecord("target-1", "target", work_models.AttemptState.ACTIVE),),
             attempt_authorities=(
-                AttemptAuthority(AttemptId("target-1"), ItemId("target"), LeaseId("worker-lease"), 4),
+                work_models.AttemptAuthority(AttemptId("target-1"), ItemId("target"), LeaseId("worker-lease"), 4),
             ),
         )
         coordinator = available_actions(
             snapshot,
-            ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, 1),
+            decision_models.ActorAuthority(
+                decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, 1
+            ),
         )
         worker = available_actions(
             snapshot,
-            ActorAuthority(
-                Role.WORKER,
-                AuthorizationKind.ATTEMPT,
+            decision_models.ActorAuthority(
+                decision_models.Role.WORKER,
+                decision_models.AuthorizationKind.ATTEMPT,
                 4,
                 LeaseId("worker-lease"),
                 (AttemptId("target-1"),),
@@ -277,21 +266,26 @@ class LifecycleDecisionTest(unittest.TestCase):
         selected = {
             action.kind: action
             for action in (*coordinator, *worker)
-            if action.kind in {ActionKind.REPORT_BLOCKER, ActionKind.BLOCK, ActionKind.BLOCK_ITEM}
+            if action.kind
+            in {
+                decision_models.ActionKind.REPORT_BLOCKER,
+                decision_models.ActionKind.BLOCK,
+                decision_models.ActionKind.BLOCK_ITEM,
+            }
         }
 
         expected = {
-            ActionKind.REPORT_BLOCKER: (
+            decision_models.ActionKind.REPORT_BLOCKER: (
                 "report-blocker:target-1",
                 "Prepare blocker report for target",
                 ("advisory", "worker", "attempt", "active-attempt"),
             ),
-            ActionKind.BLOCK: (
+            decision_models.ActionKind.BLOCK: (
                 "block:target-1",
                 "Block active attempt for target",
                 ("mutating", "coordinator", "attempt", "active-attempt"),
             ),
-            ActionKind.BLOCK_ITEM: (
+            decision_models.ActionKind.BLOCK_ITEM: (
                 "block-item:unstarted",
                 "Block unstarted work item unstarted",
                 ("mutating", "coordinator", "item", "intake-item"),
@@ -301,7 +295,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         for kind, (action_id, label, semantics) in expected.items():
             with self.subTest(kind=kind):
                 action = selected[kind]
-                descriptor = blocker_action_descriptor(action.kind)
+                descriptor = decision_models.blocker_action_descriptor(action.kind)
                 self.assertIsNotNone(descriptor)
                 assert descriptor is not None
                 self.assertEqual(action_id, action.action_id)
@@ -316,25 +310,29 @@ class LifecycleDecisionTest(unittest.TestCase):
                     ),
                 )
 
-        rejected = bind_transition_outcome(selected[ActionKind.REPORT_BLOCKER], EmptyInput())
+        rejected = bind_transition_outcome(
+            selected[decision_models.ActionKind.REPORT_BLOCKER], work_models.EmptyInput()
+        )
         self.assertIsInstance(rejected, DecisionFailure)
         self.assertEqual(DecisionFailureCode.ACTION_NOT_MUTATING, rejected.code)
 
         blocked = decide(
             snapshot,
             bind_transition(
-                selected[ActionKind.BLOCK],
-                BlockInput("Waiting for prerequisite.", (ItemId("prerequisite"),)),
+                selected[decision_models.ActionKind.BLOCK],
+                work_models.BlockInput("Waiting for prerequisite.", (ItemId("prerequisite"),)),
             ),
             NOW,
         )
-        self.assertIsInstance(blocked.change, BlockAttemptChange)
-        assert isinstance(blocked.change, BlockAttemptChange)
+        self.assertIsInstance(blocked.change, decision_models.BlockAttemptChange)
+        assert isinstance(blocked.change, decision_models.BlockAttemptChange)
         self.assertEqual((ItemId("prerequisite"),), blocked.change.dependencies_after)
 
     def test_missing_attempt_is_a_returned_failure(self) -> None:
         snapshot = LedgerSnapshot("revision", 1, ())
-        command = bind_transition(action(ActionKind.PAUSE, "missing-attempt"), ReasonInput("pause"))
+        command = bind_transition(
+            action(decision_models.ActionKind.PAUSE, "missing-attempt"), work_models.ReasonInput("pause")
+        )
 
         outcome = decision_outcome(snapshot, command, NOW)
 
@@ -344,31 +342,35 @@ class LifecycleDecisionTest(unittest.TestCase):
         )
 
     def test_terminal_decisions_require_and_return_outcome_evidence(self) -> None:
-        active = item("target", WorkState.REVIEW, attempt="target-1")
+        active = item("target", work_models.WorkState.REVIEW, attempt="target-1")
         snapshot = LedgerSnapshot(
             "revision",
             1,
             (active,),
-            attempts=(AttemptRecord("target-1", "target", AttemptState.REVIEW),),
+            attempts=(AttemptRecord("target-1", "target", work_models.AttemptState.REVIEW),),
         )
 
-        completed_action = action(ActionKind.COMPLETE, "target-1")
-        completed = decide(snapshot, bind_transition(completed_action, EvidenceInput("review accepted")), NOW)
+        completed_action = action(decision_models.ActionKind.COMPLETE, "target-1")
+        completed = decide(
+            snapshot, bind_transition(completed_action, work_models.EvidenceInput("review accepted")), NOW
+        )
         self.assertEqual("review accepted", completed.receipt.evidence)
-        self.assertIsInstance(completed.change, CompletionChange)
-        assert isinstance(completed.change, CompletionChange)
+        self.assertIsInstance(completed.change, decision_models.CompletionChange)
+        assert isinstance(completed.change, decision_models.CompletionChange)
         self.assertEqual("review accepted", completed.change.evidence)
 
-        rejected = bind_transition_outcome(action(ActionKind.COMPLETE, "target-1"), EmptyInput())
+        rejected = bind_transition_outcome(
+            action(decision_models.ActionKind.COMPLETE, "target-1"), work_models.EmptyInput()
+        )
         self.assertIsInstance(rejected, DecisionFailure)
         self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
-        intake = LedgerSnapshot("revision", 1, (item("obsolete", WorkState.INTAKE),))
+        intake = LedgerSnapshot("revision", 1, (item("obsolete", work_models.WorkState.INTAKE),))
         closed = decide(
             intake,
             bind_transition(
-                action(ActionKind.CLOSE, "obsolete"),
-                CloseInput(CloseOutcome.DROPPED, "no longer needed"),
+                action(decision_models.ActionKind.CLOSE, "obsolete"),
+                work_models.CloseInput(work_models.CloseOutcome.DROPPED, "no longer needed"),
             ),
             NOW,
         )
@@ -377,12 +379,12 @@ class LifecycleDecisionTest(unittest.TestCase):
     def test_changed_semantic_scope_blocks_the_next_attempt_boundary(self) -> None:
         current_scope = native_scope()
         current = ScopeAnchor("build-map", 2, item_scope_digest(current_scope), current_scope)
-        active = item("build-map", WorkState.ACTIVE, attempt="build-map-1")
+        active = item("build-map", work_models.WorkState.ACTIVE, attempt="build-map-1")
         snapshot = LedgerSnapshot(
             "revision",
             1,
             (active,),
-            attempts=(AttemptRecord("build-map-1", "build-map", AttemptState.ACTIVE, 1, DIGEST_A),),
+            attempts=(AttemptRecord("build-map-1", "build-map", work_models.AttemptState.ACTIVE, 1, DIGEST_A),),
             scopes=(current,),
         )
 
@@ -390,75 +392,83 @@ class LifecycleDecisionTest(unittest.TestCase):
             value.action_id
             for value in available_actions(
                 snapshot,
-                ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, 1),
+                decision_models.ActorAuthority(
+                    decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, 1
+                ),
             )
         }
         self.assertIn("continue:build-map-1", action_ids)
         self.assertNotIn("dispatch:build-map-1", action_ids)
         self.assertNotIn("complete:build-map-1", action_ids)
-        submit = action(ActionKind.SUBMIT_REVIEW, "build-map-1")
-        command = bind_transition(submit, SubmitReviewInput(CandidateId("candidate")))
+        submit = action(decision_models.ActionKind.SUBMIT_REVIEW, "build-map-1")
+        command = bind_transition(submit, work_models.SubmitReviewInput(CandidateId("candidate")))
         rejected = decision_outcome(snapshot, command, NOW)
         self.assertIsInstance(rejected, DecisionFailure)
         self.assertEqual(DecisionFailureCode.ITEM_SCOPE_STALE, rejected.code)
 
     def test_transition_rejections_preserve_the_domain_boundary(self) -> None:
-        ready = item("target", WorkState.READY)
-        active = item("target", WorkState.ACTIVE, attempt="target-1")
-        paused = item("target", WorkState.PAUSED, attempt="target-1")
-        review = item("target", WorkState.REVIEW, attempt="target-1")
-        attempt_active = AttemptRecord("target-1", "target", AttemptState.ACTIVE)
-        attempt_review = AttemptRecord("target-1", "target", AttemptState.REVIEW)
+        ready = item("target", work_models.WorkState.READY)
+        active = item("target", work_models.WorkState.ACTIVE, attempt="target-1")
+        paused = item("target", work_models.WorkState.PAUSED, attempt="target-1")
+        review = item("target", work_models.WorkState.REVIEW, attempt="target-1")
+        attempt_active = AttemptRecord("target-1", "target", work_models.AttemptState.ACTIVE)
+        attempt_review = AttemptRecord("target-1", "target", work_models.AttemptState.REVIEW)
         stale_scope = ScopeAnchor("target", 2, DIGEST_B, replace(native_scope(), item_id="target"))
         cases = (
             (
                 LedgerSnapshot("r", 1, ()),
-                ActionKind.ACTIVATE,
+                decision_models.ActionKind.ACTIVATE,
                 "missing",
-                ActivateInput(AttemptId("missing-1"), "branch", "base", "owner", ArtifactRefId(1)),
+                work_models.ActivateInput(AttemptId("missing-1"), "branch", "base", "owner", ArtifactRefId(1)),
                 "ITEM_NOT_FOUND",
             ),
-            (LedgerSnapshot("r", 1, (ready,)), ActionKind.ACTIVATE, "target", EmptyInput(), "TRANSITION_INPUT_INVALID"),
             (
-                LedgerSnapshot("r", 1, (item("target", WorkState.INTAKE),)),
-                ActionKind.ACTIVATE,
+                LedgerSnapshot("r", 1, (ready,)),
+                decision_models.ActionKind.ACTIVATE,
                 "target",
-                ActivateInput(AttemptId("target-1"), "branch", "base", "owner", ArtifactRefId(1)),
+                work_models.EmptyInput(),
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                LedgerSnapshot("r", 1, (item("target", work_models.WorkState.INTAKE),)),
+                decision_models.ActionKind.ACTIVATE,
+                "target",
+                work_models.ActivateInput(AttemptId("target-1"), "branch", "base", "owner", ArtifactRefId(1)),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
                 LedgerSnapshot("r", 1, (ready,)),
-                ActionKind.PAUSE,
+                decision_models.ActionKind.PAUSE,
                 "missing-1",
-                ReasonInput("pause"),
+                work_models.ReasonInput("pause"),
                 "ATTEMPT_NOT_FOUND",
             ),
             (
                 LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,)),
-                ActionKind.PAUSE,
+                decision_models.ActionKind.PAUSE,
                 "target-1",
-                ReasonInput("pause"),
+                work_models.ReasonInput("pause"),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
                 LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
-                ActionKind.PAUSE,
+                decision_models.ActionKind.PAUSE,
                 "target-1",
-                SubmitReviewInput(CandidateId("candidate")),
+                work_models.SubmitReviewInput(CandidateId("candidate")),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
-                ActionKind.BLOCK,
+                decision_models.ActionKind.BLOCK,
                 "target-1",
-                SubmitReviewInput(CandidateId("candidate")),
+                work_models.SubmitReviewInput(CandidateId("candidate")),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, (paused,)),
-                ActionKind.COMPLETE,
+                decision_models.ActionKind.COMPLETE,
                 "target-1",
-                EvidenceInput("done"),
+                work_models.EvidenceInput("done"),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
@@ -469,60 +479,76 @@ class LifecycleDecisionTest(unittest.TestCase):
                     attempts=(replace(attempt_active, accepted_scope_revision=1, accepted_scope_digest=DIGEST_A),),
                     scopes=(stale_scope,),
                 ),
-                ActionKind.COMPLETE,
+                decision_models.ActionKind.COMPLETE,
                 "target-1",
-                EvidenceInput("done"),
+                work_models.EvidenceInput("done"),
                 "ITEM_SCOPE_STALE",
             ),
             (
                 LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,), history_items=(ItemId("target"),)),
-                ActionKind.COMPLETE,
+                decision_models.ActionKind.COMPLETE,
                 "target-1",
-                EvidenceInput("done"),
+                work_models.EvidenceInput("done"),
                 "HISTORY_RECORD_EXISTS",
             ),
             (
                 LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
-                ActionKind.CLOSE,
+                decision_models.ActionKind.CLOSE,
                 "target",
-                CloseInput(CloseOutcome.DONE, "done"),
+                work_models.CloseInput(work_models.CloseOutcome.DONE, "done"),
                 "ACTION_NOT_AVAILABLE",
             ),
-            (LedgerSnapshot("r", 1, (ready,)), ActionKind.CLOSE, "target", EmptyInput(), "TRANSITION_INPUT_INVALID"),
             (
-                LedgerSnapshot("r", 1, (ready, replace(item("dependent", WorkState.READY), depends_on=("target",)))),
-                ActionKind.CLOSE,
+                LedgerSnapshot("r", 1, (ready,)),
+                decision_models.ActionKind.CLOSE,
                 "target",
-                CloseInput(CloseOutcome.DROPPED, "obsolete"),
+                work_models.EmptyInput(),
+                "TRANSITION_INPUT_INVALID",
+            ),
+            (
+                LedgerSnapshot(
+                    "r", 1, (ready, replace(item("dependent", work_models.WorkState.READY), depends_on=("target",)))
+                ),
+                decision_models.ActionKind.CLOSE,
+                "target",
+                work_models.CloseInput(work_models.CloseOutcome.DROPPED, "obsolete"),
                 "LIVE_DEPENDENTS",
             ),
             (
                 LedgerSnapshot("r", 1, (ready,), history_items=(ItemId("target"),)),
-                ActionKind.CLOSE,
+                decision_models.ActionKind.CLOSE,
                 "target",
-                CloseInput(CloseOutcome.DONE, "done"),
+                work_models.CloseInput(work_models.CloseOutcome.DONE, "done"),
                 "HISTORY_RECORD_EXISTS",
             ),
-            (LedgerSnapshot("r", 1, (ready,)), ActionKind.RESUME, "target", ResumeInput(), "ACTION_NOT_AVAILABLE"),
             (
-                LedgerSnapshot("r", 1, (replace(paused, depends_on=("source",)), item("source", WorkState.READY))),
-                ActionKind.RESUME,
+                LedgerSnapshot("r", 1, (ready,)),
+                decision_models.ActionKind.RESUME,
                 "target",
-                ResumeInput(),
+                work_models.ResumeInput(),
+                "ACTION_NOT_AVAILABLE",
+            ),
+            (
+                LedgerSnapshot(
+                    "r", 1, (replace(paused, depends_on=("source",)), item("source", work_models.WorkState.READY))
+                ),
+                decision_models.ActionKind.RESUME,
+                "target",
+                work_models.ResumeInput(),
                 "DEPENDENCY_NOT_SATISFIED",
             ),
             (
                 LedgerSnapshot("r", 1, (paused,)),
-                ActionKind.RESUME,
+                decision_models.ActionKind.RESUME,
                 "target",
-                EvidenceInput("resume"),
+                work_models.EvidenceInput("resume"),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,)),
-                ActionKind.SUBMIT_REVIEW,
+                decision_models.ActionKind.SUBMIT_REVIEW,
                 "target-1",
-                SubmitReviewInput(CandidateId("candidate")),
+                work_models.SubmitReviewInput(CandidateId("candidate")),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
@@ -533,114 +559,128 @@ class LifecycleDecisionTest(unittest.TestCase):
                     attempts=(replace(attempt_active, accepted_scope_revision=1, accepted_scope_digest=DIGEST_A),),
                     scopes=(stale_scope,),
                 ),
-                ActionKind.SUBMIT_REVIEW,
+                decision_models.ActionKind.SUBMIT_REVIEW,
                 "target-1",
-                SubmitReviewInput(CandidateId("candidate")),
+                work_models.SubmitReviewInput(CandidateId("candidate")),
                 "ITEM_SCOPE_STALE",
             ),
             (
                 LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
-                ActionKind.SUBMIT_REVIEW,
+                decision_models.ActionKind.SUBMIT_REVIEW,
                 "target-1",
-                EvidenceInput("review"),
+                work_models.EvidenceInput("review"),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, (active,)),
-                ActionKind.BLOCK_ITEM,
+                decision_models.ActionKind.BLOCK_ITEM,
                 "target",
-                BlockInput("blocked"),
+                work_models.BlockInput("blocked"),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
-                LedgerSnapshot("r", 1, (item("target", WorkState.INTAKE),)),
-                ActionKind.REOPEN,
+                LedgerSnapshot("r", 1, (item("target", work_models.WorkState.INTAKE),)),
+                decision_models.ActionKind.REOPEN,
                 "target",
-                EvidenceInput("reopen"),
+                work_models.EvidenceInput("reopen"),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
-                LedgerSnapshot("r", 1, (item("target", WorkState.INTAKE),)),
-                ActionKind.MARK_READY,
+                LedgerSnapshot("r", 1, (item("target", work_models.WorkState.INTAKE),)),
+                decision_models.ActionKind.MARK_READY,
                 "target",
-                EmptyInput(),
+                work_models.EmptyInput(),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, (active,)),
-                ActionKind.DEFER,
+                decision_models.ActionKind.DEFER,
                 "target",
                 DeferInput("safe-to-defer", "later"),
                 "ACTION_NOT_AVAILABLE",
             ),
-            (LedgerSnapshot("r", 1, (ready,)), ActionKind.DEFER, "target", EmptyInput(), "TRANSITION_INPUT_INVALID"),
+            (
+                LedgerSnapshot("r", 1, (ready,)),
+                decision_models.ActionKind.DEFER,
+                "target",
+                work_models.EmptyInput(),
+                "TRANSITION_INPUT_INVALID",
+            ),
             (
                 LedgerSnapshot("r", 1, ()),
-                ActionKind.ACCEPT_PROPOSAL,
+                decision_models.ActionKind.ACCEPT_PROPOSAL,
                 "proposal",
-                AcceptProposalInput(item="new-item", state=AcceptedProposalState.READY, next_action="start"),
+                AcceptProposalInput(
+                    item="new-item", state=work_models.AcceptedProposalState.READY, next_action="start"
+                ),
                 "PROPOSAL_NOT_FOUND",
             ),
             (
                 LedgerSnapshot(
                     "r",
                     1,
-                    (item("proposal", WorkState.INTAKE),),
+                    (item("proposal", work_models.WorkState.INTAKE),),
                     proposals=(ProposalRecord("proposal", "p1"),),
                 ),
-                ActionKind.ACCEPT_PROPOSAL,
+                decision_models.ActionKind.ACCEPT_PROPOSAL,
                 "proposal",
-                EmptyInput(),
+                work_models.EmptyInput(),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot(
                     "r",
                     1,
-                    (ready, item("proposal", WorkState.INTAKE)),
+                    (ready, item("proposal", work_models.WorkState.INTAKE)),
                     proposals=(ProposalRecord("proposal", "p1"),),
                 ),
-                ActionKind.ACCEPT_PROPOSAL,
+                decision_models.ActionKind.ACCEPT_PROPOSAL,
                 "proposal",
-                AcceptProposalInput(item="target", state=AcceptedProposalState.READY, next_action="start"),
+                AcceptProposalInput(item="target", state=work_models.AcceptedProposalState.READY, next_action="start"),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)),
-                ActionKind.MERGE_PROPOSAL,
+                decision_models.ActionKind.MERGE_PROPOSAL,
                 "proposal",
-                EmptyInput(),
+                work_models.EmptyInput(),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, (), proposals=(ProposalRecord("proposal", "p1"),)),
-                ActionKind.REJECT_PROPOSAL,
+                decision_models.ActionKind.REJECT_PROPOSAL,
                 "proposal",
-                EmptyInput(),
+                work_models.EmptyInput(),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, ()),
-                ActionKind.TRANSFER_COORDINATOR,
+                decision_models.ActionKind.TRANSFER_COORDINATOR,
                 "ledger",
                 TransferCoordinatorInput("task", "host"),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
                 LedgerSnapshot("r", 1, (), can_transfer_coordinator=True),
-                ActionKind.TRANSFER_COORDINATOR,
+                decision_models.ActionKind.TRANSFER_COORDINATOR,
                 "ledger",
-                EmptyInput(),
+                work_models.EmptyInput(),
                 "TRANSITION_INPUT_INVALID",
             ),
             (
                 LedgerSnapshot("r", 1, (), can_transfer_coordinator=True),
-                ActionKind.TRANSFER_COORDINATOR,
+                decision_models.ActionKind.TRANSFER_COORDINATOR,
                 "ledger",
                 TransferCoordinatorInput("task", "host"),
                 "ACTION_NOT_AVAILABLE",
             ),
-            (LedgerSnapshot("r", 1, ()), ActionKind.INSPECT, "ledger", EmptyInput(), "ACTION_NOT_MUTATING"),
+            (
+                LedgerSnapshot("r", 1, ()),
+                decision_models.ActionKind.INSPECT,
+                "ledger",
+                work_models.EmptyInput(),
+                "ACTION_NOT_MUTATING",
+            ),
         )
         for snapshot, kind, subject, value, code in cases:
             with self.subTest(kind=kind.value, code=code):
@@ -672,8 +712,14 @@ class ScopeContractTest(unittest.TestCase):
         self.assertEqual(expected, item_scope_bytes(scope))
         self.assertEqual(hashlib.sha256(expected).hexdigest(), item_scope_digest(scope))
 
-        evidence = ScopeArtifact(
-            ArtifactRole.EVIDENCE, 0, "evidence", "observation", 1, "artifacts/evidence/observation/1.json", DIGEST_A
+        evidence = work_models.ScopeArtifact(
+            work_models.ArtifactRole.EVIDENCE,
+            0,
+            "evidence",
+            "observation",
+            1,
+            "artifacts/evidence/observation/1.json",
+            DIGEST_A,
         )
         self.assertEqual(
             item_scope_bytes(scope), item_scope_bytes(replace(scope, artifacts=(*scope.artifacts, evidence)))
@@ -693,8 +739,12 @@ class ScopeContractTest(unittest.TestCase):
             replace(
                 native_scope(),
                 artifacts=(
-                    ScopeArtifact(ArtifactRole.PLAN, 0, "plan", "same", 1, "artifacts/plans/same/1.md", DIGEST_A),
-                    ScopeArtifact(ArtifactRole.PLAN, 0, "plan", "other", 1, "artifacts/plans/other/1.md", DIGEST_B),
+                    work_models.ScopeArtifact(
+                        work_models.ArtifactRole.PLAN, 0, "plan", "same", 1, "artifacts/plans/same/1.md", DIGEST_A
+                    ),
+                    work_models.ScopeArtifact(
+                        work_models.ArtifactRole.PLAN, 0, "plan", "other", 1, "artifacts/plans/other/1.md", DIGEST_B
+                    ),
                 ),
             ),
         )
@@ -705,8 +755,8 @@ class ScopeContractTest(unittest.TestCase):
             self.assertEqual(DecisionFailureCode.ITEM_SCOPE_INVALID, rejected.code)
 
     def test_scope_rejects_malformed_semantic_fields_as_one_contract(self) -> None:
-        artifact = ScopeArtifact(
-            ArtifactRole.PLAN,
+        artifact = work_models.ScopeArtifact(
+            work_models.ArtifactRole.PLAN,
             0,
             "plan",
             "route-plan",

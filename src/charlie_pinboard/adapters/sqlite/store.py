@@ -52,7 +52,7 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
-from charlie_pinboard.domain.decision_models import TransitionReceipt
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -62,7 +62,6 @@ from charlie_pinboard.domain.identifiers import (
     ItemId,
     TaskId,
 )
-from charlie_pinboard.domain.work_models import ArtifactRole, CanonicalJson
 
 
 def _decode_row[Record](row: sqlite3.Row, record_type: type[Record]) -> Record:
@@ -72,13 +71,13 @@ def _decode_row[Record](row: sqlite3.Row, record_type: type[Record]) -> Record:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"Stored row is invalid: {error}") from error
 
 
-def _stored_json(column: str, value: str) -> CanonicalJson:
+def _stored_json(column: str, value: str) -> work_models.CanonicalJson:
     encoded = value.encode("utf-8")
     try:
         msgspec.json.decode(encoded, type=msgspec.Raw)
     except msgspec.DecodeError as error:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"Column {column!r} has invalid JSON.") from error
-    return CanonicalJson(encoded)
+    return work_models.CanonicalJson(encoded)
 
 
 class _StoredTransitionRow(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -324,7 +323,7 @@ def _timestamp(value: datetime | None) -> str | None:
     return None if value is None else value.isoformat()
 
 
-def _json_text(value: CanonicalJson | None) -> str | None:
+def _json_text(value: work_models.CanonicalJson | None) -> str | None:
     return None if value is None else bytes(value).decode("utf-8")
 
 
@@ -665,7 +664,7 @@ class _SQLiteWorkTransaction:
     def snapshot(self) -> StoredWorkState:
         return _StoredStateReader(self._connection).read()
 
-    def commit(self, mutation: StoredStateMutation) -> TransitionReceipt:
+    def commit(self, mutation: StoredStateMutation) -> decision_models.TransitionReceipt:
         current = _StoredStateReader(self._connection).read()
         if current != mutation.before:
             raise StorageError(
@@ -732,7 +731,7 @@ class SQLiteWorkStore:
         accepted_at: datetime,
         *,
         item_id: ItemId | None = None,
-        role: ArtifactRole | None = None,
+        role: work_models.ArtifactRole | None = None,
     ) -> ArtifactReference:
         connection = open_database(self._path, OpenMode.READ_WRITE)
         try:

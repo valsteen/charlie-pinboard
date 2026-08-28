@@ -3,6 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
 from charlie_pinboard.domain.identifiers import (
     ActionId,
@@ -15,15 +16,6 @@ from charlie_pinboard.domain.identifiers import (
     LeaseId,
     ProposalId,
     TaskId,
-)
-from charlie_pinboard.domain.work_models import (
-    ArtifactRole,
-    AttemptState,
-    CanonicalJson,
-    CoordinationLeaseStatus,
-    ProposalDispositionKind,
-    ProposalRelationKind,
-    Timing,
 )
 
 
@@ -112,7 +104,7 @@ class StoredWorkItem:
     item_id: ItemId
     user_label: str
     state: StoredWorkItemState
-    timing: Timing | None
+    timing: work_models.Timing | None
     source: str | None
     trigger: str | None
     why_it_matters: str | None
@@ -149,7 +141,7 @@ class ItemDependency:
 class ItemArtifactLink:
     item_id: ItemId
     artifact_ref_id: ArtifactRefId
-    role: ArtifactRole
+    role: work_models.ArtifactRole
     position: int
 
 
@@ -157,7 +149,7 @@ class ItemArtifactLink:
 class StoredAttempt:
     attempt_id: AttemptId
     item_id: ItemId
-    state: AttemptState
+    state: work_models.AttemptState
     branch: str
     base_revision: str
     provenance: str
@@ -182,12 +174,12 @@ class StoredProposal:
     user_label: str
     trigger: str
     why_it_matters: str
-    relation: ProposalRelationKind
+    relation: work_models.ProposalRelationKind
     relation_item_id: ItemId | None
     effect: str
     unlock: str
     urgency_evidence: str
-    disposition: ProposalDispositionKind | None
+    disposition: work_models.ProposalDispositionKind | None
     disposition_target_item_id: ItemId | None
     disposition_reason: str | None
     subject_revision: int
@@ -216,7 +208,7 @@ class StoredCoordinationLease:
     generation: int
     acquired_at: datetime
     expires_at: datetime
-    state: CoordinationLeaseStatus
+    state: work_models.CoordinationLeaseStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,9 +255,9 @@ class StoredTransitionReceipt:
     actor_task_id: TaskId | None
     actor_host_id: HostId | None
     input_schema: str
-    input_payload: CanonicalJson
+    input_payload: work_models.CanonicalJson
     outcome_schema: str
-    outcome_payload: CanonicalJson
+    outcome_payload: work_models.CanonicalJson
     committed_at: datetime
 
 

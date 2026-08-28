@@ -23,6 +23,7 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.authority_decisions import (
     decide_attempt_authority,
     decide_coordination_authority,
@@ -41,14 +42,6 @@ from charlie_pinboard.domain.authority_models import (
     RevokeAttemptAuthority,
     RevokeCoordinationAuthority,
     TransferAttemptAuthority,
-)
-from charlie_pinboard.domain.decision_models import (
-    Action,
-    ActorAuthority,
-    AuthorizationKind,
-    Role,
-    TransitionCommand,
-    TransitionReceipt,
 )
 from charlie_pinboard.domain.decisions import (
     command_action,
@@ -71,16 +64,12 @@ from charlie_pinboard.domain.proposal_models import (
     CreateProposalOperation,
     LocalIntakeAuthority,
 )
-from charlie_pinboard.domain.work_models import (
-    AttemptState,
-    CanonicalJson,
-)
 
 
 def change_coordination_authority(
     store: WorkStore,
     operation: CoordinationAuthorityOperation,
-) -> DecisionResult[TransitionReceipt]:
+) -> DecisionResult[decision_models.TransitionReceipt]:
     """Decide and persist one exact coordination-authority mutation."""
 
     with store.write() as transaction:
@@ -114,7 +103,7 @@ def change_coordination_authority(
                 authorization = TransitionHistoryAuthorizationKind.COORDINATOR
             case _ as unreachable:
                 assert_never(unreachable)
-        transition = TransitionReceipt(
+        transition = decision_models.TransitionReceipt(
             ActionId(f"continue:coordination-authority:{after_authority.generation}"),
             None,
             outcome,
@@ -132,7 +121,7 @@ def change_coordination_authority(
             after_authority.task_id,
             after_authority.host_id,
             "coordination-authority/v1",
-            CanonicalJson(b"{}"),
+            work_models.CanonicalJson(b"{}"),
         )
         supplied_after = replace(
             before,
@@ -186,7 +175,7 @@ def _retained_attempt_authority(
 def change_attempt_authority(
     store: WorkStore,
     operation: AttemptAuthorityOperation,
-) -> DecisionResult[TransitionReceipt]:
+) -> DecisionResult[decision_models.TransitionReceipt]:
     """Decide and persist one exact attempt-authority mutation."""
 
     match operation:
@@ -229,13 +218,14 @@ def change_attempt_authority(
             snapshot.coordination_lease,
             live_attempt=(
                 (attempt_id, attempt.item)
-                if (attempt := snapshot.attempt(attempt_id)) is not None and attempt.state == AttemptState.ACTIVE
+                if (attempt := snapshot.attempt(attempt_id)) is not None
+                and attempt.state == work_models.AttemptState.ACTIVE
                 else None
             ),
             transferable_attempt=(
                 (attempt_id, attempt.item)
                 if (attempt := snapshot.attempt(attempt_id)) is not None
-                and attempt.state not in {AttemptState.DONE, AttemptState.CLOSED}
+                and attempt.state not in {work_models.AttemptState.DONE, work_models.AttemptState.CLOSED}
                 else None
             ),
             project_host_epoch=snapshot.host_epoch,
@@ -243,7 +233,7 @@ def change_attempt_authority(
         if isinstance(decision, DecisionFailure):
             return decision
         after = decision.current_after
-        transition = TransitionReceipt(
+        transition = decision_models.TransitionReceipt(
             ActionId(f"continue:attempt-authority:{attempt_id}:{after.generation}"),
             next(
                 (value.item_id for value in before.lifecycle.attempts if value.attempt_id == attempt_id),
@@ -264,7 +254,7 @@ def change_attempt_authority(
             after.task_id,
             after.host_id,
             "attempt-authority/v1",
-            CanonicalJson(b"{}"),
+            work_models.CanonicalJson(b"{}"),
         )
         draft = AttemptAuthorityMutation(before, before, receipt, decision)
         mutation = replace(draft, after=expected_stored_state(draft))
@@ -275,7 +265,7 @@ def create_proposal(
     store: WorkStore,
     operation: CreateProposalOperation,
     now: datetime,
-) -> DecisionResult[TransitionReceipt]:
+) -> DecisionResult[decision_models.TransitionReceipt]:
     """Persist immutable proposal facts and their visible intake item from one locked snapshot."""
 
     with store.write() as transaction:
@@ -292,7 +282,7 @@ def create_proposal(
         if isinstance(decision, DecisionFailure):
             return decision
         intake = decision.proposal
-        transition = TransitionReceipt(
+        transition = decision_models.TransitionReceipt(
             ActionId(f"inspect:proposal:{intake.proposal_id}"),
             None,
             "create-proposal",
@@ -310,7 +300,7 @@ def create_proposal(
             intake.source_task_id,
             None,
             "proposal-intake/v1",
-            CanonicalJson(b"{}"),
+            work_models.CanonicalJson(b"{}"),
         )
         draft = ProposalCreationMutation(before, before, receipt, decision)
         mutation = replace(draft, after=expected_stored_state(draft))
@@ -319,13 +309,15 @@ def create_proposal(
 
 def _actor_for(
     snapshot: LedgerSnapshot,
-    action: Action,
+    action: decision_models.Action,
     now: datetime,
-) -> DecisionResult[ActorAuthority]:
+) -> DecisionResult[decision_models.ActorAuthority]:
     match action.authorization:
-        case AuthorizationKind.COORDINATOR:
-            return ActorAuthority(Role.COORDINATOR, action.authorization, action.coordinator_generation)
-        case AuthorizationKind.COORDINATION:
+        case decision_models.AuthorizationKind.COORDINATOR:
+            return decision_models.ActorAuthority(
+                decision_models.Role.COORDINATOR, action.authorization, action.coordinator_generation
+            )
+        case decision_models.AuthorizationKind.COORDINATION:
             authority = snapshot.coordination_authority
             if (
                 authority is None
@@ -337,13 +329,13 @@ def _actor_for(
                     DecisionFailureCode.ACTION_NOT_AVAILABLE,
                     "The supplied coordination authority is no longer current.",
                 )
-            return ActorAuthority(
-                Role.COORDINATOR,
+            return decision_models.ActorAuthority(
+                decision_models.Role.COORDINATOR,
                 action.authorization,
                 action.coordinator_generation,
                 action.lease_id,
             )
-        case AuthorizationKind.ATTEMPT:
+        case decision_models.AuthorizationKind.ATTEMPT:
             authority = action.command_authority
             if (
                 authority is None
@@ -356,15 +348,15 @@ def _actor_for(
                     DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
                     "The supplied attempt authority is no longer current.",
                 )
-            return ActorAuthority(
-                Role.WORKER,
+            return decision_models.ActorAuthority(
+                decision_models.Role.WORKER,
                 action.authorization,
                 action.coordinator_generation,
                 action.lease_id,
                 (AttemptId(action.subject),),
                 False,
             )
-        case AuthorizationKind.OBSERVER:
+        case decision_models.AuthorizationKind.OBSERVER:
             return DecisionFailure(
                 DecisionFailureCode.ACTION_NOT_MUTATING,
                 "Observer actions cannot mutate repository work.",
@@ -375,10 +367,11 @@ def _actor_for(
 
 def execute(
     store: WorkStore,
-    command: TransitionCommand,
+    command: decision_models.TransitionCommand,
     now: datetime,
-    transition_guard: Callable[[StoredWorkState, TransitionCommand], DecisionFailure | None] | None = None,
-) -> DecisionResult[TransitionReceipt]:
+    transition_guard: Callable[[StoredWorkState, decision_models.TransitionCommand], DecisionFailure | None]
+    | None = None,
+) -> DecisionResult[decision_models.TransitionReceipt]:
     """Rediscover, decide, and persist one lifecycle mutation under one write lock."""
 
     supplied = command_action(command)

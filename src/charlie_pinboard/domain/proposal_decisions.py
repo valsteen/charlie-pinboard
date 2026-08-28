@@ -1,5 +1,6 @@
 import re
 
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from charlie_pinboard.domain.history import item_scope_digest
 from charlie_pinboard.domain.identifiers import ItemId
@@ -11,7 +12,6 @@ from charlie_pinboard.domain.proposal_models import (
     ProposalCreationDecision,
     VisibleProposalItem,
 )
-from charlie_pinboard.domain.work_models import ItemScope, ProposalRelationKind, ScopeDependency
 
 _PROPOSAL_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -57,8 +57,8 @@ def decide_proposal_creation(  # noqa: C901, PLR0912
     ):
         return DecisionFailure(DecisionFailureCode.PROPOSAL_INVALID, "Proposal evidence must be ordered and unique.")
     relation_without_item = intake.relation in {
-        ProposalRelationKind.INDEPENDENT,
-        ProposalRelationKind.CLARIFICATION,
+        work_models.ProposalRelationKind.INDEPENDENT,
+        work_models.ProposalRelationKind.CLARIFICATION,
     }
     if relation_without_item != (intake.relation_item is None):
         return DecisionFailure(
@@ -80,35 +80,35 @@ def decide_proposal_creation(  # noqa: C901, PLR0912
         )
     dependencies = (
         (intake.relation_item,)
-        if intake.relation == ProposalRelationKind.FOLLOW_UP and intake.relation_item is not None
+        if intake.relation == work_models.ProposalRelationKind.FOLLOW_UP and intake.relation_item is not None
         else ()
     )
-    scope = ItemScope(
+    scope = work_models.ItemScope(
         item_id,
         intake.user_label,
         intake.trigger,
         intake.why_it_matters,
         intake.effect,
         intake.unlock,
-        tuple(ScopeDependency(index, dependency) for index, dependency in enumerate(dependencies)),
+        tuple(work_models.ScopeDependency(index, dependency) for index, dependency in enumerate(dependencies)),
     )
     digest = item_scope_digest(scope)
     if isinstance(digest, DecisionFailure):
         return digest
     prerequisite_change: PrerequisiteDependencyChange | None = None
-    if intake.relation == ProposalRelationKind.PREREQUISITE and intake.relation_item is not None:
+    if intake.relation == work_models.ProposalRelationKind.PREREQUISITE and intake.relation_item is not None:
         target = snapshot.item(intake.relation_item)
         anchor = next((value for value in snapshot.scopes if value.item == intake.relation_item), None)
         if target is not None and anchor is not None:
             dependency_position = len(anchor.scope.dependencies)
-            changed_scope = ItemScope(
+            changed_scope = work_models.ItemScope(
                 anchor.scope.item_id,
                 anchor.scope.user_label,
                 anchor.scope.trigger,
                 anchor.scope.why_it_matters,
                 anchor.scope.effect,
                 anchor.scope.unlock,
-                (*anchor.scope.dependencies, ScopeDependency(dependency_position, item_id)),
+                (*anchor.scope.dependencies, work_models.ScopeDependency(dependency_position, item_id)),
                 anchor.scope.artifacts,
             )
             changed_digest = item_scope_digest(changed_scope)

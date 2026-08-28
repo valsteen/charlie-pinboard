@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import assert_never
 
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
@@ -22,16 +23,10 @@ from charlie_pinboard.domain.authority_models import (
 )
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from charlie_pinboard.domain.identifiers import AttemptId, ItemId
-from charlie_pinboard.domain.work_models import (
-    CommandAttemptAuthority,
-    CoordinationCommandAuthority,
-    CoordinationLeaseAuthority,
-    CoordinationLeaseStatus,
-)
 
 
-def _coordination_token(value: CoordinationLeaseAuthority) -> CoordinationCommandAuthority:
-    return CoordinationCommandAuthority(
+def _coordination_token(value: work_models.CoordinationLeaseAuthority) -> work_models.CoordinationCommandAuthority:
+    return work_models.CoordinationCommandAuthority(
         value.host_epoch,
         value.task_id,
         value.host_id,
@@ -42,7 +37,7 @@ def _coordination_token(value: CoordinationLeaseAuthority) -> CoordinationComman
 
 
 def decide_coordination_authority(  # noqa: C901, PLR0912
-    retained: CoordinationLeaseAuthority | None,
+    retained: work_models.CoordinationLeaseAuthority | None,
     operation: CoordinationAuthorityOperation,
 ) -> DecisionResult[CoordinationAuthorityDecision]:
     match operation:
@@ -61,7 +56,7 @@ def decide_coordination_authority(  # noqa: C901, PLR0912
                 )
             if (
                 retained is not None
-                and retained.state == CoordinationLeaseStatus.ACTIVE
+                and retained.state == work_models.CoordinationLeaseStatus.ACTIVE
                 and retained.expires_at > acquired_at
             ):
                 return DecisionFailure(
@@ -71,7 +66,7 @@ def decide_coordination_authority(  # noqa: C901, PLR0912
             generation = 1 if retained is None else retained.generation + 1
             return CoordinationAuthorityDecision(
                 retained,
-                CoordinationLeaseAuthority(
+                work_models.CoordinationLeaseAuthority(
                     host_epoch,
                     task_id,
                     host_id,
@@ -79,7 +74,7 @@ def decide_coordination_authority(  # noqa: C901, PLR0912
                     generation,
                     acquired_at,
                     expires_at,
-                    CoordinationLeaseStatus.ACTIVE,
+                    work_models.CoordinationLeaseStatus.ACTIVE,
                 ),
             )
         case RenewCoordinationAuthority(authority=authority, renewed_at=renewed_at, expires_at=expires_at):
@@ -88,7 +83,10 @@ def decide_coordination_authority(  # noqa: C901, PLR0912
                     DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
                     "Coordination authority does not exist.",
                 )
-            if retained.state != CoordinationLeaseStatus.ACTIVE or _coordination_token(retained) != authority:
+            if (
+                retained.state != work_models.CoordinationLeaseStatus.ACTIVE
+                or _coordination_token(retained) != authority
+            ):
                 return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Coordination authority is fenced.")
             if retained.expires_at <= renewed_at:
                 return DecisionFailure(
@@ -107,7 +105,10 @@ def decide_coordination_authority(  # noqa: C901, PLR0912
                     DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
                     "Coordination authority does not exist.",
                 )
-            if retained.state != CoordinationLeaseStatus.ACTIVE or _coordination_token(retained) != authority:
+            if (
+                retained.state != work_models.CoordinationLeaseStatus.ACTIVE
+                or _coordination_token(retained) != authority
+            ):
                 return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Coordination authority is fenced.")
             if retained.expires_at <= released_at:
                 return DecisionFailure(
@@ -116,7 +117,7 @@ def decide_coordination_authority(  # noqa: C901, PLR0912
                 )
             return CoordinationAuthorityDecision(
                 retained,
-                replace(retained, expires_at=released_at, state=CoordinationLeaseStatus.RELEASED),
+                replace(retained, expires_at=released_at, state=work_models.CoordinationLeaseStatus.RELEASED),
             )
         case RevokeCoordinationAuthority(lease_id=lease_id, generation=generation, revoked_at=revoked_at):
             if retained is None:
@@ -132,15 +133,15 @@ def decide_coordination_authority(  # noqa: C901, PLR0912
                     retained,
                     generation=retained.generation + 1,
                     expires_at=revoked_at,
-                    state=CoordinationLeaseStatus.REVOKED,
+                    state=work_models.CoordinationLeaseStatus.REVOKED,
                 ),
             )
         case _ as unreachable:
             assert_never(unreachable)
 
 
-def _attempt_token(value: AttemptLeaseAuthority) -> CommandAttemptAuthority:
-    return CommandAttemptAuthority(
+def _attempt_token(value: AttemptLeaseAuthority) -> work_models.CommandAttemptAuthority:
+    return work_models.CommandAttemptAuthority(
         value.host_epoch,
         value.item,
         "",
@@ -154,7 +155,7 @@ def _attempt_token(value: AttemptLeaseAuthority) -> CommandAttemptAuthority:
     )
 
 
-def _same_attempt_token(retained: AttemptLeaseAuthority, supplied: CommandAttemptAuthority) -> bool:
+def _same_attempt_token(retained: AttemptLeaseAuthority, supplied: work_models.CommandAttemptAuthority) -> bool:
     token = _attempt_token(retained)
     return (
         token.host_epoch,
@@ -181,7 +182,7 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
     retained: AttemptLeaseAuthority | None,
     counter: int,
     operation: AttemptAuthorityOperation,
-    coordination: CoordinationLeaseAuthority | None,
+    coordination: work_models.CoordinationLeaseAuthority | None,
     *,
     live_attempt: tuple[AttemptId, ItemId] | None = None,
     transferable_attempt: tuple[AttemptId, ItemId] | None = None,
@@ -335,7 +336,7 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
 
 def _validate_attempt_change(
     retained: AttemptLeaseAuthority | None,
-    current: CommandAttemptAuthority,
+    current: work_models.CommandAttemptAuthority,
     now: datetime,
 ) -> DecisionFailure | None:
     if retained is None:
@@ -380,13 +381,13 @@ def _validate_attempt_transfer(
 
 
 def _validate_coordination(
-    retained: CoordinationLeaseAuthority | None,
-    current: CoordinationCommandAuthority,
+    retained: work_models.CoordinationLeaseAuthority | None,
+    current: work_models.CoordinationCommandAuthority,
     now: datetime,
 ) -> DecisionFailure | None:
     if (
         retained is None
-        or retained.state != CoordinationLeaseStatus.ACTIVE
+        or retained.state != work_models.CoordinationLeaseStatus.ACTIVE
         or _coordination_token(retained) != current
         or retained.expires_at <= now
     ):
