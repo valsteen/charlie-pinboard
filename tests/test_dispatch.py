@@ -1,5 +1,6 @@
 import contextlib
 import io
+import subprocess
 import tempfile
 import unittest
 from collections.abc import Callable
@@ -55,11 +56,16 @@ class DispatchTest(unittest.TestCase):
             (DispatchPermission.REPOSITORY_READ,),
         )
 
+    def run_git(self, cwd: Path, *arguments: str) -> None:
+        subprocess.run(["git", *arguments], cwd=cwd, check=True, capture_output=True)
+
     def initialized(
         self,
+        project: Path | None = None,
+        roots: DurableRoots | None = None,
     ) -> tuple[Path, DurableRoots, SQLiteWorkStore, WorkBrief, Callable[[], Action], DispatchEnvironment]:
-        project = Path(tempfile.mkdtemp()).resolve()
-        roots = resolve_durable_roots(project)
+        project = Path(tempfile.mkdtemp()).resolve() if project is None else project
+        roots = resolve_durable_roots(project) if roots is None else roots
         initialize_database(roots, SQLITE_NOW)
         brief = work_a_brief(project)
         published = write_revision(
@@ -193,13 +199,18 @@ class DispatchTest(unittest.TestCase):
                 {"environment": replace(environment, checkout=str(project / "missing"))},
                 DispatchErrorCode.DISPATCH_CHECKOUT_MISSING,
             ),
+            (
+                "checkout-mismatch",
+                {"source_checkout_root": Path(tempfile.mkdtemp()).resolve()},
+                DispatchErrorCode.DISPATCH_CHECKOUT_MISMATCH,
+            ),
         )
         for _name, changed, code in cases:
             arguments = {
                 "attempt_path": path,
                 "attempt_id": value.attempt_id,
                 "attempt_branch": value.branch,
-                "project_root": project,
+                "source_checkout_root": project,
                 "checkpoint": CHECKPOINT_ID,
                 "environment": environment,
                 "accepted_item_id": value.item_id,
@@ -398,6 +409,70 @@ class DispatchTest(unittest.TestCase):
         result, stdout, stderr = self.run_cli(*verify_arguments)
         self.assertEqual(0, result, stderr)
         self.assertIn("DISPATCH_READY", stdout)
+
+    def test_cli_dispatch_revalidates_the_linked_source_checkout_against_the_shared_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            linked = root / "linked"
+            repository.mkdir()
+            self.run_git(repository, "init", "-b", "main")
+            (repository / "architecture.md").write_text(
+                "# Architecture\n\n## Contract\n\nTyped JSON is canonical.\n",
+                encoding="utf-8",
+            )
+            self.run_git(repository, "add", "architecture.md")
+            self.run_git(
+                repository,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            )
+            self.run_git(repository, "worktree", "add", "-b", "codex/work-a", str(linked))
+            _, roots, _, value, action, environment = self.initialized(linked, resolve_durable_roots(repository))
+            (repository / "architecture.md").write_text(
+                "# Architecture\n\n## Contract\n\nDirty primary authority.\n",
+                encoding="utf-8",
+            )
+            environment_path = linked / "environment.json"
+            environment_path.write_bytes(msgspec.json.encode(environment))
+            review_path = linked / "review.json"
+            review_path.write_bytes(ready_review(value))
+            selected = action()
+
+            result, prompt, stderr = self.run_cli(
+                "--project-root",
+                str(linked),
+                "dispatch",
+                "--action-id",
+                str(selected.action_id),
+                "--expected-revision",
+                selected.expected_revision,
+                "--generation",
+                str(selected.coordinator_generation),
+                "--lease-id",
+                str(selected.lease_id),
+                "--checkpoint",
+                CHECKPOINT_ID,
+                "--environment",
+                str(environment_path),
+                "--brief-review",
+                str(review_path),
+                "--review-id",
+                "linked-review",
+            )
+            shared_database_exists = (roots.work_root / "state.sqlite3").is_file()
+            duplicate_ledger_exists = (linked / ".codex" / "pinboard").exists()
+            linked_checkout = str(linked)
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn(f"Checkout: {linked_checkout}", prompt)
+        self.assertTrue(shared_database_exists)
+        self.assertFalse(duplicate_ledger_exists)
 
     def test_dispatch_environment_is_strict(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

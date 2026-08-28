@@ -48,7 +48,7 @@ class DispatchBriefPreparer(Protocol):
         attempt_path: Path,
         attempt_id: str,
         attempt_branch: str,
-        project_root: Path,
+        source_checkout_root: Path,
         checkpoint: str,
         environment: DispatchEnvironment,
         *,

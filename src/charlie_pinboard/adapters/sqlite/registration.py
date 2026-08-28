@@ -15,14 +15,14 @@ from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 
 
 def initialize_work_state(
-    project_root: Path,
+    shared_repository_root: Path,
     work_root: Path | None = None,
     *,
     now: datetime | None = None,
 ) -> InitReceipt:
     if work_root is None:
-        ensure_default_git_exclude(project_root)
-    roots = resolve_durable_roots(project_root, work_root)
+        ensure_default_git_exclude(shared_repository_root)
+    roots = resolve_durable_roots(shared_repository_root, work_root)
     resumed = roots.database_path.exists()
     current = now or datetime.now(UTC)
     if resumed:
