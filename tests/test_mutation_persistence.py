@@ -27,25 +27,12 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.authority_models import (
     AttemptAuthorityDecision,
     AttemptLeaseAuthority,
     AttemptLeaseStatus,
     CoordinationAuthorityDecision,
-)
-from charlie_pinboard.domain.decision_models import (
-    AcceptedProposalChange,
-    Action,
-    ActionKind,
-    ActivationChange,
-    ActorAuthority,
-    AuthorizationKind,
-    Decision,
-    ReasonedProposalDispositionChange,
-    ReasonedProposalDispositionKind,
-    Role,
-    TransitionCommand,
-    TransitionReceipt,
 )
 from charlie_pinboard.domain.decisions import available_actions as available_actions_outcome
 from charlie_pinboard.domain.decisions import bind_transition as bind_transition_outcome
@@ -68,36 +55,26 @@ from charlie_pinboard.domain.proposal_models import (
     ProposalIntake,
     VisibleProposalItem,
 )
-from charlie_pinboard.domain.work_models import (
-    AcceptedProposalState,
-    AcceptProposalInput,
-    ActivateInput,
-    AttemptState,
-    CanonicalJson,
-    CloseInput,
-    CloseOutcome,
-    DeferInput,
-    MergeProposalInput,
-    ProposalDispositionKind,
-    ProposalRelationKind,
-    ReasonInput,
-    ResumeInput,
-    Timing,
-    TransitionInput,
-)
 from tests.domain_support import expect_success
+from tests.domain_support import replace as replace_dataclass
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
 
-def available_actions(snapshot: LedgerSnapshot, actor: ActorAuthority) -> tuple[Action, ...]:
+def available_actions(
+    snapshot: LedgerSnapshot, actor: decision_models.ActorAuthority
+) -> tuple[decision_models.Action, ...]:
     return expect_success(available_actions_outcome(snapshot, actor))
 
 
-def bind_transition(action: Action, value: TransitionInput) -> TransitionCommand:
+def bind_transition(
+    action: decision_models.Action, value: work_models.TransitionInput
+) -> decision_models.TransitionCommand:
     return expect_success(bind_transition_outcome(action, value))
 
 
-def decide(snapshot: LedgerSnapshot, command: TransitionCommand, now: datetime) -> Decision:
+def decide(
+    snapshot: LedgerSnapshot, command: decision_models.TransitionCommand, now: datetime
+) -> decision_models.Decision:
     return expect_success(decision_outcome(snapshot, command, now))
 
 
@@ -141,8 +118,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 "The mutation remains decision-backed.",
                 "Exercise the exact relational delta.",
                 "Invalid carrier shapes are rejected.",
-                ProposalRelationKind.INDEPENDENT,
-                None,
+                work_models.IndependentProposalRelation(),
                 "No scheduling effect.",
                 (),
                 (),
@@ -157,8 +133,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 proposal.why_it_matters,
                 proposal.effect,
                 proposal.unlock,
-                ProposalRelationKind(proposal.relation.value),
-                proposal.relation_item_id,
+                proposal.relation,
                 proposal.urgency_evidence,
                 (),
                 (),
@@ -205,9 +180,11 @@ class MutationPersistenceTest(unittest.TestCase):
             replace(retained, expires_at=retained.expires_at + timedelta(minutes=1)),
         )
 
-    def _receipt_state(self, before: StoredWorkState, action: str) -> tuple[TransitionReceipt, StoredWorkState]:
+    def _receipt_state(
+        self, before: StoredWorkState, action: str
+    ) -> tuple[decision_models.TransitionReceipt, StoredWorkState]:
         decided_at = before.lifecycle.project.updated_at + timedelta(seconds=1)
-        receipt = TransitionReceipt(ActionId(action), ItemId("work-a"), action, None, decided_at)
+        receipt = decision_models.TransitionReceipt(ActionId(action), ItemId("work-a"), action, None, decided_at)
         stored_receipt = StoredTransitionReceipt(
             HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
             before.lifecycle.project.revision + 1,
@@ -219,9 +196,9 @@ class MutationPersistenceTest(unittest.TestCase):
             None,
             None,
             "mutation/v1",
-            CanonicalJson(b"{}"),
+            work_models.CanonicalJson(b"{}"),
             "transition-receipt/v1",
-            CanonicalJson(
+            work_models.CanonicalJson(
                 json.dumps(
                     {"evidence": receipt.evidence, "outcome": receipt.outcome},
                     sort_keys=True,
@@ -247,7 +224,7 @@ class MutationPersistenceTest(unittest.TestCase):
     def _stored_receipt(self, after: StoredWorkState) -> StoredTransitionReceipt:
         return after.transition_receipts[-1]
 
-    def _mutation_receipt(self, receipt: TransitionReceipt, after: StoredWorkState) -> MutationReceipt:
+    def _mutation_receipt(self, receipt: decision_models.TransitionReceipt, after: StoredWorkState) -> MutationReceipt:
         stored = self._stored_receipt(after)
         return MutationReceipt(
             receipt,
@@ -267,21 +244,25 @@ class MutationPersistenceTest(unittest.TestCase):
         stored_receipt = replace(
             self._stored_receipt(after),
             outcome_schema=outcome.outcome_schema,
-            outcome_payload=CanonicalJson(outcome.payload),
+            outcome_payload=work_models.CanonicalJson(outcome.payload),
         )
         return replace(after, transition_receipts=(*after.transition_receipts[:-1], stored_receipt))
 
     def test_activation_decision_retains_and_persists_creation_facts(self) -> None:
         store = self._store()
         snapshot = project_decision_snapshot(store.snapshot())
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
-        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.ACTIVATE)
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+        )
+        action = next(
+            value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.ACTIVATE
+        )
         decided_at = SQLITE_NOW + timedelta(seconds=1)
         decision = decide(
             snapshot,
             bind_transition(
                 action,
-                ActivateInput(
+                work_models.ActivateInput(
                     AttemptId("work-c-1"),
                     "codex/work-c",
                     "base-c",
@@ -292,8 +273,8 @@ class MutationPersistenceTest(unittest.TestCase):
             decided_at,
         )
 
-        self.assertIsInstance(decision.change, ActivationChange)
-        assert isinstance(decision.change, ActivationChange)
+        self.assertIsInstance(decision.change, decision_models.ActivationChange)
+        assert isinstance(decision.change, decision_models.ActivationChange)
         self.assertEqual(
             ("codex/work-c", "base-c", "worker-c", ArtifactRefId(1)),
             (
@@ -338,15 +319,21 @@ class MutationPersistenceTest(unittest.TestCase):
                 state.lifecycle,
                 work_items=items,
                 dependencies=tuple(value for value in state.lifecycle.dependencies if value.item_id != attempt.item_id),
-                attempts=(replace(attempt, state=AttemptState.PAUSED),),
+                attempts=(replace(attempt, state=work_models.AttemptState.PAUSED),),
             ),
             artifact_references=(*state.artifact_references, replacement),
         )
         store = self._store_with_state(state)
         snapshot = project_decision_snapshot(store.snapshot())
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
-        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.RESUME)
-        decision = decide(snapshot, bind_transition(action, ResumeInput(replacement.artifact_ref_id)), SQLITE_NOW)
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+        )
+        action = next(
+            value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.RESUME
+        )
+        decision = decide(
+            snapshot, bind_transition(action, work_models.ResumeInput(replacement.artifact_ref_id)), SQLITE_NOW
+        )
 
         with store.write() as transaction:
             transaction.commit(project_transition_mutation(transaction.snapshot(), decision))
@@ -354,21 +341,27 @@ class MutationPersistenceTest(unittest.TestCase):
         persisted = next(
             value for value in store.snapshot().lifecycle.attempts if value.attempt_id == attempt.attempt_id
         )
-        self.assertEqual(AttemptState.ACTIVE, persisted.state)
+        self.assertEqual(work_models.AttemptState.ACTIVE, persisted.state)
         self.assertEqual(replacement.artifact_ref_id, persisted.brief_artifact_ref_id)
 
     def test_proposal_acceptance_round_trips_semantics_and_ordered_dependencies(self) -> None:
         store = self._store()
         snapshot = project_decision_snapshot(store.snapshot())
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
-        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.ACCEPT_PROPOSAL)
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+        )
+        action = next(
+            value
+            for value in available_actions(snapshot, actor)
+            if value.kind == decision_models.ActionKind.ACCEPT_PROPOSAL
+        )
         decision = decide(
             snapshot,
             bind_transition(
                 action,
-                AcceptProposalInput(
+                work_models.AcceptProposalInput(
                     ItemId("zz-proposal-a"),
-                    AcceptedProposalState.READY,
+                    work_models.AcceptedProposalState.READY,
                     "activate",
                     timing=None,
                     depends_on=(ItemId("intake-work"),),
@@ -377,7 +370,7 @@ class MutationPersistenceTest(unittest.TestCase):
             SQLITE_NOW + timedelta(seconds=1),
         )
 
-        self.assertIsInstance(decision.change, AcceptedProposalChange)
+        self.assertIsInstance(decision.change, decision_models.AcceptedProposalChange)
         with store.write() as transaction:
             transaction.commit(project_transition_mutation(transaction.snapshot(), decision))
 
@@ -395,8 +388,13 @@ class MutationPersistenceTest(unittest.TestCase):
             (ItemId("work-c"), ItemId("intake-work")),
             tuple(value.dependency_id for value in reopened.lifecycle.dependencies if value.item_id == item.item_id),
         )
-        self.assertEqual(ProposalDispositionKind.ACCEPTED, proposal.disposition)
-        self.assertEqual(ItemId("zz-proposal-a"), proposal.disposition_target_item_id)
+        self.assertEqual(
+            work_models.AcceptedProposalDisposition(
+                ItemId("zz-proposal-a"),
+                SQLITE_NOW + timedelta(seconds=1),
+            ),
+            proposal.disposition,
+        )
         self.assertEqual(13, reopened.lifecycle.project.revision)
         self.assertEqual(2, len(reopened.transition_receipts))
 
@@ -453,16 +451,12 @@ class MutationPersistenceTest(unittest.TestCase):
             "Proposal B",
             "A new observation",
             "The queue needs the observation.",
-            ProposalRelationKind.INDEPENDENT,
-            None,
+            work_models.IndependentProposalRelation(),
             "Preserve the proposal.",
             "A coordinator can assess it.",
             "Scheduling remains unchanged.",
             None,
-            None,
-            None,
             13,
-            None,
         )
         draft = ProposalCreationMutation(
             before,
@@ -529,63 +523,57 @@ class MutationPersistenceTest(unittest.TestCase):
         self.assertEqual(after, store.snapshot())
 
     def test_proposal_disposition_matrix_persists_each_closed_value(self) -> None:
-        self.assertEqual(
-            (ReasonedProposalDispositionKind.RETURNED, ReasonedProposalDispositionKind.REJECTED),
-            tuple(ReasonedProposalDispositionKind),
-        )
-        for kind, payload, expected, target, reason, reasoned_disposition in (
+        for kind, payload, expected in (
             (
-                ActionKind.MERGE_PROPOSAL,
-                MergeProposalInput(ItemId("work-c")),
-                "merged",
-                ItemId("work-c"),
-                None,
-                None,
+                decision_models.ActionKind.MERGE_PROPOSAL,
+                work_models.MergeProposalInput(ItemId("work-c")),
+                work_models.MergedProposalDisposition(
+                    ItemId("work-c"),
+                    SQLITE_NOW + timedelta(seconds=1),
+                ),
             ),
             (
-                ActionKind.RETURN_PROPOSAL,
-                ReasonInput("Clarify the evidence."),
-                "returned",
-                None,
-                "Clarify the evidence.",
-                ReasonedProposalDispositionKind.RETURNED,
+                decision_models.ActionKind.RETURN_PROPOSAL,
+                work_models.ReasonInput("Clarify the evidence."),
+                work_models.ReturnedProposalDisposition(
+                    "Clarify the evidence.",
+                    SQLITE_NOW + timedelta(seconds=1),
+                ),
             ),
             (
-                ActionKind.REJECT_PROPOSAL,
-                ReasonInput("The finding is obsolete."),
-                "rejected",
-                None,
-                "The finding is obsolete.",
-                ReasonedProposalDispositionKind.REJECTED,
+                decision_models.ActionKind.REJECT_PROPOSAL,
+                work_models.ReasonInput("The finding is obsolete."),
+                work_models.RejectedProposalDisposition(
+                    "The finding is obsolete.",
+                    SQLITE_NOW + timedelta(seconds=1),
+                ),
             ),
         ):
             with self.subTest(kind=kind):
                 store = self._store()
                 snapshot = project_decision_snapshot(store.snapshot())
-                actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
+                actor = decision_models.ActorAuthority(
+                    decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+                )
                 action = next(value for value in available_actions(snapshot, actor) if value.kind == kind)
                 decision = decide(snapshot, bind_transition(action, payload), SQLITE_NOW + timedelta(seconds=1))
-                if reasoned_disposition is not None:
-                    self.assertIsInstance(decision.change, ReasonedProposalDispositionChange)
-                    assert isinstance(decision.change, ReasonedProposalDispositionChange)
-                    self.assertEqual(reasoned_disposition, decision.change.disposition)
                 with store.write() as transaction:
                     transaction.commit(project_transition_mutation(transaction.snapshot(), decision))
                 proposal = store.snapshot().proposals.proposals[0]
-                assert proposal.disposition is not None
-                self.assertEqual(
-                    (expected, target, reason),
-                    (proposal.disposition.value, proposal.disposition_target_item_id, proposal.disposition_reason),
-                )
+                self.assertEqual(expected, proposal.disposition)
 
     def test_attempt_transition_reports_the_missing_or_stale_before_state_invariant(self) -> None:
         before = self._store().snapshot()
         snapshot = project_decision_snapshot(before)
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
-        action = next(value for value in available_actions(snapshot, actor) if value.kind == ActionKind.PAUSE)
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+        )
+        action = next(
+            value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.PAUSE
+        )
         decision = decide(
             snapshot,
-            bind_transition(action, ReasonInput("Pause at a stable checkpoint.")),
+            bind_transition(action, work_models.ReasonInput("Pause at a stable checkpoint.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
         without_attempt = replace(before, lifecycle=replace(before.lifecycle, attempts=()))
@@ -600,17 +588,19 @@ class MutationPersistenceTest(unittest.TestCase):
         store = self._store()
         before = store.snapshot()
         snapshot = project_decision_snapshot(before)
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+        )
         close_action = next(
             value
             for value in available_actions(snapshot, actor)
-            if value.kind == ActionKind.CLOSE and value.subject == ItemId("intake-work")
+            if value.kind == decision_models.ActionKind.CLOSE and value.capability.subject == ItemId("intake-work")
         )
         close = decide(
             snapshot,
             bind_transition(
                 close_action,
-                CloseInput(CloseOutcome.DROPPED, "The intake is no longer needed."),
+                work_models.CloseInput(work_models.CloseOutcome.DROPPED, "The intake is no longer needed."),
             ),
             SQLITE_NOW + timedelta(seconds=1),
         )
@@ -622,17 +612,19 @@ class MutationPersistenceTest(unittest.TestCase):
             store = self._store()
             before = store.snapshot()
             snapshot = project_decision_snapshot(before)
-            actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
+            actor = decision_models.ActorAuthority(
+                decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+            )
             close_action = next(
                 value
                 for value in available_actions(snapshot, actor)
-                if value.kind == ActionKind.CLOSE and value.subject == ItemId("intake-work")
+                if value.kind == decision_models.ActionKind.CLOSE and value.capability.subject == ItemId("intake-work")
             )
             close = decide(
                 snapshot,
                 bind_transition(
                     close_action,
-                    CloseInput(CloseOutcome.DROPPED, "The intake is no longer needed."),
+                    work_models.CloseInput(work_models.CloseOutcome.DROPPED, "The intake is no longer needed."),
                 ),
                 SQLITE_NOW + timedelta(seconds=1),
             )
@@ -648,15 +640,20 @@ class MutationPersistenceTest(unittest.TestCase):
     def test_defer_decision_persists_reopen_focus(self) -> None:
         store = self._store()
         snapshot = project_decision_snapshot(store.snapshot())
-        actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+        )
         action = next(
             value
             for value in available_actions(snapshot, actor)
-            if value.kind == ActionKind.DEFER and value.subject == ItemId("intake-work")
+            if value.kind == decision_models.ActionKind.DEFER and value.capability.subject == ItemId("intake-work")
         )
         decision = decide(
             snapshot,
-            bind_transition(action, DeferInput(Timing.SAFE_TO_DEFER, "Reopen when the prerequisite is accepted.")),
+            bind_transition(
+                action,
+                work_models.DeferInput(work_models.Timing.SAFE_TO_DEFER, "Reopen when the prerequisite is accepted."),
+            ),
             SQLITE_NOW + timedelta(seconds=1),
         )
         with store.write() as transaction:
@@ -667,14 +664,16 @@ class MutationPersistenceTest(unittest.TestCase):
 
     def test_row_level_staleness_rejects_after_revision_tokens_are_refreshed(self) -> None:
         for kind, payload in (
-            (ActionKind.PAUSE, ReasonInput("Pause once.")),
-            (ActionKind.MERGE_PROPOSAL, MergeProposalInput(ItemId("work-c"))),
+            (decision_models.ActionKind.PAUSE, work_models.ReasonInput("Pause once.")),
+            (decision_models.ActionKind.MERGE_PROPOSAL, work_models.MergeProposalInput(ItemId("work-c"))),
         ):
             with self.subTest(kind=kind):
                 store = self._store()
                 before = store.snapshot()
                 snapshot = project_decision_snapshot(before)
-                actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
+                actor = decision_models.ActorAuthority(
+                    decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+                )
                 action = next(value for value in available_actions(snapshot, actor) if value.kind == kind)
                 decision = decide(
                     snapshot,
@@ -687,7 +686,14 @@ class MutationPersistenceTest(unittest.TestCase):
                 committed = store.snapshot()
                 refreshed = replace(
                     decision,
-                    action=replace(decision.action, expected_revision="13", subject_revision="13"),
+                    action=replace_dataclass(
+                        decision.action,
+                        capability=replace_dataclass(
+                            decision.action.capability,
+                            expected_revision="13",
+                            subject_revision="13",
+                        ),
+                    ),
                 )
                 with self.assertRaises(StorageError), store.write() as transaction:
                     transaction.commit(replace(mutation, decision=refreshed))
@@ -719,7 +725,7 @@ class MutationPersistenceTest(unittest.TestCase):
             replace(mutation_receipt, actor_task_id=TaskId("different-task")),
             replace(mutation_receipt, actor_host_id=HostId("different-host")),
             replace(mutation_receipt, input_schema="unrelated/v9"),
-            replace(mutation_receipt, input_payload=CanonicalJson(b'{"different":true}')),
+            replace(mutation_receipt, input_payload=work_models.CanonicalJson(b'{"different":true}')),
             replace(
                 mutation_receipt,
                 transition=replace(receipt, decided_at=receipt.decided_at + timedelta(seconds=1)),
@@ -748,9 +754,9 @@ class MutationPersistenceTest(unittest.TestCase):
             replace(accepted, actor_task_id=TaskId("different-task")),
             replace(accepted, actor_host_id=HostId("different-host")),
             replace(accepted, input_schema="unrelated/v9"),
-            replace(accepted, input_payload=CanonicalJson(b'{"different":true}')),
+            replace(accepted, input_payload=work_models.CanonicalJson(b'{"different":true}')),
             replace(accepted, outcome_schema="unrelated-receipt/v9"),
-            replace(accepted, outcome_payload=CanonicalJson(b'{"outcome":"different"}')),
+            replace(accepted, outcome_payload=work_models.CanonicalJson(b'{"outcome":"different"}')),
             replace(accepted, committed_at=accepted.committed_at + timedelta(seconds=1)),
         )
         for changed_receipt in changed_receipts:

@@ -1,33 +1,19 @@
+from collections.abc import Callable
 from dataclasses import replace as dataclass_replace
+from datetime import UTC, datetime
 from typing import Any  # noqa: TID251 - fixture corruption intentionally crosses the typed boundary
 
-from charlie_pinboard.domain.decision_models import Action as ActionValue
-from charlie_pinboard.domain.decision_models import ActionKind
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionResult
 from charlie_pinboard.domain.identifiers import (
-    ActionId,
     AttemptId,
     CandidateId,
     HostId,
     ItemId,
-    LedgerId,
     ProposalId,
+    SubjectId,
     TaskId,
 )
-from charlie_pinboard.domain.work_models import (
-    AcceptedProposalState,
-    AttemptState,
-    ScopeArtifact,
-    Timing,
-)
-from charlie_pinboard.domain.work_models import AcceptProposalInput as AcceptProposalInputValue
-from charlie_pinboard.domain.work_models import AttemptRecord as AttemptRecordValue
-from charlie_pinboard.domain.work_models import DeferInput as DeferInputValue
-from charlie_pinboard.domain.work_models import ItemScope as ItemScopeValue
-from charlie_pinboard.domain.work_models import ProposalRecord as ProposalRecordValue
-from charlie_pinboard.domain.work_models import ScopeAnchor as ScopeAnchorValue
-from charlie_pinboard.domain.work_models import ScopeDependency as ScopeDependencyValue
-from charlie_pinboard.domain.work_models import TransferCoordinatorInput as TransferCoordinatorInputValue
 
 
 def replace(instance: Any, **changes: Any) -> Any:  # noqa: ANN401
@@ -41,31 +27,11 @@ def expect_success[T](value: DecisionResult[T]) -> T:
     return value
 
 
-def action(kind: ActionKind, subject: str) -> ActionValue:
-    if kind in {
-        ActionKind.ACCEPT_CHECKPOINT,
-        ActionKind.BLOCK,
-        ActionKind.COMPLETE,
-        ActionKind.CONTINUE,
-        ActionKind.DISPATCH,
-        ActionKind.PAUSE,
-        ActionKind.REPORT_BLOCKER,
-        ActionKind.RETURN_FOR_CORRECTION,
-        ActionKind.SUBMIT_REVIEW,
-    }:
-        subject_id = AttemptId(subject)
-    elif kind in {
-        ActionKind.ACCEPT_PROPOSAL,
-        ActionKind.MERGE_PROPOSAL,
-        ActionKind.REJECT_PROPOSAL,
-        ActionKind.RETURN_PROPOSAL,
-    }:
-        subject_id = ProposalId(subject)
-    elif kind in {ActionKind.INSPECT, ActionKind.TRANSFER_COORDINATOR}:
-        subject_id = LedgerId(subject)
-    else:
-        subject_id = ItemId(subject)
-    return ActionValue(ActionId(f"{kind.value}:{subject}"), kind, subject_id, kind.value, "rev", 1)
+def action[SubjectT: SubjectId, ActionT](
+    constructor: Callable[[decision_models.ActionCapability[SubjectT]], ActionT],
+    subject: SubjectT,
+) -> ActionT:
+    return constructor(decision_models.ActionCapability(subject, "test action", "rev", 1))
 
 
 def item_scope(
@@ -75,10 +41,10 @@ def item_scope(
     why_it_matters: str | None,
     effect: str | None,
     unlock: str | None,
-    dependencies: tuple[ScopeDependencyValue, ...] = (),
-    artifacts: tuple[ScopeArtifact, ...] = (),
-) -> ItemScopeValue:
-    return ItemScopeValue(
+    dependencies: tuple[work_models.ScopeDependency, ...] = (),
+    artifacts: tuple[work_models.ScopeArtifact, ...] = (),
+) -> work_models.ItemScope:
+    return work_models.ItemScope(
         ItemId(item_id),
         user_label,
         trigger,
@@ -90,19 +56,19 @@ def item_scope(
     )
 
 
-def scope_dependency(position: int, dependency_id: str) -> ScopeDependencyValue:
-    return ScopeDependencyValue(position, ItemId(dependency_id))
+def scope_dependency(position: int, dependency_id: str) -> work_models.ScopeDependency:
+    return work_models.ScopeDependency(position, ItemId(dependency_id))
 
 
 def attempt_record(
     attempt: str,
     item: str,
-    state: AttemptState,
+    state: work_models.AttemptState,
     accepted_scope_revision: int | None = None,
     accepted_scope_digest: str | None = None,
     protected_candidate_revision: str | None = None,
-) -> AttemptRecordValue:
-    return AttemptRecordValue(
+) -> work_models.AttemptRecord:
+    return work_models.AttemptRecord(
         AttemptId(attempt),
         ItemId(item),
         state,
@@ -112,29 +78,41 @@ def attempt_record(
     )
 
 
-def scope_anchor(item: str, revision: int, digest: str, scope: ItemScopeValue) -> ScopeAnchorValue:
-    return ScopeAnchorValue(ItemId(item), revision, digest, scope)
+def scope_anchor(item: str, revision: int, digest: str, scope: work_models.ItemScope) -> work_models.ScopeAnchor:
+    return work_models.ScopeAnchor(ItemId(item), revision, digest, scope)
 
 
-def proposal_record(proposal: str, revision: str) -> ProposalRecordValue:
-    return ProposalRecordValue(ProposalId(proposal), revision)
+def proposal_record(proposal: str, revision: str) -> work_models.ProposalRecord:
+    return work_models.ProposalRecord(
+        ProposalId(proposal),
+        revision,
+        datetime(2026, 1, 1, tzinfo=UTC),
+        TaskId("proposal-source"),
+        "Proposal",
+        "A proposal was recorded.",
+        "The proposal remains relevant.",
+        work_models.IndependentProposalRelation(),
+        "Preserve the proposal.",
+        "The proposal can be evaluated.",
+        "No immediate scheduling effect.",
+    )
 
 
 def accept_proposal_input(
     item: str,
-    state: AcceptedProposalState,
+    state: work_models.AcceptedProposalState,
     next_action: str,
-    timing: Timing | None = None,
+    timing: work_models.Timing | None = None,
     depends_on: tuple[str, ...] = (),
-) -> AcceptProposalInputValue:
-    return AcceptProposalInputValue(
+) -> work_models.AcceptProposalInput:
+    return work_models.AcceptProposalInput(
         ItemId(item), state, next_action, timing, tuple(ItemId(value) for value in depends_on)
     )
 
 
-def defer_input(timing: str, reopen_condition: str) -> DeferInputValue:
-    return DeferInputValue(Timing(timing), reopen_condition)
+def defer_input(timing: str, reopen_condition: str) -> work_models.DeferInput:
+    return work_models.DeferInput(work_models.Timing(timing), reopen_condition)
 
 
-def transfer_coordinator_input(task_id: str, host_id: str) -> TransferCoordinatorInputValue:
-    return TransferCoordinatorInputValue(TaskId(task_id), HostId(host_id))
+def transfer_coordinator_input(task_id: str, host_id: str) -> work_models.TransferCoordinatorInput:
+    return work_models.TransferCoordinatorInput(TaskId(task_id), HostId(host_id))

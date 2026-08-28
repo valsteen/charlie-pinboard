@@ -6,7 +6,7 @@ from typing import Protocol
 from charlie_pinboard.application.artifacts import ArtifactRef, NewArtifact, WorkBriefIdentity
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.stored_state import ArtifactKind, ArtifactReference, StoredWorkState
-from charlie_pinboard.domain.decision_models import ActivateCommand, ResumeCommand, TransitionCommand
+from charlie_pinboard.domain import decision_models
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 
 
@@ -37,22 +37,22 @@ def publish_accepted_artifact(
 
 def validate_transition_work_brief(
     state: StoredWorkState,
-    command: TransitionCommand,
+    command: decision_models.TransitionCommand,
     artifacts: ArtifactReader,
     decode_identity: Callable[[bytes], WorkBriefIdentity],
 ) -> DecisionFailure | None:
     """Validate activation or resume brief identity against the locked SQLite snapshot."""
 
     match command:
-        case ActivateCommand(capability=capability, value=value):
+        case decision_models.ActivateCommand(action=action, value=value):
             artifact_ref_id = value.brief_artifact_ref_id
             attempt_id = str(value.attempt)
-            item_id = str(capability.subject)
+            item_id = str(action.capability.subject)
             branch = value.branch
             base_revision = value.base_revision
-        case ResumeCommand(capability=capability, value=value) if value.brief_artifact_ref_id is not None:
+        case decision_models.ResumeCommand(action=action, value=value) if value.brief_artifact_ref_id is not None:
             artifact_ref_id = value.brief_artifact_ref_id
-            item_id = str(capability.subject)
+            item_id = str(action.capability.subject)
             attempt = next(
                 (candidate for candidate in state.lifecycle.attempts if str(candidate.item_id) == item_id), None
             )
@@ -64,7 +64,7 @@ def validate_transition_work_brief(
             attempt_id = str(attempt.attempt_id)
             branch = attempt.branch
             base_revision = attempt.base_revision
-        case ResumeCommand():
+        case decision_models.ResumeCommand():
             return None
         case _:
             return None

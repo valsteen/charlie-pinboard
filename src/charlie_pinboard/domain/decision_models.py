@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import assert_never
 
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -13,57 +14,10 @@ from charlie_pinboard.domain.identifiers import (
     CheckpointId,
     ItemId,
     LeaseId,
+    LedgerId,
     ProposalId,
     SubjectId,
 )
-from charlie_pinboard.domain.work_models import (
-    AcceptCheckpointInput,
-    AcceptProposalInput,
-    AcceptReviewAndContinueInput,
-    ActivateInput,
-    AttemptAuthority,
-    AttemptState,
-    BlockInput,
-    CloseInput,
-    CloseOutcome,
-    CommandAttemptAuthority,
-    CoordinationLeaseAuthority,
-    DeferInput,
-    EvidenceInput,
-    MergeProposalInput,
-    ReasonInput,
-    ResumeInput,
-    SubmitReviewInput,
-    Timing,
-    TransferCoordinatorInput,
-    WorkState,
-)
-
-
-class ActionKind(Enum):
-    ACCEPT_CHECKPOINT = "accept-checkpoint"
-    ACCEPT_REVIEW_AND_CONTINUE = "accept-review-and-continue"
-    ACCEPT_PROPOSAL = "accept-proposal"
-    ACTIVATE = "activate"
-    BLOCK = "block"
-    BLOCK_ITEM = "block-item"
-    COMPLETE = "complete"
-    CLOSE = "close"
-    CONTINUE = "continue"
-    DEFER = "defer"
-    DISPATCH = "dispatch"
-    INSPECT = "inspect"
-    MARK_READY = "mark-ready"
-    MERGE_PROPOSAL = "merge-proposal"
-    PAUSE = "pause"
-    REJECT_PROPOSAL = "reject-proposal"
-    REOPEN = "reopen"
-    REPORT_BLOCKER = "report-blocker"
-    RESUME = "resume"
-    RETURN_FOR_CORRECTION = "return-for-correction"
-    RETURN_PROPOSAL = "return-proposal"
-    SUBMIT_REVIEW = "submit-review"
-    TRANSFER_COORDINATOR = "transfer-coordinator"
 
 
 class AuthorizationKind(Enum):
@@ -102,6 +56,32 @@ class BlockerActionDescriptor:
     lifecycle_precondition: ActionLifecyclePrecondition
 
 
+class ActionKind(Enum):
+    ACCEPT_CHECKPOINT = "accept-checkpoint"
+    ACCEPT_REVIEW_AND_CONTINUE = "accept-review-and-continue"
+    ACCEPT_PROPOSAL = "accept-proposal"
+    ACTIVATE = "activate"
+    BLOCK = "block"
+    BLOCK_ITEM = "block-item"
+    COMPLETE = "complete"
+    CLOSE = "close"
+    CONTINUE = "continue"
+    DEFER = "defer"
+    DISPATCH = "dispatch"
+    INSPECT = "inspect"
+    MARK_READY = "mark-ready"
+    MERGE_PROPOSAL = "merge-proposal"
+    PAUSE = "pause"
+    REJECT_PROPOSAL = "reject-proposal"
+    REOPEN = "reopen"
+    REPORT_BLOCKER = "report-blocker"
+    RESUME = "resume"
+    RETURN_FOR_CORRECTION = "return-for-correction"
+    RETURN_PROPOSAL = "return-proposal"
+    SUBMIT_REVIEW = "submit-review"
+    TRANSFER_COORDINATOR = "transfer-coordinator"
+
+
 def blocker_action_descriptor(kind: ActionKind) -> BlockerActionDescriptor | None:
     match kind:
         case ActionKind.REPORT_BLOCKER:
@@ -127,8 +107,8 @@ def blocker_action_descriptor(kind: ActionKind) -> BlockerActionDescriptor | Non
             )
         case (
             ActionKind.ACCEPT_CHECKPOINT
-            | ActionKind.ACCEPT_PROPOSAL
             | ActionKind.ACCEPT_REVIEW_AND_CONTINUE
+            | ActionKind.ACCEPT_PROPOSAL
             | ActionKind.ACTIVATE
             | ActionKind.CLOSE
             | ActionKind.COMPLETE
@@ -152,149 +132,297 @@ def blocker_action_descriptor(kind: ActionKind) -> BlockerActionDescriptor | Non
             assert_never(unreachable)
 
 
-class ReasonedProposalDispositionKind(Enum):
-    RETURNED = "returned"
-    REJECTED = "rejected"
-
-
 @dataclass(frozen=True, slots=True)
-class Action:
-    action_id: ActionId
-    kind: ActionKind
-    subject: SubjectId
+class ActionCapability[SubjectT: SubjectId]:
+    subject: SubjectT
     label: str
     expected_revision: str
     coordinator_generation: int
     subject_revision: str | None = None
     authorization: AuthorizationKind = AuthorizationKind.COORDINATOR
     lease_id: LeaseId | None = None
-    command_authority: CommandAttemptAuthority | None = None
+    command_authority: work_models.CommandAttemptAuthority | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class ActionCapability:
-    subject: SubjectId
-    label: str
-    expected_revision: str
-    coordinator_generation: int
-    subject_revision: str | None
-    authorization: AuthorizationKind
-    lease_id: LeaseId | None
-    command_authority: CommandAttemptAuthority | None
+class AcceptCheckpointAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_CHECKPOINT)
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptReviewAndContinueAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_REVIEW_AND_CONTINUE)
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptProposalAction:
+    capability: ActionCapability[ProposalId]
+    kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_PROPOSAL)
+
+
+@dataclass(frozen=True, slots=True)
+class ActivateAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.ACTIVATE)
+
+
+@dataclass(frozen=True, slots=True)
+class BlockAttemptAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.BLOCK)
+
+
+@dataclass(frozen=True, slots=True)
+class BlockItemAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.BLOCK_ITEM)
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.COMPLETE)
+
+
+@dataclass(frozen=True, slots=True)
+class CloseAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.CLOSE)
+
+
+@dataclass(frozen=True, slots=True)
+class ContinueAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.CONTINUE)
+
+
+@dataclass(frozen=True, slots=True)
+class DeferAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.DEFER)
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.DISPATCH)
+
+
+@dataclass(frozen=True, slots=True)
+class InspectAction:
+    capability: ActionCapability[LedgerId]
+    kind: ActionKind = field(init=False, default=ActionKind.INSPECT)
+
+
+@dataclass(frozen=True, slots=True)
+class MarkReadyAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.MARK_READY)
+
+
+@dataclass(frozen=True, slots=True)
+class MergeProposalAction:
+    capability: ActionCapability[ProposalId]
+    kind: ActionKind = field(init=False, default=ActionKind.MERGE_PROPOSAL)
+
+
+@dataclass(frozen=True, slots=True)
+class PauseAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.PAUSE)
+
+
+@dataclass(frozen=True, slots=True)
+class RejectProposalAction:
+    capability: ActionCapability[ProposalId]
+    kind: ActionKind = field(init=False, default=ActionKind.REJECT_PROPOSAL)
+
+
+@dataclass(frozen=True, slots=True)
+class ReopenAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.REOPEN)
+
+
+@dataclass(frozen=True, slots=True)
+class ReportBlockerAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.REPORT_BLOCKER)
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.RESUME)
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnForCorrectionAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.RETURN_FOR_CORRECTION)
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnProposalAction:
+    capability: ActionCapability[ProposalId]
+    kind: ActionKind = field(init=False, default=ActionKind.RETURN_PROPOSAL)
+
+
+@dataclass(frozen=True, slots=True)
+class SubmitReviewAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.SUBMIT_REVIEW)
+
+
+@dataclass(frozen=True, slots=True)
+class TransferCoordinatorAction:
+    capability: ActionCapability[LedgerId]
+    kind: ActionKind = field(init=False, default=ActionKind.TRANSFER_COORDINATOR)
+
+
+type AdvisoryAction = ContinueAction | DispatchAction | InspectAction | ReportBlockerAction
+type LifecycleAction = (
+    AcceptCheckpointAction
+    | AcceptReviewAndContinueAction
+    | AcceptProposalAction
+    | ActivateAction
+    | BlockAttemptAction
+    | BlockItemAction
+    | CompleteAction
+    | CloseAction
+    | DeferAction
+    | MarkReadyAction
+    | MergeProposalAction
+    | PauseAction
+    | RejectProposalAction
+    | ReopenAction
+    | ResumeAction
+    | ReturnForCorrectionAction
+    | ReturnProposalAction
+    | SubmitReviewAction
+)
+type TransitionAction = LifecycleAction | TransferCoordinatorAction
+type Action = TransitionAction | AdvisoryAction
+
+
+def action_id(action: Action) -> ActionId:
+    return ActionId(f"{action.kind.value}:{action.capability.subject}")
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptCheckpointCommand:
-    capability: ActionCapability
-    value: AcceptCheckpointInput
+    action: AcceptCheckpointAction
+    value: work_models.AcceptCheckpointInput
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptReviewAndContinueCommand:
-    capability: ActionCapability
-    value: AcceptReviewAndContinueInput
+    action: AcceptReviewAndContinueAction
+    value: work_models.AcceptReviewAndContinueInput
 
 
 @dataclass(frozen=True, slots=True)
 class ActivateCommand:
-    capability: ActionCapability
-    value: ActivateInput
+    action: ActivateAction
+    value: work_models.ActivateInput
 
 
 @dataclass(frozen=True, slots=True)
 class PauseCommand:
-    capability: ActionCapability
-    value: ReasonInput
+    action: PauseAction
+    value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class BlockCommand:
-    capability: ActionCapability
-    value: BlockInput
+    action: BlockAttemptAction
+    value: work_models.BlockInput
 
 
 @dataclass(frozen=True, slots=True)
 class CompleteCommand:
-    capability: ActionCapability
-    value: EvidenceInput
+    action: CompleteAction
+    value: work_models.EvidenceInput
 
 
 @dataclass(frozen=True, slots=True)
 class CloseCommand:
-    capability: ActionCapability
-    value: CloseInput
+    action: CloseAction
+    value: work_models.CloseInput
 
 
 @dataclass(frozen=True, slots=True)
 class ResumeCommand:
-    capability: ActionCapability
-    value: ResumeInput
+    action: ResumeAction
+    value: work_models.ResumeInput
 
 
 @dataclass(frozen=True, slots=True)
 class SubmitReviewCommand:
-    capability: ActionCapability
-    value: SubmitReviewInput
+    action: SubmitReviewAction
+    value: work_models.SubmitReviewInput
 
 
 @dataclass(frozen=True, slots=True)
 class ReturnForCorrectionCommand:
-    capability: ActionCapability
-    value: ReasonInput
+    action: ReturnForCorrectionAction
+    value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class ReopenCommand:
-    capability: ActionCapability
-    value: EvidenceInput
+    action: ReopenAction
+    value: work_models.EvidenceInput
 
 
 @dataclass(frozen=True, slots=True)
 class MarkReadyCommand:
-    capability: ActionCapability
-    value: ReasonInput
+    action: MarkReadyAction
+    value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class BlockItemCommand:
-    capability: ActionCapability
-    value: BlockInput
+    action: BlockItemAction
+    value: work_models.BlockInput
 
 
 @dataclass(frozen=True, slots=True)
 class DeferCommand:
-    capability: ActionCapability
-    value: DeferInput
+    action: DeferAction
+    value: work_models.DeferInput
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptProposalCommand:
-    capability: ActionCapability
-    value: AcceptProposalInput
+    action: AcceptProposalAction
+    value: work_models.AcceptProposalInput
 
 
 @dataclass(frozen=True, slots=True)
 class MergeProposalCommand:
-    capability: ActionCapability
-    value: MergeProposalInput
+    action: MergeProposalAction
+    value: work_models.MergeProposalInput
 
 
 @dataclass(frozen=True, slots=True)
 class ReturnProposalCommand:
-    capability: ActionCapability
-    value: ReasonInput
+    action: ReturnProposalAction
+    value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class RejectProposalCommand:
-    capability: ActionCapability
-    value: ReasonInput
+    action: RejectProposalAction
+    value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class TransferCoordinatorCommand:
-    capability: ActionCapability
-    value: TransferCoordinatorInput
+    action: TransferCoordinatorAction
+    value: work_models.TransferCoordinatorInput
 
 
 type TransitionCommand = (
@@ -333,14 +461,14 @@ class ActorAuthority:
 @dataclass(frozen=True, slots=True)
 class ItemStateChange:
     item: ItemId
-    before: WorkState
-    after: WorkState
+    before: work_models.WorkState
+    after: work_models.WorkState
 
 
 @dataclass(frozen=True, slots=True)
 class ActivationChange:
     item: ItemId
-    item_before: WorkState
+    item_before: work_models.WorkState
     attempt: AttemptId
     brief_artifact_ref_id: ArtifactRefId
     branch: str
@@ -351,35 +479,35 @@ class ActivationChange:
 @dataclass(frozen=True, slots=True)
 class AttemptStateChange:
     item: ItemId
-    item_before: WorkState
-    item_after: WorkState
+    item_before: work_models.WorkState
+    item_after: work_models.WorkState
     attempt: AttemptId
-    attempt_before: AttemptState
-    attempt_after: AttemptState
+    attempt_before: work_models.AttemptState
+    attempt_after: work_models.AttemptState
 
 
 @dataclass(frozen=True, slots=True)
 class BlockAttemptChange:
     item: ItemId
-    item_before: WorkState
+    item_before: work_models.WorkState
     attempt: AttemptId
-    attempt_before: AttemptState
+    attempt_before: work_models.AttemptState
     dependencies_after: tuple[ItemId, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class BlockItemChange:
     item: ItemId
-    item_before: WorkState
+    item_before: work_models.WorkState
     dependencies_after: tuple[ItemId, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class ResumeAttemptChange:
     item: ItemId
-    item_before: WorkState
+    item_before: work_models.WorkState
     attempt: AttemptId
-    attempt_before: AttemptState
+    attempt_before: work_models.AttemptState
     brief_artifact_ref_id: ArtifactRefId | None
 
 
@@ -409,9 +537,9 @@ class ReviewAcceptanceChange:
 @dataclass(frozen=True, slots=True)
 class CompletionChange:
     item: ItemId
-    item_before: WorkState
+    item_before: work_models.WorkState
     attempt: AttemptId
-    attempt_before: AttemptState
+    attempt_before: work_models.AttemptState
     evidence: str
     authority_change: AttemptAuthorityChange | None
 
@@ -419,27 +547,27 @@ class CompletionChange:
 @dataclass(frozen=True, slots=True)
 class ItemClosureChange:
     item: ItemId
-    item_before: WorkState
-    terminal_state: CloseOutcome
+    item_before: work_models.WorkState
+    terminal_state: work_models.CloseOutcome
     evidence: str
 
 
 @dataclass(frozen=True, slots=True)
 class AttemptClosureChange:
     item: ItemId
-    item_before: WorkState
-    terminal_state: CloseOutcome
+    item_before: work_models.WorkState
+    terminal_state: work_models.CloseOutcome
     evidence: str
     attempt: AttemptId
-    attempt_before: AttemptState
+    attempt_before: work_models.AttemptState
     authority_change: AttemptAuthorityChange | None
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptedProposalItem:
     item: ItemId
-    state: WorkState
-    timing: Timing | None
+    state: work_models.AcceptedProposalState
+    timing: work_models.Timing | None
     next_action: str
     dependencies: tuple[ItemId, ...]
     user_label: str
@@ -467,23 +595,29 @@ class MergedProposalChange:
 
 
 @dataclass(frozen=True, slots=True)
-class ReasonedProposalDispositionChange:
+class ReturnedProposalChange:
     proposal: ProposalId
-    disposition: ReasonedProposalDispositionKind
+    reason: str
+    disposed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RejectedProposalChange:
+    proposal: ProposalId
     reason: str
     disposed_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
 class AttemptAuthorityChange:
-    before: AttemptAuthority
-    after: AttemptAuthority
+    before: work_models.AttemptAuthority
+    after: work_models.AttemptAuthority
 
 
 @dataclass(frozen=True, slots=True)
 class CoordinatorAuthorityChange:
-    before: CoordinationLeaseAuthority
-    after: CoordinationLeaseAuthority
+    before: work_models.CoordinationLeaseAuthority
+    after: work_models.CoordinationLeaseAuthority
 
 
 @dataclass(frozen=True, slots=True)
@@ -524,7 +658,8 @@ type DecisionChange = (
     | AttemptClosureChange
     | AcceptedProposalChange
     | MergedProposalChange
-    | ReasonedProposalDispositionChange
+    | ReturnedProposalChange
+    | RejectedProposalChange
     | CheckpointAcceptanceChange
     | CoordinatorTransferChange
 )
@@ -532,6 +667,6 @@ type DecisionChange = (
 
 @dataclass(frozen=True, slots=True)
 class Decision:
-    action: Action
+    action: TransitionAction
     change: DecisionChange
     receipt: TransitionReceipt

@@ -18,8 +18,8 @@ from charlie_pinboard.adapters.sqlite.errors import StorageError
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.stored_state import ArtifactKind
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.identifiers import ItemId
-from charlie_pinboard.domain.work_models import ArtifactRole
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -40,7 +40,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             published,
             SQLITE_NOW,
             item_id=ItemId("intake-work"),
-            role=ArtifactRole.EVIDENCE,
+            role=work_models.ArtifactRole.EVIDENCE,
         )
 
         reloaded = SQLiteWorkStore(roots.database_path).snapshot()
@@ -66,7 +66,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             published,
             SQLITE_NOW,
             item_id=ItemId("work-a"),
-            role=ArtifactRole.EVIDENCE,
+            role=work_models.ArtifactRole.EVIDENCE,
         )
 
         reloaded = SQLiteWorkStore(roots.database_path).snapshot()
@@ -172,7 +172,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             published,
             SQLITE_NOW,
             item_id=ItemId("work-a"),
-            role=ArtifactRole.EVIDENCE,
+            role=work_models.ArtifactRole.EVIDENCE,
         )
         self.assertEqual(accepted, store.accept_artifact_reference(roots.work_root, published, SQLITE_NOW))
 
@@ -187,7 +187,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             later_link,
             SQLITE_NOW,
             item_id=ItemId("work-a"),
-            role=ArtifactRole.EVIDENCE,
+            role=work_models.ArtifactRole.EVIDENCE,
         )
         after_link = store.snapshot()
         self.assertEqual(initially_unlinked, linked)
@@ -196,7 +196,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             any(
                 value.item_id == ItemId("work-a")
                 and value.artifact_ref_id == linked.artifact_ref_id
-                and value.role == ArtifactRole.EVIDENCE
+                and value.role == work_models.ArtifactRole.EVIDENCE
                 for value in after_link.lifecycle.item_artifacts
             )
         )
@@ -205,8 +205,8 @@ class ArtifactPersistenceTest(unittest.TestCase):
 
         for item_id, role in (
             (ItemId("work-a"), None),
-            (ItemId("missing"), ArtifactRole.EVIDENCE),
-            (ItemId("work-a"), ArtifactRole.DESIGN),
+            (ItemId("missing"), work_models.ArtifactRole.EVIDENCE),
+            (ItemId("work-a"), work_models.ArtifactRole.DESIGN),
         ):
             candidate = write_revision(
                 roots,

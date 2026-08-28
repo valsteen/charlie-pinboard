@@ -16,15 +16,9 @@ from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifact_publication import validate_transition_work_brief
 from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.stored_state import ArtifactKind
-from charlie_pinboard.domain.decision_models import (
-    ActionCapability,
-    ActivateCommand,
-    AuthorizationKind,
-    ResumeCommand,
-)
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.errors import DecisionFailureCode
 from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId, ItemId
-from charlie_pinboard.domain.work_models import ActivateInput, ResumeInput
 from charlie_pinboard.interfaces.cli import main
 from charlie_pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
 from charlie_pinboard.interfaces.work_brief_models import (
@@ -262,17 +256,17 @@ class WorkBriefBoundaryTest(unittest.TestCase):
         self.assertIn("later-work", rendered)
 
     def test_activation_and_resume_reject_mismatched_typed_brief_identity(self) -> None:
-        capability_values = ("label", "expected", 1, None, AuthorizationKind.COORDINATOR, None, None)
+        capability_values = ("label", "expected", 1, None, decision_models.AuthorizationKind.COORDINATOR, None, None)
         for name in ("activate", "resume"):
             with self.subTest(name=name):
                 project = Path(tempfile.mkdtemp()).resolve()
                 roots = resolve_durable_roots(project)
                 if name == "activate":
                     value = work_c_brief()
-                    capability = ActionCapability(ItemId("work-c"), *capability_values)
-                    command = ActivateCommand(
-                        capability,
-                        ActivateInput(
+                    capability = decision_models.ActionCapability(ItemId("work-c"), *capability_values)
+                    command = decision_models.ActivateCommand(
+                        decision_models.ActivateAction(capability),
+                        work_models.ActivateInput(
                             AttemptId("work-c-1"),
                             "codex/work-c",
                             "candidate-base",
@@ -282,8 +276,10 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                     )
                 else:
                     value = work_a_brief(project)
-                    capability = ActionCapability(ItemId("work-a"), *capability_values)
-                    command = ResumeCommand(capability, ResumeInput(ArtifactRefId(1)))
+                    capability = decision_models.ActionCapability(ItemId("work-a"), *capability_values)
+                    command = decision_models.ResumeCommand(
+                        decision_models.ResumeAction(capability), work_models.ResumeInput(ArtifactRefId(1))
+                    )
                 published = write_revision(
                     roots,
                     NewArtifact(ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)),

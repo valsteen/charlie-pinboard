@@ -12,18 +12,12 @@ from charlie_pinboard.adapters.sqlite.errors import StorageError
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.decision_projection import project_decision_snapshot
 from charlie_pinboard.application.mutations import project_transition_mutation
-from charlie_pinboard.domain.decision_models import (
-    ActionKind,
-    ActorAuthority,
-    AuthorizationKind,
-    Role,
-)
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.decisions import (
     available_actions,
     bind_transition,
     decide,
 )
-from charlie_pinboard.domain.work_models import ReasonInput
 from tests.domain_support import expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
@@ -36,10 +30,12 @@ def _commit_same_pause(
     store = SQLiteWorkStore(Path(database_path))
     before = store.snapshot()
     snapshot = project_decision_snapshot(before)
-    actor = ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, snapshot.generation)
+    actor = decision_models.ActorAuthority(
+        decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+    )
     actions = expect_success(available_actions(snapshot, actor))
-    action = next(value for value in actions if value.kind == ActionKind.PAUSE)
-    command = expect_success(bind_transition(action, ReasonInput("Concurrent pause.")))
+    action = next(value for value in actions if value.kind == decision_models.ActionKind.PAUSE)
+    command = expect_success(bind_transition(action, work_models.ReasonInput("Concurrent pause.")))
     decision = expect_success(decide(snapshot, command, SQLITE_NOW))
     mutation = project_transition_mutation(before, decision)
     barrier.wait()

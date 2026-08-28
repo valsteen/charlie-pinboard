@@ -4,9 +4,8 @@ from typing import Annotated
 
 import msgspec
 
-from charlie_pinboard.domain.decision_models import ActionKind, Role
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.identifiers import ActionId, AttemptId, HostId, ItemId, LeaseId, TaskId
-from charlie_pinboard.domain.work_models import CloseOutcome
 
 _STABLE_ID = msgspec.Meta(min_length=1, pattern=r"^(?!\.{1,2}$)[^/\x00]+$")
 type StableActionId = Annotated[ActionId, _STABLE_ID]
@@ -53,7 +52,7 @@ class ItemStatusCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True)
 
 class CloseCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     item_id: StableItemId
-    outcome: CloseOutcome
+    outcome: work_models.CloseOutcome
     reason: str
     task_id: StableTaskId
     host_id: StableHostId
@@ -62,13 +61,13 @@ class CloseCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 
 class ActionsCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    role: Role
+    role: decision_models.Role
     action_id: StableActionId | None = None
     json: bool = False
 
 
 class LeasedActionsCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    role: Role
+    role: decision_models.Role
     lease_id: StableLeaseId
     generation: int
     action_id: StableActionId | None = None
@@ -79,7 +78,7 @@ type ActionQueryCommand = ActionsCommand | LeasedActionsCommand
 
 
 class InputContractCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    action_kind: ActionKind
+    action_kind: decision_models.ActionKind
     json: bool = False
 
 

@@ -26,6 +26,7 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
+from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
 from charlie_pinboard.domain.identifiers import (
     ActionId,
@@ -38,14 +39,6 @@ from charlie_pinboard.domain.identifiers import (
     LeaseId,
     ProposalId,
     TaskId,
-)
-from charlie_pinboard.domain.work_models import (
-    ArtifactRole,
-    AttemptState,
-    CanonicalJson,
-    CoordinationLeaseStatus,
-    ProposalRelationKind,
-    Timing,
 )
 
 type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
@@ -68,7 +61,7 @@ def _stored_item(
         item_id,
         f"Work {item_id}",
         state,
-        None if sparse else Timing.MUST_NOW,
+        None if sparse else work_models.Timing.MUST_NOW,
         source if source is not None else (None if sparse else "accepted requirement"),
         None if sparse else "A verified observation",
         None if sparse else "The workflow needs this fact.",
@@ -152,12 +145,12 @@ def complete_sqlite_state() -> StoredWorkState:
             for item in (intake_item, item_a, item_b, item_c, proposal_item)
         ),
         (ItemDependency(item_a, item_c, 0), ItemDependency(proposal_item, item_c, 0)),
-        (ItemArtifactLink(item_a, design.artifact_ref_id, ArtifactRole.DESIGN, 0),),
+        (ItemArtifactLink(item_a, design.artifact_ref_id, work_models.ArtifactRole.DESIGN, 0),),
         (
             StoredAttempt(
                 attempt_id,
                 item_a,
-                AttemptState.ACTIVE,
+                work_models.AttemptState.ACTIVE,
                 "codex/work-a",
                 "base-revision",
                 "source-task",
@@ -185,16 +178,12 @@ def complete_sqlite_state() -> StoredWorkState:
                 "Proposal A",
                 "A related observation",
                 "It may affect work C.",
-                ProposalRelationKind.FOLLOW_UP,
-                item_c,
+                work_models.FollowUpProposalRelation(item_c),
                 "Record the follow-up.",
                 "A later coordinator can assess it.",
                 "No immediate scheduling impact.",
                 None,
-                None,
-                None,
                 4,
-                None,
             ),
         ),
         (ProposalEvidence(proposal_id, 0, "evidence:observation"),),
@@ -208,7 +197,7 @@ def complete_sqlite_state() -> StoredWorkState:
             9,
             SQLITE_NOW,
             SQLITE_NOW + timedelta(minutes=5),
-            CoordinationLeaseStatus.ACTIVE,
+            work_models.CoordinationLeaseStatus.ACTIVE,
         ),
         (AttemptLeaseCounter(attempt_id, 3),),
         (AttemptLeaseGeneration(attempt_id, 3, attempt_lease_id, TaskId("worker"), HostId("host-a")),),
@@ -226,9 +215,9 @@ def complete_sqlite_state() -> StoredWorkState:
             TaskId("worker"),
             HostId("host-a"),
             "empty/v1",
-            CanonicalJson(b"{}"),
+            work_models.CanonicalJson(b"{}"),
             "continued/v1",
-            CanonicalJson(b"{}"),
+            work_models.CanonicalJson(b"{}"),
             SQLITE_NOW,
         ),
     )

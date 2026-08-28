@@ -6,15 +6,14 @@ from typing import Protocol
 from charlie_pinboard.application.artifacts import ArtifactRef
 from charlie_pinboard.application.mutation_models import StoredStateMutation
 from charlie_pinboard.application.stored_state import ArtifactReference, StoredWorkState
-from charlie_pinboard.domain.decision_models import TransitionReceipt
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.identifiers import ItemId
-from charlie_pinboard.domain.work_models import ArtifactRole
 
 
 class WorkTransaction(Protocol):
     def snapshot(self) -> StoredWorkState: ...
 
-    def commit(self, mutation: StoredStateMutation) -> TransitionReceipt: ...
+    def commit(self, mutation: StoredStateMutation) -> decision_models.TransitionReceipt: ...
 
 
 class WorkStore(Protocol):
@@ -29,5 +28,5 @@ class WorkStore(Protocol):
         accepted_at: datetime,
         *,
         item_id: ItemId | None = None,
-        role: ArtifactRole | None = None,
+        role: work_models.ArtifactRole | None = None,
     ) -> ArtifactReference: ...

@@ -44,6 +44,8 @@ class ProposalInputTest(unittest.TestCase):
             ({**valid, "position": 0}, "position"),
             ({**valid, "evidence": [""]}, "evidence[0]"),
             ({**valid, "relation": {"kind": "invented", "item": None}}, "relation.kind"),
+            ({**valid, "relation": {"kind": "independent", "item": "work-a"}}, "relation.item"),
+            ({**valid, "relation": {"kind": "prerequisite", "item": None}}, "relation.item"),
         )
         for value, field in cases:
             with self.subTest(field=field), self.assertRaisesRegex(ProposalError, "PROPOSAL_INVALID") as caught:

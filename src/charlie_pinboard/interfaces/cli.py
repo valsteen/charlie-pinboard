@@ -59,6 +59,7 @@ from charlie_pinboard.application.stored_state import (
     StoredWorkState,
 )
 from charlie_pinboard.application.validation import Diagnostic, Severity, ValidationReport, validate_work_state
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
@@ -70,14 +71,6 @@ from charlie_pinboard.domain.authority_models import (
     RevokeAttemptAuthority,
     RevokeCoordinationAuthority,
     TransferAttemptAuthority,
-)
-from charlie_pinboard.domain.decision_models import (
-    Action,
-    ActionKind,
-    AuthorizationKind,
-    BlockerActionDescriptor,
-    Role,
-    blocker_action_descriptor,
 )
 from charlie_pinboard.domain.decisions import bind_transition
 from charlie_pinboard.domain.errors import DecisionFailure
@@ -96,7 +89,7 @@ from charlie_pinboard.domain.proposal_models import (
     CreateProposalOperation,
     ProposalIntake,
 )
-from charlie_pinboard.domain.work_models import CloseOutcome, CoordinationCommandAuthority, WorkState
+from charlie_pinboard.interfaces import proposal_models
 from charlie_pinboard.interfaces.brief_source_models import (
     BriefSourceBatch,
     BriefSourcePlan,
@@ -243,7 +236,9 @@ def _overview_view(overview: WorkOverview) -> OverviewView:
     )
 
 
-def _blocker_descriptor_view(descriptor: BlockerActionDescriptor | None) -> BlockerActionDescriptorView | None:
+def _blocker_descriptor_view(
+    descriptor: decision_models.BlockerActionDescriptor | None,
+) -> BlockerActionDescriptorView | None:
     if descriptor is None:
         return None
     return BlockerActionDescriptorView(
@@ -254,10 +249,10 @@ def _blocker_descriptor_view(descriptor: BlockerActionDescriptor | None) -> Bloc
     )
 
 
-def _input_contract_view(kind: ActionKind) -> InputContractView:
-    descriptor = blocker_action_descriptor(kind)
+def _input_contract_view(kind: decision_models.ActionKind) -> InputContractView:
+    descriptor = decision_models.blocker_action_descriptor(kind)
     try:
-        payload_schema = msgspec.Raw(encoded_transition_input_schema(kind.value))
+        payload_schema = msgspec.Raw(encoded_transition_input_schema(kind))
     except TransitionInputError as error:
         if descriptor is None or error.code != TransitionInputErrorCode.ACTION_NOT_MUTATING:
             raise
@@ -310,7 +305,8 @@ def _brief_source_plan_view(plan: BriefSourcePlan) -> BriefSourcePlanView:
     )
 
 
-def _action_view(action: Action, *, include_input_contract: bool = False) -> ActionView:
+def _action_view(action: decision_models.Action, *, include_input_contract: bool = False) -> ActionView:
+    capability = action.capability
     input_contract: InputContractView | None = None
     if include_input_contract:
         try:
@@ -319,16 +315,16 @@ def _action_view(action: Action, *, include_input_contract: bool = False) -> Act
             if error.code != TransitionInputErrorCode.ACTION_NOT_MUTATING:
                 raise
     return ActionView(
-        action_id=action.action_id,
+        action_id=decision_models.action_id(action),
         kind=action.kind.value,
-        subject=action.subject,
-        label=action.label,
-        expected_revision=action.expected_revision,
-        coordinator_generation=action.coordinator_generation,
-        subject_revision=action.subject_revision or "",
-        authorization=action.authorization.value,
-        lease_id=action.lease_id or "",
-        semantics=_blocker_descriptor_view(blocker_action_descriptor(action.kind)),
+        subject=capability.subject,
+        label=capability.label,
+        expected_revision=capability.expected_revision,
+        coordinator_generation=capability.coordinator_generation,
+        subject_revision=capability.subject_revision or "",
+        authorization=capability.authorization.value,
+        lease_id=capability.lease_id or "",
+        semantics=_blocker_descriptor_view(decision_models.blocker_action_descriptor(action.kind)),
         input_contract=input_contract,
     )
 
@@ -383,7 +379,7 @@ class _BriefSourcesArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=
 
 
 class _ActionsArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    role: Role
+    role: decision_models.Role
     lease_id: StableLeaseId | None
     generation: int | None
     action_id: StableActionId | None
@@ -674,7 +670,7 @@ def _add_chat_parser(commands: argparse._SubParsersAction[argparse.ArgumentParse
     _select(overview, OverviewCommand)
     close = commands.add_parser("close", help="Record a terminal decision for non-active work.")
     close.add_argument("item_id")
-    close.add_argument("--outcome", choices=tuple(outcome.value for outcome in CloseOutcome), required=True)
+    close.add_argument("--outcome", choices=tuple(outcome.value for outcome in work_models.CloseOutcome), required=True)
     close.add_argument("--reason", required=True)
     close.add_argument("--task-id", required=True)
     close.add_argument("--host-id", required=True)
@@ -695,7 +691,7 @@ def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.Argume
     _add_chat_parser(commands)
     _add_item_parser(commands)
     actions = commands.add_parser("actions", help="List the legal contextual actions.")
-    actions.add_argument("--role", choices=tuple(role.value for role in Role), required=True)
+    actions.add_argument("--role", choices=tuple(role.value for role in decision_models.Role), required=True)
     actions.add_argument("--lease-id")
     actions.add_argument("--generation", type=int)
     actions.add_argument("--action-id", help="Return only this exact currently legal action.")
@@ -842,7 +838,7 @@ def _status_value(work: Path, source_checkout: Path, shared_repository: Path) ->
         active_attempts=overview.active_attempts,
         next_action=state.focus.next_action,
         counts=dict(Counter(item.state.value for item in state.lifecycle.work_items)),
-        visible_candidate_count=sum(1 for item in overview.items if item.state == WorkState.INTAKE),
+        visible_candidate_count=sum(1 for item in overview.items if item.state == work_models.WorkState.INTAKE),
         coordinator=(
             CoordinatorView(
                 str(coordinator.task_id),
@@ -859,109 +855,137 @@ def _status_value(work: Path, source_checkout: Path, shared_repository: Path) ->
     )
 
 
-def _action_from_command(command: TransitionCommand | DispatchCommand) -> Action:
-    action_id = command.action_id
-    if ":" not in action_id:
+def _action_from_command(  # noqa: C901, PLR0912, PLR0915
+    command: TransitionCommand | DispatchCommand,
+) -> decision_models.Action:
+    selected_action_id = command.action_id
+    if ":" not in selected_action_id:
         raise CommandError(CommandErrorCode.ACTION_ID_INVALID, "Action identity must be 'kind:subject'.")
-    kind_value, subject = action_id.split(":", 1)
+    kind_value, subject = selected_action_id.split(":", 1)
     try:
-        kind = ActionKind(kind_value)
+        kind = decision_models.ActionKind(kind_value)
     except ValueError as error:
         raise CommandError(CommandErrorCode.ACTION_ID_INVALID, f"Unknown action kind: {error}.") from error
     match command:
         case CoordinatorTransitionCommand(subject_revision=subject_revision):
-            authorization = AuthorizationKind.COORDINATOR
+            authorization = decision_models.AuthorizationKind.COORDINATOR
             lease_id = None
         case CoordinationTransitionCommand(lease_id=lease_id, subject_revision=subject_revision):
-            authorization = AuthorizationKind.COORDINATION
+            authorization = decision_models.AuthorizationKind.COORDINATION
         case AttemptTransitionCommand(lease_id=lease_id, subject_revision=subject_revision):
-            authorization = AuthorizationKind.ATTEMPT
+            authorization = decision_models.AuthorizationKind.ATTEMPT
         case CoordinatorDispatchCommand() | CoordinatorReviewedDispatchCommand():
-            authorization = AuthorizationKind.COORDINATOR
+            authorization = decision_models.AuthorizationKind.COORDINATOR
             lease_id = None
             subject_revision = None
         case CoordinationDispatchCommand(lease_id=lease_id) | CoordinationReviewedDispatchCommand(lease_id=lease_id):
-            authorization = AuthorizationKind.COORDINATION
+            authorization = decision_models.AuthorizationKind.COORDINATION
             subject_revision = None
         case _ as unreachable:
             assert_never(unreachable)
-    attempt_kinds = {
-        ActionKind.ACCEPT_CHECKPOINT,
-        ActionKind.ACCEPT_REVIEW_AND_CONTINUE,
-        ActionKind.BLOCK,
-        ActionKind.COMPLETE,
-        ActionKind.CONTINUE,
-        ActionKind.DISPATCH,
-        ActionKind.PAUSE,
-        ActionKind.REPORT_BLOCKER,
-        ActionKind.RETURN_FOR_CORRECTION,
-        ActionKind.SUBMIT_REVIEW,
-    }
-    proposal_kinds = {
-        ActionKind.ACCEPT_PROPOSAL,
-        ActionKind.MERGE_PROPOSAL,
-        ActionKind.REJECT_PROPOSAL,
-        ActionKind.RETURN_PROPOSAL,
-    }
-    subject_id: SubjectId
-    if kind in attempt_kinds:
-        subject_id = AttemptId(subject)
-    elif kind in proposal_kinds:
-        subject_id = ProposalId(subject)
-    elif kind in {ActionKind.INSPECT, ActionKind.TRANSFER_COORDINATOR}:
-        subject_id = LedgerId(subject)
-    else:
-        subject_id = ItemId(subject)
-    return Action(
-        action_id=action_id,
-        kind=kind,
-        subject=subject_id,
-        label=str(action_id),
-        expected_revision=command.expected_revision,
-        coordinator_generation=command.generation,
-        subject_revision=subject_revision,
-        authorization=authorization,
-        lease_id=lease_id,
-    )
+
+    def capability[SubjectT: SubjectId](subject_id: SubjectT) -> decision_models.ActionCapability[SubjectT]:
+        return decision_models.ActionCapability(
+            subject_id,
+            str(selected_action_id),
+            command.expected_revision,
+            command.generation,
+            subject_revision,
+            authorization,
+            lease_id,
+        )
+
+    match kind:
+        case decision_models.ActionKind.ACCEPT_CHECKPOINT:
+            return decision_models.AcceptCheckpointAction(capability(AttemptId(subject)))
+        case decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE:
+            return decision_models.AcceptReviewAndContinueAction(capability(AttemptId(subject)))
+        case decision_models.ActionKind.ACCEPT_PROPOSAL:
+            return decision_models.AcceptProposalAction(capability(ProposalId(subject)))
+        case decision_models.ActionKind.ACTIVATE:
+            return decision_models.ActivateAction(capability(ItemId(subject)))
+        case decision_models.ActionKind.BLOCK:
+            return decision_models.BlockAttemptAction(capability(AttemptId(subject)))
+        case decision_models.ActionKind.BLOCK_ITEM:
+            return decision_models.BlockItemAction(capability(ItemId(subject)))
+        case decision_models.ActionKind.COMPLETE:
+            return decision_models.CompleteAction(capability(AttemptId(subject)))
+        case decision_models.ActionKind.CLOSE:
+            return decision_models.CloseAction(capability(ItemId(subject)))
+        case decision_models.ActionKind.CONTINUE:
+            return decision_models.ContinueAction(capability(AttemptId(subject)))
+        case decision_models.ActionKind.DEFER:
+            return decision_models.DeferAction(capability(ItemId(subject)))
+        case decision_models.ActionKind.DISPATCH:
+            return decision_models.DispatchAction(capability(AttemptId(subject)))
+        case decision_models.ActionKind.INSPECT:
+            return decision_models.InspectAction(capability(LedgerId(subject)))
+        case decision_models.ActionKind.MARK_READY:
+            return decision_models.MarkReadyAction(capability(ItemId(subject)))
+        case decision_models.ActionKind.MERGE_PROPOSAL:
+            return decision_models.MergeProposalAction(capability(ProposalId(subject)))
+        case decision_models.ActionKind.PAUSE:
+            return decision_models.PauseAction(capability(AttemptId(subject)))
+        case decision_models.ActionKind.REJECT_PROPOSAL:
+            return decision_models.RejectProposalAction(capability(ProposalId(subject)))
+        case decision_models.ActionKind.REOPEN:
+            return decision_models.ReopenAction(capability(ItemId(subject)))
+        case decision_models.ActionKind.REPORT_BLOCKER:
+            return decision_models.ReportBlockerAction(capability(AttemptId(subject)))
+        case decision_models.ActionKind.RESUME:
+            return decision_models.ResumeAction(capability(ItemId(subject)))
+        case decision_models.ActionKind.RETURN_FOR_CORRECTION:
+            return decision_models.ReturnForCorrectionAction(capability(AttemptId(subject)))
+        case decision_models.ActionKind.RETURN_PROPOSAL:
+            return decision_models.ReturnProposalAction(capability(ProposalId(subject)))
+        case decision_models.ActionKind.SUBMIT_REVIEW:
+            return decision_models.SubmitReviewAction(capability(AttemptId(subject)))
+        case decision_models.ActionKind.TRANSFER_COORDINATOR:
+            return decision_models.TransferCoordinatorAction(capability(LedgerId(subject)))
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
-def _reselect_action(roots: ResolvedRoots, supplied: Action, role: Role) -> Action:
+def _reselect_action(
+    roots: ResolvedRoots, supplied: decision_models.Action, role: decision_models.Role
+) -> decision_models.Action:
+    supplied_capability = supplied.capability
     try:
         available = discover_actions(
             SQLiteWorkStore(roots.work / "state.sqlite3"),
             role,
-            lease_id=supplied.lease_id,
-            generation=supplied.coordinator_generation,
+            lease_id=supplied_capability.lease_id,
+            generation=supplied_capability.coordinator_generation,
         )
     except ActionQueryError as error:
         raise CommandError(CommandErrorCode(error.code.value), str(error).partition(": ")[2]) from error
-    current = next((value for value in available if value.action_id == supplied.action_id), None)
+    current = next(
+        (value for value in available if decision_models.action_id(value) == decision_models.action_id(supplied)), None
+    )
     if current is None:
         raise CommandError(
-            CommandErrorCode.ACTION_NOT_AVAILABLE, f"Action '{supplied.action_id}' is not currently legal."
+            CommandErrorCode.ACTION_NOT_AVAILABLE,
+            f"Action '{decision_models.action_id(supplied)}' is not currently legal.",
         )
-    if current.expected_revision != supplied.expected_revision:
+    current_capability = current.capability
+    if current_capability.expected_revision != supplied_capability.expected_revision:
         raise CommandError(CommandErrorCode.STALE_ACTION, "The work ledger changed after this action was selected.")
-    supplied_capability = (
-        supplied.kind,
-        supplied.subject,
-        supplied.coordinator_generation,
-        supplied.subject_revision,
-        supplied.authorization,
-        supplied.lease_id,
+    supplied_authority = (
+        supplied_capability.coordinator_generation,
+        supplied_capability.subject_revision,
+        supplied_capability.authorization,
+        supplied_capability.lease_id,
     )
-    current_capability = (
-        current.kind,
-        current.subject,
-        current.coordinator_generation,
-        current.subject_revision,
-        current.authorization,
-        current.lease_id,
+    current_authority = (
+        current_capability.coordinator_generation,
+        current_capability.subject_revision,
+        current_capability.authorization,
+        current_capability.lease_id,
     )
-    if current_capability != supplied_capability:
+    if current_authority != supplied_authority:
         raise CommandError(
             CommandErrorCode.ACTION_NOT_AVAILABLE,
-            f"Action '{supplied.action_id}' no longer has exact current authority.",
+            f"Action '{decision_models.action_id(supplied)}' no longer has exact current authority.",
         )
     return current
 
@@ -1021,7 +1045,7 @@ def _overview(roots: ResolvedRoots, command: OverviewCommand) -> int:
             f"\tnext={next_action}{attempt}\t{item.label}"
         )
     print(
-        f"visible_candidates={sum(1 for item in overview.items if item.state == WorkState.INTAKE)} "
+        f"visible_candidates={sum(1 for item in overview.items if item.state == work_models.WorkState.INTAKE)} "
         f"immediate_options={len(overview.immediate_options)}"
     )
     return 0
@@ -1090,7 +1114,7 @@ def _actions(roots: ResolvedRoots, command: ActionsCommand | LeasedActionsComman
     )
     exact_action_id = command.action_id
     if exact_action_id is not None:
-        available = tuple(action for action in available if action.action_id == exact_action_id)
+        available = tuple(action for action in available if decision_models.action_id(action) == exact_action_id)
         if not available:
             raise CommandError(
                 CommandErrorCode.ACTION_NOT_AVAILABLE,
@@ -1112,7 +1136,7 @@ def _actions(roots: ResolvedRoots, command: ActionsCommand | LeasedActionsComman
         print("OK NO_ACTIONS_AVAILABLE")
     else:
         for action in available:
-            print(f"{action.action_id}\t{action.label}")
+            print(f"{decision_models.action_id(action)}\t{action.capability.label}")
     return 0
 
 
@@ -1224,6 +1248,24 @@ def _initialize(roots: ResolvedRoots, _command: InitializeCommand) -> int:
     return 0
 
 
+def _domain_proposal_relation(value: proposal_models.ProposalRelation) -> work_models.ProposalRelation:
+    match value:
+        case proposal_models.IndependentProposalRelation():
+            return work_models.IndependentProposalRelation()
+        case proposal_models.PrerequisiteProposalRelation(item=item):
+            return work_models.PrerequisiteProposalRelation(ItemId(item))
+        case proposal_models.FollowUpProposalRelation(item=item):
+            return work_models.FollowUpProposalRelation(ItemId(item))
+        case proposal_models.DuplicateProposalRelation(item=item):
+            return work_models.DuplicateProposalRelation(ItemId(item))
+        case proposal_models.ContradictionProposalRelation(item=item):
+            return work_models.ContradictionProposalRelation(ItemId(item))
+        case proposal_models.ClarificationProposalRelation():
+            return work_models.ClarificationProposalRelation()
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 def _proposal(roots: ResolvedRoots, command: ProposalCommand) -> int:
     path = command.file
     try:
@@ -1251,8 +1293,7 @@ def _proposal(roots: ResolvedRoots, command: ProposalCommand) -> int:
         proposal.why_it_matters,
         proposal.effect,
         proposal.unlock,
-        proposal.relation.kind,
-        None if proposal.relation.item is None else ItemId(proposal.relation.item),
+        _domain_proposal_relation(proposal.relation),
         proposal.urgency_evidence,
         proposal.evidence,
         proposal.freshness_assumptions,
@@ -1286,9 +1327,13 @@ def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
         raise CommandError(
             CommandErrorCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}"
         ) from error
-    role = Role.WORKER if action.authorization == AuthorizationKind.ATTEMPT else Role.COORDINATOR
+    role = (
+        decision_models.Role.WORKER
+        if action.capability.authorization == decision_models.AuthorizationKind.ATTEMPT
+        else decision_models.Role.COORDINATOR
+    )
     action = _reselect_action(roots, action, role)
-    parsed = parse_transition_input(action.kind.value, payload)
+    parsed = parse_transition_input(action.kind, payload)
     command = bind_transition(action, parsed)
     if isinstance(command, DecisionFailure):
         raise CommandError(CommandErrorCode(command.code.value), command.message)
@@ -1308,20 +1353,22 @@ def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
     if isinstance(result, DecisionFailure):
         raise CommandError(CommandErrorCode(result.code.value), result.message)
     state = store.snapshot()
+    affected_attempt = next(
+        (attempt.attempt_id for attempt in state.lifecycle.attempts if attempt.attempt_id == action.capability.subject),
+        None,
+    )
     affected = AffectedViews(
         queue=True,
         current_focus=True,
         history=True,
         items=(result.item,) if result.item is not None else (),
-        attempts=(AttemptId(action.subject),)
-        if any(attempt.attempt_id == action.subject for attempt in state.lifecycle.attempts)
-        else (),
+        attempts=(affected_attempt,) if affected_attempt is not None else (),
     )
     view_result = refresh_views(store, roots.work, affected, _brief_views(roots, store))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     revision = str(state.lifecycle.project.revision)
-    print(f"OK TRANSITION_APPLIED {action.action_id} revision={revision}")
+    print(f"OK TRANSITION_APPLIED {decision_models.action_id(action)} revision={revision}")
     return 0
 
 
@@ -1356,7 +1403,7 @@ def _prepare_dispatch(roots: ResolvedRoots, command: DispatchCommand) -> int:
                 f"Cannot read '{brief_review_path}': {error}",
             ) from error
     action = _action_from_command(command)
-    action = _reselect_action(roots, action, Role.COORDINATOR)
+    action = _reselect_action(roots, action, decision_models.Role.COORDINATOR)
     prompt = prepare_dispatch(
         SQLiteWorkStore(roots.work / "state.sqlite3"),
         ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work)),
@@ -1415,8 +1462,8 @@ def _supplied_coordination_authority(
     current: StoredCoordinationLease,
     lease_id: LeaseId,
     generation: int,
-) -> CoordinationCommandAuthority:
-    return CoordinationCommandAuthority(
+) -> work_models.CoordinationCommandAuthority:
+    return work_models.CoordinationCommandAuthority(
         state.lifecycle.project.host_epoch,
         current.task_id,
         current.host_id,
@@ -1512,7 +1559,7 @@ def _execute_borrowed_coordination(
     task_id: TaskId,
     host_id: HostId,
     ttl_seconds: int,
-    action_id: ActionId,
+    selected_action_id: ActionId,
     payload: bytes,
 ) -> str:
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
@@ -1536,17 +1583,20 @@ def _execute_borrowed_coordination(
         coordination = _retained_coordination(current_state)
         available = discover_actions(
             store,
-            Role.COORDINATOR,
+            decision_models.Role.COORDINATOR,
             lease_id=coordination.lease_id,
             generation=coordination.generation,
         )
         action = next(
-            (candidate for candidate in available if candidate.action_id == action_id),
+            (candidate for candidate in available if decision_models.action_id(candidate) == selected_action_id),
             None,
         )
         if action is None:
-            raise CommandError(CommandErrorCode.ACTION_NOT_AVAILABLE, f"Action '{action_id}' is not currently legal.")
-        parsed = parse_transition_input(action.kind.value, payload)
+            raise CommandError(
+                CommandErrorCode.ACTION_NOT_AVAILABLE,
+                f"Action '{selected_action_id}' is not currently legal.",
+            )
+        parsed = parse_transition_input(action.kind, payload)
         command = bind_transition(action, parsed)
         if isinstance(command, DecisionFailure):
             raise CommandError(CommandErrorCode(command.code.value), command.message)
@@ -1570,7 +1620,7 @@ def _execute_borrowed_coordination(
             released = change_coordination_authority(
                 store,
                 ReleaseCoordinationAuthority(
-                    CoordinationCommandAuthority(
+                    work_models.CoordinationCommandAuthority(
                         store.snapshot().lifecycle.project.host_epoch,
                         current.task_id,
                         current.host_id,
@@ -1672,7 +1722,7 @@ def _attempt_acquire_operation(
         )
     return TransferAttemptAuthority(
         inactive,
-        CoordinationCommandAuthority(
+        work_models.CoordinationCommandAuthority(
             state.lifecycle.project.host_epoch,
             coordination.task_id,
             coordination.host_id,
@@ -1743,7 +1793,7 @@ def _attempt_revoke_operation(
         command.attempt_id,
         command.lease_id,
         command.generation,
-        CoordinationCommandAuthority(
+        work_models.CoordinationCommandAuthority(
             state.lifecycle.project.host_epoch,
             coordination.task_id,
             coordination.host_id,

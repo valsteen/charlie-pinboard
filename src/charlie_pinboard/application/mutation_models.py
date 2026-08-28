@@ -5,18 +5,17 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
+from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.authority_models import AttemptAuthorityDecision, CoordinationAuthorityDecision
-from charlie_pinboard.domain.decision_models import Decision, TransitionReceipt
 from charlie_pinboard.domain.identifiers import ArtifactRefId, HistoryId, HistorySubjectId, HostId, TaskId
 from charlie_pinboard.domain.proposal_models import ProposalCreationDecision
-from charlie_pinboard.domain.work_models import CanonicalJson
 
 
 @dataclass(frozen=True, slots=True)
 class MutationReceipt:
     """Stored-history identity for an ordinary transition receipt."""
 
-    transition: TransitionReceipt
+    transition: decision_models.TransitionReceipt
     history_id: HistoryId
     project_revision: int
     action_kind: TransitionHistoryActionKind
@@ -26,7 +25,7 @@ class MutationReceipt:
     actor_task_id: TaskId | None
     actor_host_id: HostId | None
     input_schema: str
-    input_payload: CanonicalJson
+    input_payload: work_models.CanonicalJson
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +42,7 @@ class ProposalCreationMutation:
 class TransitionMutation:
     """Persists one accepted closed lifecycle decision as an exact relational delta."""
 
-    decision: Decision
+    decision: decision_models.Decision
     before: StoredWorkState
     after: StoredWorkState
     receipt: MutationReceipt
