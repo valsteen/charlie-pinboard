@@ -93,7 +93,7 @@ For each approved family:
 
 1. Remove or isolate its outermost unsupported entry points.
 2. Recompute production reachability immediately.
-3. Follow the orphan chain through commands and arguments, state producers and consumers, records and fields, closed-union members, enum values, branches, serializers, schema, readers and writers, error codes, helpers, tests, fixtures, examples, documentation, skills, package exports, direct and transitive dependencies, lockfiles, build and release configuration, and CI workflows.
+3. Follow the orphan chain through commands and arguments, state producers and consumers, records and fields, closed-family members, vocabulary values, branches, serializers, schema, readers and writers, error codes, helpers, tests, fixtures, examples, documentation, skills, package exports, direct and transitive dependencies, lockfiles, build and release configuration, and CI workflows.
 4. Delete tests whose only purpose was proving deleted implementation machinery. Preserve or add tests only for observable surviving behavior, boundaries, migrations, and rejection contracts.
 5. Run the cheapest relevant checks before continuing to the next family. A coverage drop can expose production code whose implementation-only tests disappeared; investigate that code instead of manufacturing tests or weakening the threshold.
 
@@ -107,35 +107,30 @@ Treat CI as executable product support. Every job, matrix entry, service, secret
 
 After deletion changes the graph, search for structures that used to distinguish alternatives but no longer do:
 
-- one-member enums or variants without an external serialized contract;
+- one-member label vocabularies or variants without an external serialized contract;
 - base classes or protocols with one implementation and no substitution role;
 - pass-through wrappers, single-use indirections, one-attribute accessors, and no-op conversions;
 - parallel tuples, dictionaries, projections, or field-by-field comparisons that reproduce an existing canonical typed value without owning a distinct external representation;
 - hand-written primitive validators or mapping walkers where one declarative boundary record can own conversion, constraints, unknown-field rejection, and error paths;
-- identical aliases, redundant unions, and a discriminator that duplicates the class hierarchy;
+- identical aliases, redundant alternative sets, and a discriminator that duplicates the variant hierarchy;
 - conditions whose alternatives now do the same thing, impossible branches, and commands that can only reject;
 - fields copied through layers without a current producer and consumer;
 - empty or tiny files, modules, and test groups that no longer own a coherent concept.
 
 Regroup by current concepts. Separate declarations from logic when each side has a meaningful thematic role; merge them when separation would create ceremonial files. Make test organization mirror the surviving production concepts whenever practical. Test helpers belong in tests, not in production APIs created solely for fixtures.
 
-Run an archaeology pass over names, comments, error codes, schema labels, help text, examples, documentation, and tests. Remove wording that describes a predecessor, migration phase, plural capability that is now singular, or behavior the code can no longer perform. Collapse documentation around the surviving concepts, remove pages, sections, examples, diagrams, badges, and setup instructions whose feature or workflow was removed, and keep parallel documents consistent rather than leaving one stale version behind. Every advertised feature must trace to a supported entry point or explicitly labeled current limitation; do not turn deleted or never-shipped implementation into present-tense documentation or an invented roadmap. Remove stale suppressions such as unused `noqa`, lint-disable, ignore, or coverage directives with the ecosystem’s unused-suppression check when available.
+Run an archaeology pass over names, comments, error codes, schema labels, help text, examples, documentation, and tests. Remove wording that describes a predecessor, migration phase, plural capability that is now singular, or behavior the code can no longer perform. Collapse documentation around the surviving concepts, remove pages, sections, examples, diagrams, badges, and setup instructions whose feature or workflow was removed, and keep parallel documents consistent rather than leaving one stale version behind. Every advertised feature must trace to a supported entry point or explicitly labeled current limitation; do not turn deleted or never-shipped implementation into present-tense documentation or an invented roadmap. Remove stale lint, warning, ignore, and coverage suppressions with the ecosystem’s unused-suppression check when available.
 
 For structural boilerplate, use one repeatable pass:
 
 1. List collections traversed by neighboring projections. Group each collection once by the consumer key when repeated scans reconstruct the same relationship; keep the grouping local and explicit.
-2. List records whose optional fields serve different operations. Replace them with the smallest flat variants that make supported combinations concrete, then require producers to construct and consumers to match those variants exhaustively.
+2. List records whose optional fields serve different operations. Replace them with the smallest flat variants that make supported combinations concrete, then require producers to construct and consumers to handle those variants exhaustively.
 3. List mapping-shaped external values decoded field by field. Replace primitive accessor and validator families with one strict declarative record conversion when the format is structural; retain explicit code for custom grammars, relational state, and semantic policy.
-4. Trace same-shaped values through every call and adapter. Fold pass-through layers that add no validation, policy, protocol, or independently reused operation into the nearest coherent owner.
-5. Re-run these inventories after each fold. Stop only when a fresh pass finds no repeated traversal, nullable multi-operation record, hand-decoded structural mapping, or orphaned same-shaped call trail in the accepted scope.
-
-For a duplicated closed classification, derive the surviving representation instead of mechanically replacing every enum with a union:
-
-1. Write down each place that encodes the classification: discriminator, variant, optional payload, collection membership, branch, persisted value, wire shape, or presentation projection.
-2. Choose one canonical owner nearest the behavior. Keep a label-only vocabulary when alternatives have the same data and meaning, use data-bearing closed variants when alternatives require different data, and leave context-dependent legality in the decision that owns the surrounding state.
-3. Preserve an independently owned external or persisted shape with one explicit exhaustive boundary conversion. Do not count that conversion as eliminated core complexity.
-4. Trace producers and consumers recursively after the collapse. Fold newly redundant mappings and collections, but retain distinctions that different consumers, protocols, retry policies, or lifecycle decisions use independently.
-5. Compare actual decision points before and after. Report explicit boundary conversion, import volume, and source-line change separately so a smaller file or import list cannot stand in for a simpler decision model.
+4. For each duplicated closed classification, list every encoding and choose one owner nearest the behavior. Keep a label-only vocabulary when alternatives have the same data and meaning, use data-bearing variants when alternatives require different data, and leave context-dependent legality in the decision that owns the surrounding state.
+5. Compare every branch that handles closed alternatives. Combine alternatives when their conditions, bound values, effects, and result are equivalent; remove a named alternative when a general branch already owns the same outcome. Preserve the alternatives themselves when another consumer, protocol, retry policy, or lifecycle decision distinguishes them.
+6. Preserve an independently owned external or persisted shape with one explicit exhaustive boundary conversion. Trace same-shaped values through every call and adapter, folding layers that add no validation, policy, protocol, or independently reused operation.
+7. Compare actual decision points before and after. Report explicit boundary conversion, dependency volume, and source-size change separately so a smaller file or dependency list cannot stand in for a simpler decision model.
+8. Re-run these inventories after each fold. Stop only when a fresh pass finds no repeated traversal, nullable multi-operation record, hand-decoded structural mapping, orphaned same-shaped call trail, or equivalent alternative-handling branch in the accepted scope.
 
 Stop collapsing when the remaining alternatives are a legitimate vocabulary, the distinction has an independent consumer, or the boundary conversion would cost more decision structure than the invalid combinations it prevents.
 

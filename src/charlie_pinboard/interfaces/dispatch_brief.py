@@ -38,9 +38,12 @@ def read_dispatch_environment(path: Path) -> DispatchEnvironment:
 
 def _review_error(error: WorkBriefError) -> DispatchError:
     match error.code:
-        case WorkBriefErrorCode.BRIEF_INVALID | WorkBriefErrorCode.BRIEF_NOT_CANONICAL:
-            code = DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID
-        case WorkBriefErrorCode.REVIEW_INVALID | WorkBriefErrorCode.REVIEW_NOT_CANONICAL:
+        case (
+            WorkBriefErrorCode.BRIEF_INVALID
+            | WorkBriefErrorCode.BRIEF_NOT_CANONICAL
+            | WorkBriefErrorCode.REVIEW_INVALID
+            | WorkBriefErrorCode.REVIEW_NOT_CANONICAL
+        ):
             code = DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID
         case WorkBriefErrorCode.REVIEW_NOT_INDEPENDENT:
             code = DispatchErrorCode.DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT

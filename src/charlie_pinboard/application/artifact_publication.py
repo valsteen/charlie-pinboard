@@ -64,8 +64,6 @@ def validate_transition_work_brief(
             attempt_id = str(attempt.attempt_id)
             branch = attempt.branch
             base_revision = attempt.base_revision
-        case decision_models.ResumeCommand():
-            return None
         case _:
             return None
     reference = next(
