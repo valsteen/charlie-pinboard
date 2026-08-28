@@ -5,8 +5,13 @@ import msgspec
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId
-from charlie_pinboard.domain.work_models import AcceptCheckpointInput, ActivateInput, ResumeInput
+from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId, CandidateId
+from charlie_pinboard.domain.work_models import (
+    AcceptCheckpointInput,
+    AcceptReviewAndContinueInput,
+    ActivateInput,
+    ResumeInput,
+)
 from charlie_pinboard.interfaces.errors import TransitionInputError
 from charlie_pinboard.interfaces.transition_input import (
     TRANSITION_ACTION_KINDS,
@@ -43,6 +48,15 @@ class TransitionInputTest(unittest.TestCase):
         )
         self.assertIsInstance(checkpoint, AcceptCheckpointInput)
 
+        continuation = parse_transition_input(
+            "accept-review-and-continue",
+            '{"candidate":"sha256:candidate","evidence":"review accepted"}',
+        )
+        self.assertEqual(
+            AcceptReviewAndContinueInput(CandidateId("sha256:candidate"), "review accepted"),
+            continuation,
+        )
+
     def test_invalid_closed_choices_report_native_paths(self) -> None:
         cases: tuple[tuple[str, JsonObject], ...] = (
             (
@@ -56,6 +70,11 @@ class TransitionInputTest(unittest.TestCase):
                 },
             ),
             ("accept-checkpoint", {"checkpoint": "Bad Checkpoint", "candidate": "candidate", "evidence": "accepted"}),
+            ("accept-review-and-continue", {"candidate": "candidate", "evidence": ""}),
+            (
+                "accept-review-and-continue",
+                {"candidate": "candidate", "evidence": "accepted", "unexpected": True},
+            ),
             ("submit-review", {"candidate": 1}),
         )
         for kind, value in cases:
@@ -72,6 +91,7 @@ class TransitionInputTest(unittest.TestCase):
     def test_every_current_kind_decodes_and_has_a_schema(self) -> None:
         payloads: dict[str, JsonObject] = {
             "accept-checkpoint": {"checkpoint": "checkpoint-a", "candidate": "candidate", "evidence": "accepted"},
+            "accept-review-and-continue": {"candidate": "candidate", "evidence": "accepted"},
             "accept-proposal": {
                 "item": "work-a",
                 "state": "intake",

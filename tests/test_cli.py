@@ -16,7 +16,7 @@ from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.stored_state import ArtifactKind, StoredWorkItemState, StoredWorkState
-from charlie_pinboard.domain.identifiers import AttemptId
+from charlie_pinboard.domain.identifiers import AttemptId, ItemId
 from charlie_pinboard.domain.work_models import AttemptState, Timing
 from charlie_pinboard.interfaces.cli import build_parser, main
 from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
@@ -542,6 +542,75 @@ class CliTest(unittest.TestCase):
                 invalid_result, _invalid_stdout, invalid_stderr = self.run_cli(*arguments)
                 self.assertEqual(11, invalid_result)
                 self.assertIn(code, invalid_stderr)
+
+    def test_review_acceptance_and_continuation_uses_the_exact_coordination_capability(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        coordination = state.authority.coordination
+        assert coordination is not None
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                work_items=tuple(
+                    replace(value, state=StoredWorkItemState.REVIEW) if value.item_id == ItemId("work-a") else value
+                    for value in state.lifecycle.work_items
+                ),
+                attempts=tuple(
+                    replace(
+                        value,
+                        state=AttemptState.REVIEW,
+                        candidate_revision="candidate-cli-review",
+                        candidate_recorded_at=now,
+                    )
+                    if value.attempt_id == AttemptId("work-a-1")
+                    else value
+                    for value in state.lifecycle.attempts
+                ),
+            ),
+            authority=replace(
+                state.authority,
+                coordination=replace(
+                    coordination,
+                    acquired_at=now,
+                    expires_at=now + timedelta(minutes=5),
+                ),
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        exact = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "coordinator",
+                "--lease-id",
+                "coordination-a",
+                "--generation",
+                "9",
+                "--action-id",
+                "accept-review-and-continue:work-a-1",
+            )["actions"]
+        )
+        action = self.json_object(exact[0])
+        payload = project / "accept-review-and-continue.json"
+        payload.write_text(
+            '{"candidate":"candidate-cli-review","evidence":"accepted through the CLI"}\n',
+            encoding="utf-8",
+        )
+
+        result, stdout, stderr = self.run_transition(common, action, payload)
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK TRANSITION_APPLIED accept-review-and-continue:work-a-1", stdout)
+        reloaded = store.snapshot()
+        attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
+        self.assertEqual(AttemptState.ACTIVE, attempt.state)
+        self.assertIsNone(attempt.candidate_revision)
 
     def test_close_borrows_sqlite_coordination_and_records_terminal_history(self) -> None:
         state = complete_sqlite_state()

@@ -864,6 +864,7 @@ def _action_from_command(command: TransitionCommand | DispatchCommand) -> Action
             assert_never(unreachable)
     attempt_kinds = {
         ActionKind.ACCEPT_CHECKPOINT,
+        ActionKind.ACCEPT_REVIEW_AND_CONTINUE,
         ActionKind.BLOCK,
         ActionKind.COMPLETE,
         ActionKind.CONTINUE,

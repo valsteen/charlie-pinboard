@@ -133,6 +133,12 @@ class AcceptCheckpointInput:
 
 
 @dataclass(frozen=True, slots=True)
+class AcceptReviewAndContinueInput:
+    candidate: CandidateId
+    evidence: str
+
+
+@dataclass(frozen=True, slots=True)
 class CloseInput:
     outcome: CloseOutcome
     reason: str
@@ -172,6 +178,7 @@ type TransitionInput = (
     | BlockInput
     | EvidenceInput
     | AcceptCheckpointInput
+    | AcceptReviewAndContinueInput
     | CloseInput
     | DeferInput
     | AcceptProposalInput

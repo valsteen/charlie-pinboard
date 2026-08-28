@@ -52,6 +52,7 @@ from charlie_pinboard.domain.decision_models import (
     ReasonedProposalDispositionChange,
     ReasonedProposalDispositionKind,
     ResumeAttemptChange,
+    ReviewAcceptanceChange,
     ReviewReturnChange,
     ReviewSubmissionChange,
 )
@@ -109,6 +110,8 @@ def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
             match decision.change:
                 case CheckpointAcceptanceChange(checkpoint=value, candidate=accepted_candidate):
                     checkpoint = str(value)
+                    candidate = str(accepted_candidate)
+                case ReviewAcceptanceChange(candidate=accepted_candidate):
                     candidate = str(accepted_candidate)
                 case ReviewSubmissionChange(protected_candidate_after=accepted_candidate):
                     candidate = str(accepted_candidate)
@@ -752,7 +755,13 @@ def _transition_focus_after(
         next_action = "resume"
     elif kind == ActionKind.SUBMIT_REVIEW:
         next_action = "review"
-    elif kind in {ActionKind.RETURN_FOR_CORRECTION, ActionKind.RESUME, ActionKind.REOPEN, ActionKind.MARK_READY}:
+    elif kind in {
+        ActionKind.ACCEPT_REVIEW_AND_CONTINUE,
+        ActionKind.RETURN_FOR_CORRECTION,
+        ActionKind.RESUME,
+        ActionKind.REOPEN,
+        ActionKind.MARK_READY,
+    }:
         next_action = "continue"
     elif kind == ActionKind.DEFER:
         next_action = "reopen"
@@ -833,7 +842,10 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
                 protected_candidate_after=candidate,
                 candidate_observed_at=observed_at,
             )
-        case ReviewReturnChange(item=item, attempt=attempt, authority_change=authority_change):
+        case (
+            ReviewAcceptanceChange(item=item, attempt=attempt, authority_change=authority_change)
+            | ReviewReturnChange(item=item, attempt=attempt, authority_change=authority_change)
+        ):
             lifecycle = _item_state_after(lifecycle, item, WorkState.REVIEW, StoredWorkItemState.ACTIVE, revision, now)
             lifecycle = _attempt_state_after(
                 lifecycle, attempt, AttemptState.REVIEW, AttemptState.ACTIVE, revision, now

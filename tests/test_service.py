@@ -17,7 +17,11 @@ from charlie_pinboard.application.service import (
     create_proposal,
     execute,
 )
-from charlie_pinboard.application.stored_state import StoredWorkItemState, StoredWorkState
+from charlie_pinboard.application.stored_state import (
+    StoredWorkItemState,
+    StoredWorkState,
+    TransitionHistoryActionKind,
+)
 from charlie_pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
@@ -60,6 +64,7 @@ from charlie_pinboard.domain.work_models import (
     AcceptCheckpointInput,
     AcceptedProposalState,
     AcceptProposalInput,
+    AcceptReviewAndContinueInput,
     AttemptState,
     BlockInput,
     CloseInput,
@@ -252,6 +257,58 @@ class ServiceTest(unittest.TestCase):
         outcome = reloaded.transition_receipts[-1].outcome_payload
         self.assertIn(b'"candidate":"supplied-different-candidate"', outcome)
         self.assertIn(b'"checkpoint":"checkpoint-a"', outcome)
+
+    def test_review_acceptance_continues_the_attempt_and_reloads_every_fact(self) -> None:
+        store, database_path = self._store_with_state(complete_sqlite_state())
+        submit = bind_transition(
+            self._worker_action(store, ActionKind.SUBMIT_REVIEW),
+            SubmitReviewInput(CandidateId("protected-candidate")),
+        )
+        assert not isinstance(submit, DecisionFailure)
+        submitted = execute(store, submit, SQLITE_NOW + timedelta(seconds=1))
+        self.assertNotIsInstance(submitted, DecisionFailure)
+        submitted_store = SQLiteWorkStore(database_path)
+        mismatch = bind_transition(
+            self._coordinator_action(submitted_store, ActionKind.ACCEPT_REVIEW_AND_CONTINUE),
+            AcceptReviewAndContinueInput(CandidateId("different-candidate"), "This must not commit."),
+        )
+        assert not isinstance(mismatch, DecisionFailure)
+        before_mismatch = submitted_store.snapshot()
+        rejected = execute(submitted_store, mismatch, SQLITE_NOW + timedelta(seconds=2))
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
+        self.assertEqual(before_mismatch, submitted_store.snapshot())
+        accept = bind_transition(
+            self._coordinator_action(submitted_store, ActionKind.ACCEPT_REVIEW_AND_CONTINUE),
+            AcceptReviewAndContinueInput(
+                CandidateId("protected-candidate"),
+                "The reviewed checkpoint is accepted; continue this attempt.",
+            ),
+        )
+        assert not isinstance(accept, DecisionFailure)
+
+        accepted = execute(submitted_store, accept, SQLITE_NOW + timedelta(seconds=3))
+
+        self.assertNotIsInstance(accepted, DecisionFailure)
+        reloaded = SQLiteWorkStore(database_path).snapshot()
+        item = next(value for value in reloaded.lifecycle.work_items if value.item_id == ItemId("work-a"))
+        attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
+        authority = reloaded.authority.attempt_leases[0]
+        self.assertEqual(StoredWorkItemState.ACTIVE, item.state)
+        self.assertEqual(AttemptState.ACTIVE, attempt.state)
+        self.assertIsNone(attempt.candidate_revision)
+        self.assertIsNone(attempt.candidate_recorded_at)
+        self.assertEqual(AttemptLeaseStatus.REVOKED, authority.state)
+        self.assertEqual(4, authority.generation)
+        self.assertEqual("continue", reloaded.focus.next_action)
+        receipt = reloaded.transition_receipts[-1]
+        self.assertEqual(TransitionHistoryActionKind.ACCEPT_REVIEW_AND_CONTINUE, receipt.action_kind)
+        self.assertEqual("transition-receipt/v1", receipt.outcome_schema)
+        self.assertIn(b'"candidate":"protected-candidate"', receipt.outcome_payload)
+        self.assertIn(
+            b'"evidence":"The reviewed checkpoint is accepted; continue this attempt."', receipt.outcome_payload
+        )
+        self.assertNotIn(b'"checkpoint"', receipt.outcome_payload)
 
     def test_retained_attempt_closure_fences_authority_and_reloads_from_fresh_store(self) -> None:
         state = complete_sqlite_state()

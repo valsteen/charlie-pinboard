@@ -18,6 +18,7 @@ from charlie_pinboard.domain.identifiers import (
 from charlie_pinboard.domain.work_models import (
     AcceptCheckpointInput,
     AcceptProposalInput,
+    AcceptReviewAndContinueInput,
     ActivateInput,
     AttemptAuthority,
     AttemptState,
@@ -40,6 +41,7 @@ from charlie_pinboard.domain.work_models import (
 
 class ActionKind(Enum):
     ACCEPT_CHECKPOINT = "accept-checkpoint"
+    ACCEPT_REVIEW_AND_CONTINUE = "accept-review-and-continue"
     ACCEPT_PROPOSAL = "accept-proposal"
     ACTIVATE = "activate"
     BLOCK = "block"
@@ -111,6 +113,12 @@ class ActionCapability:
 class AcceptCheckpointCommand:
     capability: ActionCapability
     value: AcceptCheckpointInput
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptReviewAndContinueCommand:
+    capability: ActionCapability
+    value: AcceptReviewAndContinueInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +225,7 @@ class TransferCoordinatorCommand:
 
 type TransitionCommand = (
     AcceptCheckpointCommand
+    | AcceptReviewAndContinueCommand
     | ActivateCommand
     | PauseCommand
     | BlockCommand
@@ -296,6 +305,14 @@ class ReviewSubmissionChange:
 class ReviewReturnChange:
     item: ItemId
     attempt: AttemptId
+    authority_change: AttemptAuthorityChange
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewAcceptanceChange:
+    item: ItemId
+    attempt: AttemptId
+    candidate: CandidateId
     authority_change: AttemptAuthorityChange
 
 
@@ -409,6 +426,7 @@ type DecisionChange = (
     | ResumeAttemptChange
     | ReviewSubmissionChange
     | ReviewReturnChange
+    | ReviewAcceptanceChange
     | CompletionChange
     | ItemClosureChange
     | AttemptClosureChange
