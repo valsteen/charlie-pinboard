@@ -75,7 +75,9 @@ from charlie_pinboard.domain.decision_models import (
     Action,
     ActionKind,
     AuthorizationKind,
+    BlockerActionDescriptor,
     Role,
+    blocker_action_descriptor,
 )
 from charlie_pinboard.domain.decisions import bind_transition
 from charlie_pinboard.domain.errors import DecisionFailure
@@ -157,6 +159,7 @@ from charlie_pinboard.interfaces.cli_commands import (
 from charlie_pinboard.interfaces.cli_models import (
     ActionsView,
     ActionView,
+    BlockerActionDescriptorView,
     BriefPublicationView,
     BriefSourceBatchView,
     BriefSourcePlanView,
@@ -193,7 +196,7 @@ from charlie_pinboard.interfaces.errors import (
 )
 from charlie_pinboard.interfaces.proposals import parse_proposal
 from charlie_pinboard.interfaces.transition_input import (
-    TRANSITION_ACTION_KINDS,
+    INPUT_CONTRACT_ACTION_KINDS,
     encoded_transition_input_schema,
     parse_transition_input,
 )
@@ -240,8 +243,26 @@ def _overview_view(overview: WorkOverview) -> OverviewView:
     )
 
 
-def _input_contract_view(kind: str) -> InputContractView:
-    return InputContractView(kind, msgspec.Raw(encoded_transition_input_schema(kind)))
+def _blocker_descriptor_view(descriptor: BlockerActionDescriptor | None) -> BlockerActionDescriptorView | None:
+    if descriptor is None:
+        return None
+    return BlockerActionDescriptorView(
+        descriptor.effect.value,
+        descriptor.required_role.value,
+        descriptor.subject_kind.value,
+        descriptor.lifecycle_precondition.value,
+    )
+
+
+def _input_contract_view(kind: ActionKind) -> InputContractView:
+    descriptor = blocker_action_descriptor(kind)
+    try:
+        payload_schema = msgspec.Raw(encoded_transition_input_schema(kind.value))
+    except TransitionInputError as error:
+        if descriptor is None or error.code != TransitionInputErrorCode.ACTION_NOT_MUTATING:
+            raise
+        payload_schema = None
+    return InputContractView(kind.value, _blocker_descriptor_view(descriptor), payload_schema)
 
 
 def _brief_source_segment_view(segment: BriefSourceSegment) -> BriefSourceSegmentView:
@@ -293,7 +314,7 @@ def _action_view(action: Action, *, include_input_contract: bool = False) -> Act
     input_contract: InputContractView | None = None
     if include_input_contract:
         try:
-            input_contract = _input_contract_view(action.kind.value)
+            input_contract = _input_contract_view(action.kind)
         except TransitionInputError as error:
             if error.code != TransitionInputErrorCode.ACTION_NOT_MUTATING:
                 raise
@@ -307,6 +328,7 @@ def _action_view(action: Action, *, include_input_contract: bool = False) -> Act
         subject_revision=action.subject_revision or "",
         authorization=action.authorization.value,
         lease_id=action.lease_id or "",
+        semantics=_blocker_descriptor_view(blocker_action_descriptor(action.kind)),
         input_contract=input_contract,
     )
 
@@ -680,9 +702,9 @@ def _add_inspection_parsers(commands: argparse._SubParsersAction[argparse.Argume
     actions.add_argument("--json", action="store_true")
     _select_decoder(actions, _decode_actions)
     input_contract = commands.add_parser(
-        "input-contract", help="Show the canonical JSON payload schema for one transition action kind."
+        "input-contract", help="Show the canonical payload and semantics for one action kind."
     )
-    input_contract.add_argument("action_kind", choices=TRANSITION_ACTION_KINDS)
+    input_contract.add_argument("action_kind", choices=INPUT_CONTRACT_ACTION_KINDS)
     input_contract.add_argument("--json", action="store_true")
     _select(input_contract, InputContractCommand)
     brief_sources = commands.add_parser(
@@ -1094,12 +1116,21 @@ def _actions(roots: ResolvedRoots, command: ActionsCommand | LeasedActionsComman
 
 
 def _input_contract(_roots: ResolvedRoots, command: InputContractCommand) -> int:
-    value = _input_contract_view(command.action_kind.value)
+    value = _input_contract_view(command.action_kind)
     if command.json:
         _write_json(value)
     else:
         print(f"OK INPUT_CONTRACT action_kind={value.action_kind}")
-        sys.stdout.write(msgspec.json.format(bytes(value.payload_schema), indent=2).decode() + "\n")
+        if value.semantics is not None:
+            print(
+                f"effect={value.semantics.effect} required_role={value.semantics.required_role} "
+                f"subject_kind={value.semantics.subject_kind} "
+                f"lifecycle_precondition={value.semantics.lifecycle_precondition}"
+            )
+        if value.payload_schema is None:
+            print("payload_schema=none")
+        else:
+            sys.stdout.write(msgspec.json.format(bytes(value.payload_schema), indent=2).decode() + "\n")
     return 0
 
 

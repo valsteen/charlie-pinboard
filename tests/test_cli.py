@@ -16,7 +16,7 @@ from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
 from charlie_pinboard.application.artifacts import NewArtifact
 from charlie_pinboard.application.stored_state import ArtifactKind, StoredWorkItemState, StoredWorkState
-from charlie_pinboard.domain.identifiers import AttemptId
+from charlie_pinboard.domain.identifiers import AttemptId, ItemId
 from charlie_pinboard.domain.work_models import AttemptState, Timing
 from charlie_pinboard.interfaces.cli import build_parser, main
 from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
@@ -435,6 +435,258 @@ class CliTest(unittest.TestCase):
                 result, stdout, stderr = self.run_cli(*common, *command)
                 self.assertEqual(0, result, stderr)
                 self.assertTrue(stdout)
+
+    def test_blocker_actions_and_input_contracts_are_unambiguous(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        assert state.authority.coordination is not None
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                coordination=replace(state.authority.coordination, expires_at=now + timedelta(minutes=5)),
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, _store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        coordinator_actions = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "coordinator",
+                "--lease-id",
+                "coordination-a",
+                "--generation",
+                "9",
+            )["actions"]
+        )
+        worker_actions = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "worker",
+                "--lease-id",
+                "attempt-lease-a",
+                "--generation",
+                "3",
+            )["actions"]
+        )
+        expected: dict[str, tuple[str, str, JsonObject]] = {
+            "report-blocker": (
+                "report-blocker:work-a-1",
+                "Prepare blocker report for work-a",
+                {
+                    "effect": "advisory",
+                    "required_role": "worker",
+                    "subject_kind": "attempt",
+                    "lifecycle_precondition": "active-attempt",
+                },
+            ),
+            "block": (
+                "block:work-a-1",
+                "Block active attempt for work-a",
+                {
+                    "effect": "mutating",
+                    "required_role": "coordinator",
+                    "subject_kind": "attempt",
+                    "lifecycle_precondition": "active-attempt",
+                },
+            ),
+            "block-item": (
+                "block-item:intake-work",
+                "Block unstarted work item intake-work",
+                {
+                    "effect": "mutating",
+                    "required_role": "coordinator",
+                    "subject_kind": "item",
+                    "lifecycle_precondition": "intake-item",
+                },
+            ),
+        }
+        all_actions = tuple(self.json_object(action) for action in (*coordinator_actions, *worker_actions))
+        selected = {
+            kind: next(action for action in all_actions if action["action_id"] == action_id)
+            for kind, (action_id, _label, _semantics) in expected.items()
+        }
+        for kind, (action_id, label, semantics) in expected.items():
+            with self.subTest(kind=kind):
+                action = selected[kind]
+                self.assertEqual(action_id, action["action_id"])
+                self.assertEqual(label, action["label"])
+                self.assertEqual(semantics, self.json_object(action["semantics"]))
+                contract = self.run_json_cli(*common, "input-contract", kind)
+                self.assertEqual(kind, contract["action_kind"])
+                self.assertEqual(semantics, self.json_object(contract["semantics"]))
+                if kind == "report-blocker":
+                    self.assertIsNone(contract["payload_schema"])
+                else:
+                    self.assertIsInstance(contract["payload_schema"], dict)
+
+    def test_active_attempt_blocker_flow_persists_dependencies_and_resumes_through_commands(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        lifecycle = replace(
+            state.lifecycle,
+            dependencies=tuple(value for value in state.lifecycle.dependencies if value.item_id != ItemId("work-a")),
+        )
+        state = replace(
+            state,
+            lifecycle=lifecycle,
+            authority=replace(
+                state.authority,
+                coordination=None,
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, _store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        report = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "worker",
+                    "--lease-id",
+                    "attempt-lease-a",
+                    "--generation",
+                    "3",
+                    "--action-id",
+                    "report-blocker:work-a-1",
+                )["actions"]
+            )[0]
+        )
+        self.assertEqual("advisory", self.json_object(report["semantics"])["effect"])
+        released = self.run_json_cli(
+            *common,
+            "attempt",
+            "release",
+            "--attempt-id",
+            "work-a-1",
+            "--lease-id",
+            "attempt-lease-a",
+            "--generation",
+            "3",
+        )
+        self.assertEqual("released", released["status"])
+
+        block = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "coordinator",
+                    "--action-id",
+                    "block:work-a-1",
+                )["actions"]
+            )[0]
+        )
+        self.assertEqual("active-attempt", self.json_object(block["semantics"])["lifecycle_precondition"])
+        block_payload = project / "block.json"
+        block_payload.write_text(
+            '{"reason":"Waiting for the intake prerequisite.","depends_on":["intake-work"]}\n',
+            encoding="utf-8",
+        )
+        self.run_json_cli(
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--action-id",
+            "block:work-a-1",
+            "--payload",
+            str(block_payload),
+        )
+
+        blocked = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        blocked_item = next(value for value in blocked.lifecycle.work_items if value.item_id == ItemId("work-a"))
+        blocked_attempt = next(
+            value for value in blocked.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
+        )
+        self.assertEqual(StoredWorkItemState.BLOCKED, blocked_item.state)
+        self.assertEqual(AttemptState.BLOCKED, blocked_attempt.state)
+        self.assertEqual(
+            ("intake-work",),
+            tuple(
+                str(value.dependency_id)
+                for value in blocked.lifecycle.dependencies
+                if value.item_id == ItemId("work-a")
+            ),
+        )
+
+        self.run_json_cli(
+            *common,
+            "close",
+            "intake-work",
+            "--outcome",
+            "done",
+            "--reason",
+            "The prerequisite is satisfied.",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+        )
+        resume = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "coordinator",
+                    "--action-id",
+                    "resume:work-a",
+                )["actions"]
+            )[0]
+        )
+        self.assertEqual("resume:work-a", resume["action_id"])
+        resume_payload = project / "resume.json"
+        resume_payload.write_text("{}\n", encoding="utf-8")
+        self.run_json_cli(
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--action-id",
+            "resume:work-a",
+            "--payload",
+            str(resume_payload),
+        )
+        resumed = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        resumed_item = next(value for value in resumed.lifecycle.work_items if value.item_id == ItemId("work-a"))
+        resumed_attempt = next(
+            value for value in resumed.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
+        )
+        self.assertEqual(StoredWorkItemState.ACTIVE, resumed_item.state)
+        self.assertEqual(AttemptState.ACTIVE, resumed_attempt.state)
+
+    def test_blocker_skill_guidance_names_advisory_and_mutating_responsibilities(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        coordinator = (repository / "skills" / "pinboard" / "SKILL.md").read_text(encoding="utf-8")
+        worker = (repository / "skills" / "pinboard-deliver" / "SKILL.md").read_text(encoding="utf-8")
+
+        for text in (coordinator, worker):
+            self.assertIn("report-blocker:<attempt>", text)
+            self.assertIn("block:<attempt>", text)
+            self.assertIn("block-item:<item>", text)
+            self.assertIn("pause:<attempt>", text)
+        self.assertIn("advisory and has no mutation payload", worker)
+        self.assertIn("never use the intake-only `block-item:<item>` action for active work", coordinator)
 
     def test_invalid_current_inputs_map_to_stable_cli_failures(self) -> None:
         project, work, _store = self.initialized_state(complete_sqlite_state())

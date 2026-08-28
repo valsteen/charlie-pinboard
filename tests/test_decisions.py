@@ -8,10 +8,12 @@ from charlie_pinboard.domain.decision_models import (
     ActionKind,
     ActorAuthority,
     AuthorizationKind,
+    BlockAttemptChange,
     CompletionChange,
     Decision,
     Role,
     TransitionCommand,
+    blocker_action_descriptor,
 )
 from charlie_pinboard.domain.decisions import available_actions as available_actions_outcome
 from charlie_pinboard.domain.decisions import bind_transition as bind_transition_outcome
@@ -28,12 +30,14 @@ from charlie_pinboard.domain.identifiers import (
     AttemptId,
     CandidateId,
     ItemId,
+    LeaseId,
 )
 from charlie_pinboard.domain.ledger import LedgerSnapshot
 from charlie_pinboard.domain.work_models import (
     AcceptedProposalState,
     ActivateInput,
     ArtifactRole,
+    AttemptAuthority,
     AttemptState,
     BlockInput,
     CloseInput,
@@ -160,6 +164,92 @@ def native_scope(*, artifacts: tuple[ScopeArtifact, ...] | None = None) -> ItemS
 
 
 class LifecycleDecisionTest(unittest.TestCase):
+    def test_blocker_actions_expose_distinct_roles_subjects_preconditions_and_effects(self) -> None:
+        active = item("target", WorkState.ACTIVE, attempt="target-1")
+        intake = item("unstarted", WorkState.INTAKE)
+        prerequisite = item("prerequisite", WorkState.READY)
+        snapshot = LedgerSnapshot(
+            "revision",
+            1,
+            (active, intake, prerequisite),
+            attempts=(AttemptRecord("target-1", "target", AttemptState.ACTIVE),),
+            attempt_authorities=(
+                AttemptAuthority(AttemptId("target-1"), ItemId("target"), LeaseId("worker-lease"), 4),
+            ),
+        )
+        coordinator = available_actions(
+            snapshot,
+            ActorAuthority(Role.COORDINATOR, AuthorizationKind.COORDINATOR, 1),
+        )
+        worker = available_actions(
+            snapshot,
+            ActorAuthority(
+                Role.WORKER,
+                AuthorizationKind.ATTEMPT,
+                4,
+                LeaseId("worker-lease"),
+                (AttemptId("target-1"),),
+                False,
+            ),
+        )
+        selected = {
+            action.kind: action
+            for action in (*coordinator, *worker)
+            if action.kind in {ActionKind.REPORT_BLOCKER, ActionKind.BLOCK, ActionKind.BLOCK_ITEM}
+        }
+
+        expected = {
+            ActionKind.REPORT_BLOCKER: (
+                "report-blocker:target-1",
+                "Prepare blocker report for target",
+                ("advisory", "worker", "attempt", "active-attempt"),
+            ),
+            ActionKind.BLOCK: (
+                "block:target-1",
+                "Block active attempt for target",
+                ("mutating", "coordinator", "attempt", "active-attempt"),
+            ),
+            ActionKind.BLOCK_ITEM: (
+                "block-item:unstarted",
+                "Block unstarted work item unstarted",
+                ("mutating", "coordinator", "item", "intake-item"),
+            ),
+        }
+        self.assertEqual(set(expected), set(selected))
+        for kind, (action_id, label, semantics) in expected.items():
+            with self.subTest(kind=kind):
+                action = selected[kind]
+                descriptor = blocker_action_descriptor(action.kind)
+                self.assertIsNotNone(descriptor)
+                assert descriptor is not None
+                self.assertEqual(action_id, action.action_id)
+                self.assertEqual(label, action.label)
+                self.assertEqual(
+                    semantics,
+                    (
+                        descriptor.effect.value,
+                        descriptor.required_role.value,
+                        descriptor.subject_kind.value,
+                        descriptor.lifecycle_precondition.value,
+                    ),
+                )
+
+        rejected = bind_transition_outcome(selected[ActionKind.REPORT_BLOCKER], EmptyInput())
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ACTION_NOT_MUTATING, rejected.code)
+
+        blocked = decide(
+            snapshot,
+            bind_transition(
+                selected[ActionKind.BLOCK],
+                BlockInput("Waiting for prerequisite.", (ItemId("prerequisite"),)),
+            ),
+            NOW,
+        )
+        self.assertIsInstance(blocked.change, BlockAttemptChange)
+        assert isinstance(blocked.change, BlockAttemptChange)
+        self.assertEqual((ItemId("prerequisite"),), blocked.change.dependencies_after)
+
     def test_missing_attempt_is_a_returned_failure(self) -> None:
         snapshot = LedgerSnapshot("revision", 1, ())
         command = bind_transition(action(ActionKind.PAUSE, "missing-attempt"), ReasonInput("pause"))

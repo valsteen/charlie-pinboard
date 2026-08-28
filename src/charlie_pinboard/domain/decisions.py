@@ -17,7 +17,9 @@ from charlie_pinboard.domain.decision_models import (
     AttemptClosureChange,
     AttemptStateChange,
     AuthorizationKind,
+    BlockAttemptChange,
     BlockCommand,
+    BlockItemChange,
     BlockItemCommand,
     CheckpointAcceptanceChange,
     CloseCommand,
@@ -302,7 +304,7 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionFactory) -> tuple[A
                 factory.make(
                     ActionKind.REPORT_BLOCKER,
                     attempt,
-                    f"Report a blocker for {item.item}",
+                    f"Prepare blocker report for {item.item}",
                     revision,
                     command_authority,
                 ),
@@ -335,7 +337,7 @@ def _active_coordinator_actions(snapshot: LedgerSnapshot, factory: ActionFactory
             result.extend(
                 (
                     factory.make(ActionKind.PAUSE, item.attempt, f"Pause and preserve {item.item}"),
-                    factory.make(ActionKind.BLOCK, item.attempt, f"Block {item.item} on a named condition"),
+                    factory.make(ActionKind.BLOCK, item.attempt, f"Block active attempt for {item.item}"),
                 )
             )
         if not _scope_stale(snapshot, item):
@@ -363,7 +365,7 @@ def _item_actions(snapshot: LedgerSnapshot, item: WorkItem, factory: ActionFacto
     if item.state == WorkState.INTAKE:
         return [
             factory.make(ActionKind.MARK_READY, item.item, f"Mark {item.item} ready"),
-            factory.make(ActionKind.BLOCK_ITEM, item.item, f"Block {item.item} on a named condition"),
+            factory.make(ActionKind.BLOCK_ITEM, item.item, f"Block unstarted work item {item.item}"),
             factory.make(ActionKind.DEFER, item.item, f"Defer {item.item} with a reopen condition"),
             close,
         ]
@@ -510,36 +512,66 @@ def _activate(snapshot: LedgerSnapshot, command: ActivateCommand, now: datetime)
     )
 
 
+def _block_dependencies(
+    snapshot: LedgerSnapshot,
+    item: WorkItem,
+    value: BlockInput,
+) -> DecisionResult[tuple[ItemId, ...]]:
+    dependencies = tuple(dict.fromkeys((*item.depends_on, *value.depends_on)))
+    if (
+        len(value.depends_on) != len(set(value.depends_on))
+        or item.item in dependencies
+        or any(
+            snapshot.item(dependency) is None and dependency not in snapshot.history_items
+            for dependency in dependencies
+        )
+    ):
+        return DecisionFailure(
+            DecisionFailureCode.DEPENDENCY_NOT_SATISFIED,
+            "Blocker dependencies must be ordered unique existing identities other than their owner.",
+        )
+    return dependencies
+
+
 def _pause_or_block(
     snapshot: LedgerSnapshot,
     command: PauseCommand | BlockCommand,
     now: datetime,
 ) -> DecisionResult[Decision]:
     action = command_action(command)
-    match command:
-        case PauseCommand():
-            target = WorkState.PAUSED
-        case BlockCommand():
-            target = WorkState.BLOCKED
-        case _ as unreachable:
-            assert_never(unreachable)
     attempt_id = AttemptId(action.subject)
     item = snapshot.item_for_attempt(attempt_id)
     if item is None:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
     if item.state != WorkState.ACTIVE:
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "The named attempt is not active.")
+    match command:
+        case PauseCommand():
+            change: DecisionChange = AttemptStateChange(
+                item.item,
+                item.state,
+                WorkState.PAUSED,
+                attempt_id,
+                AttemptState.ACTIVE,
+                AttemptState.PAUSED,
+            )
+        case BlockCommand(value=value):
+            dependencies = _block_dependencies(snapshot, item, value)
+            if isinstance(dependencies, DecisionFailure):
+                return dependencies
+            change = BlockAttemptChange(
+                item.item,
+                item.state,
+                attempt_id,
+                AttemptState.ACTIVE,
+                dependencies,
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
     return _result(
         action,
         now,
-        AttemptStateChange(
-            item.item,
-            item.state,
-            target,
-            attempt_id,
-            AttemptState.ACTIVE,
-            AttemptState(target.value),
-        ),
+        change,
         item=item.item,
     )
 
@@ -788,9 +820,30 @@ def _accept_checkpoint(
     )
 
 
+def _block_item(snapshot: LedgerSnapshot, command: BlockItemCommand, now: datetime) -> DecisionResult[Decision]:
+    action = command_action(command)
+    item_id = ItemId(action.subject)
+    item = snapshot.item(item_id)
+    if item is None:
+        return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
+    if item.state != WorkState.INTAKE:
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot perform '{action.kind.value}' now."
+        )
+    dependencies = _block_dependencies(snapshot, item, command.value)
+    if isinstance(dependencies, DecisionFailure):
+        return dependencies
+    return _result(
+        action,
+        now,
+        BlockItemChange(item.item, item.state, dependencies),
+        item=item.item,
+    )
+
+
 def _simple_item_transition(
     snapshot: LedgerSnapshot,
-    command: ReopenCommand | MarkReadyCommand | BlockItemCommand,
+    command: ReopenCommand | MarkReadyCommand,
     now: datetime,
 ) -> DecisionResult[Decision]:
     action = command_action(command)
@@ -801,9 +854,6 @@ def _simple_item_transition(
         case MarkReadyCommand():
             expected = (WorkState.INTAKE,)
             target = WorkState.READY
-        case BlockItemCommand():
-            expected = (WorkState.INTAKE, WorkState.READY)
-            target = WorkState.BLOCKED
         case _ as unreachable:
             assert_never(unreachable)
     item_id = ItemId(action.subject)
@@ -1024,7 +1074,9 @@ def decide(  # noqa: C901, PLR0912
             return _submit_review(snapshot, command, now)
         case ReturnForCorrectionCommand():
             return _return_for_correction(snapshot, command, now)
-        case ReopenCommand() | MarkReadyCommand() | BlockItemCommand():
+        case BlockItemCommand():
+            return _block_item(snapshot, command, now)
+        case ReopenCommand() | MarkReadyCommand():
             return _simple_item_transition(snapshot, command, now)
         case DeferCommand():
             return _defer(snapshot, command, now)

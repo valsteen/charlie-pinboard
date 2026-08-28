@@ -41,6 +41,8 @@ from charlie_pinboard.domain.decision_models import (
     AttemptClosureChange,
     AttemptStateChange,
     AuthorizationKind,
+    BlockAttemptChange,
+    BlockItemChange,
     CheckpointAcceptanceChange,
     CompletionChange,
     CoordinatorAuthorityChange,
@@ -116,6 +118,8 @@ def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
                     AcceptedProposalChange()
                     | ActivationChange()
                     | AttemptStateChange()
+                    | BlockAttemptChange()
+                    | BlockItemChange()
                     | AttemptClosureChange()
                     | CompletionChange()
                     | CoordinatorTransferChange()
@@ -409,6 +413,18 @@ def _item_state_after(
         queue_position=None if terminal else queue_position,
     )
     return replace(lifecycle, work_items=tuple(items))
+
+
+def _item_dependencies_after(
+    lifecycle: LifecycleRecords,
+    item: ItemId,
+    dependencies_after: tuple[ItemId, ...],
+) -> LifecycleRecords:
+    dependencies = (
+        *(value for value in lifecycle.dependencies if value.item_id != item),
+        *(ItemDependency(item, dependency, position) for position, dependency in enumerate(dependencies_after)),
+    )
+    return replace(lifecycle, dependencies=tuple(sorted(dependencies, key=_dependency_key)))
 
 
 def _accepted_proposal_after(
@@ -799,6 +815,19 @@ def _transition_after(  # noqa: C901, PLR0912, PLR0915
                 lifecycle, item, item_before, StoredWorkItemState(item_after.value), revision, now
             )
             lifecycle = _attempt_state_after(lifecycle, attempt, attempt_before, attempt_after, revision, now)
+        case BlockAttemptChange(
+            item=item,
+            item_before=item_before,
+            attempt=attempt,
+            attempt_before=attempt_before,
+            dependencies_after=dependencies_after,
+        ):
+            lifecycle = _item_state_after(lifecycle, item, item_before, StoredWorkItemState.BLOCKED, revision, now)
+            lifecycle = _attempt_state_after(lifecycle, attempt, attempt_before, AttemptState.BLOCKED, revision, now)
+            lifecycle = _item_dependencies_after(lifecycle, item, dependencies_after)
+        case BlockItemChange(item=item, item_before=item_before, dependencies_after=dependencies_after):
+            lifecycle = _item_state_after(lifecycle, item, item_before, StoredWorkItemState.BLOCKED, revision, now)
+            lifecycle = _item_dependencies_after(lifecycle, item, dependencies_after)
         case ResumeAttemptChange(
             item=item,
             item_before=item_before,

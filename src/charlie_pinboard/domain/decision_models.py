@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from typing import assert_never
 
 from charlie_pinboard.domain.identifiers import (
     ActionId,
@@ -74,6 +75,78 @@ class Role(Enum):
     COORDINATOR = "coordinator"
     WORKER = "worker"
     OBSERVER = "observer"
+
+
+class ActionEffect(Enum):
+    ADVISORY = "advisory"
+    MUTATING = "mutating"
+
+
+class ActionSubjectKind(Enum):
+    ATTEMPT = "attempt"
+    ITEM = "item"
+
+
+class ActionLifecyclePrecondition(Enum):
+    ACTIVE_ATTEMPT = "active-attempt"
+    INTAKE_ITEM = "intake-item"
+
+
+@dataclass(frozen=True, slots=True)
+class BlockerActionDescriptor:
+    effect: ActionEffect
+    required_role: Role
+    subject_kind: ActionSubjectKind
+    lifecycle_precondition: ActionLifecyclePrecondition
+
+
+def blocker_action_descriptor(kind: ActionKind) -> BlockerActionDescriptor | None:
+    match kind:
+        case ActionKind.REPORT_BLOCKER:
+            return BlockerActionDescriptor(
+                ActionEffect.ADVISORY,
+                Role.WORKER,
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
+            )
+        case ActionKind.BLOCK:
+            return BlockerActionDescriptor(
+                ActionEffect.MUTATING,
+                Role.COORDINATOR,
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
+            )
+        case ActionKind.BLOCK_ITEM:
+            return BlockerActionDescriptor(
+                ActionEffect.MUTATING,
+                Role.COORDINATOR,
+                ActionSubjectKind.ITEM,
+                ActionLifecyclePrecondition.INTAKE_ITEM,
+            )
+        case (
+            ActionKind.ACCEPT_CHECKPOINT
+            | ActionKind.ACCEPT_PROPOSAL
+            | ActionKind.ACTIVATE
+            | ActionKind.CLOSE
+            | ActionKind.COMPLETE
+            | ActionKind.CONTINUE
+            | ActionKind.DEFER
+            | ActionKind.DISPATCH
+            | ActionKind.INSPECT
+            | ActionKind.MARK_READY
+            | ActionKind.MERGE_PROPOSAL
+            | ActionKind.PAUSE
+            | ActionKind.REJECT_PROPOSAL
+            | ActionKind.REOPEN
+            | ActionKind.RESUME
+            | ActionKind.RETURN_FOR_CORRECTION
+            | ActionKind.RETURN_PROPOSAL
+            | ActionKind.SUBMIT_REVIEW
+            | ActionKind.TRANSFER_COORDINATOR
+        ):
+            return None
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 class ReasonedProposalDispositionKind(Enum):
@@ -276,6 +349,22 @@ class AttemptStateChange:
 
 
 @dataclass(frozen=True, slots=True)
+class BlockAttemptChange:
+    item: ItemId
+    item_before: WorkState
+    attempt: AttemptId
+    attempt_before: AttemptState
+    dependencies_after: tuple[ItemId, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BlockItemChange:
+    item: ItemId
+    item_before: WorkState
+    dependencies_after: tuple[ItemId, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ResumeAttemptChange:
     item: ItemId
     item_before: WorkState
@@ -406,6 +495,8 @@ type DecisionChange = (
     ItemStateChange
     | ActivationChange
     | AttemptStateChange
+    | BlockAttemptChange
+    | BlockItemChange
     | ResumeAttemptChange
     | ReviewSubmissionChange
     | ReviewReturnChange

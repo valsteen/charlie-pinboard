@@ -50,7 +50,8 @@ If a discovered problem blocks the attempt:
 2. preserve the current commit/worktree and verification;
 3. write `blocker.md` in the active attempt directory with the observation, affected criterion, completed work, and safest next action;
 4. use `$pinboard-intake` to propose a prerequisite when explicitly requested;
-5. report the blocker so any chat can borrow coordination and choose the available block or pause transition.
+5. use the worker-visible `report-blocker:<attempt>` affordance to report that preserved evidence; it is advisory and has no mutation payload;
+6. leave shared lifecycle mutation to coordination, which must select the exact `block:<attempt>` action for an active attempt with named dependencies or `pause:<attempt>` when no dependency condition is recorded; `block-item:<item>` is only for unstarted intake work.
 
 ## Implement and verify
 

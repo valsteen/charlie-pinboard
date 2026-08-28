@@ -66,6 +66,7 @@ TRANSITION_ACTION_KINDS: Final = (
     "submit-review",
     "transfer-coordinator",
 )
+INPUT_CONTRACT_ACTION_KINDS: Final = (*TRANSITION_ACTION_KINDS, "report-blocker")
 
 
 def _input_model(kind: str) -> InputModel:  # noqa: C901, PLR0912
