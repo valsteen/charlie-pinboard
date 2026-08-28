@@ -45,6 +45,8 @@ Every checkpoint has a stable kebab-case `checkpoint_id`, separate human `title`
 
 When a checkpoint owns structural cleanup, its typed scope and acceptance criteria must name the readable typed consolidation, the direct orphan families to recurse through, and the evidence from one fresh fixed-point pass. Reference the repository's recursive-cleanup procedure for the method instead of duplicating it here; the generated Markdown projection remains non-authoritative.
 
+When that cleanup collapses a closed classification, the contract must identify every duplicated encoding, the proposed canonical owner, and why each surviving representation is a label-only vocabulary, data-bearing variant, context-dependent decision, or independently required boundary shape. Require exhaustive conversion at retained wire, storage, or presentation boundaries. Acceptance evidence must report core decision points, explicit boundary conversion, import volume, and source-line change separately, then name the fixed-point pass and the product distinctions deliberately retained. Reject a brief that assumes every enum should become a union or treats fewer lines or imports as proof of a simpler decision model.
+
 Architecture impact is tagged by `kind`:
 
 - `none` records a reason ownership and dependency direction are unchanged;

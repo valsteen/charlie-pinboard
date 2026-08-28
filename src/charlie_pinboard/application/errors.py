@@ -27,7 +27,6 @@ class QueryError(RuntimeError):
 
 
 class DispatchErrorCode(Enum):
-    COORDINATION_LEASE_REQUIRED = "COORDINATION_LEASE_REQUIRED"
     DISPATCH_ACTION_INVALID = "DISPATCH_ACTION_INVALID"
     DISPATCH_ACTION_UNAVAILABLE = "DISPATCH_ACTION_UNAVAILABLE"
     DISPATCH_ATTEMPT_NOT_ACTIVE = "DISPATCH_ATTEMPT_NOT_ACTIVE"
@@ -53,10 +52,13 @@ class DispatchErrorCode(Enum):
     STALE_ACTION = "STALE_ACTION"
 
 
-class DispatchError(RuntimeError):
-    code: DispatchErrorCode
+type DispatchFailureCode = DispatchErrorCode | DecisionFailureCode
 
-    def __init__(self, code: DispatchErrorCode, message: str) -> None:
+
+class DispatchError(RuntimeError):
+    code: DispatchFailureCode
+
+    def __init__(self, code: DispatchFailureCode, message: str) -> None:
         self.code = code
         super().__init__(f"{code.value}: {message}")
 

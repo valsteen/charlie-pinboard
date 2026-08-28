@@ -31,11 +31,6 @@ class ItemStatus(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     attempts: tuple[ItemStatusAttempt, ...]
 
 
-class ParallelOutcome(Enum):
-    LAUNCHABLE = "launchable"
-    EXCLUDED = "excluded"
-
-
 class ParallelSelection(Enum):
     ALL_SAFE = "all-safe"
     SELECTED = "selected"
@@ -89,13 +84,22 @@ class ParallelReason(msgspec.Struct, frozen=True):
     message: str
 
 
-class ParallelItem(msgspec.Struct, frozen=True):
+class LaunchableParallelItem(msgspec.Struct, frozen=True):
     item_id: str
     label: str
     state: work_models.WorkState
     attempt_id: str | None
-    outcome: ParallelOutcome
-    reasons: tuple[ParallelReason, ...] = ()
+
+
+class ExcludedParallelItem(msgspec.Struct, frozen=True):
+    item_id: str
+    label: str
+    state: work_models.WorkState
+    attempt_id: str | None
+    reasons: Annotated[tuple[ParallelReason, ...], msgspec.Meta(min_length=1)]
+
+
+type ParallelItem = LaunchableParallelItem | ExcludedParallelItem
 
 
 class ParallelPreview(msgspec.Struct, frozen=True):
@@ -103,5 +107,4 @@ class ParallelPreview(msgspec.Struct, frozen=True):
     revision: str
     selection: ParallelSelection
     safe: bool
-    launchable: tuple[ParallelItem, ...]
-    excluded: tuple[ParallelItem, ...]
+    items: tuple[ParallelItem, ...]

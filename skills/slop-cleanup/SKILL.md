@@ -129,6 +129,16 @@ For structural boilerplate, use one repeatable pass:
 4. Trace same-shaped values through every call and adapter. Fold pass-through layers that add no validation, policy, protocol, or independently reused operation into the nearest coherent owner.
 5. Re-run these inventories after each fold. Stop only when a fresh pass finds no repeated traversal, nullable multi-operation record, hand-decoded structural mapping, or orphaned same-shaped call trail in the accepted scope.
 
+For a duplicated closed classification, derive the surviving representation instead of mechanically replacing every enum with a union:
+
+1. Write down each place that encodes the classification: discriminator, variant, optional payload, collection membership, branch, persisted value, wire shape, or presentation projection.
+2. Choose one canonical owner nearest the behavior. Keep a label-only vocabulary when alternatives have the same data and meaning, use data-bearing closed variants when alternatives require different data, and leave context-dependent legality in the decision that owns the surrounding state.
+3. Preserve an independently owned external or persisted shape with one explicit exhaustive boundary conversion. Do not count that conversion as eliminated core complexity.
+4. Trace producers and consumers recursively after the collapse. Fold newly redundant mappings and collections, but retain distinctions that different consumers, protocols, retry policies, or lifecycle decisions use independently.
+5. Compare actual decision points before and after. Report explicit boundary conversion, import volume, and source-line change separately so a smaller file or import list cannot stand in for a simpler decision model.
+
+Stop collapsing when the remaining alternatives are a legitimate vocabulary, the distinction has an independent consumer, or the boundary conversion would cost more decision structure than the invalid combinations it prevents.
+
 ## Handle persisted-state removal as a bridge burn
 
 Before deleting a stored family or compatibility path, enumerate every known supported store and external consumer. When migration is authorized, prefer a temporary isolated migrator, recoverable backups, pre/post semantic equivalence, atomic replacement, verification through the installed product, and deletion of the migrator and obsolete compatibility code in the same cleanup outcome. Do not leave permanent archaeology for a predecessor that has no supported users.
