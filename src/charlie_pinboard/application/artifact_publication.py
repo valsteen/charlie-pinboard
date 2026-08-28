@@ -44,17 +44,15 @@ def validate_transition_work_brief(
     """Validate activation or resume brief identity against the locked SQLite snapshot."""
 
     match command:
-        case decision_models.ActivateCommand(capability=capability, value=value):
+        case decision_models.ActivateCommand(action=action, value=value):
             artifact_ref_id = value.brief_artifact_ref_id
             attempt_id = str(value.attempt)
-            item_id = str(capability.subject)
+            item_id = str(action.capability.subject)
             branch = value.branch
             base_revision = value.base_revision
-        case decision_models.ResumeCommand(capability=capability, value=value) if (
-            value.brief_artifact_ref_id is not None
-        ):
+        case decision_models.ResumeCommand(action=action, value=value) if value.brief_artifact_ref_id is not None:
             artifact_ref_id = value.brief_artifact_ref_id
-            item_id = str(capability.subject)
+            item_id = str(action.capability.subject)
             attempt = next(
                 (candidate for candidate in state.lifecycle.attempts if str(candidate.item_id) == item_id), None
             )

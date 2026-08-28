@@ -14,26 +14,30 @@ from charlie_pinboard.application.errors import ActionQueryError, DispatchError,
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.stored_state import ArtifactKind
 from charlie_pinboard.domain import decision_models, work_models
-from charlie_pinboard.domain.identifiers import AttemptId, ItemId, LeaseId
+from charlie_pinboard.domain.identifiers import AttemptId, ItemId
 
 
-def _current_action(store: WorkStore, supplied: decision_models.Action) -> decision_models.Action:
+def _current_action(store: WorkStore, supplied: decision_models.DispatchAction) -> decision_models.DispatchAction:
+    capability = supplied.capability
     try:
         actions = discover_actions(
             store,
             decision_models.Role.COORDINATOR,
-            lease_id=supplied.lease_id,
-            generation=supplied.coordinator_generation,
+            lease_id=capability.lease_id,
+            generation=capability.coordinator_generation,
         )
     except ActionQueryError as error:
         raise DispatchError(DispatchErrorCode(error.code.value), str(error).partition(": ")[2]) from error
-    current = next((value for value in actions if value.action_id == supplied.action_id), None)
-    if current is None or supplied.kind != decision_models.ActionKind.DISPATCH:
+    current = next(
+        (value for value in actions if decision_models.action_id(value) == decision_models.action_id(supplied)), None
+    )
+    if not isinstance(current, decision_models.DispatchAction):
         raise DispatchError(
-            DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE, f"Action '{supplied.action_id}' is not available."
+            DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE,
+            f"Action '{decision_models.action_id(supplied)}' is not available.",
         )
     if current != supplied:
-        if current.expected_revision != supplied.expected_revision:
+        if current.capability.expected_revision != capability.expected_revision:
             raise DispatchError(
                 DispatchErrorCode.STALE_ACTION,
                 "The work ledger changed after this dispatch action was selected.",
@@ -134,9 +138,15 @@ def prepare_dispatch(
     brief_review: bytes | None = None,
     review_id: str | None = None,
 ) -> str:
+    if not isinstance(action, decision_models.DispatchAction):
+        raise DispatchError(
+            DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE,
+            f"Action '{decision_models.action_id(action)}' is not a dispatch action.",
+        )
     _current_action(store, action)
+    capability = action.capability
     state = store.snapshot()
-    attempt_id = AttemptId(action.subject)
+    attempt_id = capability.subject
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
     if attempt is None or attempt.state != work_models.AttemptState.ACTIVE:
         raise DispatchError(DispatchErrorCode.DISPATCH_ATTEMPT_NOT_ACTIVE, f"Attempt '{attempt_id}' is not active.")
@@ -176,24 +186,29 @@ def prepare_dispatch(
         review_id=review_id,
         review_publisher=publisher,
     )
-    current = next(
+    rediscovered = next(
         (
             value
             for value in discover_actions(
                 store,
                 decision_models.Role.COORDINATOR,
-                lease_id=LeaseId(action.lease_id) if action.lease_id is not None else None,
-                generation=action.coordinator_generation,
+                lease_id=capability.lease_id,
+                generation=capability.coordinator_generation,
             )
-            if value.action_id == action.action_id
+            if decision_models.action_id(value) == decision_models.action_id(action)
         ),
         None,
     )
+    current = rediscovered if isinstance(rediscovered, decision_models.DispatchAction) else None
     current_matches = current == action
     if current is not None and publication_revisions:
         current_matches = (
-            current.expected_revision == str(publication_revisions[-1])
-            and replace(current, expected_revision=action.expected_revision) == action
+            current.capability.expected_revision == str(publication_revisions[-1])
+            and replace(
+                current,
+                capability=replace(current.capability, expected_revision=capability.expected_revision),
+            )
+            == action
         )
     if not current_matches:
         raise DispatchError(

@@ -45,6 +45,7 @@ from charlie_pinboard.domain.identifiers import (
 )
 from charlie_pinboard.domain.ledger import LedgerSnapshot
 from tests.domain_support import expect_success
+from tests.domain_support import replace as replace_dataclass
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
 
@@ -704,7 +705,14 @@ class SQLiteStoreTest(unittest.TestCase):
 
         stale_subject_decision = replace(
             decision,
-            action=replace(decision.action, expected_revision="", subject_revision="stale-subject"),
+            action=replace_dataclass(
+                decision.action,
+                capability=replace_dataclass(
+                    decision.action.capability,
+                    expected_revision="",
+                    subject_revision="stale-subject",
+                ),
+            ),
         )
         with self.assertRaises(StorageError) as stale_subject, store.write() as transaction:
             transaction.commit(replace(mutation, decision=stale_subject_decision))

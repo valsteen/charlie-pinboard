@@ -43,11 +43,7 @@ from charlie_pinboard.domain.authority_models import (
     RevokeCoordinationAuthority,
     TransferAttemptAuthority,
 )
-from charlie_pinboard.domain.decisions import (
-    command_action,
-    decide,
-    rediscover_action,
-)
+from charlie_pinboard.domain.decisions import decide, rediscover_action
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from charlie_pinboard.domain.identifiers import (
     ActionId,
@@ -312,17 +308,18 @@ def _actor_for(
     action: decision_models.Action,
     now: datetime,
 ) -> DecisionResult[decision_models.ActorAuthority]:
-    match action.authorization:
+    capability = action.capability
+    match capability.authorization:
         case decision_models.AuthorizationKind.COORDINATOR:
             return decision_models.ActorAuthority(
-                decision_models.Role.COORDINATOR, action.authorization, action.coordinator_generation
+                decision_models.Role.COORDINATOR, capability.authorization, capability.coordinator_generation
             )
         case decision_models.AuthorizationKind.COORDINATION:
             authority = snapshot.coordination_authority
             if (
                 authority is None
-                or action.lease_id != authority.lease_id
-                or action.coordinator_generation != authority.generation
+                or capability.lease_id != authority.lease_id
+                or capability.coordinator_generation != authority.generation
                 or authority.expires_at <= now
             ):
                 return DecisionFailure(
@@ -331,16 +328,16 @@ def _actor_for(
                 )
             return decision_models.ActorAuthority(
                 decision_models.Role.COORDINATOR,
-                action.authorization,
-                action.coordinator_generation,
-                action.lease_id,
+                capability.authorization,
+                capability.coordinator_generation,
+                capability.lease_id,
             )
         case decision_models.AuthorizationKind.ATTEMPT:
-            authority = action.command_authority
+            authority = capability.command_authority
             if (
                 authority is None
-                or action.lease_id != authority.lease_id
-                or action.coordinator_generation != authority.generation
+                or capability.lease_id != authority.lease_id
+                or capability.coordinator_generation != authority.generation
                 or authority.expires_at <= now
                 or authority not in snapshot.command_attempt_authorities
             ):
@@ -350,10 +347,10 @@ def _actor_for(
                 )
             return decision_models.ActorAuthority(
                 decision_models.Role.WORKER,
-                action.authorization,
-                action.coordinator_generation,
-                action.lease_id,
-                (AttemptId(action.subject),),
+                capability.authorization,
+                capability.coordinator_generation,
+                capability.lease_id,
+                (authority.attempt,),
                 False,
             )
         case decision_models.AuthorizationKind.OBSERVER:
@@ -374,16 +371,16 @@ def execute(
 ) -> DecisionResult[decision_models.TransitionReceipt]:
     """Rediscover, decide, and persist one lifecycle mutation under one write lock."""
 
-    supplied = command_action(command)
+    supplied = command.action
     with store.write() as transaction:
         before = transaction.snapshot()
         snapshot = project_decision_snapshot(before)
         actor = _actor_for(snapshot, supplied, now)
         if isinstance(actor, DecisionFailure):
             return actor
-        current = rediscover_action(snapshot, actor, supplied)
-        if isinstance(current, DecisionFailure):
-            return current
+        rediscovered = rediscover_action(snapshot, actor, supplied)
+        if isinstance(rediscovered, DecisionFailure):
+            return rediscovered
         if transition_guard is not None and (failure := transition_guard(before, command)) is not None:
             return failure
         decision = decide(snapshot, command, now)

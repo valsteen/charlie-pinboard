@@ -739,29 +739,41 @@ def _transition_focus_after(
     *,
     terminal: bool = False,
 ) -> StoredWorkState:
-    kind = mutation.decision.action.kind
+    action = mutation.decision.action
     if terminal:
         next_action = "select"
-    elif kind in {
-        decision_models.ActionKind.PAUSE,
-        decision_models.ActionKind.BLOCK,
-        decision_models.ActionKind.BLOCK_ITEM,
-    }:
-        next_action = "resume"
-    elif kind == decision_models.ActionKind.SUBMIT_REVIEW:
-        next_action = "review"
-    elif kind in {
-        decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE,
-        decision_models.ActionKind.RETURN_FOR_CORRECTION,
-        decision_models.ActionKind.RESUME,
-        decision_models.ActionKind.REOPEN,
-        decision_models.ActionKind.MARK_READY,
-    }:
-        next_action = "continue"
-    elif kind == decision_models.ActionKind.DEFER:
-        next_action = "reopen"
     else:
-        next_action = kind.value
+        match action:
+            case (
+                decision_models.PauseAction() | decision_models.BlockAttemptAction() | decision_models.BlockItemAction()
+            ):
+                next_action = "resume"
+            case decision_models.SubmitReviewAction():
+                next_action = "review"
+            case (
+                decision_models.AcceptReviewAndContinueAction()
+                | decision_models.ReturnForCorrectionAction()
+                | decision_models.ResumeAction()
+                | decision_models.ReopenAction()
+                | decision_models.MarkReadyAction()
+            ):
+                next_action = "continue"
+            case decision_models.DeferAction():
+                next_action = "reopen"
+            case (
+                decision_models.AcceptCheckpointAction()
+                | decision_models.AcceptProposalAction()
+                | decision_models.ActivateAction()
+                | decision_models.CompleteAction()
+                | decision_models.CloseAction()
+                | decision_models.MergeProposalAction()
+                | decision_models.RejectProposalAction()
+                | decision_models.ReturnProposalAction()
+                | decision_models.TransferCoordinatorAction()
+            ):
+                next_action = action.kind.value
+            case _ as unreachable:
+                assert_never(unreachable)
     return replace(
         common,
         focus=StoredFocus(
@@ -1066,20 +1078,21 @@ def project_transition_mutation(before: StoredWorkState, decision: decision_mode
     """Project one pure lifecycle decision into its exact flat accepted mutation."""
 
     action = decision.action
+    capability = action.capability
     actor_task_id: TaskId | None = None
     actor_host_id: HostId | None = None
-    if action.authorization == decision_models.AuthorizationKind.ATTEMPT and action.lease_id is not None:
+    if capability.authorization == decision_models.AuthorizationKind.ATTEMPT and capability.lease_id is not None:
         anchor = next(
             (
                 value
                 for value in before.authority.attempt_generations
-                if value.lease_id == action.lease_id and value.generation == action.coordinator_generation
+                if value.lease_id == capability.lease_id and value.generation == capability.coordinator_generation
             ),
             None,
         )
         if anchor is not None:
             actor_task_id, actor_host_id = anchor.task_id, anchor.host_id
-    elif action.authorization == decision_models.AuthorizationKind.COORDINATION:
+    elif capability.authorization == decision_models.AuthorizationKind.COORDINATION:
         coordination = before.authority.coordination
         if coordination is not None:
             actor_task_id, actor_host_id = coordination.task_id, coordination.host_id
@@ -1088,9 +1101,9 @@ def project_transition_mutation(before: StoredWorkState, decision: decision_mode
         HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
         before.lifecycle.project.revision + 1,
         TransitionHistoryActionKind(action.kind.value),
-        HistorySubjectId(action.subject),
+        HistorySubjectId(capability.subject),
         None,
-        TransitionHistoryAuthorizationKind(action.authorization.value),
+        TransitionHistoryAuthorizationKind(capability.authorization.value),
         actor_task_id,
         actor_host_id,
         "decision/v1",

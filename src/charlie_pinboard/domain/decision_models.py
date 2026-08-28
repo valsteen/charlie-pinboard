@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import assert_never
 
 from charlie_pinboard.domain import work_models
 from charlie_pinboard.domain.identifiers import (
@@ -14,35 +13,10 @@ from charlie_pinboard.domain.identifiers import (
     CheckpointId,
     ItemId,
     LeaseId,
+    LedgerId,
     ProposalId,
     SubjectId,
 )
-
-
-class ActionKind(Enum):
-    ACCEPT_CHECKPOINT = "accept-checkpoint"
-    ACCEPT_REVIEW_AND_CONTINUE = "accept-review-and-continue"
-    ACCEPT_PROPOSAL = "accept-proposal"
-    ACTIVATE = "activate"
-    BLOCK = "block"
-    BLOCK_ITEM = "block-item"
-    COMPLETE = "complete"
-    CLOSE = "close"
-    CONTINUE = "continue"
-    DEFER = "defer"
-    DISPATCH = "dispatch"
-    INSPECT = "inspect"
-    MARK_READY = "mark-ready"
-    MERGE_PROPOSAL = "merge-proposal"
-    PAUSE = "pause"
-    REJECT_PROPOSAL = "reject-proposal"
-    REOPEN = "reopen"
-    REPORT_BLOCKER = "report-blocker"
-    RESUME = "resume"
-    RETURN_FOR_CORRECTION = "return-for-correction"
-    RETURN_PROPOSAL = "return-proposal"
-    SUBMIT_REVIEW = "submit-review"
-    TRANSFER_COORDINATOR = "transfer-coordinator"
 
 
 class AuthorizationKind(Enum):
@@ -81,54 +55,67 @@ class BlockerActionDescriptor:
     lifecycle_precondition: ActionLifecyclePrecondition
 
 
-def blocker_action_descriptor(kind: ActionKind) -> BlockerActionDescriptor | None:
-    match kind:
-        case ActionKind.REPORT_BLOCKER:
-            return BlockerActionDescriptor(
-                ActionEffect.ADVISORY,
-                Role.WORKER,
-                ActionSubjectKind.ATTEMPT,
-                ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
-            )
-        case ActionKind.BLOCK:
-            return BlockerActionDescriptor(
-                ActionEffect.MUTATING,
-                Role.COORDINATOR,
-                ActionSubjectKind.ATTEMPT,
-                ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
-            )
-        case ActionKind.BLOCK_ITEM:
-            return BlockerActionDescriptor(
-                ActionEffect.MUTATING,
-                Role.COORDINATOR,
-                ActionSubjectKind.ITEM,
-                ActionLifecyclePrecondition.INTAKE_ITEM,
-            )
-        case (
-            ActionKind.ACCEPT_CHECKPOINT
-            | ActionKind.ACCEPT_PROPOSAL
-            | ActionKind.ACCEPT_REVIEW_AND_CONTINUE
-            | ActionKind.ACTIVATE
-            | ActionKind.CLOSE
-            | ActionKind.COMPLETE
-            | ActionKind.CONTINUE
-            | ActionKind.DEFER
-            | ActionKind.DISPATCH
-            | ActionKind.INSPECT
-            | ActionKind.MARK_READY
-            | ActionKind.MERGE_PROPOSAL
-            | ActionKind.PAUSE
-            | ActionKind.REJECT_PROPOSAL
-            | ActionKind.REOPEN
-            | ActionKind.RESUME
-            | ActionKind.RETURN_FOR_CORRECTION
-            | ActionKind.RETURN_PROPOSAL
-            | ActionKind.SUBMIT_REVIEW
-            | ActionKind.TRANSFER_COORDINATOR
-        ):
-            return None
-        case _ as unreachable:
-            assert_never(unreachable)
+class ActionKind(Enum):
+    value: str
+    blocker_descriptor: BlockerActionDescriptor | None
+
+    def __new__(
+        cls,
+        value: str,
+        blocker_descriptor: BlockerActionDescriptor | None = None,
+    ) -> ActionKind:
+        member = object.__new__(cls)
+        member._value_ = value
+        member.blocker_descriptor = blocker_descriptor
+        return member
+
+    ACCEPT_CHECKPOINT = ("accept-checkpoint",)
+    ACCEPT_REVIEW_AND_CONTINUE = ("accept-review-and-continue",)
+    ACCEPT_PROPOSAL = ("accept-proposal",)
+    ACTIVATE = ("activate",)
+    BLOCK = (
+        "block",
+        BlockerActionDescriptor(
+            ActionEffect.MUTATING,
+            Role.COORDINATOR,
+            ActionSubjectKind.ATTEMPT,
+            ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
+        ),
+    )
+    BLOCK_ITEM = (
+        "block-item",
+        BlockerActionDescriptor(
+            ActionEffect.MUTATING,
+            Role.COORDINATOR,
+            ActionSubjectKind.ITEM,
+            ActionLifecyclePrecondition.INTAKE_ITEM,
+        ),
+    )
+    COMPLETE = ("complete",)
+    CLOSE = ("close",)
+    CONTINUE = ("continue",)
+    DEFER = ("defer",)
+    DISPATCH = ("dispatch",)
+    INSPECT = ("inspect",)
+    MARK_READY = ("mark-ready",)
+    MERGE_PROPOSAL = ("merge-proposal",)
+    PAUSE = ("pause",)
+    REJECT_PROPOSAL = ("reject-proposal",)
+    REOPEN = ("reopen",)
+    REPORT_BLOCKER = (
+        "report-blocker",
+        BlockerActionDescriptor(
+            ActionEffect.ADVISORY,
+            Role.WORKER,
+            ActionSubjectKind.ATTEMPT,
+            ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
+        ),
+    )
+    RESUME = ("resume",)
+    RETURN_FOR_CORRECTION = ("return-for-correction",)
+    RETURN_PROPOSAL = ("return-proposal",)
+    SUBMIT_REVIEW = ("submit-review",)
+    TRANSFER_COORDINATOR = ("transfer-coordinator",)
 
 
 class ReasonedProposalDispositionKind(Enum):
@@ -137,10 +124,8 @@ class ReasonedProposalDispositionKind(Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class Action:
-    action_id: ActionId
-    kind: ActionKind
-    subject: SubjectId
+class ActionCapability[SubjectT: SubjectId]:
+    subject: SubjectT
     label: str
     expected_revision: str
     coordinator_generation: int
@@ -151,128 +136,283 @@ class Action:
 
 
 @dataclass(frozen=True, slots=True)
-class ActionCapability:
-    subject: SubjectId
-    label: str
-    expected_revision: str
-    coordinator_generation: int
-    subject_revision: str | None
-    authorization: AuthorizationKind
-    lease_id: LeaseId | None
-    command_authority: work_models.CommandAttemptAuthority | None
+class AcceptCheckpointAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_CHECKPOINT)
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptReviewAndContinueAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_REVIEW_AND_CONTINUE)
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptProposalAction:
+    capability: ActionCapability[ProposalId]
+    kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_PROPOSAL)
+
+
+@dataclass(frozen=True, slots=True)
+class ActivateAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.ACTIVATE)
+
+
+@dataclass(frozen=True, slots=True)
+class BlockAttemptAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.BLOCK)
+
+
+@dataclass(frozen=True, slots=True)
+class BlockItemAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.BLOCK_ITEM)
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.COMPLETE)
+
+
+@dataclass(frozen=True, slots=True)
+class CloseAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.CLOSE)
+
+
+@dataclass(frozen=True, slots=True)
+class ContinueAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.CONTINUE)
+
+
+@dataclass(frozen=True, slots=True)
+class DeferAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.DEFER)
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.DISPATCH)
+
+
+@dataclass(frozen=True, slots=True)
+class InspectAction:
+    capability: ActionCapability[LedgerId]
+    kind: ActionKind = field(init=False, default=ActionKind.INSPECT)
+
+
+@dataclass(frozen=True, slots=True)
+class MarkReadyAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.MARK_READY)
+
+
+@dataclass(frozen=True, slots=True)
+class MergeProposalAction:
+    capability: ActionCapability[ProposalId]
+    kind: ActionKind = field(init=False, default=ActionKind.MERGE_PROPOSAL)
+
+
+@dataclass(frozen=True, slots=True)
+class PauseAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.PAUSE)
+
+
+@dataclass(frozen=True, slots=True)
+class RejectProposalAction:
+    capability: ActionCapability[ProposalId]
+    kind: ActionKind = field(init=False, default=ActionKind.REJECT_PROPOSAL)
+
+
+@dataclass(frozen=True, slots=True)
+class ReopenAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.REOPEN)
+
+
+@dataclass(frozen=True, slots=True)
+class ReportBlockerAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.REPORT_BLOCKER)
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeAction:
+    capability: ActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.RESUME)
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnForCorrectionAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.RETURN_FOR_CORRECTION)
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnProposalAction:
+    capability: ActionCapability[ProposalId]
+    kind: ActionKind = field(init=False, default=ActionKind.RETURN_PROPOSAL)
+
+
+@dataclass(frozen=True, slots=True)
+class SubmitReviewAction:
+    capability: ActionCapability[AttemptId]
+    kind: ActionKind = field(init=False, default=ActionKind.SUBMIT_REVIEW)
+
+
+@dataclass(frozen=True, slots=True)
+class TransferCoordinatorAction:
+    capability: ActionCapability[LedgerId]
+    kind: ActionKind = field(init=False, default=ActionKind.TRANSFER_COORDINATOR)
+
+
+type AdvisoryAction = ContinueAction | DispatchAction | InspectAction | ReportBlockerAction
+type TransitionAction = (
+    AcceptCheckpointAction
+    | AcceptReviewAndContinueAction
+    | AcceptProposalAction
+    | ActivateAction
+    | BlockAttemptAction
+    | BlockItemAction
+    | CompleteAction
+    | CloseAction
+    | DeferAction
+    | MarkReadyAction
+    | MergeProposalAction
+    | PauseAction
+    | RejectProposalAction
+    | ReopenAction
+    | ResumeAction
+    | ReturnForCorrectionAction
+    | ReturnProposalAction
+    | SubmitReviewAction
+    | TransferCoordinatorAction
+)
+type Action = TransitionAction | AdvisoryAction
+
+
+def action_id(action: Action) -> ActionId:
+    return ActionId(f"{action.kind.value}:{action.capability.subject}")
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptCheckpointCommand:
-    capability: ActionCapability
+    action: AcceptCheckpointAction
     value: work_models.AcceptCheckpointInput
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptReviewAndContinueCommand:
-    capability: ActionCapability
+    action: AcceptReviewAndContinueAction
     value: work_models.AcceptReviewAndContinueInput
 
 
 @dataclass(frozen=True, slots=True)
 class ActivateCommand:
-    capability: ActionCapability
+    action: ActivateAction
     value: work_models.ActivateInput
 
 
 @dataclass(frozen=True, slots=True)
 class PauseCommand:
-    capability: ActionCapability
+    action: PauseAction
     value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class BlockCommand:
-    capability: ActionCapability
+    action: BlockAttemptAction
     value: work_models.BlockInput
 
 
 @dataclass(frozen=True, slots=True)
 class CompleteCommand:
-    capability: ActionCapability
+    action: CompleteAction
     value: work_models.EvidenceInput
 
 
 @dataclass(frozen=True, slots=True)
 class CloseCommand:
-    capability: ActionCapability
+    action: CloseAction
     value: work_models.CloseInput
 
 
 @dataclass(frozen=True, slots=True)
 class ResumeCommand:
-    capability: ActionCapability
+    action: ResumeAction
     value: work_models.ResumeInput
 
 
 @dataclass(frozen=True, slots=True)
 class SubmitReviewCommand:
-    capability: ActionCapability
+    action: SubmitReviewAction
     value: work_models.SubmitReviewInput
 
 
 @dataclass(frozen=True, slots=True)
 class ReturnForCorrectionCommand:
-    capability: ActionCapability
+    action: ReturnForCorrectionAction
     value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class ReopenCommand:
-    capability: ActionCapability
+    action: ReopenAction
     value: work_models.EvidenceInput
 
 
 @dataclass(frozen=True, slots=True)
 class MarkReadyCommand:
-    capability: ActionCapability
+    action: MarkReadyAction
     value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class BlockItemCommand:
-    capability: ActionCapability
+    action: BlockItemAction
     value: work_models.BlockInput
 
 
 @dataclass(frozen=True, slots=True)
 class DeferCommand:
-    capability: ActionCapability
+    action: DeferAction
     value: work_models.DeferInput
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptProposalCommand:
-    capability: ActionCapability
+    action: AcceptProposalAction
     value: work_models.AcceptProposalInput
 
 
 @dataclass(frozen=True, slots=True)
 class MergeProposalCommand:
-    capability: ActionCapability
+    action: MergeProposalAction
     value: work_models.MergeProposalInput
 
 
 @dataclass(frozen=True, slots=True)
 class ReturnProposalCommand:
-    capability: ActionCapability
+    action: ReturnProposalAction
     value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class RejectProposalCommand:
-    capability: ActionCapability
+    action: RejectProposalAction
     value: work_models.ReasonInput
 
 
 @dataclass(frozen=True, slots=True)
 class TransferCoordinatorCommand:
-    capability: ActionCapability
+    action: TransferCoordinatorAction
     value: work_models.TransferCoordinatorInput
 
 
@@ -511,6 +651,6 @@ type DecisionChange = (
 
 @dataclass(frozen=True, slots=True)
 class Decision:
-    action: Action
+    action: TransitionAction
     change: DecisionChange
     receipt: TransitionReceipt

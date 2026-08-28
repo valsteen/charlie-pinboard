@@ -57,12 +57,14 @@ def rediscover_action(
     return expect_success(rediscover_action_outcome(snapshot, actor, supplied))
 
 
-def _stored_action(snapshot: LedgerSnapshot) -> decision_models.Action:
-    return next(
+def _stored_action(snapshot: LedgerSnapshot) -> decision_models.SubmitReviewAction:
+    selected = next(
         candidate
         for candidate in available_actions(snapshot, _worker_actor())
         if candidate.kind == decision_models.ActionKind.SUBMIT_REVIEW
     )
+    assert isinstance(selected, decision_models.SubmitReviewAction)
+    return selected
 
 
 class TypedTransitionContractTest(unittest.TestCase):
@@ -96,7 +98,7 @@ class TypedTransitionContractTest(unittest.TestCase):
                 work_models.ArtifactRecord(ArtifactRefId(2), "design"),
             ),
         )
-        activation = action(decision_models.ActionKind.ACTIVATE, "ready-item")
+        activation = action(decision_models.ActivateAction, ItemId("ready-item"))
         rejected = bind_transition_outcome(activation, work_models.EmptyInput())
         self.assertIsInstance(rejected, DecisionFailure)
         self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
@@ -146,7 +148,7 @@ class TypedTransitionContractTest(unittest.TestCase):
         rejected_without_attempt = decision_outcome(
             without_attempt,
             bind_transition(
-                action(decision_models.ActionKind.RESUME, "ready-item"), work_models.ResumeInput(ArtifactRefId(1))
+                action(decision_models.ResumeAction, ItemId("ready-item")), work_models.ResumeInput(ArtifactRefId(1))
             ),
             SQLITE_NOW,
         )
@@ -182,7 +184,7 @@ class TypedTransitionContractTest(unittest.TestCase):
                 work_models.ArtifactRecord(ArtifactRefId(3), "design"),
             ),
         )
-        resume = action(decision_models.ActionKind.RESUME, "ready-item")
+        resume = action(decision_models.ResumeAction, ItemId("ready-item"))
 
         for value in (work_models.ResumeInput(ArtifactRefId(99)), work_models.ResumeInput(ArtifactRefId(3))):
             with self.subTest(value=value):
@@ -200,7 +202,7 @@ class ExactMutationAuthorityTest(unittest.TestCase):
     def test_action_preserves_every_attempt_authority_fact(self) -> None:
         snapshot = project_decision_snapshot(complete_sqlite_state())
         selected = _stored_action(snapshot)
-        authority = selected.command_authority
+        authority = selected.capability.command_authority
         self.assertIsNotNone(authority)
         assert authority is not None
         self.assertEqual(
@@ -222,9 +224,17 @@ class ExactMutationAuthorityTest(unittest.TestCase):
         state = complete_sqlite_state()
         snapshot = project_decision_snapshot(state)
         selected = _stored_action(snapshot)
-        authority = selected.command_authority
+        authority = selected.capability.command_authority
         assert authority is not None
-        substitutions = (replace(selected, command_authority=replace(authority, generation=authority.generation + 1)),)
+        substitutions = (
+            replace(
+                selected,
+                capability=replace(
+                    selected.capability,
+                    command_authority=replace(authority, generation=authority.generation + 1),
+                ),
+            ),
+        )
         for supplied in substitutions:
             with self.subTest(supplied=supplied):
                 rejected = rediscover_action_outcome(snapshot, _worker_actor(), supplied)
@@ -239,7 +249,7 @@ class ExactMutationAuthorityTest(unittest.TestCase):
             ),
         )
         rediscovered = rediscover_action(project_decision_snapshot(advanced_state), _worker_actor(), selected)
-        self.assertEqual(selected.action_id, rediscovered.action_id)
+        self.assertEqual(decision_models.action_id(selected), decision_models.action_id(rediscovered))
 
 
 if __name__ == "__main__":

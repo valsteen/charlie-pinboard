@@ -89,7 +89,9 @@ class ServiceTest(unittest.TestCase):
         result = available_actions(snapshot, actor)
         self.assertIsInstance(result, tuple)
         return next(
-            action for action in result if action.kind == kind and (subject is None or str(action.subject) == subject)
+            action
+            for action in result
+            if action.kind == kind and (subject is None or str(action.capability.subject) == subject)
         )
 
     def _worker_action(self, store: SQLiteWorkStore, kind: decision_models.ActionKind) -> decision_models.Action:

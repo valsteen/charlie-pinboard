@@ -1,16 +1,16 @@
+from collections.abc import Callable
 from dataclasses import replace as dataclass_replace
 from typing import Any  # noqa: TID251 - fixture corruption intentionally crosses the typed boundary
 
 from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.errors import DecisionFailure, DecisionResult
 from charlie_pinboard.domain.identifiers import (
-    ActionId,
     AttemptId,
     CandidateId,
     HostId,
     ItemId,
-    LedgerId,
     ProposalId,
+    SubjectId,
     TaskId,
 )
 
@@ -26,31 +26,11 @@ def expect_success[T](value: DecisionResult[T]) -> T:
     return value
 
 
-def action(kind: decision_models.ActionKind, subject: str) -> decision_models.Action:
-    if kind in {
-        decision_models.ActionKind.ACCEPT_CHECKPOINT,
-        decision_models.ActionKind.BLOCK,
-        decision_models.ActionKind.COMPLETE,
-        decision_models.ActionKind.CONTINUE,
-        decision_models.ActionKind.DISPATCH,
-        decision_models.ActionKind.PAUSE,
-        decision_models.ActionKind.REPORT_BLOCKER,
-        decision_models.ActionKind.RETURN_FOR_CORRECTION,
-        decision_models.ActionKind.SUBMIT_REVIEW,
-    }:
-        subject_id = AttemptId(subject)
-    elif kind in {
-        decision_models.ActionKind.ACCEPT_PROPOSAL,
-        decision_models.ActionKind.MERGE_PROPOSAL,
-        decision_models.ActionKind.REJECT_PROPOSAL,
-        decision_models.ActionKind.RETURN_PROPOSAL,
-    }:
-        subject_id = ProposalId(subject)
-    elif kind in {decision_models.ActionKind.INSPECT, decision_models.ActionKind.TRANSFER_COORDINATOR}:
-        subject_id = LedgerId(subject)
-    else:
-        subject_id = ItemId(subject)
-    return decision_models.Action(ActionId(f"{kind.value}:{subject}"), kind, subject_id, kind.value, "rev", 1)
+def action[SubjectT: SubjectId, ActionT](
+    constructor: Callable[[decision_models.ActionCapability[SubjectT]], ActionT],
+    subject: SubjectT,
+) -> ActionT:
+    return constructor(decision_models.ActionCapability(subject, "test action", "rev", 1))
 
 
 def item_scope(

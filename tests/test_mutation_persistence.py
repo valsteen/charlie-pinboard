@@ -56,6 +56,7 @@ from charlie_pinboard.domain.proposal_models import (
     VisibleProposalItem,
 )
 from tests.domain_support import expect_success
+from tests.domain_support import replace as replace_dataclass
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
 
@@ -609,7 +610,7 @@ class MutationPersistenceTest(unittest.TestCase):
         close_action = next(
             value
             for value in available_actions(snapshot, actor)
-            if value.kind == decision_models.ActionKind.CLOSE and value.subject == ItemId("intake-work")
+            if value.kind == decision_models.ActionKind.CLOSE and value.capability.subject == ItemId("intake-work")
         )
         close = decide(
             snapshot,
@@ -633,7 +634,7 @@ class MutationPersistenceTest(unittest.TestCase):
             close_action = next(
                 value
                 for value in available_actions(snapshot, actor)
-                if value.kind == decision_models.ActionKind.CLOSE and value.subject == ItemId("intake-work")
+                if value.kind == decision_models.ActionKind.CLOSE and value.capability.subject == ItemId("intake-work")
             )
             close = decide(
                 snapshot,
@@ -661,7 +662,7 @@ class MutationPersistenceTest(unittest.TestCase):
         action = next(
             value
             for value in available_actions(snapshot, actor)
-            if value.kind == decision_models.ActionKind.DEFER and value.subject == ItemId("intake-work")
+            if value.kind == decision_models.ActionKind.DEFER and value.capability.subject == ItemId("intake-work")
         )
         decision = decide(
             snapshot,
@@ -701,7 +702,14 @@ class MutationPersistenceTest(unittest.TestCase):
                 committed = store.snapshot()
                 refreshed = replace(
                     decision,
-                    action=replace(decision.action, expected_revision="13", subject_revision="13"),
+                    action=replace_dataclass(
+                        decision.action,
+                        capability=replace_dataclass(
+                            decision.action.capability,
+                            expected_revision="13",
+                            subject_revision="13",
+                        ),
+                    ),
                 )
                 with self.assertRaises(StorageError), store.write() as transaction:
                     transaction.commit(replace(mutation, decision=refreshed))

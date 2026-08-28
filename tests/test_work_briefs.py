@@ -265,7 +265,7 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                     value = work_c_brief()
                     capability = decision_models.ActionCapability(ItemId("work-c"), *capability_values)
                     command = decision_models.ActivateCommand(
-                        capability,
+                        decision_models.ActivateAction(capability),
                         work_models.ActivateInput(
                             AttemptId("work-c-1"),
                             "codex/work-c",
@@ -277,7 +277,9 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                 else:
                     value = work_a_brief(project)
                     capability = decision_models.ActionCapability(ItemId("work-a"), *capability_values)
-                    command = decision_models.ResumeCommand(capability, work_models.ResumeInput(ArtifactRefId(1)))
+                    command = decision_models.ResumeCommand(
+                        decision_models.ResumeAction(capability), work_models.ResumeInput(ArtifactRefId(1))
+                    )
                 published = write_revision(
                     roots,
                     NewArtifact(ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)),
