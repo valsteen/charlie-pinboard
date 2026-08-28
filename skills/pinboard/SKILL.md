@@ -116,7 +116,7 @@ Never describe a partial external launch as complete. Report one result per requ
 
 ## Apply a transition
 
-1. Identify one action as `<kind>:<subject>`. When its semantic input is not already settled, run `pinboard input-contract <kind> --json` and prepare the payload before borrowing authority.
+1. Identify one action as `<kind>:<subject>`. Read its returned semantics instead of inferring from the verb: `effect` distinguishes advisory from mutating, `required_role` names the owner, `subject_kind` distinguishes item from attempt identity, and `lifecycle_precondition` names the legal source state. When its semantic input is not already settled, run `pinboard input-contract <kind> --json` and prepare the payload before borrowing authority. `report-blocker:<attempt>` is a worker advisory with no mutation payload; `block:<attempt>` is the coordinator transition for an active attempt; `block-item:<item>` is the coordinator transition for an unstarted intake item.
 2. For one graph-wide change, prefer `pinboard coordination apply`. Its revision-stamped result records the exact post-commit SQLite revision; coordination is then released before the receipt returns. Do not add an action-list preflight or a confirming overview.
 3. For an attempt-local change or an exceptional manual coordination sequence, query only the exact action with `pinboard actions --role <role> --lease-id <lease> --generation <generation> --action-id <kind:subject> --json`. Treat the returned action record as one opaque capability receipt. Forward its `action_id`, `expected_revision`, `coordinator_generation`, `authorization`, and every non-empty `subject_revision` and `lease_id` value verbatim. Do not infer authorization from the current role, reuse fields from another action, or reconstruct a partial token from prose.
 4. Run `pinboard transition` with those exact token fields and the prepared payload file.
@@ -175,7 +175,7 @@ When an active attempt discovers a prerequisite:
 
 1. preserve its current result and verification;
 2. use `$pinboard-intake` to propose the prerequisite;
-3. block or pause the attempt through an available action;
+3. report the advisory `report-blocker:<attempt>` from the worker context, then have coordination select the exact active-attempt transition: use `block:<attempt>` when recording named dependencies or `pause:<attempt>` when preserving work without a dependency condition; never use the intake-only `block-item:<item>` action for active work;
 4. implement the accepted prerequisite independently from the current integration base;
 5. resume the preserved attempt only after its freshness check passes.
 

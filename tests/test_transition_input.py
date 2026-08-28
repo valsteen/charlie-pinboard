@@ -85,8 +85,9 @@ class TransitionInputTest(unittest.TestCase):
                 parse_transition_input(kind, json.dumps(value))
             self.assertIsInstance(caught.exception.__cause__, msgspec.ValidationError)
 
-        with self.assertRaisesRegex(TransitionInputError, "ACTION_NOT_MUTATING"):
-            parse_transition_input("unknown", "{}")
+        for kind in ("unknown", "report-blocker"):
+            with self.subTest(kind=kind), self.assertRaisesRegex(TransitionInputError, "ACTION_NOT_MUTATING"):
+                parse_transition_input(kind, "{}")
 
     def test_every_current_kind_decodes_and_has_a_schema(self) -> None:
         payloads: dict[str, JsonObject] = {
