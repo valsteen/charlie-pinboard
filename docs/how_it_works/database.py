@@ -48,7 +48,7 @@ def _schema_shape(root: Path) -> tuple[frozenset[str], frozenset[tuple[str, str]
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
     try:
-        schema = root.joinpath("src/charlie_pinboard/adapters/sqlite/schema.sql").read_text(encoding="utf-8")
+        schema = root.joinpath("src/pinboard/adapters/sqlite/schema.sql").read_text(encoding="utf-8")
         connection.executescript(schema)
         tables = frozenset(
             str(row["name"])

@@ -4,27 +4,27 @@ from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
-from charlie_pinboard.adapters.files.artifacts import verify_reference, write_revision
-from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.database import initialize_database
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.artifacts import NewArtifact
-from charlie_pinboard.application.errors import PortableCopyError, PortableCopyErrorCode
-from charlie_pinboard.application.service import change_attempt_authority
-from charlie_pinboard.application.stored_state import (
+from pinboard.adapters.files.artifacts import verify_reference, write_revision
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.artifacts import NewArtifact
+from pinboard.application.errors import PortableCopyError, PortableCopyErrorCode
+from pinboard.application.service import change_attempt_authority
+from pinboard.application.stored_state import (
     ArtifactKind,
     ArtifactReference,
     TransitionHistoryActionKind,
 )
-from charlie_pinboard.application.transfer import create_portable_copy
-from charlie_pinboard.domain import work_models
-from charlie_pinboard.domain.authority_models import (
+from pinboard.application.transfer import create_portable_copy
+from pinboard.domain import work_models
+from pinboard.domain.authority_models import (
     AttemptLeaseStatus,
     RenewAttemptAuthority,
 )
-from charlie_pinboard.domain.errors import DecisionFailure
-from charlie_pinboard.domain.identifiers import ArtifactRefId
-from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
+from pinboard.domain.errors import DecisionFailure
+from pinboard.domain.identifiers import ArtifactRefId
+from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 from tests.support import SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import work_a_brief
 

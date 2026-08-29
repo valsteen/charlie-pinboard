@@ -1,8 +1,8 @@
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.mutations import project_transition_mutation
-from charlie_pinboard.application.service import execute
-from charlie_pinboard.domain import decision_models
-from charlie_pinboard.interfaces.cli_commands import TransitionCommand
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.mutations import project_transition_mutation
+from pinboard.application.service import execute
+from pinboard.domain import decision_models
+from pinboard.interfaces.cli_commands import TransitionCommand
 
 from .model import Box, Connector, Diagram, Guide, Note, Section
 

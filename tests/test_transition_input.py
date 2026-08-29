@@ -3,10 +3,10 @@ import unittest
 
 import msgspec
 
-from charlie_pinboard.domain import decision_models, work_models
-from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId, CandidateId
-from charlie_pinboard.interfaces.errors import TransitionInputError
-from charlie_pinboard.interfaces.transition_input import (
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.identifiers import ArtifactRefId, AttemptId, CandidateId
+from pinboard.interfaces.errors import TransitionInputError
+from pinboard.interfaces.transition_input import (
     TRANSITION_ACTION_KINDS,
     encoded_transition_input_schema,
     parse_transition_input,

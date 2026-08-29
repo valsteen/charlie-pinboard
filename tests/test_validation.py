@@ -8,17 +8,17 @@ from pathlib import Path
 
 from msgspec.structs import replace as struct_replace
 
-from charlie_pinboard.adapters.files.artifacts import write_revision
-from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.database import initialize_database
-from charlie_pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
-from charlie_pinboard.adapters.sqlite.registration import initialize_work_state
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.artifacts import NewArtifact
-from charlie_pinboard.application.stored_state import ArtifactKind
-from charlie_pinboard.application.validation import validate_work_state
-from charlie_pinboard.interfaces.cli import main
-from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
+from pinboard.adapters.files.artifacts import write_revision
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
+from pinboard.adapters.sqlite.registration import initialize_work_state
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.artifacts import NewArtifact
+from pinboard.application.stored_state import ArtifactKind
+from pinboard.application.validation import validate_work_state
+from pinboard.interfaces.cli import main
+from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 from tests.support import SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import work_a_brief
 
@@ -91,7 +91,7 @@ class SQLiteValidationTest(unittest.TestCase):
         store = SQLiteWorkStore(first.database_path)
         store.initialize_state(complete_sqlite_state())
         before = store.snapshot()
-        staging = first.database_path.with_name(f".{first.database_path.name}.charlie-pinboard-stage")
+        staging = first.database_path.with_name(f".{first.database_path.name}.pinboard-stage")
         staging.hardlink_to(first.database_path)
         staging_journal = staging.with_name(f"{staging.name}-journal")
         staging_journal.write_bytes(b"owned publication residue")
@@ -108,7 +108,7 @@ class SQLiteValidationTest(unittest.TestCase):
     def test_initialization_rejects_conflicting_publication_residue_without_mutation(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         receipt = initialize_work_state(project, now=SQLITE_NOW)
-        staging = receipt.database_path.with_name(f".{receipt.database_path.name}.charlie-pinboard-stage")
+        staging = receipt.database_path.with_name(f".{receipt.database_path.name}.pinboard-stage")
         staging.write_bytes(b"different file")
         database_before = receipt.database_path.read_bytes()
         staging_before = staging.read_bytes()
@@ -123,7 +123,7 @@ class SQLiteValidationTest(unittest.TestCase):
     def test_initialization_rejects_malformed_database_before_residue_cleanup(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         receipt = initialize_work_state(project, now=SQLITE_NOW)
-        staging = receipt.database_path.with_name(f".{receipt.database_path.name}.charlie-pinboard-stage")
+        staging = receipt.database_path.with_name(f".{receipt.database_path.name}.pinboard-stage")
         staging.hardlink_to(receipt.database_path)
         receipt.database_path.write_bytes(b"malformed database")
         database_before = receipt.database_path.read_bytes()

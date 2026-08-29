@@ -7,13 +7,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from charlie_pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
-from charlie_pinboard.adapters.files.file_io import (
+from pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
+from pinboard.adapters.files.file_io import (
     atomic_replace,
     create_immutable,
     resolve_durable_roots,
 )
-from charlie_pinboard.adapters.sqlite.database import (
+from pinboard.adapters.sqlite.database import (
     backup_database,
     initialize_database,
     open_database,
@@ -21,29 +21,29 @@ from charlie_pinboard.adapters.sqlite.database import (
     schema_bytes,
     write_transaction,
 )
-from charlie_pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
-from charlie_pinboard.adapters.sqlite.models import OpenMode
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.decision_projection import project_decision_snapshot
-from charlie_pinboard.application.mutations import project_transition_mutation
-from charlie_pinboard.application.stored_state import (
+from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
+from pinboard.adapters.sqlite.models import OpenMode
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.decision_projection import project_decision_snapshot
+from pinboard.application.mutations import project_transition_mutation
+from pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
     TransitionHistoryActionKind,
 )
-from charlie_pinboard.domain import decision_models, work_models
-from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
-from charlie_pinboard.domain.decisions import available_actions as available_actions_outcome
-from charlie_pinboard.domain.decisions import bind_transition as bind_transition_outcome
-from charlie_pinboard.domain.decisions import decide as decision_outcome
-from charlie_pinboard.domain.identifiers import (
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.authority_models import AttemptLeaseStatus
+from pinboard.domain.decisions import available_actions as available_actions_outcome
+from pinboard.domain.decisions import bind_transition as bind_transition_outcome
+from pinboard.domain.decisions import decide as decision_outcome
+from pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
     CandidateId,
     ItemId,
     LeaseId,
 )
-from charlie_pinboard.domain.ledger import LedgerSnapshot
+from pinboard.domain.ledger import LedgerSnapshot
 from tests.domain_support import expect_success
 from tests.domain_support import replace as replace_dataclass
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
@@ -243,7 +243,7 @@ class SQLiteStoreTest(unittest.TestCase):
             connection.execute(
                 "CREATE TABLE project_meta (singleton INTEGER, application TEXT, schema_version INTEGER)"
             )
-            connection.execute("INSERT INTO project_meta VALUES (1, 'charlie-pinboard', 1)")
+            connection.execute("INSERT INTO project_meta VALUES (1, 'pinboard', 1)")
             connection.commit()
         finally:
             connection.close()
@@ -271,7 +271,7 @@ class SQLiteStoreTest(unittest.TestCase):
             malformed_connection.execute("CREATE TABLE project_meta (application, schema_version)")
             malformed_connection.executemany(
                 "INSERT INTO project_meta VALUES (?, ?)",
-                (("charlie-pinboard", 1), ("charlie-pinboard", 1)),
+                (("pinboard", 1), ("pinboard", 1)),
             )
             malformed_connection.commit()
         finally:
@@ -290,7 +290,7 @@ class SQLiteStoreTest(unittest.TestCase):
         interrupted_project = Path(tempfile.mkdtemp()).resolve()
         interrupted_roots = resolve_durable_roots(interrupted_project)
         with (
-            patch("charlie_pinboard.adapters.sqlite.database.schema_bytes", return_value=b"\xff"),
+            patch("pinboard.adapters.sqlite.database.schema_bytes", return_value=b"\xff"),
             self.assertRaises(StorageError) as initialize_error,
         ):
             initialize_database(interrupted_roots, SQLITE_NOW)
@@ -314,7 +314,7 @@ class SQLiteStoreTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         with (
             patch(
-                "charlie_pinboard.adapters.sqlite.database._sync_database",
+                "pinboard.adapters.sqlite.database._sync_database",
                 side_effect=StorageError(StorageErrorCode.IO_ERROR, "injected database synchronization failure"),
             ),
             self.assertRaises(StorageError) as synchronization_error,
@@ -326,7 +326,7 @@ class SQLiteStoreTest(unittest.TestCase):
         initialize_database(roots, SQLITE_NOW)
         backup = roots.database_path.with_name("interrupted-backup.sqlite3")
         with (
-            patch("charlie_pinboard.adapters.sqlite.database.os.open", side_effect=OSError("injected open failure")),
+            patch("pinboard.adapters.sqlite.database.os.open", side_effect=OSError("injected open failure")),
             self.assertRaises(StorageError) as backup_error,
         ):
             backup_database(roots.database_path, backup)
@@ -337,9 +337,9 @@ class SQLiteStoreTest(unittest.TestCase):
         prepublication_project = Path(tempfile.mkdtemp()).resolve()
         prepublication_roots = resolve_durable_roots(prepublication_project)
         with (
-            patch("charlie_pinboard.adapters.sqlite.database.schema_bytes", return_value=b"\xff"),
+            patch("pinboard.adapters.sqlite.database.schema_bytes", return_value=b"\xff"),
             patch(
-                "charlie_pinboard.adapters.sqlite.database.Path.unlink",
+                "pinboard.adapters.sqlite.database.Path.unlink",
                 side_effect=OSError("injected pre-publication cleanup failure"),
             ),
             self.assertRaises(StorageError) as prepublication_error,
@@ -357,11 +357,11 @@ class SQLiteStoreTest(unittest.TestCase):
         )
         with (
             patch(
-                "charlie_pinboard.adapters.sqlite.database._sync_database",
+                "pinboard.adapters.sqlite.database._sync_database",
                 side_effect=(None, synchronization_failure),
             ),
             patch(
-                "charlie_pinboard.adapters.sqlite.database.Path.unlink",
+                "pinboard.adapters.sqlite.database.Path.unlink",
                 side_effect=OSError("injected published database cleanup failure"),
             ),
             self.assertRaises(StorageError) as synchronization_error,
@@ -372,9 +372,9 @@ class SQLiteStoreTest(unittest.TestCase):
 
         backup = synchronization_roots.database_path.with_name("cleanup-retry.sqlite3")
         with (
-            patch("charlie_pinboard.adapters.sqlite.database.os.open", side_effect=OSError("injected backup failure")),
+            patch("pinboard.adapters.sqlite.database.os.open", side_effect=OSError("injected backup failure")),
             patch(
-                "charlie_pinboard.adapters.sqlite.database.Path.unlink",
+                "pinboard.adapters.sqlite.database.Path.unlink",
                 side_effect=OSError("injected backup cleanup failure"),
             ),
             self.assertRaises(StorageError) as backup_error,
@@ -450,7 +450,7 @@ class SQLiteStoreTest(unittest.TestCase):
 
             with (
                 self.subTest(failure=failure),
-                patch("charlie_pinboard.adapters.files.file_io._sync_directory", side_effect=interrupt),
+                patch("pinboard.adapters.files.file_io._sync_directory", side_effect=interrupt),
                 self.assertRaises(StorageError) as raised,
             ):
                 initialize_database(roots, SQLITE_NOW)
@@ -481,8 +481,8 @@ class SQLiteStoreTest(unittest.TestCase):
 
         immutable_staging = external.artifacts_root / "staged-evidence.md"
         with (
-            patch("charlie_pinboard.adapters.files.file_io.secrets.token_hex", return_value="immutable-token"),
-            patch("charlie_pinboard.adapters.files.file_io.os.link", wraps=os.link) as linked,
+            patch("pinboard.adapters.files.file_io.secrets.token_hex", return_value="immutable-token"),
+            patch("pinboard.adapters.files.file_io.os.link", wraps=os.link) as linked,
         ):
             create_immutable(immutable_staging, b"staged evidence")
         self.assertEqual(".pinboard-stage-immutable-token", Path(linked.call_args.args[0]).name)
@@ -494,9 +494,9 @@ class SQLiteStoreTest(unittest.TestCase):
 
         replace_staging = external.artifacts_root / "staged-view.md"
         with (
-            patch("charlie_pinboard.adapters.files.file_io.secrets.token_hex", return_value="replace-token"),
+            patch("pinboard.adapters.files.file_io.secrets.token_hex", return_value="replace-token"),
             patch(
-                "charlie_pinboard.adapters.files.file_io.Path.replace",
+                "pinboard.adapters.files.file_io.Path.replace",
                 autospec=True,
                 side_effect=replace_staged,
             ) as replaced_path,
@@ -512,7 +512,7 @@ class SQLiteStoreTest(unittest.TestCase):
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         with (
-            patch("charlie_pinboard.adapters.files.file_io.Path.mkdir", side_effect=OSError("injected mkdir failure")),
+            patch("pinboard.adapters.files.file_io.Path.mkdir", side_effect=OSError("injected mkdir failure")),
             self.assertRaises(StorageError) as creation_error,
         ):
             initialize_database(roots, SQLITE_NOW)
@@ -520,7 +520,7 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertFalse(roots.database_path.exists())
 
         with (
-            patch("charlie_pinboard.adapters.files.file_io.os.fsync", side_effect=OSError("injected sync failure")),
+            patch("pinboard.adapters.files.file_io.os.fsync", side_effect=OSError("injected sync failure")),
             self.assertRaises(StorageError) as synchronization_error,
         ):
             initialize_database(roots, SQLITE_NOW)
@@ -534,7 +534,7 @@ class SQLiteStoreTest(unittest.TestCase):
 
         publication = roots.artifacts_root / "publication.md"
         with (
-            patch("charlie_pinboard.adapters.files.file_io.os.link", side_effect=OSError("injected link failure")),
+            patch("pinboard.adapters.files.file_io.os.link", side_effect=OSError("injected link failure")),
             self.assertRaises(FileIOError),
         ):
             create_immutable(publication, b"evidence")
@@ -542,7 +542,7 @@ class SQLiteStoreTest(unittest.TestCase):
 
         cleanup_tolerant = roots.artifacts_root / "cleanup-tolerant.md"
         with patch(
-            "charlie_pinboard.adapters.files.file_io.Path.unlink",
+            "pinboard.adapters.files.file_io.Path.unlink",
             side_effect=OSError("injected staging cleanup failure"),
         ):
             create_immutable(cleanup_tolerant, b"durable evidence")

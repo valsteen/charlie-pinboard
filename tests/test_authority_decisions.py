@@ -2,15 +2,15 @@ import unittest
 from dataclasses import replace
 from datetime import timedelta
 
-from charlie_pinboard.application.decision_projection import (
+from pinboard.application.decision_projection import (
     project_decision_snapshot,
     project_inactive_attempt_authority,
 )
-from charlie_pinboard.domain.authority_decisions import (
+from pinboard.domain.authority_decisions import (
     decide_attempt_authority,
     decide_coordination_authority,
 )
-from charlie_pinboard.domain.authority_models import (
+from pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
     AttemptLeaseAuthority,
@@ -24,8 +24,8 @@ from charlie_pinboard.domain.authority_models import (
     RevokeCoordinationAuthority,
     TransferAttemptAuthority,
 )
-from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
-from charlie_pinboard.domain.identifiers import HostId, LeaseId, TaskId
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from pinboard.domain.identifiers import HostId, LeaseId, TaskId
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 

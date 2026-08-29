@@ -4,21 +4,21 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from charlie_pinboard.adapters.files.artifacts import verify_reference, write_revision
-from charlie_pinboard.adapters.files.errors import (
+from pinboard.adapters.files.artifacts import verify_reference, write_revision
+from pinboard.adapters.files.errors import (
     ArtifactError,
     ArtifactErrorCode,
     FileIOError,
     FileIOErrorCode,
 )
-from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.database import initialize_database
-from charlie_pinboard.adapters.sqlite.errors import StorageError
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.artifacts import NewArtifact
-from charlie_pinboard.application.stored_state import ArtifactKind
-from charlie_pinboard.domain import work_models
-from charlie_pinboard.domain.identifiers import ItemId
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.errors import StorageError
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.artifacts import NewArtifact
+from pinboard.application.stored_state import ArtifactKind
+from pinboard.domain import work_models
+from pinboard.domain.identifiers import ItemId
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -132,7 +132,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         failing_roots = resolve_durable_roots(failing_project)
         with (
             patch(
-                "charlie_pinboard.adapters.files.artifacts.ensure_directory_chain",
+                "pinboard.adapters.files.artifacts.ensure_directory_chain",
                 side_effect=FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, "unavailable"),
             ),
             self.assertRaises(ArtifactError) as io_error,

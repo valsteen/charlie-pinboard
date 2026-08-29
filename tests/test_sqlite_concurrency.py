@@ -6,14 +6,14 @@ import unittest
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
 
-from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.database import initialize_database
-from charlie_pinboard.adapters.sqlite.errors import StorageError
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.decision_projection import project_decision_snapshot
-from charlie_pinboard.application.mutations import project_transition_mutation
-from charlie_pinboard.domain import decision_models, work_models
-from charlie_pinboard.domain.decisions import (
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.errors import StorageError
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.decision_projection import project_decision_snapshot
+from pinboard.application.mutations import project_transition_mutation
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.decisions import (
     available_actions,
     bind_transition,
     decide,
