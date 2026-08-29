@@ -51,18 +51,18 @@ The four views move from the visible workflow to package responsibilities, then 
 
 A work item is the durable project decision. An attempt is one execution of that work. They move together while remaining separate: an item can survive interruption, correction, or a replacement worker without losing its identity or accepted scope.
 
-![A work item lifecycle above a parallel attempt lifecycle, with proposal, scope, authority, and evidence travelling alongside them](assets/how-it-works/product.svg)
+![A work item lifecycle above the legal branches of an active attempt, with related facts shown separately](assets/how-it-works/product.svg)
 
-The primary path is intentionally familiar: intake becomes ready, active work enters review, and accepted work becomes a terminal outcome. The side paths carry the distinctions that matter later. Deferred work was consciously saved. Paused work can continue without inventing a blocker. Blocked work retains a named condition. Review protects one exact candidate.
+The primary path is intentionally familiar: intake becomes ready, active work enters review, and accepted work becomes a terminal outcome. Deferred, paused, and blocked work are optional branches rather than required stages. Paused and blocked work can resume the same attempt; review can request correction, pause at an accepted checkpoint, continue the attempt, or complete it. Completion can also be accepted directly from active work.
 
-Proposals, dependencies, accepted scope, authority, and evidence are not extra states. They answer different questions about the same work; treating them as statuses would erase the distinctions they carry.
+Proposals and dependencies are not extra states. Accepted scope is the exact authorized revision an attempt uses. Mutation ownership records who may act now: either one graph-wide coordination holder or one attempt lease. A review candidate identifies the exact result under review, and evidence supports its acceptance.
 
 ## What each transition preserves
 
 The lifecycle is accompanied by four guarantees:
 
 - **Work survives conversations.** A later task can continue from accepted scope and evidence instead of reconstructing intent from chat history.
-- **Authority is current.** An expired or replaced worker cannot apply an action it discovered earlier.
+- **Mutation ownership is current.** An expired or replaced worker cannot apply an action it discovered earlier.
 - **Review is about one candidate.** Correction, checkpoint acceptance, continuation, and terminal completion preserve different outcomes without changing which work they belong to.
 - **Transitions are atomic.** An accepted change updates its related facts and history together; a rejected or failed change leaves the previous ledger intact.
 
@@ -72,25 +72,27 @@ These guarantees explain why seemingly similar words remain distinct.
 
 The package is split into four layers because each removes a different kind of ambiguity. The split keeps workflow policy out of storage and keeps external representations out of decisions.
 
-![Four package layers showing interfaces, application, domain, and adapters with the question each layer answers](assets/how-it-works/layers.svg)
+![Four package layers showing interfaces, application, domain, and adapters, connected by package dependencies](assets/how-it-works/layers.svg)
 
-Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. Application code coordinates complete operations against current state. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
+Every arrow in this view means “may depend on”; the next view shows runtime flow. Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. Application code coordinates complete operations against current state. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
 
 ## Follow one change
 
-Submitting work for review is one visible action, but it strengthens meaning at every boundary. External values become an exact command. The application reloads current state and authority inside the write operation. The domain returns one closed review change. The application projects that decision into complete stored facts, and SQLite either commits all of them with a history receipt or commits nothing.
+Submitting work for review is one visible action, but it strengthens meaning at every boundary. External values become an exact command. The application reloads current state and mutation ownership inside the write operation. Domain evaluation returns either an accepted change or an expected rejection; rejection leaves the ledger unchanged. The application projects an accepted change into complete stored facts, and SQLite either commits all of them with a history receipt or commits nothing.
 
 ![A submit-review request travelling through interface decoding, application orchestration, domain decision, mutation projection, and atomic SQLite commit](assets/how-it-works/journey.svg)
 
-The layers do not repeat the same decision. Each contributes a different guarantee, then hands a narrower value to the next owner.
+The layers do not repeat the same decision. Each contributes a different guarantee, then hands a narrower value to the next owner. Generated views refresh after the authoritative commit and can be rebuilt from the ledger if that refresh is interrupted.
 
 ## The durable memory underneath
 
-The relational ledger groups sixteen tables into six kinds of memory: current work, accepted scope and dependencies, discoveries, immutable knowledge, changing authority, and the history that connects them.
+The relational ledger groups sixteen tables into six kinds of memory: current work, accepted scope and dependencies, discoveries, immutable knowledge, changing mutation ownership, and the history that connects them.
 
-![Six groups of SQLite tables showing current work, scope, discovery, durable knowledge, authority, and history](assets/how-it-works/database.svg)
+![Six groups of SQLite tables showing current work, scope, discovery, durable knowledge, mutation ownership, and history](assets/how-it-works/database.svg)
 
-A work item survives attempts. Scope survives edits. Evidence survives conversations. Authority changes over time. The database makes those relationships explicit so the application does not have to infer them from filenames, Markdown, or whichever task happens to be open.
+A work item survives attempts. Accepted versions preserve current scope and its revision history. Proposal evidence records why possible work was raised, while its freshness assumptions record which facts must be checked again. Attached knowledge links an item and a role to immutable file contents; attempts keep separate references to their brief and result.
+
+Mutation ownership changes over time. Coordination covers graph-wide changes, while an attempt lease and its generation prevent an older worker from acting after ownership changes. Project state holds the current revision, and committed history records each accepted input, outcome, and actor. These relationships keep the application from inferring durable facts from filenames, Markdown, or whichever task happens to be open.
 
 For installation and the product story, return to the [README](README.md). For contributor-facing ownership, storage boundaries, and representative command flows, continue to the [architecture map](ARCHITECTURE.md).
 
