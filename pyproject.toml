@@ -77,7 +77,6 @@ show_missing = true
 [dependency-groups]
 dev = [
     "coverage>=7.10.4",
-    "hypothesis>=6.138.7",
     "pyyaml>=6.0.3",
     "pyrefly>=1.2.0",
     "ruff>=0.16.3",

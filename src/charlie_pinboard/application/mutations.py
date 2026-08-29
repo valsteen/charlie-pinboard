@@ -90,9 +90,10 @@ def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
                 case decision_models.CheckpointAcceptanceChange(checkpoint=value, candidate=accepted_candidate):
                     checkpoint = str(value)
                     candidate = str(accepted_candidate)
-                case decision_models.ReviewAcceptanceChange(candidate=accepted_candidate):
-                    candidate = str(accepted_candidate)
-                case decision_models.ReviewSubmissionChange(protected_candidate_after=accepted_candidate):
+                case (
+                    decision_models.ReviewAcceptanceChange(candidate=accepted_candidate)
+                    | decision_models.ReviewSubmissionChange(protected_candidate_after=accepted_candidate)
+                ):
                     candidate = str(accepted_candidate)
                 case (
                     decision_models.AcceptedProposalChange()
@@ -539,7 +540,6 @@ def _activation_attempt_after(
         change.base_revision,
         change.owner,
         change.brief_artifact_ref_id,
-        None,
         None,
         None,
         None,

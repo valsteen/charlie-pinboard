@@ -3,6 +3,7 @@ from typing import Final, assert_never
 import msgspec
 
 from charlie_pinboard.domain import decision_models, work_models
+from charlie_pinboard.domain.errors import DecisionFailureCode
 from charlie_pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
@@ -12,7 +13,7 @@ from charlie_pinboard.domain.identifiers import (
     ItemId,
     TaskId,
 )
-from charlie_pinboard.interfaces.errors import TransitionInputError, TransitionInputErrorCode
+from charlie_pinboard.interfaces.errors import TransitionInputError
 from charlie_pinboard.interfaces.transition_models import (
     AcceptCheckpointInputPayload,
     AcceptProposalInputPayload,
@@ -87,7 +88,7 @@ def _input_model(kind: decision_models.ActionKind) -> InputModel:
     model = _input_model_or_none(kind)
     if model is None:
         raise TransitionInputError(
-            TransitionInputErrorCode.ACTION_NOT_MUTATING,
+            DecisionFailureCode.ACTION_NOT_MUTATING,
             f"Action '{kind.value}' is not a canonical transition.",
         )
     return model
@@ -102,7 +103,7 @@ def parse_transition_input(  # noqa: C901, PLR0912
         payload = msgspec.json.decode(data, type=model)
     except msgspec.DecodeError as error:
         raise TransitionInputError(
-            TransitionInputErrorCode.TRANSITION_INPUT_INVALID,
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
             f"Cannot decode transition JSON: {error}",
         ) from error
     match payload:

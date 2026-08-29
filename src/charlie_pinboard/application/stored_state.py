@@ -203,7 +203,6 @@ class StoredAttempt:
     provenance: str
     brief_artifact_ref_id: ArtifactRefId
     result_artifact_ref_id: ArtifactRefId | None
-    blocker_artifact_ref_id: ArtifactRefId | None
     candidate_revision: str | None
     candidate_recorded_at: datetime | None
     accepted_scope_revision: int

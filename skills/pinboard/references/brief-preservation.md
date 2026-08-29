@@ -27,7 +27,7 @@ If the complete authority set plus working headroom cannot fit, stop before comp
 
 ## Compile canonical JSON
 
-Prepare a strict `pinboard-work-brief/v2` JSON candidate. Pinboard decodes it directly into frozen `msgspec.Struct` records with unknown fields forbidden, validates its cross-references, canonicalizes it with sorted object keys and one final LF, and publishes the immutable accepted `.json` artifact through `pinboard brief publish --file <candidate> --json`. This JSON artifact is the sole semantic brief. The generated Markdown attempt view is read-only output and must not be edited or parsed as input.
+Prepare a strict `pinboard-work-brief/v2` JSON candidate. Pinboard decodes it directly into frozen records with unknown fields forbidden, validates its cross-references, canonicalizes it with sorted object keys and one final LF, and publishes the immutable accepted `.json` artifact through `pinboard brief publish --file <candidate> --json`. This JSON artifact is the sole semantic brief. The generated Markdown attempt view is read-only output and must not be edited or parsed as input.
 
 The root record contains:
 
@@ -44,6 +44,8 @@ Every checkpoint has a stable kebab-case `checkpoint_id`, separate human `title`
 - `cross-boundary` additionally requires `outcome: independently-buildable`, nonempty contracts, reviewed authorities, authoritative coverage, and one lifecycle partition.
 
 When a checkpoint owns structural cleanup, its typed scope and acceptance criteria must name the readable typed consolidation, the direct orphan families to recurse through, and the evidence from one fresh fixed-point pass. Reference the repository's recursive-cleanup procedure for the method instead of duplicating it here; the generated Markdown projection remains non-authoritative.
+
+When that cleanup collapses a closed classification, the contract must identify every duplicated encoding, equivalent alternative-handling branch, proposed canonical owner, and independently required boundary shape. It must distinguish label-only vocabularies, data-bearing alternatives, and context-dependent decisions; require equivalent branches to share one handler without erasing alternatives that another consumer distinguishes; and require exhaustive conversion at retained wire, storage, or presentation boundaries. Acceptance evidence must report core decision points, explicit boundary conversion, dependency volume, and source-size change separately, then name the fixed-point pass and the product distinctions deliberately retained. Reject a brief that prescribes one representation category for every closed family or treats smaller source or dependency counts as proof of a simpler decision model.
 
 Architecture impact is tagged by `kind`:
 
@@ -85,7 +87,7 @@ Correct the JSON candidate when coverage is incomplete, then produce a new diges
 
 ## Publish review evidence
 
-Canonical encoding uses msgspec JSON with sorted object keys. The brief artifact adds one final LF. Digest inputs do not add presentation bytes:
+Canonical encoding uses the application JSON codec with sorted object keys. The brief artifact adds one final LF. Digest inputs do not add presentation bytes:
 
 - `checkpoint_sha256` is SHA-256 of the canonical encoded checkpoint record;
 - `reviewed_authority_set_sha256` is SHA-256 of the canonical encoded ordered tuple of reviewed-authority records;

@@ -119,7 +119,7 @@ class SQLiteQueriesTest(unittest.TestCase):
 
         preview = preview_parallel(store, selected=("work-a",), now=SQLITE_NOW)
 
-        selected = (*preview.launchable, *preview.excluded)[0]
+        selected = preview.items[0]
         self.assertEqual("work-a-1", selected.attempt_id)
 
     def test_item_status_returns_exact_live_and_done_shapes_while_overview_stays_live_only(self) -> None:

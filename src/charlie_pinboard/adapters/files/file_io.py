@@ -2,11 +2,9 @@ import os
 import secrets
 from contextlib import suppress
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
 
 from charlie_pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
-from charlie_pinboard.adapters.files.models import DurableFile
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,18 +111,15 @@ def ensure_child_directory(parent: Path, component: str) -> Path:
     return child
 
 
-def _write_and_sync(path: Path, content: bytes) -> DurableFile:
-    digest = sha256()
+def _write_and_sync(path: Path, content: bytes) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(descriptor, "wb", closefd=False) as stream:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        digest.update(content)
     finally:
         os.close(descriptor)
-    return DurableFile(digest.hexdigest(), len(content))
 
 
 def _cleanup_staging(path: Path, parent: Path) -> None:
@@ -138,20 +133,16 @@ def _cleanup_staging(path: Path, parent: Path) -> None:
         _sync_directory(parent)
 
 
-def create_immutable(path: Path, content: bytes) -> DurableFile:
+def create_immutable(path: Path, content: bytes) -> None:
     parent = _verified_directory(path.parent, label="Immutable-file parent")
     staging = parent / f".pinboard-stage-{secrets.token_hex(16)}"
     try:
-        result = _write_and_sync(staging, content)
+        _write_and_sync(staging, content)
         try:
             os.link(staging, path, follow_symlinks=False)
         except FileExistsError as error:
             raise FileIOError(FileIOErrorCode.FILE_ALREADY_EXISTS, f"Immutable file already exists: {path}") from error
         _sync_directory(parent)
-        _cleanup_staging(staging, parent)
-        return result
-    except FileIOError:
-        raise
     except OSError as error:
         raise FileIOError(
             FileIOErrorCode.FILE_PUBLISH_FAILED, f"Immutable file could not be published: {path}"
@@ -160,16 +151,13 @@ def create_immutable(path: Path, content: bytes) -> DurableFile:
         _cleanup_staging(staging, parent)
 
 
-def atomic_replace(path: Path, content: bytes) -> DurableFile:
+def atomic_replace(path: Path, content: bytes) -> None:
     parent = _verified_directory(path.parent, label="Replacement-file parent")
     staging = parent / f".pinboard-stage-{secrets.token_hex(16)}"
     try:
-        result = _write_and_sync(staging, content)
+        _write_and_sync(staging, content)
         staging.replace(path)
         _sync_directory(parent)
-        return result
-    except FileIOError:
-        raise
     except OSError as error:
         raise FileIOError(
             FileIOErrorCode.FILE_PUBLISH_FAILED, f"Replacement file could not be published: {path}"

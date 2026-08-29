@@ -41,8 +41,9 @@ from charlie_pinboard.application.queries import (
     preview_parallel,
 )
 from charlie_pinboard.application.query_models import (
+    ExcludedParallelItem,
+    LaunchableParallelItem,
     OverviewItem,
-    ParallelItem,
     ParallelPreview,
     WorkOverview,
 )
@@ -73,7 +74,7 @@ from charlie_pinboard.domain.authority_models import (
     TransferAttemptAuthority,
 )
 from charlie_pinboard.domain.decisions import bind_transition
-from charlie_pinboard.domain.errors import DecisionFailure
+from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from charlie_pinboard.domain.identifiers import (
     ActionId,
     AttemptId,
@@ -181,9 +182,7 @@ from charlie_pinboard.interfaces.errors import (
     CommandError,
     CommandErrorCode,
     ProposalError,
-    ProposalErrorCode,
     TransitionInputError,
-    TransitionInputErrorCode,
     WorkBriefError,
     WorkBriefErrorCode,
 )
@@ -254,7 +253,7 @@ def _input_contract_view(kind: decision_models.ActionKind) -> InputContractView:
     try:
         payload_schema = msgspec.Raw(encoded_transition_input_schema(kind))
     except TransitionInputError as error:
-        if descriptor is None or error.code != TransitionInputErrorCode.ACTION_NOT_MUTATING:
+        if descriptor is None or error.code != DecisionFailureCode.ACTION_NOT_MUTATING:
             raise
         payload_schema = None
     return InputContractView(kind.value, _blocker_descriptor_view(descriptor), payload_schema)
@@ -312,7 +311,7 @@ def _action_view(action: decision_models.Action, *, include_input_contract: bool
         try:
             input_contract = _input_contract_view(action.kind)
         except TransitionInputError as error:
-            if error.code != TransitionInputErrorCode.ACTION_NOT_MUTATING:
+            if error.code != DecisionFailureCode.ACTION_NOT_MUTATING:
                 raise
     return ActionView(
         action_id=decision_models.action_id(action),
@@ -329,25 +328,35 @@ def _action_view(action: decision_models.Action, *, include_input_contract: bool
     )
 
 
-def _parallel_item_view(item: ParallelItem) -> ParallelItemView:
-    return ParallelItemView(
-        item.item_id,
-        item.label,
-        item.state.value,
-        item.attempt_id,
-        item.outcome.value,
-        tuple(ParallelReasonView(reason.code.value, reason.message) for reason in item.reasons),
-    )
-
-
 def _parallel_preview_view(preview: ParallelPreview) -> ParallelPreviewView:
+    launchable: list[ParallelItemView] = []
+    excluded: list[ParallelItemView] = []
+    for item in preview.items:
+        match item:
+            case LaunchableParallelItem():
+                launchable.append(
+                    ParallelItemView(item.item_id, item.label, item.state.value, item.attempt_id, "launchable", ())
+                )
+            case ExcludedParallelItem(reasons=reasons):
+                excluded.append(
+                    ParallelItemView(
+                        item.item_id,
+                        item.label,
+                        item.state.value,
+                        item.attempt_id,
+                        "excluded",
+                        tuple(ParallelReasonView(reason.code.value, reason.message) for reason in reasons),
+                    )
+                )
+            case _ as unreachable:
+                assert_never(unreachable)
     return ParallelPreviewView(
         preview.schema,
         preview.revision,
         preview.selection.value,
         preview.safe,
-        tuple(_parallel_item_view(item) for item in preview.launchable),
-        tuple(_parallel_item_view(item) for item in preview.excluded),
+        tuple(launchable),
+        tuple(excluded),
     )
 
 
@@ -958,13 +967,13 @@ def _reselect_action(
             generation=supplied_capability.coordinator_generation,
         )
     except ActionQueryError as error:
-        raise CommandError(CommandErrorCode(error.code.value), str(error).partition(": ")[2]) from error
+        raise CommandError(error.code, str(error).partition(": ")[2]) from error
     current = next(
         (value for value in available if decision_models.action_id(value) == decision_models.action_id(supplied)), None
     )
     if current is None:
         raise CommandError(
-            CommandErrorCode.ACTION_NOT_AVAILABLE,
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
             f"Action '{decision_models.action_id(supplied)}' is not currently legal.",
         )
     current_capability = current.capability
@@ -984,7 +993,7 @@ def _reselect_action(
     )
     if current_authority != supplied_authority:
         raise CommandError(
-            CommandErrorCode.ACTION_NOT_AVAILABLE,
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
             f"Action '{decision_models.action_id(supplied)}' no longer has exact current authority.",
         )
     return current
@@ -1117,7 +1126,7 @@ def _actions(roots: ResolvedRoots, command: ActionsCommand | LeasedActionsComman
         available = tuple(action for action in available if decision_models.action_id(action) == exact_action_id)
         if not available:
             raise CommandError(
-                CommandErrorCode.ACTION_NOT_AVAILABLE,
+                DecisionFailureCode.ACTION_NOT_AVAILABLE,
                 f"Action '{exact_action_id}' is not currently legal for this role and lease.",
             )
     if command.json:
@@ -1271,19 +1280,21 @@ def _proposal(roots: ResolvedRoots, command: ProposalCommand) -> int:
     try:
         data = path.read_bytes()
     except OSError as error:
-        raise ProposalError(ProposalErrorCode.PROPOSAL_INVALID, f"Cannot read proposal at '{path}': {error}") from error
+        raise ProposalError(
+            DecisionFailureCode.PROPOSAL_INVALID, f"Cannot read proposal at '{path}': {error}"
+        ) from error
     proposal = parse_proposal(data)
     try:
         created_at = datetime.fromisoformat(proposal.created_at.replace("Z", "+00:00"))
     except ValueError as error:
         raise ProposalError(
-            ProposalErrorCode.PROPOSAL_INVALID, "Proposal created_at must be an ISO timestamp."
+            DecisionFailureCode.PROPOSAL_INVALID, "Proposal created_at must be an ISO timestamp."
         ) from error
     if created_at.tzinfo is None:
         if len(proposal.created_at) == 10:
             created_at = created_at.replace(tzinfo=UTC)
         else:
-            raise ProposalError(ProposalErrorCode.PROPOSAL_INVALID, "Proposal created_at must include a timezone.")
+            raise ProposalError(DecisionFailureCode.PROPOSAL_INVALID, "Proposal created_at must include a timezone.")
     intake = ProposalIntake(
         ProposalId(proposal.proposal_id),
         created_at.astimezone(UTC),
@@ -1302,7 +1313,7 @@ def _proposal(roots: ResolvedRoots, command: ProposalCommand) -> int:
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     result = create_proposal(store, CreateProposalOperation(intake), datetime.now(UTC))
     if isinstance(result, DecisionFailure):
-        raise ProposalError(ProposalErrorCode(result.code.value), result.message)
+        raise ProposalError(result.code, result.message)
     view_result = refresh_views(
         store,
         roots.work,
@@ -1325,7 +1336,7 @@ def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
         payload = payload_path.read_bytes()
     except OSError as error:
         raise CommandError(
-            CommandErrorCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}"
+            DecisionFailureCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}"
         ) from error
     role = (
         decision_models.Role.WORKER
@@ -1336,7 +1347,7 @@ def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
     parsed = parse_transition_input(action.kind, payload)
     command = bind_transition(action, parsed)
     if isinstance(command, DecisionFailure):
-        raise CommandError(CommandErrorCode(command.code.value), command.message)
+        raise CommandError(command.code, command.message)
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     artifacts = ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work))
     result = execute(
@@ -1351,7 +1362,7 @@ def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
         ),
     )
     if isinstance(result, DecisionFailure):
-        raise CommandError(CommandErrorCode(result.code.value), result.message)
+        raise CommandError(result.code, result.message)
     state = store.snapshot()
     affected_attempt = next(
         (attempt.attempt_id for attempt in state.lifecycle.attempts if attempt.attempt_id == action.capability.subject),
@@ -1453,7 +1464,7 @@ def _emit_coordination(roots: ResolvedRoots, *, json: bool) -> int:
 def _retained_coordination(state: StoredWorkState) -> StoredCoordinationLease:
     current = state.authority.coordination
     if current is None:
-        raise CommandError(CommandErrorCode.COORDINATION_LEASE_REQUIRED, "Coordination authority does not exist.")
+        raise CommandError(DecisionFailureCode.COORDINATION_LEASE_REQUIRED, "Coordination authority does not exist.")
     return current
 
 
@@ -1518,7 +1529,7 @@ def _coordination(
             assert_never(unreachable)
     result = change_coordination_authority(store, authority_operation)
     if isinstance(result, DecisionFailure):
-        raise CommandError(CommandErrorCode(result.code.value), result.message)
+        raise CommandError(result.code, result.message)
     view_result = refresh_views(
         store,
         roots.work,
@@ -1536,7 +1547,7 @@ def _coordinated_transition(roots: ResolvedRoots, command: CoordinationApplyComm
         payload = payload_path.read_bytes()
     except OSError as error:
         raise CommandError(
-            CommandErrorCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}"
+            DecisionFailureCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}"
         ) from error
     transition_revision = _execute_borrowed_coordination(
         roots,
@@ -1576,7 +1587,7 @@ def _execute_borrowed_coordination(
     )
     acquired = change_coordination_authority(store, acquire)
     if isinstance(acquired, DecisionFailure):
-        raise CommandError(CommandErrorCode(acquired.code.value), acquired.message)
+        raise CommandError(acquired.code, acquired.message)
     transition_revision: str | None = None
     try:
         current_state = store.snapshot()
@@ -1593,13 +1604,13 @@ def _execute_borrowed_coordination(
         )
         if action is None:
             raise CommandError(
-                CommandErrorCode.ACTION_NOT_AVAILABLE,
+                DecisionFailureCode.ACTION_NOT_AVAILABLE,
                 f"Action '{selected_action_id}' is not currently legal.",
             )
         parsed = parse_transition_input(action.kind, payload)
         command = bind_transition(action, parsed)
         if isinstance(command, DecisionFailure):
-            raise CommandError(CommandErrorCode(command.code.value), command.message)
+            raise CommandError(command.code, command.message)
         result = execute(
             store,
             command,
@@ -1612,7 +1623,7 @@ def _execute_borrowed_coordination(
             ),
         )
         if isinstance(result, DecisionFailure):
-            raise CommandError(CommandErrorCode(result.code.value), result.message)
+            raise CommandError(result.code, result.message)
         transition_revision = str(store.snapshot().lifecycle.project.revision)
     finally:
         current = store.snapshot().authority.coordination
@@ -1632,7 +1643,7 @@ def _execute_borrowed_coordination(
                 ),
             )
             if isinstance(released, DecisionFailure) and transition_revision is None:
-                raise CommandError(CommandErrorCode(released.code.value), released.message)
+                raise CommandError(released.code, released.message)
     view_result = rebuild_views(store, roots.work, _brief_views(roots, store))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
@@ -1645,7 +1656,7 @@ def _emit_attempt_authority(state: StoredWorkState, attempt_id: AttemptId, *, js
     lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
     if lease is None:
         raise CommandError(
-            CommandErrorCode.ATTEMPT_LEASE_REQUIRED, f"Attempt '{attempt_id}' has no retained authority."
+            DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, f"Attempt '{attempt_id}' has no retained authority."
         )
     anchor = next(
         (
@@ -1682,7 +1693,7 @@ def _attempt_status(roots: ResolvedRoots, command: AttemptStatusCommand) -> int:
 def _current_attempt(state: StoredWorkState, attempt_id: AttemptId) -> StoredAttempt:
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
     if attempt is None:
-        raise CommandError(CommandErrorCode.ATTEMPT_LEASE_REQUIRED, f"Attempt '{attempt_id}' is not current.")
+        raise CommandError(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, f"Attempt '{attempt_id}' is not current.")
     return attempt
 
 
@@ -1711,13 +1722,15 @@ def _attempt_acquire_operation(
         )
     inactive = project_inactive_attempt_authority(state, attempt_id, now)
     if isinstance(inactive, DecisionFailure):
-        raise CommandError(CommandErrorCode(inactive.code.value), inactive.message)
+        raise CommandError(inactive.code, inactive.message)
     coordination = state.authority.coordination
     if coordination is None:
-        raise CommandError(CommandErrorCode.COORDINATION_LEASE_REQUIRED, "Attempt reacquisition requires coordination.")
+        raise CommandError(
+            DecisionFailureCode.COORDINATION_LEASE_REQUIRED, "Attempt reacquisition requires coordination."
+        )
     if isinstance(command, AttemptAcquireCommand):
         raise CommandError(
-            CommandErrorCode.COORDINATION_LEASE_REQUIRED,
+            DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
             "Attempt reacquisition requires the exact coordination lease and generation.",
         )
     return TransferAttemptAuthority(
@@ -1752,7 +1765,7 @@ def _attempt_renew_operation(
         None,
     )
     if retained is None:
-        raise CommandError(CommandErrorCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
+        raise CommandError(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
     return RenewAttemptAuthority(
         replace(retained, lease_id=command.lease_id, generation=command.generation),
         now,
@@ -1774,7 +1787,7 @@ def _attempt_release_operation(
         None,
     )
     if retained is None:
-        raise CommandError(CommandErrorCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
+        raise CommandError(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
     return ReleaseAttemptAuthority(
         replace(retained, lease_id=command.lease_id, generation=command.generation),
         now,
@@ -1788,7 +1801,7 @@ def _attempt_revoke_operation(
 ) -> RevokeAttemptAuthority:
     coordination = state.authority.coordination
     if coordination is None:
-        raise CommandError(CommandErrorCode.COORDINATION_LEASE_REQUIRED, "Coordination authority is absent.")
+        raise CommandError(DecisionFailureCode.COORDINATION_LEASE_REQUIRED, "Coordination authority is absent.")
     return RevokeAttemptAuthority(
         command.attempt_id,
         command.lease_id,
@@ -1832,7 +1845,7 @@ def _change_attempt_authority(
             assert_never(unreachable)
     result = change_attempt_authority(store, authority_operation)
     if isinstance(result, DecisionFailure):
-        raise CommandError(CommandErrorCode(result.code.value), result.message)
+        raise CommandError(result.code, result.message)
     refresh_result = refresh_views(
         store,
         roots.work,
@@ -1844,7 +1857,7 @@ def _change_attempt_authority(
     return _emit_attempt_authority(store.snapshot(), command.attempt_id, json=command.json)
 
 
-def _print_parallel_group(title: str, items: tuple[ParallelItem, ...]) -> None:
+def _print_parallel_group(title: str, items: tuple[ParallelItemView, ...]) -> None:
     print(f"{title}:")
     if not items:
         print("- none")
@@ -1853,7 +1866,7 @@ def _print_parallel_group(title: str, items: tuple[ParallelItem, ...]) -> None:
         detail = "; ".join(reason.message for reason in item.reasons)
         attempt = f", attempt {item.attempt_id}" if item.attempt_id is not None else ""
         suffix = f" — {detail}" if detail else ""
-        print(f"- {item.item_id} ({item.state.value}{attempt}){suffix}")
+        print(f"- {item.item_id} ({item.state}{attempt}){suffix}")
 
 
 def _parallel(roots: ResolvedRoots, command: ParallelPreviewCommand) -> int:
@@ -1861,15 +1874,16 @@ def _parallel(roots: ResolvedRoots, command: ParallelPreviewCommand) -> int:
         SQLiteWorkStore(roots.work / "state.sqlite3"),
         selected=tuple(command.item),
     )
+    view = _parallel_preview_view(preview)
     if command.json:
-        _write_json(_parallel_preview_view(preview))
+        _write_json(view)
     else:
         print(
             f"OK PARALLEL_PREVIEW revision={preview.revision} selection={preview.selection.value} "
             f"safe={'yes' if preview.safe else 'no'}"
         )
-        _print_parallel_group("Ready to launch together", preview.launchable)
-        _print_parallel_group("Not launchable", preview.excluded)
+        _print_parallel_group("Ready to launch together", view.launchable)
+        _print_parallel_group("Not launchable", view.excluded)
     return 0
 
 
@@ -1987,7 +2001,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 12
     except ProposalError as error:
         print(str(error), file=sys.stderr)
-        return 2 if error.code == ProposalErrorCode.PROPOSAL_INVALID else 13
+        return 2 if error.code == DecisionFailureCode.PROPOSAL_INVALID else 13
     except DispatchError as error:
         print(str(error), file=sys.stderr)
         return 14

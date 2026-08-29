@@ -414,9 +414,76 @@ class CliTest(unittest.TestCase):
         self.assertEqual(
             "active", self.run_json_cli(*common, "attempt", "status", "--attempt-id", "work-a-1")["status"]
         )
+        parallel = self.run_json_cli(*common, "parallel", "preview")
         self.assertEqual(
-            "pinboard-parallel-preview/v1",
-            self.run_json_cli(*common, "parallel", "preview")["schema"],
+            {"excluded", "launchable", "revision", "safe", "schema", "selection"},
+            set(parallel),
+        )
+        self.assertEqual(
+            ("pinboard-parallel-preview/v1", "12", "all-safe", True),
+            (parallel["schema"], parallel["revision"], parallel["selection"], parallel["safe"]),
+        )
+        items = [
+            self.json_object(item)
+            for item in (*self.json_list(parallel["launchable"]), *self.json_list(parallel["excluded"]))
+        ]
+        self.assertTrue(
+            all(set(item) == {"attempt_id", "item_id", "label", "outcome", "reasons", "state"} for item in items)
+        )
+        self.assertEqual(
+            [
+                ("work-c", "Work work-c", "ready", None, "launchable", []),
+                (
+                    "intake-work",
+                    "Work intake-work",
+                    "intake",
+                    None,
+                    "excluded",
+                    [
+                        {
+                            "code": "state-not-launchable",
+                            "message": "Item 'intake-work' is intake; only ready items and unowned active attempts can launch.",
+                        }
+                    ],
+                ),
+                (
+                    "work-a",
+                    "Work work-a",
+                    "active",
+                    "work-a-1",
+                    "excluded",
+                    [
+                        {
+                            "code": "dependency-live",
+                            "message": "Item 'work-a' still depends on live work: work-c.",
+                        }
+                    ],
+                ),
+                (
+                    "zz-proposal-a",
+                    "Work zz-proposal-a",
+                    "intake",
+                    None,
+                    "excluded",
+                    [
+                        {
+                            "code": "state-not-launchable",
+                            "message": "Item 'zz-proposal-a' is intake; only ready items and unowned active attempts can launch.",
+                        }
+                    ],
+                ),
+            ],
+            [
+                (
+                    item["item_id"],
+                    item["label"],
+                    item["state"],
+                    item["attempt_id"],
+                    item["outcome"],
+                    item["reasons"],
+                )
+                for item in items
+            ],
         )
         self.assertIn("payload_schema", self.run_json_cli(*common, "input-contract", "activate"))
 
@@ -435,6 +502,19 @@ class CliTest(unittest.TestCase):
                 result, stdout, stderr = self.run_cli(*common, *command)
                 self.assertEqual(0, result, stderr)
                 self.assertTrue(stdout)
+        result, stdout, stderr = self.run_cli(*common, "parallel", "preview")
+        self.assertEqual(0, result, stderr)
+        self.assertEqual(
+            """OK PARALLEL_PREVIEW revision=12 selection=all-safe safe=yes
+Ready to launch together:
+- work-c (ready)
+Not launchable:
+- intake-work (intake) — Item 'intake-work' is intake; only ready items and unowned active attempts can launch.
+- work-a (active, attempt work-a-1) — Item 'work-a' still depends on live work: work-c.
+- zz-proposal-a (intake) — Item 'zz-proposal-a' is intake; only ready items and unowned active attempts can launch.
+""",
+            stdout,
+        )
 
     def test_blocker_actions_and_input_contracts_are_unambiguous(self) -> None:
         state = complete_sqlite_state()

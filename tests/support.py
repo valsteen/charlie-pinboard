@@ -158,7 +158,6 @@ def complete_sqlite_state() -> StoredWorkState:
                 None,
                 None,
                 None,
-                None,
                 1,
                 SQLITE_DIGEST,
                 8,

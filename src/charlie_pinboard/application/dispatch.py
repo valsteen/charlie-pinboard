@@ -27,7 +27,7 @@ def _current_action(store: WorkStore, supplied: decision_models.DispatchAction) 
             generation=capability.coordinator_generation,
         )
     except ActionQueryError as error:
-        raise DispatchError(DispatchErrorCode(error.code.value), str(error).partition(": ")[2]) from error
+        raise DispatchError(error.code, str(error).partition(": ")[2]) from error
     current = next(
         (value for value in actions if decision_models.action_id(value) == decision_models.action_id(supplied)), None
     )

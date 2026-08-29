@@ -261,14 +261,16 @@ def _proposal_disposition_columns(
     match value:
         case None:
             return None, None, None, None
-        case work_models.AcceptedProposalDisposition(target=target, disposed_at=disposed_at):
-            return value.kind.value, target, None, disposed_at.isoformat()
-        case work_models.MergedProposalDisposition(target=target, disposed_at=disposed_at):
-            return value.kind.value, target, None, disposed_at.isoformat()
-        case work_models.ReturnedProposalDisposition(reason=reason, disposed_at=disposed_at):
-            return value.kind.value, None, reason, disposed_at.isoformat()
-        case work_models.RejectedProposalDisposition(reason=reason, disposed_at=disposed_at):
-            return value.kind.value, None, reason, disposed_at.isoformat()
+        case (
+            work_models.AcceptedProposalDisposition(kind=kind, target=target, disposed_at=disposed_at)
+            | work_models.MergedProposalDisposition(kind=kind, target=target, disposed_at=disposed_at)
+        ):
+            return kind.value, target, None, disposed_at.isoformat()
+        case (
+            work_models.ReturnedProposalDisposition(kind=kind, reason=reason, disposed_at=disposed_at)
+            | work_models.RejectedProposalDisposition(kind=kind, reason=reason, disposed_at=disposed_at)
+        ):
+            return kind.value, None, reason, disposed_at.isoformat()
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -364,7 +366,7 @@ class _StoredStateReader:
             for row in self._rows(
                 """
                 SELECT attempt_id, item_id, state, branch, base_revision, provenance, brief_artifact_ref_id,
-                       result_artifact_ref_id, blocker_artifact_ref_id, candidate_revision, candidate_recorded_at,
+                       result_artifact_ref_id, candidate_revision, candidate_recorded_at,
                        accepted_scope_revision, accepted_scope_digest, subject_revision, recorded_at, updated_at
                 FROM attempts
                 ORDER BY attempt_id
@@ -653,9 +655,9 @@ class _StoredStateWriter:
             INSERT INTO attempts (
                 attempt_id, item_id, state, branch, base_revision, provenance,
                 brief_artifact_ref_id, brief_artifact_kind, result_artifact_ref_id, result_artifact_kind,
-                blocker_artifact_ref_id, blocker_artifact_kind, candidate_revision, candidate_recorded_at,
+                candidate_revision, candidate_recorded_at,
                 accepted_scope_revision, accepted_scope_digest, subject_revision, recorded_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'brief', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'brief', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             tuple(
                 (
@@ -668,8 +670,6 @@ class _StoredStateWriter:
                     value.brief_artifact_ref_id,
                     value.result_artifact_ref_id,
                     None if value.result_artifact_ref_id is None else "result",
-                    value.blocker_artifact_ref_id,
-                    None if value.blocker_artifact_ref_id is None else "blocker",
                     value.candidate_revision,
                     _timestamp(value.candidate_recorded_at),
                     value.accepted_scope_revision,

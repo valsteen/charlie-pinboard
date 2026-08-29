@@ -470,12 +470,12 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(external_parent / ".codex" / "work", explicit_legacy.work_root)
 
         immutable = external.artifacts_root / "evidence.md"
-        created = create_immutable(immutable, b"accepted evidence")
-        self.assertEqual((17, b"accepted evidence"), (created.size, immutable.read_bytes()))
+        create_immutable(immutable, b"accepted evidence")
+        self.assertEqual(b"accepted evidence", immutable.read_bytes())
         with self.assertRaises(FileIOError):
             create_immutable(immutable, b"replacement")
-        replaced = atomic_replace(external.artifacts_root / "view.md", b"revision one")
-        self.assertEqual((12, b"revision one"), (replaced.size, (external.artifacts_root / "view.md").read_bytes()))
+        atomic_replace(external.artifacts_root / "view.md", b"revision one")
+        self.assertEqual(b"revision one", (external.artifacts_root / "view.md").read_bytes())
         atomic_replace(external.artifacts_root / "view.md", b"revision two")
         self.assertEqual(b"revision two", (external.artifacts_root / "view.md").read_bytes())
 
@@ -545,8 +545,8 @@ class SQLiteStoreTest(unittest.TestCase):
             "charlie_pinboard.adapters.files.file_io.Path.unlink",
             side_effect=OSError("injected staging cleanup failure"),
         ):
-            created = create_immutable(cleanup_tolerant, b"durable evidence")
-        self.assertEqual((16, b"durable evidence"), (created.size, cleanup_tolerant.read_bytes()))
+            create_immutable(cleanup_tolerant, b"durable evidence")
+        self.assertEqual(b"durable evidence", cleanup_tolerant.read_bytes())
 
     def test_complete_stored_state_and_relational_contract_matrix(self) -> None:
         path, store = self._store()

@@ -1,5 +1,4 @@
 import os
-import stat
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
@@ -48,31 +47,23 @@ def _selector(kind: ArtifactKind, key: str, revision: int, suffix: str) -> str:
     ).as_posix()
 
 
-def _reference_values(reference: ArtifactRef | ArtifactReference) -> tuple[ArtifactKind, str, int, str, str, int]:
-    return (
-        reference.kind,
-        reference.key,
-        reference.revision,
-        reference.selector,
-        reference.content_sha256,
-        reference.size_bytes,
-    )
-
-
 def _canonical_reference(reference: ArtifactRef | ArtifactReference) -> Path:
-    kind, key, revision, selector, _digest, _size = _reference_values(reference)
-    pure = PurePosixPath(selector)
+    pure = PurePosixPath(reference.selector)
     parts = pure.parts
     if pure.is_absolute() or not parts or any(part in {"", ".", ".."} for part in parts):
         raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact selector is not canonical.")
-    if len(parts) != 4 or parts[:3] != ("artifacts", _DIRECTORIES[kind], _identity(key, label="key")):
+    if len(parts) != 4 or parts[:3] != (
+        "artifacts",
+        _DIRECTORIES[reference.kind],
+        _identity(reference.key, label="key"),
+    ):
         raise ArtifactError(
             ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
             "Artifact selector does not match its identity.",
         )
     filename = parts[3]
     prefix, separator, suffix = filename.partition(".")
-    if not separator or prefix != str(revision) or not suffix:
+    if not separator or prefix != str(reference.revision) or not suffix:
         raise ArtifactError(
             ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
             "Artifact selector does not match its revision.",
@@ -80,59 +71,16 @@ def _canonical_reference(reference: ArtifactRef | ArtifactReference) -> Path:
     return Path(*parts)
 
 
-def _read_regular_no_follow(work_root: Path, relative: Path) -> bytes:
-    current = work_root
-    try:
-        root_stat = current.lstat()
-    except OSError as error:
-        raise ArtifactError(ArtifactErrorCode.STORAGE_IO_ERROR, "Artifact work root could not be inspected.") from error
-    if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
-        raise ArtifactError(
-            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
-            "Artifact work root is not a real directory.",
-        )
-    for component in relative.parts[:-1]:
-        current = current / component
-        try:
-            status = current.lstat()
-        except OSError as error:
-            raise ArtifactError(
-                ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
-                "Artifact directory chain is incomplete.",
-            ) from error
-        if stat.S_ISLNK(status.st_mode) or not stat.S_ISDIR(status.st_mode):
-            raise ArtifactError(
-                ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
-                "Artifact directory chain is not real.",
-            )
-    path = current / relative.name
-    try:
-        status = path.lstat()
-        if stat.S_ISLNK(status.st_mode) or not stat.S_ISREG(status.st_mode):
-            raise ArtifactError(
-                ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
-                "Artifact selector is not a regular file.",
-            )
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            with os.fdopen(descriptor, "rb", closefd=False) as stream:
-                return stream.read()
-        finally:
-            os.close(descriptor)
-    except ArtifactError:
-        raise
-    except OSError as error:
-        raise ArtifactError(
-            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
-            "Artifact bytes could not be read safely.",
-        ) from error
-
-
 def verify_reference(work_root: Path, reference: ArtifactRef | ArtifactReference) -> None:
     relative = _canonical_reference(reference)
-    _kind, _key, _revision, _selector_value, expected_digest, expected_size = _reference_values(reference)
-    data = _read_regular_no_follow(work_root, relative)
-    if len(data) != expected_size or sha256(data).hexdigest() != expected_digest:
+    try:
+        data = (work_root / relative).read_bytes()
+    except OSError as error:
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            "Artifact bytes could not be read.",
+        ) from error
+    if len(data) != reference.size_bytes or sha256(data).hexdigest() != reference.content_sha256:
         raise ArtifactError(
             ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
             "Artifact size or digest does not match its reference.",
@@ -152,7 +100,7 @@ def write_revision(roots: DurableRoots, artifact: NewArtifact) -> ArtifactRef:
             path.lstat()
         except FileNotFoundError:
             try:
-                created = create_immutable(path, artifact.content)
+                create_immutable(path, artifact.content)
             except FileIOError:
                 try:
                     verify_reference(roots.work_root, reference)
@@ -161,17 +109,9 @@ def write_revision(roots: DurableRoots, artifact: NewArtifact) -> ArtifactRef:
                         ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
                         "Artifact revision could not be published immutably.",
                     ) from collision
-            else:
-                if (created.sha256, created.size) != (reference.content_sha256, reference.size_bytes):
-                    raise ArtifactError(
-                        ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
-                        "Published artifact facts changed unexpectedly.",
-                    )
         else:
             verify_reference(roots.work_root, reference)
         return reference
-    except ArtifactError:
-        raise
     except FileIOError as error:
         raise ArtifactError(ArtifactErrorCode.STORAGE_IO_ERROR, str(error)) from error
 

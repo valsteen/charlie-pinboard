@@ -4,11 +4,12 @@ from charlie_pinboard.application.errors import QueryError, QueryErrorCode
 from charlie_pinboard.application.ports import WorkStore
 from charlie_pinboard.application.query_models import (
     DependencyReason,
+    ExcludedParallelItem,
     ItemStatus,
     ItemStatusAttempt,
+    LaunchableParallelItem,
     OverviewItem,
     ParallelItem,
-    ParallelOutcome,
     ParallelPreview,
     ParallelReason,
     ParallelReasonCode,
@@ -279,11 +280,10 @@ def preview_parallel(
         )
     candidates = tuple(by_id[item_id] for item_id in selected) if selected else tuple(sorted(live, key=_item_key))
     live_ids = frozenset(by_id)
-    launchable: list[ParallelItem] = []
-    excluded: list[ParallelItem] = []
+    items: list[ParallelItem] = []
     for item in candidates:
         reasons = _parallel_reasons(state, item.item_id, live_ids, current)
-        value = ParallelItem(
+        common = (
             str(item.item_id),
             item.user_label,
             _required_live_work_state(item.state),
@@ -298,15 +298,12 @@ def preview_parallel(
                 )
             )
             or None,
-            ParallelOutcome.EXCLUDED if reasons else ParallelOutcome.LAUNCHABLE,
-            reasons,
         )
-        (excluded if reasons else launchable).append(value)
+        items.append(ExcludedParallelItem(*common, reasons) if reasons else LaunchableParallelItem(*common))
     return ParallelPreview(
         "pinboard-parallel-preview/v1",
         str(state.lifecycle.project.revision),
         ParallelSelection.SELECTED if selected else ParallelSelection.ALL_SAFE,
-        not selected or not excluded,
-        tuple(sorted(launchable, key=_parallel_item_key)),
-        tuple(sorted(excluded, key=_parallel_item_key)),
+        not selected or not any(isinstance(item, ExcludedParallelItem) for item in items),
+        tuple(sorted(items, key=_parallel_item_key)),
     )
