@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from docs.how_it_works import render
+from docs.how_it_works import database, journey, layers, product, render
 from docs.how_it_works.model import Box, Connector, Diagram, render_svg
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +60,22 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                     Diagram("unsafe", "Unsafe", "Unsafe route", 280, 100, (), (), (connector,), boxes),
                     "source-revision",
                 )
+
+    def test_diagram_connectors_state_real_relationships(self) -> None:
+        product_edges = {(value.source, value.target) for value in product.DIAGRAM.connectors}
+        self.assertNotIn(("attempt-paused", "attempt-blocked"), product_edges)
+        self.assertIn(("attempt-active", "attempt-blocked"), product_edges)
+
+        self.assertTrue(all(value.label for value in layers.DIAGRAM.connectors))
+
+        journey_edges = {(value.source, value.target) for value in journey.DIAGRAM.connectors}
+        self.assertIn(("transaction", "result"), journey_edges)
+        self.assertIn(("transaction", "views"), journey_edges)
+        self.assertNotIn(("views", "result"), journey_edges)
+
+        database_edges = {(value.source, value.target) for value in database.DIAGRAM.connectors}
+        self.assertIn(("work-items", "dependencies"), database_edges)
+        self.assertIn(("meta", "history"), database_edges)
 
     def test_write_and_stale_check_round_trip(self) -> None:
         outputs = render.build_outputs(ROOT)
