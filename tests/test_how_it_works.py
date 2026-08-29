@@ -61,6 +61,82 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                     "source-revision",
                 )
 
+    def test_renderer_reserves_card_text_and_connector_clearance(self) -> None:
+        boxes = (
+            Box("source", "", "Source", (), (), 10, 10, 100, 60),
+            Box("obstacle", "", "Obstacle", (), (), 130, 10, 100, 60),
+            Box("target", "", "Target", (), (), 250, 10, 100, 60),
+        )
+
+        with self.assertRaisesRegex(ValueError, "right margin"):
+            render_svg(
+                Diagram(
+                    "crowded-text",
+                    "Crowded text",
+                    "Crowded text",
+                    280,
+                    100,
+                    (),
+                    (),
+                    (),
+                    (Box("crowded", "", "Complete stored change", (), (), 10, 10, 100, 60),),
+                ),
+                "source-revision",
+            )
+
+        with self.assertRaisesRegex(ValueError, "right margin"):
+            render_svg(
+                Diagram(
+                    "tight-text",
+                    "Tight text",
+                    "Tight text",
+                    280,
+                    100,
+                    (),
+                    (),
+                    (),
+                    (Box("tight", "", "Attached knowledge", (), (), 10, 10, 180, 60),),
+                ),
+                "source-revision",
+            )
+
+        with self.assertRaisesRegex(ValueError, "clearance from obstacle"):
+            render_svg(
+                Diagram(
+                    "crowded-route",
+                    "Crowded route",
+                    "Crowded route",
+                    370,
+                    100,
+                    (),
+                    (),
+                    (Connector(((110, 40), (250, 40)), "source", "target"),),
+                    boxes,
+                ),
+                "source-revision",
+            )
+
+        near_boxes = (
+            Box("source", "", "Source", (), (), 10, 0, 100, 60),
+            Box("obstacle", "", "Obstacle", (), (), 130, 30, 100, 60),
+            Box("target", "", "Target", (), (), 250, 0, 100, 60),
+        )
+        with self.assertRaisesRegex(ValueError, "clearance from obstacle"):
+            render_svg(
+                Diagram(
+                    "grazing-route",
+                    "Grazing route",
+                    "Grazing route",
+                    370,
+                    100,
+                    (),
+                    (),
+                    (Connector(((110, 20), (250, 20)), "source", "target"),),
+                    near_boxes,
+                ),
+                "source-revision",
+            )
+
     def test_diagram_connectors_state_real_relationships(self) -> None:
         product_edges = {(value.source, value.target) for value in product.DIAGRAM.connectors}
         self.assertNotIn(("attempt-paused", "attempt-blocked"), product_edges)

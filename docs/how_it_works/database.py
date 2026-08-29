@@ -103,7 +103,7 @@ DIAGRAM = Diagram(
     connectors=(
         Connector(((270, 155), (430, 155)), "proposals", "work-items", "may become work", (350, 143)),
         Connector(((640, 155), (570, 155)), "attempts", "work-items", "executes", (605, 143)),
-        Connector(((780, 155), (835, 155)), "attempts", "scopes", "scope", (807, 143)),
+        Connector(((780, 155), (830, 155)), "attempts", "scopes", "scope", (805, 143)),
         Connector(((500, 110), (500, 80), (1100, 80), (1100, 110)), "work-items", "dependencies"),
         Connector(
             ((105, 260), (105, 230), (140, 230), (140, 200)), "proposal-evidence", "proposals", "supports", (72, 226)
@@ -115,7 +115,7 @@ DIAGRAM = Diagram(
         Connector(
             ((640, 270), (640, 240), (700, 240), (700, 200)), "focus", "attempts", "optional attempt", (700, 228)
         ),
-        Connector(((230, 545), (200, 545)), "item-artifacts", "artifact-refs"),
+        Connector(((200, 650), (200, 590)), "item-artifacts", "artifact-refs"),
         Connector(
             ((680, 590), (680, 620), (540, 620), (540, 650)),
             "lease-counters",
@@ -123,20 +123,18 @@ DIAGRAM = Diagram(
             "issues",
             (610, 608),
         ),
-        Connector(((650, 695), (630, 695)), "attempt-leases", "lease-generations"),
+        Connector(((650, 695), (620, 695)), "attempt-leases", "lease-generations"),
         Connector(((975, 590), (975, 650)), "meta", "history", "each revision", (1017, 620)),
     ),
     boxes=(
         Box("proposals", "", "Proposals", ("possible work",), ("may relate to an item",), 90, 110, 180, 90),
-        Box("proposal-evidence", "", "Evidence", ("why it was raised",), ("proposal_evidence",), 40, 260, 130, 90),
-        Box("proposal-freshness", "", "Assumptions", ("facts to recheck",), ("proposal_freshness",), 190, 260, 170, 90),
+        Box("proposal-evidence", "", "Evidence", ("why it was raised",), ("proposal_evidence",), 40, 260, 150, 90),
+        Box("proposal-freshness", "", "Assumptions", ("facts to recheck",), ("proposal_freshness",), 210, 260, 170, 90),
         Box("work-items", "", "Work items", ("durable identity",), ("work_items",), 430, 110, 140, 90),
         Box("attempts", "", "Attempts", ("one execution",), ("attempts",), 640, 110, 140, 90),
         Box("focus", "", "Current focus", ("advisory pointer",), ("item + optional attempt",), 500, 270, 180, 80),
-        Box("scopes", "", "Accepted versions", ("current scope",), ("plus its history",), 835, 110, 170, 90),
-        Box(
-            "dependencies", "", "Dependency edges", ("item → prerequisite",), ("item_dependencies",), 1020, 110, 160, 90
-        ),
+        Box("scopes", "", "Accepted versions", ("current scope",), ("plus its history",), 830, 110, 175, 90),
+        Box("dependencies", "", "Dependencies", ("item → prerequisite",), ("item_dependencies",), 1020, 110, 160, 90),
         Box(
             "artifact-refs",
             "",
@@ -145,7 +143,7 @@ DIAGRAM = Diagram(
             ("artifact_refs",),
             50,
             500,
-            150,
+            300,
             90,
         ),
         Box(
@@ -154,21 +152,21 @@ DIAGRAM = Diagram(
             "Attached knowledge",
             ("item + role + artifact",),
             ("item_artifacts",),
-            230,
-            500,
-            160,
+            50,
+            650,
+            300,
             90,
         ),
-        Box("coordination", "", "Coordination", ("one shared-change holder",), ("status + expiry",), 430, 500, 170, 90),
+        Box("coordination", "", "Coordination", ("one shared-change holder",), ("status + expiry",), 415, 500, 175, 90),
         Box(
             "lease-counters",
             "",
             "Generation counter",
             ("highest ownership epoch",),
             ("attempt_lease_counters",),
-            620,
+            605,
             500,
-            160,
+            185,
             90,
         ),
         Box(
@@ -177,13 +175,13 @@ DIAGRAM = Diagram(
             "Ownership history",
             ("task + host + lease id",),
             ("attempt_lease_generations",),
-            450,
+            420,
             650,
-            180,
+            200,
             90,
         ),
         Box("attempt-leases", "", "Current lease", ("generation",), ("status + expiry",), 650, 650, 140, 90),
-        Box("meta", "", "Project state", ("revision + host epoch",), ("project_meta",), 900, 500, 150, 90),
+        Box("meta", "", "Project state", ("revision + host epoch",), ("project_meta",), 900, 500, 160, 90),
         Box(
             "history", "", "Committed history", ("input + outcome + actor",), ("transition_history",), 890, 650, 170, 90
         ),
