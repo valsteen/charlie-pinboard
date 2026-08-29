@@ -1,3 +1,12 @@
+"""Portable-copy production workflow awaiting a future installed CLI route.
+
+This module is intentionally unreachable from the current command surface. Treat
+``create_portable_copy`` and the production code that supports it as retained
+work in progress: lack of callers is not grounds to delete or relocate it. The
+implementation may be refactored or simplified as normal production code while
+its tested portable-copy behavior remains intact.
+"""
+
 import json
 import os
 import shutil
