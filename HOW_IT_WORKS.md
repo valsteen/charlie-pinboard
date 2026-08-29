@@ -2,9 +2,9 @@
 
 # How Pinboard works
 
-Pinboard looks like a small workflow engine: work appears, moves, pauses, resumes, and eventually leaves the live queue. The consequential part is not moving a label from one column to another. Pinboard preserves what the project decided, which execution is acting on it, who may change it now, and what evidence another task can trust later.
+Pinboard keeps repository work coherent across tasks and interruptions. It preserves what the project decided, which execution is acting on it, who may change it now, and what evidence another task can trust later.
 
-This guide shows the same system from four perspectives. Each view omits detail deliberately; together they explain why the implementation is larger than its basic state diagram suggests.
+The four views move from the visible workflow to package responsibilities, then follow one change and show the durable relationships underneath.
 
 ## What moves
 
@@ -14,18 +14,18 @@ A work item is the durable project decision. An attempt is one execution of that
 
 The primary path is intentionally familiar: intake becomes ready, active work enters review, and accepted work becomes a terminal outcome. The side paths carry the distinctions that matter later. Deferred work was consciously saved. Paused work can continue without inventing a blocker. Blocked work retains a named condition. Review protects one exact candidate.
 
-Proposals, dependencies, accepted scope, authority, and evidence are not extra states. They answer different questions about the same work, so squeezing them into one status would make the workflow smaller on paper and less truthful in use.
+Proposals, dependencies, accepted scope, authority, and evidence are not extra states. They answer different questions about the same work; treating them as statuses would erase the distinctions they carry.
 
-## Why the code has consequences
+## What each transition preserves
 
-Four promises turn the simple-looking lifecycle into durable coordination:
+The lifecycle is accompanied by four guarantees:
 
 - **Work survives conversations.** A later task can continue from accepted scope and evidence instead of reconstructing intent from chat history.
 - **Authority is current.** An expired or replaced worker cannot apply an action it discovered earlier.
 - **Review is about one candidate.** Correction, checkpoint acceptance, continuation, and terminal completion preserve different outcomes without changing which work they belong to.
 - **Transitions are atomic.** An accepted change updates its related facts and history together; a rejected or failed change leaves the previous ledger intact.
 
-These promises explain why seemingly similar words remain distinct. They also explain why boundaries and exact representations occupy more code than the state names themselves.
+These guarantees explain why seemingly similar words remain distinct.
 
 ## Where responsibilities live
 
@@ -33,7 +33,7 @@ The package is split into four layers because each removes a different kind of a
 
 ![Four package layers showing interfaces, application, domain, and adapters with the question each layer answers](assets/how-it-works/layers.svg)
 
-Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. Application code coordinates complete operations against current state. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. Most of the implementation exists at those transformations, where silent interpretation would otherwise accumulate.
+Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. Application code coordinates complete operations against current state. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
 
 ## Follow one change
 
@@ -45,13 +45,11 @@ The layers do not repeat the same decision. Each contributes a different guarant
 
 ## The durable memory underneath
 
-The relational ledger is intentionally the busiest view. Sixteen tables are not sixteen workflow states. They preserve six different kinds of memory: current work, accepted scope and dependencies, discoveries, immutable knowledge, changing authority, and the history that connects them.
+The relational ledger groups sixteen tables into six kinds of memory: current work, accepted scope and dependencies, discoveries, immutable knowledge, changing authority, and the history that connects them.
 
 ![Six groups of SQLite tables showing current work, scope, discovery, durable knowledge, authority, and history](assets/how-it-works/database.svg)
 
 A work item survives attempts. Scope survives edits. Evidence survives conversations. Authority changes over time. The database makes those relationships explicit so the application does not have to infer them from filenames, Markdown, or whichever task happens to be open.
-
-This is still one local workflow engine. Its size comes from making the consequential parts explicit: meaning at the boundary, legality at the center, and durable relationships underneath.
 
 For installation and the product story, return to the [README](README.md). For contributor-facing ownership, storage boundaries, and representative command flows, continue to the [architecture map](ARCHITECTURE.md).
 
