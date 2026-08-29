@@ -36,6 +36,7 @@ banned-from = [
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "enum.StrEnum".msg = "Use Enum so string behavior remains explicit."
+"src".msg = "Import the installed package as pinboard; src is only the source-tree layout."
 "typing.Any".msg = "Use a concrete type or a closed union."
 
 [tool.ruff.lint.mccabe]
