@@ -4,12 +4,6 @@ from charlie_pinboard.domain.identifiers import AttemptId, ItemId
 
 
 @dataclass(frozen=True, slots=True)
-class DurableFile:
-    sha256: str
-    size: int
-
-
-@dataclass(frozen=True, slots=True)
 class ViewWarning:
     message: str
     repair: str

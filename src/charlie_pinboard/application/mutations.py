@@ -543,7 +543,6 @@ def _activation_attempt_after(
         None,
         None,
         None,
-        None,
         item.scope_revision,
         item.scope_digest,
         revision,

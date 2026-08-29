@@ -98,8 +98,6 @@ CREATE TABLE attempts (
     brief_artifact_kind TEXT NOT NULL DEFAULT 'brief' CHECK (brief_artifact_kind = 'brief'),
     result_artifact_ref_id INTEGER,
     result_artifact_kind TEXT CHECK (result_artifact_kind = 'result'),
-    blocker_artifact_ref_id INTEGER,
-    blocker_artifact_kind TEXT CHECK (blocker_artifact_kind = 'blocker'),
     candidate_revision TEXT,
     candidate_recorded_at TEXT,
     accepted_scope_revision INTEGER NOT NULL CHECK (accepted_scope_revision >= 1),
@@ -112,12 +110,9 @@ CREATE TABLE attempts (
         REFERENCES artifact_refs(artifact_ref_id, kind),
     FOREIGN KEY (result_artifact_ref_id, result_artifact_kind)
         REFERENCES artifact_refs(artifact_ref_id, kind),
-    FOREIGN KEY (blocker_artifact_ref_id, blocker_artifact_kind)
-        REFERENCES artifact_refs(artifact_ref_id, kind),
     FOREIGN KEY (item_id, accepted_scope_revision, accepted_scope_digest)
         REFERENCES item_scope_revisions(item_id, scope_revision, scope_digest),
     CHECK ((result_artifact_ref_id IS NULL) = (result_artifact_kind IS NULL)),
-    CHECK ((blocker_artifact_ref_id IS NULL) = (blocker_artifact_kind IS NULL)),
     CHECK ((candidate_revision IS NULL) = (candidate_recorded_at IS NULL)),
     CHECK (
         (state = 'review' AND candidate_revision IS NOT NULL)

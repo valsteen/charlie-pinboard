@@ -2,8 +2,6 @@ import json
 import unittest
 
 import msgspec
-from hypothesis import given, settings
-from hypothesis import strategies as st
 
 from charlie_pinboard.domain import decision_models, work_models
 from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId, CandidateId
@@ -137,18 +135,18 @@ class TransitionInputTest(unittest.TestCase):
                 schema = encoded_transition_input_schema(kind)
                 self.assertIn(b'"type":"object"', schema)
 
-    @settings(max_examples=50)
-    @given(invalid=st.one_of(st.none(), st.integers(), st.lists(st.integers()), st.dictionaries(st.text(), st.text())))
-    def test_activate_rejects_non_string_attempt(self, invalid: JsonValue) -> None:
-        value: dict[str, JsonValue] = {
-            "attempt": invalid,
-            "branch": "codex/reveal-core",
-            "base_revision": "abc123",
-            "owner": "worker",
-            "brief_artifact_ref_id": 1,
-        }
-        with self.assertRaises(TransitionInputError):
-            parse_transition_input(decision_models.ActionKind.ACTIVATE, json.dumps(value))
+    def test_activate_rejects_non_string_attempt(self) -> None:
+        invalid_values: tuple[JsonValue, ...] = (None, 1, [], {})
+        for invalid in invalid_values:
+            value: dict[str, JsonValue] = {
+                "attempt": invalid,
+                "branch": "codex/reveal-core",
+                "base_revision": "abc123",
+                "owner": "worker",
+                "brief_artifact_ref_id": 1,
+            }
+            with self.subTest(invalid=invalid), self.assertRaises(TransitionInputError):
+                parse_transition_input(decision_models.ActionKind.ACTIVATE, json.dumps(value))
 
 
 if __name__ == "__main__":

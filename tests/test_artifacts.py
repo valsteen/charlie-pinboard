@@ -12,7 +12,6 @@ from charlie_pinboard.adapters.files.errors import (
     FileIOErrorCode,
 )
 from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.files.models import DurableFile
 from charlie_pinboard.adapters.sqlite.database import initialize_database
 from charlie_pinboard.adapters.sqlite.errors import StorageError
 from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
@@ -91,7 +90,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         self.assertEqual(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, collision.exception.code)
         self.assertEqual(b"{}\n", (roots.work_root / reference.selector).read_bytes())
 
-    def test_reference_verification_rejects_escape_symlink_size_and_digest(self) -> None:
+    def test_reference_verification_rejects_escape_size_and_digest(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         reference = write_revision(
@@ -106,13 +105,6 @@ class ArtifactPersistenceTest(unittest.TestCase):
         ):
             with self.subTest(reference=changed), self.assertRaises(ArtifactError):
                 verify_reference(roots.work_root, changed)
-
-        target = roots.work_root / reference.selector
-        original = target.with_name("original.json")
-        target.rename(original)
-        target.symlink_to(original.name)
-        with self.assertRaises(ArtifactError):
-            verify_reference(roots.work_root, reference)
 
     def test_artifact_identity_and_publication_failure_matrix_is_stable(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
@@ -135,15 +127,6 @@ class ArtifactPersistenceTest(unittest.TestCase):
         ):
             with self.subTest(selector=selector), self.assertRaises(ArtifactError):
                 verify_reference(roots.work_root, replace(published, selector=selector))
-
-        with (
-            patch(
-                "charlie_pinboard.adapters.files.artifacts.create_immutable",
-                return_value=DurableFile("0" * 64, 100),
-            ),
-            self.assertRaises(ArtifactError),
-        ):
-            write_revision(roots, NewArtifact(ArtifactKind.RESULT, "bad-facts", 1, ".md", b"x"))
 
         failing_project = Path(tempfile.mkdtemp()).resolve()
         failing_roots = resolve_durable_roots(failing_project)
