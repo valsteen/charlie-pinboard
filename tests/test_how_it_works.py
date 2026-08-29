@@ -29,10 +29,13 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         self.assertIn("## Where responsibilities live", guide)
         self.assertIn("## Follow one change", guide)
         self.assertIn("## The durable memory underneath", guide)
-        self.assertIn("An artifact reference identifies one exact file", guide)
-        self.assertIn("An item attachment gives that file a role", guide)
-        self.assertIn("The coordination lease is deliberately standalone", guide)
+        self.assertIn("A canonical work brief is published before an item is activated or resumed", guide)
+        self.assertIn("ready-review evidence can be published during dispatch preparation", guide)
+        self.assertIn("does not currently publish them into this registry", guide)
+        self.assertIn("any task may borrow the single coordination lease", guide)
+        self.assertIn("It is not a coordinator task", guide)
         self.assertIn("An attempt lease records which task session", guide)
+        self.assertNotIn("requirements, plans, designs, briefs, results, blockers", guide)
 
     def test_diagrams_use_the_approved_reading_surface(self) -> None:
         outputs = render.build_outputs(ROOT)
@@ -155,7 +158,13 @@ class HowItWorksDocumentationTests(unittest.TestCase):
 
         database_edges = {(value.source, value.target) for value in database.DIAGRAM.connectors}
         self.assertIn(("work-items", "dependencies"), database_edges)
+        self.assertIn(("item-artifacts", "artifact-refs"), database_edges)
         self.assertIn(("meta", "history"), database_edges)
+
+        database_boxes = {value.key: value for value in database.DIAGRAM.boxes}
+        self.assertEqual("Accepted artifacts", database_boxes["artifact-refs"].title)
+        self.assertEqual("Item evidence link", database_boxes["item-artifacts"].title)
+        self.assertEqual("Shared authority", database_boxes["coordination"].title)
 
     def test_write_and_stale_check_round_trip(self) -> None:
         outputs = render.build_outputs(ROOT)
