@@ -28,7 +28,7 @@ Connectors are semantic marks, not decoration:
 - Filled arrowheads are the default direction marker. Another arrowhead style requires another real relationship meaning.
 - A short statement is preferable to a long route through unrelated groups.
 
-The day canvas uses a warm paper tone; the night canvas uses neutral charcoal while retaining a little warmth in its cards and routing. Both use a visible square grid and a thin outer border. The grid provides spatial stability across sparse and dense diagrams and must remain legible at normal GitHub reading width. Meaningful group guides remain stronger than the grid. Neither palette adds gradients, shadows, or decorative effects.
+The day canvas uses a warm paper tone; the night canvas uses muted navy selected against GitHub's dark reading surface. Both use a visible square grid and a thin outer border. The grid provides spatial stability across sparse and dense diagrams and must remain legible at normal GitHub reading width. Meaningful group guides remain stronger than the grid. Neither palette adds gradients, shadows, or decorative effects.
 
 ## Source ownership
 

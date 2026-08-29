@@ -38,18 +38,18 @@ DAY_PALETTE = Palette(
 )
 
 NIGHT_PALETTE = Palette(
-    canvas="#191b1d",
-    grid="#454541",
-    frame="#4b463d",
-    card="#292621",
-    card_border="#665f54",
-    text="#eee8dd",
-    label="#bdb4a6",
-    muted_text="#c8c0b4",
-    guide="#4a453c",
-    connector="#9ca6b5",
-    primary="#91a4bd",
-    secondary="#9b8f7e",
+    canvas="#1c2127",
+    grid="#65798b",
+    frame="#45515c",
+    card="#242b32",
+    card_border="#5e6a74",
+    text="#edf1f2",
+    label="#b7c0c5",
+    muted_text="#c5cdd0",
+    guide="#414c55",
+    connector="#9ba8b1",
+    primary="#91a7bb",
+    secondary="#9b948b",
 )
 
 
