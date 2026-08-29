@@ -39,7 +39,7 @@ DAY_PALETTE = Palette(
 
 NIGHT_PALETTE = Palette(
     canvas="#1c2127",
-    grid="#65798b",
+    grid="#586a79",
     frame="#45515c",
     card="#242b32",
     card_border="#5e6a74",
