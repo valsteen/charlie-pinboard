@@ -15,12 +15,15 @@ The generated diagrams are static reading aids for a visitor who is scrolling th
 
 Cards are flat, light, and rectangular. A narrow left bar establishes the structural accent. Small monospaced labels identify a state, layer, table, or source symbol; the main title states the human meaning; supporting facts remain visually quieter.
 
+Every text line stays inside the card's content area with a deliberate right margin. Merely avoiding literal overflow is not enough: a title, detail, or source name must not appear to bump into the border.
+
 Connectors are semantic marks, not decoration:
 
 - Routes are horizontal or vertical. Soft elbows are used only when a route must turn.
 - Every bend has a straight segment before the arrowhead.
 - A connector meets the middle region of a card edge, never a fragile corner.
 - Connectors do not cross text, graze unrelated cards, run closely parallel to a card, stop without a destination, or make a detour that carries no meaning.
+- Every connector segment keeps a visible clearance corridor around unrelated cards. A route must never overlap or visually merge with another card's border; move it above, below, or farther beside the card instead.
 - Distinct relationships use distinct card ports. A shared trunk is reserved for a relationship that genuinely branches.
 - Filled arrowheads are the default direction marker. Another arrowhead style requires another real relationship meaning.
 - A short statement is preferable to a long route through unrelated groups.

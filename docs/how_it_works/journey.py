@@ -51,7 +51,7 @@ DIAGRAM = Diagram(
         Connector(((570, 346), (570, 388), (700, 388), (700, 430)), "use-case", "decision"),
         Connector(((650, 472), (560, 472)), "decision", "rejection", "rejected", (605, 458)),
         Connector(((750, 430), (750, 294), (800, 294)), "decision", "mutation", "accepted", (710, 356)),
-        Connector(((850, 346), (850, 620)), "mutation", "transaction", "commit", (820, 554)),
+        Connector(((870, 346), (870, 620)), "mutation", "transaction", "commit", (840, 554)),
         Connector(
             ((900, 620), (900, 550), (1100, 550), (1100, 172)),
             "transaction",
@@ -59,7 +59,7 @@ DIAGRAM = Diagram(
             "receipt",
             (1000, 538),
         ),
-        Connector(((950, 680), (1020, 680)), "transaction", "views", "refresh", (985, 668)),
+        Connector(((950, 680), (1000, 680)), "transaction", "views", "refresh", (975, 668)),
     ),
     boxes=(
         Box("request", "Request", "submit-review", (), ("CLI / JSON",), 170, 88, 150, 84, "muted"),
@@ -84,7 +84,7 @@ DIAGRAM = Diagram(
             ("project_transition_mutation",),
             800,
             244,
-            200,
+            240,
             102,
         ),
         Box(
@@ -118,7 +118,7 @@ DIAGRAM = Diagram(
             (),
             440,
             620,
-            180,
+            190,
             102,
         ),
         Box(
@@ -138,9 +138,9 @@ DIAGRAM = Diagram(
             "Refresh projection",
             ("after commit · repairable",),
             (),
-            1020,
+            1000,
             620,
-            160,
+            180,
             102,
             "muted",
         ),

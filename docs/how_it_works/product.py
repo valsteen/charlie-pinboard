@@ -77,10 +77,10 @@ DIAGRAM = Diagram(
         Guide((300, 746), (1172, 746)),
     ),
     connectors=(
-        Connector(((210, 125), (260, 125)), "intake", "ready"),
+        Connector(((220, 125), (260, 125)), "intake", "ready"),
         Connector(((410, 125), (480, 125)), "ready", "active"),
         Connector(((650, 125), (740, 125)), "active", "review"),
-        Connector(((930, 125), (980, 125)), "review", "terminal"),
+        Connector(((940, 125), (980, 125)), "review", "terminal"),
         Connector(((130, 170), (130, 250)), "intake", "deferred", "defer", (158, 216)),
         Connector(((530, 170), (530, 250)), "active", "paused", "pause", (558, 216)),
         Connector(
@@ -93,13 +93,13 @@ DIAGRAM = Diagram(
         Connector(((350, 515), (250, 515)), "attempt-active", "attempt-paused", "pause", (300, 503)),
         Connector(((440, 570), (440, 610)), "attempt-active", "attempt-blocked", "block", (476, 594)),
         Connector(((530, 515), (650, 515)), "attempt-active", "attempt-review", "submit", (590, 503)),
-        Connector(((850, 515), (970, 515)), "attempt-review", "attempt-done", "complete", (910, 503)),
+        Connector(((860, 515), (970, 515)), "attempt-review", "attempt-done", "complete", (915, 503)),
     ),
     boxes=(
-        Box("intake", "Intake", "Visible finding", (), ("WorkState.INTAKE",), 60, 80, 150, 90),
+        Box("intake", "Intake", "Visible finding", (), ("WorkState.INTAKE",), 60, 80, 160, 90),
         Box("ready", "Ready", "Accepted work", (), ("WorkState.READY",), 260, 80, 150, 90),
         Box("active", "Active", "Attempt underway", (), ("WorkState.ACTIVE",), 480, 80, 170, 90),
-        Box("review", "Review", "Exact candidate held", (), ("return · continue",), 740, 80, 190, 90),
+        Box("review", "Review", "Exact candidate held", (), ("return · continue",), 740, 80, 200, 90),
         Box(
             "terminal",
             "Terminal",
@@ -178,7 +178,7 @@ DIAGRAM = Diagram(
             ("AttemptState.REVIEW",),
             650,
             470,
-            200,
+            210,
             100,
         ),
         Box(

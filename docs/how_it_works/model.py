@@ -72,6 +72,15 @@ class Diagram:
 _CORNER_RADIUS = 12
 _PORT_MARGIN = 12
 _ARROW_APPROACH = 16
+_CARD_CLEARANCE = 12
+_BOX_TEXT_INSET = 16
+_BOX_TEXT_RIGHT_MARGIN = 16
+_TEXT_WIDTH_FACTORS = {
+    "label": 7.5,
+    "meta": 6.2,
+}
+_NARROW_GLYPHS = frozenset(" !'(),.:;I[]`fijlt|")
+_WIDE_GLYPHS = frozenset("%&@GMOQVWmw")
 
 
 def _segment_length(start: tuple[int, int], end: tuple[int, int]) -> int:
@@ -97,6 +106,44 @@ def _stable_port(box: Box, point: tuple[int, int]) -> bool:
     return horizontal_edge or vertical_edge
 
 
+def _text_fits_width(box: Box, text: str, style: str) -> bool:
+    available = box.width - _BOX_TEXT_INSET - _BOX_TEXT_RIGHT_MARGIN
+    if style in _TEXT_WIDTH_FACTORS:
+        estimated = len(text) * _TEXT_WIDTH_FACTORS[style]
+    else:
+        em_width = sum(
+            0.34 if character in _NARROW_GLYPHS else 0.78 if character in _WIDE_GLYPHS else 0.56 for character in text
+        )
+        estimated = em_width * (15.9 if style == "title" else 11)
+    return estimated <= available
+
+
+def _segment_enters_clearance(start: tuple[int, int], end: tuple[int, int], box: Box) -> bool:
+    left = box.x - _CARD_CLEARANCE
+    right = box.x + box.width + _CARD_CLEARANCE
+    top = box.y - _CARD_CLEARANCE
+    bottom = box.y + box.height + _CARD_CLEARANCE
+    if start[1] == end[1]:
+        segment_left, segment_right = sorted((start[0], end[0]))
+        return top <= start[1] <= bottom and segment_left <= right and segment_right >= left
+    segment_top, segment_bottom = sorted((start[1], end[1]))
+    return left <= start[0] <= right and segment_top <= bottom and segment_bottom >= top
+
+
+def _validate_connector_clearance(
+    diagram: Diagram,
+    connector: Connector,
+    boxes: dict[str, Box],
+    segments: tuple[tuple[tuple[int, int], tuple[int, int]], ...],
+) -> None:
+    for box in boxes.values():
+        for index, (start, end) in enumerate(segments):
+            leaves_source = box.key == connector.source and index == 0
+            enters_target = box.key == connector.target and index == len(segments) - 1
+            if not leaves_source and not enters_target and _segment_enters_clearance(start, end, box):
+                raise ValueError(f"{diagram.slug} connector needs clearance from {box.key}")
+
+
 def _validate_box(diagram: Diagram, box: Box) -> None:
     if box.x < 0 or box.y < 0 or box.x + box.width > diagram.width or box.y + box.height > diagram.height:
         raise ValueError(f"{diagram.slug} box {box.key} leaves the canvas")
@@ -107,6 +154,13 @@ def _validate_box(diagram: Diagram, box: Box) -> None:
         raise ValueError(f"{diagram.slug} box {box.key} text does not fit")
     if not box.meta and last_detail_y > box.height - 12:
         raise ValueError(f"{diagram.slug} box {box.key} text does not fit")
+    text_lines = [(box.title, "title")]
+    if box.label:
+        text_lines.append((box.label, "label"))
+    text_lines.extend((line, "body") for line in box.details)
+    text_lines.extend((line, "meta") for line in box.meta)
+    if any(not _text_fits_width(box, text, style) for text, style in text_lines):
+        raise ValueError(f"{diagram.slug} box {box.key} text needs a right margin")
 
 
 def _validate_connector(diagram: Diagram, connector: Connector, boxes: dict[str, Box]) -> None:
@@ -131,6 +185,7 @@ def _validate_connector(diagram: Diagram, connector: Connector, boxes: dict[str,
         target = boxes.get(connector.target)
         if target is None or not _stable_port(target, connector.points[-1]):
             raise ValueError(f"{diagram.slug} connector target {connector.target} is not a stable card port")
+    _validate_connector_clearance(diagram, connector, boxes, segments)
 
 
 def validate_diagram(diagram: Diagram) -> None:
