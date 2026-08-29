@@ -91,8 +91,8 @@ DIAGRAM = Diagram(
         Section("Discovery", "findings before and after scheduling", 28, 42),
         Section("Current work", "identity that survives execution", 424, 42),
         Section("Scope + relationships", "accepted intent and dependency", 824, 42),
-        Section("Durable knowledge", "immutable files connected to work by role", 28, 432),
-        Section("Mutation ownership", "one shared session · independent implementation owners", 424, 432),
+        Section("Accepted files", "brief contracts and ready-review evidence", 28, 432),
+        Section("Mutation ownership", "temporary shared authority · independent attempt owners", 424, 432),
         Section("Integrity + time", "current revision and committed receipts", 824, 432),
     ),
     guides=(
@@ -115,7 +115,7 @@ DIAGRAM = Diagram(
         Connector(
             ((640, 270), (640, 240), (700, 240), (700, 200)), "focus", "attempts", "optional attempt", (700, 228)
         ),
-        Connector(((200, 640), (200, 610)), "item-artifacts", "artifact-refs"),
+        Connector(((200, 640), (200, 610)), "item-artifacts", "artifact-refs", "resolves", (235, 628)),
         Connector(
             ((680, 590), (680, 630), (540, 630), (540, 660)),
             "lease-counters",
@@ -138,8 +138,8 @@ DIAGRAM = Diagram(
         Box(
             "artifact-refs",
             "",
-            "Artifact references",
-            ("one exact immutable file", "kind · revision · digest"),
+            "Accepted artifacts",
+            ("brief · ready-review evidence", "path · revision · digest"),
             ("artifact_refs",),
             50,
             500,
@@ -149,8 +149,8 @@ DIAGRAM = Diagram(
         Box(
             "item-artifacts",
             "",
-            "Attached knowledge",
-            ("item + semantic role → file", "requirements · plan · design · evidence"),
+            "Item evidence link",
+            ("ready review → work item", "role + position"),
             ("item_artifacts",),
             50,
             640,
@@ -160,8 +160,8 @@ DIAGRAM = Diagram(
         Box(
             "coordination",
             "",
-            "Coordination",
-            ("one task session", "shared graph changes"),
+            "Shared authority",
+            ("any task borrows briefly", "exclusive graph change"),
             ("coordination_lease",),
             415,
             500,
@@ -209,7 +209,7 @@ DIAGRAM = Diagram(
     notes=(
         Note("SELECTED RELATIONSHIPS SHOWN · EVERY FOREIGN KEY STILL CHECKED BY THE SEED", 28, 790, 11, meta=True),
         Note(
-            "Coordination stands alone because it protects the shared graph. Attempts retain their own brief and result references.",
+            "Briefs are selected by attempts. Ready-review evidence links to the item. Shared authority is temporary, not a coordinator task.",
             28,
             816,
             11,
