@@ -29,6 +29,10 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         self.assertIn("## Where responsibilities live", guide)
         self.assertIn("## Follow one change", guide)
         self.assertIn("## The durable memory underneath", guide)
+        self.assertIn("An artifact reference identifies one exact file", guide)
+        self.assertIn("An item attachment gives that file a role", guide)
+        self.assertIn("The coordination lease is deliberately standalone", guide)
+        self.assertIn("An attempt lease records which task session", guide)
 
     def test_diagrams_use_the_approved_reading_surface(self) -> None:
         outputs = render.build_outputs(ROOT)

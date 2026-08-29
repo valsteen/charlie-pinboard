@@ -49,9 +49,11 @@ The relational ledger groups sixteen tables into six kinds of memory: current wo
 
 ![Six groups of SQLite tables showing current work, scope, discovery, durable knowledge, mutation ownership, and history](assets/how-it-works/database.svg)
 
-A work item survives attempts. Accepted versions preserve current scope and its revision history. Proposal evidence records why possible work was raised, while its freshness assumptions record which facts must be checked again. Attached knowledge links an item and a role to immutable file contents; attempts keep separate references to their brief and result.
+A work item survives attempts. Accepted versions preserve current scope and its revision history. Proposal evidence records why possible work was raised, while its freshness assumptions record which facts must be checked again.
 
-Mutation ownership changes over time. Coordination covers graph-wide changes, while an attempt lease and its generation prevent an older worker from acting after ownership changes. Project state holds the current revision, and committed history records each accepted input, outcome, and actor. These relationships keep the application from inferring durable facts from filenames, Markdown, or whichever task happens to be open.
+Long-form material—requirements, plans, designs, briefs, results, blockers, and review evidence—lives as immutable files. An artifact reference identifies one exact file by kind, revision, path, and content digest, so a later task can verify the same bytes. An item attachment gives that file a role on a work item, such as requirements, plan, design, or evidence. Attempts separately reference their own brief and result, and history may retain accepted evidence. This keeps reusable evidence separate from the relationships that give it meaning.
+
+Mutation ownership has two scopes. The coordination lease is deliberately standalone: one task session briefly owns shared scheduling and graph-wide changes, so it does not belong to a particular item or attempt. An attempt lease records which task session—identified by task, host, and lease id—owns one implementation attempt. Its generation fences an older owner after transfer or revocation, while leases for unrelated attempts remain independent. Project state holds the current revision, and committed history records each accepted input, outcome, and actor.
 
 For installation and the product story, return to the [README](README.md). For contributor-facing ownership, storage boundaries, and representative command flows, continue to the [architecture map](ARCHITECTURE.md).
 
