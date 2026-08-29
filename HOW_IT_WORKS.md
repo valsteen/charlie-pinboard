@@ -10,7 +10,10 @@ The four views move from the visible workflow to package responsibilities, then 
 
 A work item is the durable project decision. An attempt is one execution of that work. They move together while remaining separate: an item can survive interruption, correction, or a replacement worker without losing its identity or accepted scope.
 
-![A work item lifecycle above the legal branches of an active attempt, with related facts shown separately](assets/how-it-works/product.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/product-dark.svg">
+  <img src="assets/how-it-works/product.svg" alt="A work item lifecycle above the legal branches of an active attempt, with related facts shown separately">
+</picture>
 
 The primary path is intentionally familiar: intake becomes ready, active work enters review, and accepted work becomes a terminal outcome. Deferred, paused, and blocked work are optional branches rather than required stages. Paused and blocked work can resume the same attempt; review can request correction, pause at an accepted checkpoint, continue the attempt, or complete it. Completion can also be accepted directly from active work.
 
@@ -31,7 +34,10 @@ These guarantees explain why seemingly similar words remain distinct.
 
 The package is split into four layers because each removes a different kind of ambiguity. The split keeps workflow policy out of storage and keeps external representations out of decisions.
 
-![Four package layers showing interfaces, application, domain, and adapters, connected by package dependencies](assets/how-it-works/layers.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/layers-dark.svg">
+  <img src="assets/how-it-works/layers.svg" alt="Four package layers showing interfaces, application, domain, and adapters, connected by package dependencies">
+</picture>
 
 Every arrow in this view means “may depend on”; the next view shows runtime flow. Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. Application code coordinates complete operations against current state. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
 
@@ -39,7 +45,10 @@ Every arrow in this view means “may depend on”; the next view shows runtime 
 
 Submitting work for review is one visible action, but it strengthens meaning at every boundary. External values become an exact command. The application reloads current state and mutation ownership inside the write operation. Domain evaluation returns either an accepted change or an expected rejection; rejection leaves the ledger unchanged. The application projects an accepted change into complete stored facts, and SQLite either commits all of them with a history receipt or commits nothing.
 
-![A submit-review request travelling through interface decoding, application orchestration, domain decision, mutation projection, and atomic SQLite commit](assets/how-it-works/journey.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/journey-dark.svg">
+  <img src="assets/how-it-works/journey.svg" alt="A submit-review request travelling through interface decoding, application orchestration, domain decision, mutation projection, and atomic SQLite commit">
+</picture>
 
 The layers do not repeat the same decision. Each contributes a different guarantee, then hands a narrower value to the next owner. Generated views refresh after the authoritative commit and can be rebuilt from the ledger if that refresh is interrupted.
 
@@ -47,7 +56,10 @@ The layers do not repeat the same decision. Each contributes a different guarant
 
 The relational ledger groups sixteen tables into six kinds of memory: current work, accepted scope and dependencies, discoveries, immutable knowledge, changing mutation ownership, and the history that connects them.
 
-![Six groups of SQLite tables showing current work, scope, discovery, durable knowledge, mutation ownership, and history](assets/how-it-works/database.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/database-dark.svg">
+  <img src="assets/how-it-works/database.svg" alt="Six groups of SQLite tables showing current work, scope, discovery, durable knowledge, mutation ownership, and history">
+</picture>
 
 A work item survives attempts. Accepted versions preserve current scope and its revision history. Proposal evidence records why possible work was raised, while its freshness assumptions record which facts must be checked again.
 

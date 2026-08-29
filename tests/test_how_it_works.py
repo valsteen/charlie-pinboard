@@ -1,9 +1,12 @@
+import re
 import tempfile
+import tomllib
 import unittest
+from dataclasses import astuple
 from pathlib import Path
 
 from docs.how_it_works import database, journey, layers, product, render
-from docs.how_it_works.model import Box, Connector, Diagram, render_svg
+from docs.how_it_works.model import DAY_PALETTE, NIGHT_PALETTE, Box, Connector, Diagram, Palette, render_svg
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -19,6 +22,10 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                 Path("assets/how-it-works/layers.svg"),
                 Path("assets/how-it-works/journey.svg"),
                 Path("assets/how-it-works/database.svg"),
+                Path("assets/how-it-works/product-dark.svg"),
+                Path("assets/how-it-works/layers-dark.svg"),
+                Path("assets/how-it-works/journey-dark.svg"),
+                Path("assets/how-it-works/database-dark.svg"),
             },
             outputs.keys(),
         )
@@ -36,20 +43,64 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         self.assertIn("It is not a coordinator task", guide)
         self.assertIn("An attempt lease records which task session", guide)
         self.assertNotIn("requirements, plans, designs, briefs, results, blockers", guide)
+        self.assertEqual(4, guide.count("<picture>"))
+        self.assertEqual(4, guide.count('media="(prefers-color-scheme: dark)"'))
+        for slug in ("product", "layers", "journey", "database"):
+            self.assertIn(f'srcset="assets/how-it-works/{slug}-dark.svg"', guide)
+            self.assertIn(f'src="assets/how-it-works/{slug}.svg"', guide)
 
-    def test_diagrams_use_the_approved_reading_surface(self) -> None:
+    def test_diagrams_use_the_approved_reading_surfaces(self) -> None:
         outputs = render.build_outputs(ROOT)
 
         for path, svg in outputs.items():
             if path.suffix != ".svg":
                 continue
             with self.subTest(path=path):
-                self.assertIn('fill="#fffdf7"', svg)
+                palette = NIGHT_PALETTE if path.stem.endswith("-dark") else DAY_PALETTE
+                self.assertIn(f'fill="{palette.canvas}"', svg)
+                self.assertIn(f'stroke="{palette.grid}"', svg)
+                self.assertIn(f"stroke: {palette.connector}", svg)
+                self.assertIn(f'fill="{palette.primary}"', svg)
                 self.assertIn('<pattern id="grid"', svg)
-                self.assertIn("stroke: #697487", svg)
-                self.assertIn('fill="#394a62"', svg)
                 self.assertNotIn("linearGradient", svg)
                 self.assertNotIn("feDropShadow", svg)
+
+        for slug in ("product", "layers", "journey", "database"):
+            day = outputs[Path(f"assets/how-it-works/{slug}.svg")]
+            night = outputs[Path(f"assets/how-it-works/{slug}-dark.svg")]
+            with self.subTest(slug=slug):
+                self.assertEqual(
+                    re.sub(r"#[0-9a-fA-F]{3,6}\b", "#COLOR", day),
+                    re.sub(r"#[0-9a-fA-F]{3,6}\b", "#COLOR", night),
+                )
+
+    def test_maintained_python_checks_include_the_generator(self) -> None:
+        configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+        expected_roots = ["src", "tests", "docs/how_it_works"]
+        self.assertEqual(expected_roots, configuration["tool"]["ruff"]["src"])
+        self.assertEqual(expected_roots, configuration["tool"]["pyrefly"]["project-includes"])
+
+    def test_renderer_uses_the_complete_palette_input(self) -> None:
+        palette = Palette(
+            canvas="#000001",
+            grid="#000002",
+            frame="#000003",
+            card="#000004",
+            card_border="#000005",
+            text="#000006",
+            label="#000007",
+            muted_text="#000008",
+            guide="#000009",
+            connector="#00000a",
+            primary="#00000b",
+            secondary="#00000c",
+        )
+
+        svg = render_svg(product.DIAGRAM, "source-revision", palette)
+
+        for color in astuple(palette):
+            self.assertIn(color, svg)
 
     def test_renderer_rejects_fragile_connector_geometry(self) -> None:
         boxes = (
@@ -66,6 +117,7 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                 render_svg(
                     Diagram("unsafe", "Unsafe", "Unsafe route", 280, 100, (), (), (connector,), boxes),
                     "source-revision",
+                    DAY_PALETTE,
                 )
 
     def test_renderer_reserves_card_text_and_connector_clearance(self) -> None:
@@ -89,6 +141,7 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                     (Box("crowded", "", "Complete stored change", (), (), 10, 10, 100, 60),),
                 ),
                 "source-revision",
+                DAY_PALETTE,
             )
 
         with self.assertRaisesRegex(ValueError, "right margin"):
@@ -105,6 +158,7 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                     (Box("tight", "", "Attached knowledge", (), (), 10, 10, 180, 60),),
                 ),
                 "source-revision",
+                DAY_PALETTE,
             )
 
         with self.assertRaisesRegex(ValueError, "clearance from obstacle"):
@@ -121,6 +175,7 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                     boxes,
                 ),
                 "source-revision",
+                DAY_PALETTE,
             )
 
         near_boxes = (
@@ -142,6 +197,7 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                     near_boxes,
                 ),
                 "source-revision",
+                DAY_PALETTE,
             )
 
     def test_diagram_connectors_state_real_relationships(self) -> None:
