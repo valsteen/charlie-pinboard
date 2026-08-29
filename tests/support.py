@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from charlie_pinboard.application.stored_state import (
+from pinboard.application.stored_state import (
     ArtifactKind,
     ArtifactReference,
     AttemptLeaseCounter,
@@ -26,9 +26,9 @@ from charlie_pinboard.application.stored_state import (
     TransitionHistoryActionKind,
     TransitionHistoryAuthorizationKind,
 )
-from charlie_pinboard.domain import work_models
-from charlie_pinboard.domain.authority_models import AttemptLeaseStatus
-from charlie_pinboard.domain.identifiers import (
+from pinboard.domain import work_models
+from pinboard.domain.authority_models import AttemptLeaseStatus
+from pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
     AttemptId,
@@ -121,7 +121,7 @@ def complete_sqlite_state() -> StoredWorkState:
         SQLITE_NOW,
     )
     lifecycle = LifecycleRecords(
-        ProjectRecord("charlie-pinboard", 1, 12, 2, SQLITE_NOW, SQLITE_NOW),
+        ProjectRecord("pinboard", 1, 12, 2, SQLITE_NOW, SQLITE_NOW),
         (
             _stored_item(intake_item, StoredWorkItemState.INTAKE, sparse=True, queue_position=1),
             _stored_item(item_a, StoredWorkItemState.ACTIVE, queue_position=2),

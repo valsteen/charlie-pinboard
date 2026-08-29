@@ -1,0 +1,136 @@
+import os
+from dataclasses import dataclass
+from hashlib import sha256
+from pathlib import Path, PurePosixPath
+
+from pinboard.adapters.files.errors import ArtifactError, ArtifactErrorCode, FileIOError
+from pinboard.adapters.files.file_io import (
+    DurableRoots,
+    create_immutable,
+    ensure_child_directory,
+    ensure_directory_chain,
+)
+from pinboard.application.artifacts import ArtifactRef, NewArtifact
+from pinboard.application.stored_state import ArtifactKind, ArtifactReference
+
+_DIRECTORIES: dict[ArtifactKind, str] = {
+    ArtifactKind.REQUIREMENTS: "requirements",
+    ArtifactKind.PLAN: "plans",
+    ArtifactKind.DESIGN: "designs",
+    ArtifactKind.BRIEF: "briefs",
+    ArtifactKind.RESULT: "results",
+    ArtifactKind.BLOCKER: "blockers",
+    ArtifactKind.EVIDENCE: "evidence",
+}
+
+
+def _identity(value: str, *, label: str) -> str:
+    if not value or value in {".", ".."} or "/" in value or os.sep in value or "\x00" in value:
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            f"Artifact {label} is not a stable path component.",
+        )
+    return value
+
+
+def _suffix(value: str) -> str:
+    if not value.startswith(".") or value in {".", ".."} or "/" in value or os.sep in value or "\x00" in value:
+        raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact suffix is not canonical.")
+    return value
+
+
+def _selector(kind: ArtifactKind, key: str, revision: int, suffix: str) -> str:
+    if revision < 1:
+        raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact revision must be positive.")
+    return PurePosixPath(
+        "artifacts", _DIRECTORIES[kind], _identity(key, label="key"), f"{revision}{_suffix(suffix)}"
+    ).as_posix()
+
+
+def _canonical_reference(reference: ArtifactRef | ArtifactReference) -> Path:
+    pure = PurePosixPath(reference.selector)
+    parts = pure.parts
+    if pure.is_absolute() or not parts or any(part in {"", ".", ".."} for part in parts):
+        raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact selector is not canonical.")
+    if len(parts) != 4 or parts[:3] != (
+        "artifacts",
+        _DIRECTORIES[reference.kind],
+        _identity(reference.key, label="key"),
+    ):
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            "Artifact selector does not match its identity.",
+        )
+    filename = parts[3]
+    prefix, separator, suffix = filename.partition(".")
+    if not separator or prefix != str(reference.revision) or not suffix:
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            "Artifact selector does not match its revision.",
+        )
+    return Path(*parts)
+
+
+def verify_reference(work_root: Path, reference: ArtifactRef | ArtifactReference) -> None:
+    relative = _canonical_reference(reference)
+    try:
+        data = (work_root / relative).read_bytes()
+    except OSError as error:
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            "Artifact bytes could not be read.",
+        ) from error
+    if len(data) != reference.size_bytes or sha256(data).hexdigest() != reference.content_sha256:
+        raise ArtifactError(
+            ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+            "Artifact size or digest does not match its reference.",
+        )
+
+
+def write_revision(roots: DurableRoots, artifact: NewArtifact) -> ArtifactRef:
+    selector = _selector(artifact.kind, artifact.key, artifact.revision, artifact.suffix)
+    digest = sha256(artifact.content).hexdigest()
+    reference = ArtifactRef(artifact.kind, artifact.key, artifact.revision, selector, digest, len(artifact.content))
+    try:
+        ensure_directory_chain(roots)
+        kind_root = ensure_child_directory(roots.artifacts_root, _DIRECTORIES[artifact.kind])
+        ensure_child_directory(kind_root, artifact.key)
+        path = roots.work_root / selector
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            try:
+                create_immutable(path, artifact.content)
+            except FileIOError:
+                try:
+                    verify_reference(roots.work_root, reference)
+                except ArtifactError as collision:
+                    raise ArtifactError(
+                        ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
+                        "Artifact revision could not be published immutably.",
+                    ) from collision
+        else:
+            verify_reference(roots.work_root, reference)
+        return reference
+    except FileIOError as error:
+        raise ArtifactError(ArtifactErrorCode.STORAGE_IO_ERROR, str(error)) from error
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactRepository:
+    """Concrete durable artifact access used by interface composition."""
+
+    roots: DurableRoots
+
+    @property
+    def work_root(self) -> Path:
+        return self.roots.work_root
+
+    def verify(self, reference: ArtifactReference) -> None:
+        verify_reference(self.work_root, reference)
+
+    def path(self, reference: ArtifactReference) -> Path:
+        return self.work_root / _canonical_reference(reference)
+
+    def publish(self, artifact: NewArtifact) -> ArtifactRef:
+        return write_revision(self.roots, artifact)

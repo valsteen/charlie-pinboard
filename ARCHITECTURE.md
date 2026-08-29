@@ -2,7 +2,7 @@
 
 ## System overview
 
-Charlie Pinboard is a local coordination system for one repository-owned work ledger. The installed `pinboard` command discovers the project, opens its work root, reads and validates current state, computes legal actions, and applies accepted changes atomically.
+Pinboard is a local coordination system for one repository-owned work ledger. The installed `pinboard` command discovers the project, opens its work root, reads and validates current state, computes legal actions, and applies accepted changes atomically.
 
 SQLite is the authority for the repository work ledger.
 
@@ -41,8 +41,8 @@ Only distribution version lookup and command composition live at the package roo
 
 | Location | Ownership |
 | --- | --- |
-| `charlie_pinboard/__init__.py` | Installed distribution version lookup |
-| `charlie_pinboard/__main__.py` | `python -m charlie_pinboard` route to the CLI |
+| `pinboard/__init__.py` | Installed distribution version lookup |
+| `pinboard/__main__.py` | `python -m pinboard` route to the CLI |
 
 ### Domain
 

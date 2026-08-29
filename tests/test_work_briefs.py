@@ -10,18 +10,18 @@ from unittest.mock import patch
 import msgspec
 from msgspec.structs import replace
 
-from charlie_pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
-from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.artifact_publication import validate_transition_work_brief
-from charlie_pinboard.application.artifacts import NewArtifact
-from charlie_pinboard.application.stored_state import ArtifactKind
-from charlie_pinboard.domain import decision_models, work_models
-from charlie_pinboard.domain.errors import DecisionFailureCode
-from charlie_pinboard.domain.identifiers import ArtifactRefId, AttemptId, ItemId
-from charlie_pinboard.interfaces.cli import main
-from charlie_pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
-from charlie_pinboard.interfaces.work_brief_models import (
+from pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.artifact_publication import validate_transition_work_brief
+from pinboard.application.artifacts import NewArtifact
+from pinboard.application.stored_state import ArtifactKind
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.errors import DecisionFailureCode
+from pinboard.domain.identifiers import ArtifactRefId, AttemptId, ItemId
+from pinboard.interfaces.cli import main
+from pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
+from pinboard.interfaces.work_brief_models import (
     AcceptanceCoverageOwner,
     AuthorityAuthorization,
     CrossBoundaryCheckpoint,
@@ -35,7 +35,7 @@ from charlie_pinboard.interfaces.work_brief_models import (
     ReviewCoverageResult,
     WorkBriefReview,
 )
-from charlie_pinboard.interfaces.work_briefs import (
+from pinboard.interfaces.work_briefs import (
     canonical_checkpoint_bytes,
     canonical_reviewed_authority_set_bytes,
     canonical_work_brief_bytes,

@@ -2,22 +2,22 @@ import unittest
 from dataclasses import replace
 from datetime import datetime
 
-from charlie_pinboard.application.decision_projection import project_decision_snapshot
-from charlie_pinboard.domain import decision_models, work_models
-from charlie_pinboard.domain.decisions import available_actions as available_actions_outcome
-from charlie_pinboard.domain.decisions import bind_transition as bind_transition_outcome
-from charlie_pinboard.domain.decisions import decide as decision_outcome
-from charlie_pinboard.domain.decisions import rediscover_action as rediscover_action_outcome
-from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
-from charlie_pinboard.domain.identifiers import (
+from pinboard.application.decision_projection import project_decision_snapshot
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.decisions import available_actions as available_actions_outcome
+from pinboard.domain.decisions import bind_transition as bind_transition_outcome
+from pinboard.domain.decisions import decide as decision_outcome
+from pinboard.domain.decisions import rediscover_action as rediscover_action_outcome
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
     CandidateId,
     ItemId,
     LeaseId,
 )
-from charlie_pinboard.domain.ledger import LedgerSnapshot
-from charlie_pinboard.interfaces.transition_input import parse_transition_input
+from pinboard.domain.ledger import LedgerSnapshot
+from pinboard.interfaces.transition_input import parse_transition_input
 from tests.domain_support import action, expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 

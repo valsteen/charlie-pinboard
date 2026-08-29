@@ -3,18 +3,18 @@ import unittest
 from dataclasses import replace as replace_dataclass
 from datetime import UTC, datetime
 
-from charlie_pinboard.domain import decision_models, work_models
-from charlie_pinboard.domain.decisions import available_actions as available_actions_outcome
-from charlie_pinboard.domain.decisions import bind_transition as bind_transition_outcome
-from charlie_pinboard.domain.decisions import decide as decision_outcome
-from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
-from charlie_pinboard.domain.history import (
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.decisions import available_actions as available_actions_outcome
+from pinboard.domain.decisions import bind_transition as bind_transition_outcome
+from pinboard.domain.decisions import decide as decision_outcome
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from pinboard.domain.history import (
     item_scope_bytes as item_scope_bytes_outcome,
 )
-from charlie_pinboard.domain.history import (
+from pinboard.domain.history import (
     item_scope_digest as item_scope_digest_outcome,
 )
-from charlie_pinboard.domain.identifiers import (
+from pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
     CandidateId,
@@ -23,7 +23,7 @@ from charlie_pinboard.domain.identifiers import (
     LedgerId,
     ProposalId,
 )
-from charlie_pinboard.domain.ledger import LedgerSnapshot
+from pinboard.domain.ledger import LedgerSnapshot
 from tests.domain_support import (
     accept_proposal_input as AcceptProposalInput,
 )

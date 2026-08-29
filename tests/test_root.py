@@ -7,9 +7,9 @@ import unittest
 from contextlib import chdir
 from pathlib import Path
 
-from charlie_pinboard.adapters.files.errors import RootError
-from charlie_pinboard.adapters.files.root import resolve_shared_repository_root, resolve_source_checkout_root
-from charlie_pinboard.interfaces.cli import main
+from pinboard.adapters.files.errors import RootError
+from pinboard.adapters.files.root import resolve_shared_repository_root, resolve_source_checkout_root
+from pinboard.interfaces.cli import main
 
 
 class RootResolutionTest(unittest.TestCase):

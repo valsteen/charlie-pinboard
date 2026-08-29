@@ -1,0 +1,243 @@
+from pinboard.domain import decision_models, work_models
+
+from .model import Box, Connector, Diagram, Guide, Section
+
+WORK_STATE_ROLES: dict[work_models.WorkState, str] = {
+    work_models.WorkState.INTAKE: "visible discovery",
+    work_models.WorkState.READY: "accepted and schedulable",
+    work_models.WorkState.ACTIVE: "currently being attempted",
+    work_models.WorkState.PAUSED: "preserved interruption",
+    work_models.WorkState.BLOCKED: "waiting on a condition",
+    work_models.WorkState.DEFERRED: "saved for a later decision",
+    work_models.WorkState.REVIEW: "protected candidate awaiting a decision",
+}
+
+ATTEMPT_STATE_ROLES: dict[work_models.AttemptState, str] = {
+    work_models.AttemptState.ACTIVE: "worker owns the attempt",
+    work_models.AttemptState.PAUSED: "same attempt, temporarily stopped",
+    work_models.AttemptState.BLOCKED: "same attempt, named condition",
+    work_models.AttemptState.REVIEW: "candidate frozen for review",
+    work_models.AttemptState.DONE: "terminal execution record",
+}
+
+ACTION_GROUPS: dict[decision_models.ActionKind, str] = {
+    decision_models.ActionKind.ACCEPT_CHECKPOINT: "review",
+    decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE: "review",
+    decision_models.ActionKind.ACCEPT_PROPOSAL: "proposal",
+    decision_models.ActionKind.ACTIVATE: "lifecycle",
+    decision_models.ActionKind.BLOCK: "lifecycle",
+    decision_models.ActionKind.BLOCK_ITEM: "lifecycle",
+    decision_models.ActionKind.COMPLETE: "terminal",
+    decision_models.ActionKind.CLOSE: "terminal",
+    decision_models.ActionKind.CONTINUE: "advisory",
+    decision_models.ActionKind.DEFER: "lifecycle",
+    decision_models.ActionKind.DISPATCH: "advisory",
+    decision_models.ActionKind.INSPECT: "advisory",
+    decision_models.ActionKind.MARK_READY: "lifecycle",
+    decision_models.ActionKind.MERGE_PROPOSAL: "proposal",
+    decision_models.ActionKind.PAUSE: "lifecycle",
+    decision_models.ActionKind.REJECT_PROPOSAL: "proposal",
+    decision_models.ActionKind.REOPEN: "lifecycle",
+    decision_models.ActionKind.REPORT_BLOCKER: "advisory",
+    decision_models.ActionKind.RESUME: "lifecycle",
+    decision_models.ActionKind.RETURN_FOR_CORRECTION: "review",
+    decision_models.ActionKind.RETURN_PROPOSAL: "proposal",
+    decision_models.ActionKind.SUBMIT_REVIEW: "review",
+    decision_models.ActionKind.TRANSFER_COORDINATOR: "authority",
+}
+
+
+def validate() -> None:
+    if set(WORK_STATE_ROLES) != set(work_models.WorkState):
+        raise ValueError("product visual must account for every current work state")
+    if set(ATTEMPT_STATE_ROLES) != set(work_models.AttemptState):
+        raise ValueError("product visual must account for every current attempt state")
+    if set(ACTION_GROUPS) != set(decision_models.ActionKind):
+        raise ValueError("product visual must disposition every current action")
+
+
+DIAGRAM = Diagram(
+    slug="product",
+    title="Work items, attempts, and related facts",
+    description=(
+        "A work item moves through a visible lifecycle while its execution attempt, accepted scope, mutation "
+        "ownership, and evidence remain separate related facts."
+    ),
+    width=1200,
+    height=920,
+    sections=(
+        Section("Work item · main route", "", 28, 38),
+        Section("Optional branches", "", 962, 226),
+        Section("Attempt · legal branches from active", "", 28, 430),
+        Section("Related facts · not another status", "", 28, 750),
+    ),
+    guides=(
+        Guide((212, 34), (1172, 34)),
+        Guide((330, 426), (1172, 426)),
+        Guide((300, 746), (1172, 746)),
+    ),
+    connectors=(
+        Connector(((220, 125), (260, 125)), "intake", "ready"),
+        Connector(((410, 125), (480, 125)), "ready", "active"),
+        Connector(((650, 125), (740, 125)), "active", "review"),
+        Connector(((940, 125), (980, 125)), "review", "terminal"),
+        Connector(((130, 170), (130, 250)), "intake", "deferred", "defer", (158, 216)),
+        Connector(((530, 170), (530, 250)), "active", "paused", "pause", (558, 216)),
+        Connector(
+            ((620, 170), (620, 210), (830, 210), (830, 250)),
+            "active",
+            "blocked",
+            "block",
+            (725, 198),
+        ),
+        Connector(((350, 515), (250, 515)), "attempt-active", "attempt-paused", "pause", (300, 503)),
+        Connector(((440, 570), (440, 610)), "attempt-active", "attempt-blocked", "block", (476, 594)),
+        Connector(((530, 515), (650, 515)), "attempt-active", "attempt-review", "submit", (590, 503)),
+        Connector(((860, 515), (970, 515)), "attempt-review", "attempt-done", "complete", (915, 503)),
+    ),
+    boxes=(
+        Box("intake", "Intake", "Visible finding", (), ("WorkState.INTAKE",), 60, 80, 160, 90),
+        Box("ready", "Ready", "Accepted work", (), ("WorkState.READY",), 260, 80, 150, 90),
+        Box("active", "Active", "Attempt underway", (), ("WorkState.ACTIVE",), 480, 80, 170, 90),
+        Box("review", "Review", "Exact candidate held", (), ("return · continue",), 740, 80, 200, 90),
+        Box(
+            "terminal",
+            "Terminal",
+            "Recorded outcome",
+            (),
+            ("done · dropped · superseded",),
+            980,
+            80,
+            200,
+            90,
+            "muted",
+        ),
+        Box(
+            "deferred",
+            "Deferred",
+            "Saved for later",
+            ("defer from unstarted work", "reopen → intake"),
+            (),
+            60,
+            250,
+            190,
+            105,
+            "muted",
+        ),
+        Box(
+            "paused",
+            "Paused",
+            "Safe interruption",
+            ("pause from active", "resume → active"),
+            (),
+            440,
+            250,
+            190,
+            105,
+            "muted",
+        ),
+        Box(
+            "blocked",
+            "Blocked",
+            "Named condition",
+            ("block from active or intake", "resume → active or ready"),
+            (),
+            730,
+            250,
+            200,
+            105,
+            "muted",
+        ),
+        Box(
+            "attempt-paused",
+            "Paused",
+            "Execution retained",
+            ("pause · resume → active",),
+            ("AttemptState.PAUSED",),
+            60,
+            470,
+            190,
+            100,
+        ),
+        Box(
+            "attempt-active",
+            "Active",
+            "Work proceeds",
+            ("one live attempt per item",),
+            ("AttemptState.ACTIVE",),
+            350,
+            470,
+            180,
+            100,
+        ),
+        Box(
+            "attempt-review",
+            "Review",
+            "Candidate protected",
+            ("correction / continue → active",),
+            ("AttemptState.REVIEW",),
+            650,
+            470,
+            210,
+            100,
+        ),
+        Box(
+            "attempt-done",
+            "Done",
+            "Execution record",
+            ("from active or review",),
+            ("AttemptState.DONE",),
+            970,
+            470,
+            170,
+            100,
+        ),
+        Box(
+            "attempt-blocked",
+            "Blocked",
+            "Condition retained",
+            ("block · resume → active",),
+            ("AttemptState.BLOCKED",),
+            350,
+            610,
+            200,
+            100,
+        ),
+        Box(
+            "proposal", "Proposal", "Why the work exists", ("trigger · evidence · consequence",), (), 50, 780, 250, 105
+        ),
+        Box(
+            "scope",
+            "Accepted scope",
+            "Exact authorized version",
+            ("revision + digest bound to attempt",),
+            (),
+            330,
+            780,
+            250,
+            105,
+        ),
+        Box(
+            "authority",
+            "Mutation ownership",
+            "Who may act now",
+            ("coordination lease · attempt lease",),
+            (),
+            610,
+            780,
+            250,
+            105,
+        ),
+        Box(
+            "evidence",
+            "Review candidate",
+            "Exact result under review",
+            ("candidate id · accepted evidence",),
+            (),
+            890,
+            780,
+            260,
+            105,
+        ),
+    ),
+)

@@ -11,26 +11,26 @@ from pathlib import Path
 import msgspec
 from msgspec.structs import replace
 
-from charlie_pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
-from charlie_pinboard.adapters.files.file_io import DurableRoots, resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.database import initialize_database
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.actions import discover_actions
-from charlie_pinboard.application.artifacts import NewArtifact
-from charlie_pinboard.application.dispatch import prepare_dispatch
-from charlie_pinboard.application.dispatch_models import DispatchEnvironment, DispatchPermission
-from charlie_pinboard.application.errors import DispatchError, DispatchErrorCode
-from charlie_pinboard.application.stored_state import ArtifactKind
-from charlie_pinboard.domain import decision_models
-from charlie_pinboard.interfaces.cli import main
-from charlie_pinboard.interfaces.dispatch_brief import prepare_dispatch_from_artifact, read_dispatch_environment
-from charlie_pinboard.interfaces.work_brief_models import (
+from pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
+from pinboard.adapters.files.file_io import DurableRoots, resolve_durable_roots
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.actions import discover_actions
+from pinboard.application.artifacts import NewArtifact
+from pinboard.application.dispatch import prepare_dispatch
+from pinboard.application.dispatch_models import DispatchEnvironment, DispatchPermission
+from pinboard.application.errors import DispatchError, DispatchErrorCode
+from pinboard.application.stored_state import ArtifactKind
+from pinboard.domain import decision_models
+from pinboard.interfaces.cli import main
+from pinboard.interfaces.dispatch_brief import prepare_dispatch_from_artifact, read_dispatch_environment
+from pinboard.interfaces.work_brief_models import (
     CrossBoundaryCheckpoint,
     LocalCheckpoint,
     WorkBrief,
     WorkBriefReview,
 )
-from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes, canonical_work_brief_review_bytes
+from pinboard.interfaces.work_briefs import canonical_work_brief_bytes, canonical_work_brief_review_bytes
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import CHECKPOINT_ID, ready_review, work_a_brief
 

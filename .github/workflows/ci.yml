@@ -43,6 +43,8 @@ jobs:
           uv run --locked coverage report
       - name: Validate plugin and skill metadata
         run: uv run --locked python scripts/validate-metadata.py
+      - name: Check generated visitor guide
+        run: uv run --locked python -m docs.how_it_works.render --check
       - name: Build without workspace sources
         run: uv build --no-sources
       - name: Smoke-test the isolated wheel
