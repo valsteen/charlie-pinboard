@@ -46,7 +46,7 @@ known-first-party = ["charlie_pinboard", "tests"]
 
 [tool.pyrefly]
 python-version = "3.14"
-project-includes = ["src", "tests"]
+project-includes = ["src", "tests", "docs/how_it_works"]
 search-path = ["."]
 preset = "strict"
 min-severity = "warn"
