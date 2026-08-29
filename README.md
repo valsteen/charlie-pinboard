@@ -1,6 +1,6 @@
-# Charlie's pinboard
+# Pinboard
 
-[![CI](https://github.com/valsteen/charlie-pinboard/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/charlie-pinboard/actions/workflows/ci.yml)
+[![CI](https://github.com/valsteen/pinboard/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/pinboard/actions/workflows/ci.yml)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![uv](https://img.shields.io/badge/managed%20with-uv-DE5FE9?logo=uv)](https://docs.astral.sh/uv/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -73,8 +73,8 @@ The plugin currently supports macOS and Linux. It uses [uv](https://docs.astral.
 Add this repository as a Codex marketplace, then install the plugin:
 
 ```sh
-codex plugin marketplace add valsteen/charlie-pinboard
-codex plugin add charlie-pinboard@charlie-pinboard
+codex plugin marketplace add valsteen/pinboard
+codex plugin add pinboard@pinboard
 ```
 
 Start a Codex task in the repository and ask:

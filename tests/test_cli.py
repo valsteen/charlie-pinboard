@@ -10,16 +10,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from charlie_pinboard.adapters.files.artifacts import write_revision
-from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.database import initialize_database
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.artifacts import NewArtifact
-from charlie_pinboard.application.stored_state import ArtifactKind, StoredWorkItemState, StoredWorkState
-from charlie_pinboard.domain import work_models
-from charlie_pinboard.domain.identifiers import AttemptId, ItemId
-from charlie_pinboard.interfaces.cli import build_parser, main
-from charlie_pinboard.interfaces.work_briefs import canonical_work_brief_bytes
+from pinboard.adapters.files.artifacts import write_revision
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.artifacts import NewArtifact
+from pinboard.application.stored_state import ArtifactKind, StoredWorkItemState, StoredWorkState
+from pinboard.domain import work_models
+from pinboard.domain.identifiers import AttemptId, ItemId
+from pinboard.interfaces.cli import build_parser, main
+from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 
 from .support import SQLITE_NOW, JsonObject, JsonValue, complete_sqlite_state
 from .work_brief_support import work_a_brief, work_c_brief
@@ -1294,7 +1294,7 @@ Not launchable:
 
     def test_module_entrypoint_delegates_to_cli(self) -> None:
         with patch.object(sys, "argv", ["pinboard", "--version"]), self.assertRaises(SystemExit) as raised:
-            runpy.run_module("charlie_pinboard.__main__", run_name="__main__")
+            runpy.run_module("pinboard.__main__", run_name="__main__")
 
         self.assertEqual(0, raised.exception.code)
 

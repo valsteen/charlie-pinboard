@@ -3,8 +3,8 @@ import unittest
 
 import msgspec
 
-from charlie_pinboard.interfaces.errors import ProposalError
-from charlie_pinboard.interfaces.proposals import parse_proposal
+from pinboard.interfaces.errors import ProposalError
+from pinboard.interfaces.proposals import parse_proposal
 from tests.support import JsonObject
 
 

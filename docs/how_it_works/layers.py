@@ -19,7 +19,7 @@ REQUIRED_ARCHITECTURE_HEADINGS = (
 
 
 def validate(root: Path) -> None:
-    package = root / "src" / "charlie_pinboard"
+    package = root / "src" / "pinboard"
     missing = tuple(name for name in LAYER_DIRECTORIES if not package.joinpath(name).is_dir())
     if missing:
         raise ValueError(f"layer visual references missing package directories: {', '.join(missing)}")
@@ -71,7 +71,7 @@ DIAGRAM = Diagram(
             "Interfaces",
             "Make the request exact",
             ("decode CLI / JSON / files", "compose installed commands"),
-            ("src/charlie_pinboard/interfaces",),
+            ("src/pinboard/interfaces",),
             60,
             100,
             300,
@@ -82,7 +82,7 @@ DIAGRAM = Diagram(
             "Application",
             "Make the operation coherent",
             ("reselect · sequence · project", "own storage capability ports"),
-            ("src/charlie_pinboard/application",),
+            ("src/pinboard/application",),
             450,
             100,
             300,
@@ -93,7 +93,7 @@ DIAGRAM = Diagram(
             "Domain",
             "Make the change legal",
             ("pure values and decisions", "accepted change or rejection"),
-            ("src/charlie_pinboard/domain",),
+            ("src/pinboard/domain",),
             840,
             100,
             300,
@@ -104,7 +104,7 @@ DIAGRAM = Diagram(
             "Adapters",
             "Persist accepted facts",
             ("SQLite and filesystem mechanics", "implement application ports"),
-            ("src/charlie_pinboard/adapters",),
+            ("src/pinboard/adapters",),
             450,
             410,
             300,

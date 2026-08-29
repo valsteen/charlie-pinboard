@@ -3,7 +3,7 @@ from pathlib import Path
 
 from msgspec.structs import replace
 
-from charlie_pinboard.interfaces.work_brief_models import (
+from pinboard.interfaces.work_brief_models import (
     AcceptanceCriterion,
     AcceptedScope,
     AcceptedScopeAuthorization,
@@ -22,7 +22,7 @@ from charlie_pinboard.interfaces.work_brief_models import (
     WorkBrief,
     WorkBriefReview,
 )
-from charlie_pinboard.interfaces.work_briefs import (
+from pinboard.interfaces.work_briefs import (
     canonical_checkpoint_bytes,
     canonical_reviewed_authority_set_bytes,
     canonical_work_brief_review_bytes,

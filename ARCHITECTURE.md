@@ -41,8 +41,8 @@ Only distribution version lookup and command composition live at the package roo
 
 | Location | Ownership |
 | --- | --- |
-| `charlie_pinboard/__init__.py` | Installed distribution version lookup |
-| `charlie_pinboard/__main__.py` | `python -m charlie_pinboard` route to the CLI |
+| `pinboard/__init__.py` | Installed distribution version lookup |
+| `pinboard/__main__.py` | `python -m pinboard` route to the CLI |
 
 ### Domain
 

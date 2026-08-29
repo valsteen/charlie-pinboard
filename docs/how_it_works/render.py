@@ -17,13 +17,13 @@ OUTPUT_PATHS = {
 WATCHED_AUTHORITIES = (
     Path("ARCHITECTURE.md"),
     Path("docs/how_it_works/VISUAL_LANGUAGE.md"),
-    Path("src/charlie_pinboard/domain/work_models.py"),
-    Path("src/charlie_pinboard/domain/decision_models.py"),
-    Path("src/charlie_pinboard/domain/decisions.py"),
-    Path("src/charlie_pinboard/application/service.py"),
-    Path("src/charlie_pinboard/application/mutations.py"),
-    Path("src/charlie_pinboard/adapters/sqlite/schema.sql"),
-    Path("src/charlie_pinboard/adapters/sqlite/store.py"),
+    Path("src/pinboard/domain/work_models.py"),
+    Path("src/pinboard/domain/decision_models.py"),
+    Path("src/pinboard/domain/decisions.py"),
+    Path("src/pinboard/application/service.py"),
+    Path("src/pinboard/application/mutations.py"),
+    Path("src/pinboard/adapters/sqlite/schema.sql"),
+    Path("src/pinboard/adapters/sqlite/store.py"),
 )
 
 

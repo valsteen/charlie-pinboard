@@ -10,14 +10,14 @@ from pathlib import Path
 
 import msgspec
 
-from charlie_pinboard.interfaces.brief_source_models import BriefSourceManifest, BriefSourceRequest
-from charlie_pinboard.interfaces.brief_sources import (
+from pinboard.interfaces.brief_source_models import BriefSourceManifest, BriefSourceRequest
+from pinboard.interfaces.brief_sources import (
     decode_brief_source_manifest,
     plan_brief_sources,
     render_brief_source_batch,
 )
-from charlie_pinboard.interfaces.cli import main
-from charlie_pinboard.interfaces.errors import BriefSourceError, BriefSourceErrorCode
+from pinboard.interfaces.cli import main
+from pinboard.interfaces.errors import BriefSourceError, BriefSourceErrorCode
 
 
 class BriefSourcesTest(unittest.TestCase):

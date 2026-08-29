@@ -1,4 +1,4 @@
-from charlie_pinboard.domain import decision_models, work_models
+from pinboard.domain import decision_models, work_models
 
 from .model import Box, Connector, Diagram, Guide, Section
 

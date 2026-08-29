@@ -4,17 +4,17 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from charlie_pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
-from charlie_pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
-from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.files.models import AffectedViews
-from charlie_pinboard.adapters.files.views import rebuild, refresh
-from charlie_pinboard.adapters.sqlite.database import initialize_database
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.artifacts import NewArtifact
-from charlie_pinboard.application.stored_state import ArtifactKind
-from charlie_pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
-from charlie_pinboard.interfaces.work_briefs import build_attempt_brief_views, canonical_work_brief_bytes
+from pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
+from pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.files.models import AffectedViews
+from pinboard.adapters.files.views import rebuild, refresh
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.artifacts import NewArtifact
+from pinboard.application.stored_state import ArtifactKind
+from pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
+from pinboard.interfaces.work_briefs import build_attempt_brief_views, canonical_work_brief_bytes
 from tests.support import SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import work_a_brief
 
@@ -48,7 +48,7 @@ class GeneratedViewsTest(unittest.TestCase):
     def test_post_commit_refresh_failure_is_a_repairable_warning(self) -> None:
         work_root, store = self._state()
         with patch(
-            "charlie_pinboard.adapters.files.views.atomic_replace",
+            "pinboard.adapters.files.views.atomic_replace",
             side_effect=FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, "disk full"),
         ):
             result = refresh(store, work_root, AffectedViews(current_focus=True))

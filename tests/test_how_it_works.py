@@ -190,7 +190,8 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         for path in sorted(prose_paths):
             with self.subTest(path=path.relative_to(ROOT)):
                 prose = path.read_text(encoding="utf-8")
-                self.assertNotRegex(prose, r"\bCharlie\b(?!'s pinboard)")
+                retired_prose_name = r"\bChar" + r"lie\b"
+                self.assertNotRegex(prose, retired_prose_name)
 
 
 if __name__ == "__main__":
