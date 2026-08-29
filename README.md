@@ -7,17 +7,17 @@
 
 <img align="right" width="430" src="assets/pinboard-investigation-board.png" alt="Pixel-art bard explaining a fantasy investigation board covered with maps, clues, and red thread">
 
-Charlie is a repository-scoped planning and execution control plane for coding agents. It turns shared project work into executable state: project decisions, legal next work, current ownership, accepted scope, and acceptance evidence remain durable across tasks and interruptions.
+Pinboard is a repository-scoped planning and execution control plane for coding agents. It turns shared project work into executable state: project decisions, legal next work, current ownership, accepted scope, and acceptance evidence remain durable across tasks and interruptions.
 
-Prompts express one agent's intent. Charlie records what the project has actually decided and enforces which state changes are legal, so a finding can survive the chat that discovered it and an implementation can reach another task without its brief being retold. It keeps one trustworthy quest log and one trustworthy execution brief without deciding the product for you.
+Prompts express one agent's intent. Pinboard records what the project has actually decided and enforces which state changes are legal, so a finding can survive the chat that discovered it and an implementation can reach another task without its brief being retold. It keeps one trustworthy quest log and one trustworthy execution brief without deciding the product for you.
 
-Charlie is most useful when repository work lasts for days, several Codex tasks are involved, or one change keeps uncovering prerequisites. A short isolated change probably does not need it. [Install it from GitHub](#install-from-github), or follow the campaign below to see the shipped workflow.
+Pinboard is most useful when repository work lasts for days, several Codex tasks are involved, or one change keeps uncovering prerequisites. A short isolated change probably does not need it. [Install it from GitHub](#install-from-github), or follow the campaign below to see the shipped workflow.
 
 ## Ashfall Keep becomes a campaign
 
 Imagine you are building *Ashfall Keep*, a small action RPG. One Codex task is working on the dragon boss's second phase. Two scouts return with useful but distracting discoveries: save games capture temporary animation state, and controller mappings identify abilities by inventory position.
 
-Without shared project state, the original chat becomes an accidental backlog, useful conclusions disappear into old conversations, and a feature branch slowly turns into a migration branch. Charlie gives each discovery an explicit place and keeps the dragon work moving until evidence says it cannot.
+Without shared project state, the original chat becomes an accidental backlog, useful conclusions disappear into old conversations, and a feature branch slowly turns into a migration branch. Pinboard gives each discovery an explicit place and keeps the dragon work moving until evidence says it cannot.
 
 ![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** The scout invokes `$pinboard-intake` to preserve the save-game finding as a visible intake candidate. It appears at the back of the live queue by default, while the current focus and active work remain unchanged. A coordinating chat later decides whether to mark it ready, defer it, merge it, or close it.
 
@@ -35,17 +35,17 @@ If a task was not authorized to preserve a new concern, it says so and asks for 
 
 <img align="right" width="360" src="assets/party-crossroads.png" alt="Pixel-art adventurers taking routes toward a river village, the dragon keep, and a crystal cave">
 
-![Pixel-art forked trail with two adventurers](assets/split-party.png) **The party can split without walking into the same trap.** Ask `$pinboard` which quests can move together. `pinboard parallel preview` identifies a safe group and explains blocked dependencies without creating tasks. Before each selected launch, Charlie checks the remaining group again; changed ownership or dependencies stop the affected launch with a precise partial result.
+![Pixel-art forked trail with two adventurers](assets/split-party.png) **The party can split without walking into the same trap.** Ask `$pinboard` which quests can move together. `pinboard parallel preview` identifies a safe group and explains blocked dependencies without creating tasks. Before each selected launch, Pinboard checks the remaining group again; changed ownership or dependencies stop the affected launch with a precise partial result.
 
 ![Pixel-art campfire checkpoint](assets/safe-camp.png) **The party makes camp.** If stable ability IDs become a true prerequisite, `$pinboard` records where the dragon work stopped and what must change. After the prerequisite is accepted, the same attempt can resume from preserved evidence instead of reconstructing the journey.
 
 ![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** `$pinboard` prepares one canonical accepted brief and `pinboard dispatch` points the worker to it without copying its semantics into another prompt. `$pinboard-deliver` claims that one active attempt, follows its exact scope and checks, and returns a durable result for independent review. The coordinating chat accepts the evidence or returns the same attempt for correction; a worker never accepts its own quest.
 
-Everything remains ordinary repository work: code, branches, worktrees, Markdown, and conversation. Charlie makes the work surrounding it executable and reviewable.
+Everything remains ordinary repository work: code, branches, worktrees, Markdown, and conversation. Pinboard makes the work surrounding it executable and reviewable.
 
-The generated [How Charlie works](HOW_IT_WORKS.md) guide shows the workflow, package layers, one transition across those layers, and the relational ledger underneath them.
+The generated [How Pinboard works](HOW_IT_WORKS.md) guide shows the workflow, package layers, one transition across those layers, and the relational ledger underneath them.
 
-## What Charlie keeps coherent
+## What Pinboard keeps coherent
 
 - `$pinboard` reads the live map, explains legal next work, previews safe parallel work, and briefly borrows coordination when a shared decision must change.
 - `$pinboard-intake` lets any authorized task preserve one finding as visible intake without silently making it ready or active.
