@@ -43,6 +43,8 @@ If a task was not authorized to preserve a new concern, it says so and asks for 
 
 Everything remains ordinary repository work: code, branches, worktrees, Markdown, and conversation. Charlie makes the work surrounding it executable and reviewable.
 
+The generated [How Charlie works](HOW_IT_WORKS.md) guide shows the workflow, package layers, one transition across those layers, and the relational ledger underneath them.
+
 ## What Charlie keeps coherent
 
 - `$pinboard` reads the live map, explains legal next work, previews safe parallel work, and briefly borrows coordination when a shared decision must change.
@@ -100,6 +102,7 @@ uv run --locked pyrefly coverage check src --strict --fail-under 100
 uv run --locked coverage run -m unittest discover -v
 uv run --locked coverage report
 uv run --locked python scripts/validate-metadata.py
+uv run --locked python -m docs.how_it_works.render --check
 uv build --no-sources
 scripts/pinboard --help
 ```

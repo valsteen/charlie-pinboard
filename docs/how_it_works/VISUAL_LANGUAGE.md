@@ -1,0 +1,55 @@
+# Visitor-guide visual language
+
+The generated diagrams are static reading aids for a visitor who is scrolling through `HOW_IT_WORKS.md`. They should orient the eye before they ask for close reading. A reader should be able to notice the major groups, choose one card, and follow its relationships without operating controls or first reviewing every label.
+
+## Evaluation criteria
+
+- The overview must remain legible before the individual card text is read.
+- Closer reading must reward the overview: labels and relationships must be accurate rather than merely suggestive.
+- Position must carry meaning. A row, column, lane, or change in elevation needs a domain or ownership reason.
+- Visual emphasis must be earned by information importance. Decorative numerals, curves, framing, or slogans do not earn attention by themselves.
+- Separation should make distinct responsibilities visible without adding labels that merely say they are distinct.
+- The relational-ledger view is the density test. A visual grammar that only works for a short linear workflow is not sufficient.
+
+## Stable grammar
+
+Cards are flat, light, and rectangular. A narrow left bar establishes the structural accent. Small monospaced labels identify a state, layer, table, or source symbol; the main title states the human meaning; supporting facts remain visually quieter.
+
+Connectors are semantic marks, not decoration:
+
+- Routes are horizontal or vertical. Soft elbows are used only when a route must turn.
+- Every bend has a straight segment before the arrowhead.
+- A connector meets the middle region of a card edge, never a fragile corner.
+- Connectors do not cross text, graze unrelated cards, run closely parallel to a card, stop without a destination, or make a detour that carries no meaning.
+- Distinct relationships use distinct card ports. A shared trunk is reserved for a relationship that genuinely branches.
+- Filled arrowheads are the default direction marker. Another arrowhead style requires another real relationship meaning.
+- A short statement is preferable to a long route through unrelated groups.
+
+The canvas uses a warm paper tone, a quiet square grid, and a thin outer border. The grid provides spatial stability across sparse and dense diagrams. Meaningful group guides remain stronger than the grid. The paper tone softens the repeated geometry without turning the diagram into a themed object.
+
+## Source ownership
+
+- `model.py` owns the reusable primitives, visual tokens, soft-elbow rendering, and mechanically checkable geometry rules.
+- `product.py`, `layers.py`, `journey.py`, and `database.py` own the semantic inventory and authored composition of their diagrams.
+- `render.py` owns the guide text, watched authorities, output paths, and freshness command.
+- `HOW_IT_WORKS.md` and `assets/how-it-works/*.svg` are generated projections and are never edited directly.
+
+The composition is deliberately authored rather than delegated to a general graph layout engine. Automatic placement may be introduced only if it preserves the same semantic axes, stable ports, label clearance, and routing quality on the relational-ledger density test.
+
+## Updating or varying the diagrams
+
+Change the relevant semantic seed when product scope, architecture, a representative flow, or the database schema changes. Change the renderer when the shared visual language changes. Keep style tokens separate from semantic content so another document can vary the palette, type, or surface without discarding the evaluation criteria and connector grammar.
+
+Generate the outputs with:
+
+```console
+uv run --locked python -m docs.how_it_works.render
+```
+
+Inspect the generated guide at its normal reading width, including the relational ledger. Then verify freshness with:
+
+```console
+uv run --locked python -m docs.how_it_works.render --check
+```
+
+Revisit the grammar when a real diagram cannot express an accurate relationship without violating it. Do not weaken a rule merely to preserve an existing placement.
