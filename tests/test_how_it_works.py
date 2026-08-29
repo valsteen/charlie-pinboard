@@ -74,6 +74,25 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                     re.sub(r"#[0-9a-fA-F]{3,6}\b", "#COLOR", night),
                 )
 
+    def test_night_palette_matches_the_approved_muted_navy(self) -> None:
+        self.assertEqual(
+            Palette(
+                canvas="#1c2127",
+                grid="#65798b",
+                frame="#45515c",
+                card="#242b32",
+                card_border="#5e6a74",
+                text="#edf1f2",
+                label="#b7c0c5",
+                muted_text="#c5cdd0",
+                guide="#414c55",
+                connector="#9ba8b1",
+                primary="#91a7bb",
+                secondary="#9b948b",
+            ),
+            NIGHT_PALETTE,
+        )
+
     def test_maintained_python_checks_include_the_generator(self) -> None:
         configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
