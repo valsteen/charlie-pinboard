@@ -77,6 +77,16 @@ class HowItWorksDocumentationTests(unittest.TestCase):
 
         self.assertEqual((), render.stale_outputs(ROOT, outputs))
 
+    def test_public_and_agent_facing_prose_uses_the_product_name(self) -> None:
+        prose_paths = {ROOT / name for name in ("README.md", "HOW_IT_WORKS.md", "ARCHITECTURE.md")}
+        prose_paths.update(path for path in (ROOT / "docs").rglob("*.md") if path.name != "AGENTS.md")
+        prose_paths.update((ROOT / "skills").rglob("*.md"))
+
+        for path in sorted(prose_paths):
+            with self.subTest(path=path.relative_to(ROOT)):
+                prose = path.read_text(encoding="utf-8")
+                self.assertNotRegex(prose, r"\bCharlie\b(?!'s pinboard)")
+
 
 if __name__ == "__main__":
     unittest.main()

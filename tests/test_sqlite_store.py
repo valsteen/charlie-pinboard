@@ -101,7 +101,7 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(store.snapshot(), SQLiteWorkStore(backup).snapshot())
 
         for field, value, expected in (
-            ("application", "charlie-board", StorageErrorCode.INVALID_STATE),
+            ("application", "wrong-application", StorageErrorCode.INVALID_STATE),
             ("schema_version", 0, StorageErrorCode.SCHEMA_UNSUPPORTED),
             ("schema_version", 2, StorageErrorCode.SCHEMA_UNSUPPORTED),
         ):

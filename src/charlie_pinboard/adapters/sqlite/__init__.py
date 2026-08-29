@@ -1,1 +1,1 @@
-"""SQLite storage adapter for Charlie Pinboard."""
+"""SQLite storage adapter for Pinboard."""
