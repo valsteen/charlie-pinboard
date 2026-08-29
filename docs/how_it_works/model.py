@@ -261,39 +261,49 @@ def _orthogonal_path(points: tuple[tuple[int, int], ...]) -> str:
 
 
 def _section(value: Section) -> str:
-    subtitle = (
-        ""
-        if not value.subtitle
-        else f'<text x="{value.x}" y="{value.y + 22}" class="section-subtitle">{escape(value.subtitle)}</text>'
+    subtitles = "".join(
+        f'<text x="{value.x}" y="{value.y + 22 + index * 16}" class="section-subtitle canvas-text">'
+        f"{escape(line)}</text>"
+        for index, line in enumerate(value.subtitle.splitlines())
     )
-    return f'<text x="{value.x}" y="{value.y}" class="section-label">{escape(value.label.upper())}</text>{subtitle}'
+    return (
+        f'<text x="{value.x}" y="{value.y}" class="section-label canvas-text">'
+        f"{escape(value.label.upper())}</text>{subtitles}"
+    )
 
 
 def _guide(value: Guide) -> str:
     return f'<line x1="{value.start[0]}" y1="{value.start[1]}" x2="{value.end[0]}" y2="{value.end[1]}" class="guide"/>'
 
 
-def _connector(value: Connector) -> str:
+def _connector_path(value: Connector) -> str:
     dash = ' stroke-dasharray="7 7"' if value.dashed else ""
     marker = ' marker-end="url(#arrow)"' if value.arrow else ""
-    path = f'<path d="{_orthogonal_path(value.points)}" class="connector"{dash}{marker}/>'
+    return f'<path d="{_orthogonal_path(value.points)}" class="connector"{dash}{marker}/>'
+
+
+def _connector_label(value: Connector) -> str:
     if not value.label:
-        return path
+        return ""
     if value.label_position is None:
         raise AssertionError("validated connector label position is missing")
     return (
-        f'{path}<text x="{value.label_position[0]}" y="{value.label_position[1]}" '
-        f'text-anchor="middle" class="connector-label">{escape(value.label.upper())}</text>'
+        f'<text x="{value.label_position[0]}" y="{value.label_position[1]}" '
+        f'text-anchor="middle" class="connector-label canvas-text">{escape(value.label.upper())}</text>'
     )
 
 
-def _box(value: Box, palette: Palette) -> str:
+def _box_surface(value: Box, palette: Palette) -> str:
     accent = palette.primary if value.emphasis == "primary" else palette.secondary
+    return (
+        f'<rect x="{value.x}" y="{value.y}" width="{value.width}" height="{value.height}" class="box"/>'
+        f'<rect x="{value.x}" y="{value.y}" width="3" height="{value.height}" fill="{accent}"/>'
+    )
+
+
+def _box_text(value: Box) -> str:
     title_y = value.y + (49 if value.label else 28)
-    body = [
-        f'<rect x="{value.x}" y="{value.y}" width="{value.width}" height="{value.height}" class="box"/>',
-        f'<rect x="{value.x}" y="{value.y}" width="3" height="{value.height}" fill="{accent}"/>',
-    ]
+    body: list[str] = []
     if value.label:
         body.append(
             f'<text x="{value.x + 16}" y="{value.y + 22}" class="box-label">{escape(value.label.upper())}</text>'
@@ -311,18 +321,24 @@ def _note(value: Note) -> str:
     css_class = "note-meta" if value.meta else "note"
     return (
         f'<text x="{value.x}" y="{value.y}" text-anchor="{value.anchor}" '
-        f'font-size="{value.size}" class="{css_class}">{escape(value.text)}</text>'
+        f'font-size="{value.size}" class="{css_class} canvas-text">{escape(value.text)}</text>'
     )
 
 
 def render_svg(diagram: Diagram, source_revision: str, palette: Palette) -> str:
     validate_diagram(diagram)
-    body = "".join(
+    geometry = "".join(
+        (
+            *(_guide(value) for value in diagram.guides),
+            *(_connector_path(value) for value in diagram.connectors),
+            *(_box_surface(value, palette) for value in diagram.boxes),
+        )
+    )
+    text = "".join(
         (
             *(_section(value) for value in diagram.sections),
-            *(_guide(value) for value in diagram.guides),
-            *(_connector(value) for value in diagram.connectors),
-            *(_box(value, palette) for value in diagram.boxes),
+            *(_connector_label(value) for value in diagram.connectors),
+            *(_box_text(value) for value in diagram.boxes),
             *(_note(value) for value in diagram.notes),
         )
     )
@@ -351,11 +367,13 @@ def render_svg(diagram: Diagram, source_revision: str, palette: Palette) -> str:
       .box-meta {{ font-size: 10px; fill: {palette.connector}; }}
       .note {{ fill: {palette.muted_text}; }}
       .note-meta {{ font-weight: 700; letter-spacing: 0.08em; fill: {palette.label}; }}
+      .canvas-text {{ paint-order: stroke fill; stroke: {palette.canvas}; stroke-width: 4px; stroke-linejoin: round; }}
     </style>
   </defs>
   <rect width="{diagram.width}" height="{diagram.height}" fill="{palette.canvas}"/>
   <rect width="{diagram.width}" height="{diagram.height}" fill="url(#grid)"/>
-  {body}
   <rect x="0.5" y="0.5" width="{diagram.width - 1}" height="{diagram.height - 1}" fill="none" stroke="{palette.frame}"/>
+  {geometry}
+  {text}
 </svg>
 '''

@@ -17,6 +17,8 @@ Cards are flat and rectangular, with a surface that remains distinct from the ca
 
 Every text line stays inside the card's content area with a deliberate right margin. Merely avoiding literal overflow is not enough: a title, detail, or source name must not appear to bump into the border.
 
+Text is painted after geometry. Free-standing labels use a canvas-colored clearance edge, and authored line breaks keep them off meaningful routes, so no grid, guide, connector, card, or frame can consume a glyph.
+
 Connectors are semantic marks, not decoration:
 
 - Routes are horizontal or vertical. Soft elbows are used only when a route must turn.

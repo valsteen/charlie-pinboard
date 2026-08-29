@@ -40,7 +40,7 @@ DIAGRAM = Diagram(
     height=760,
     sections=(
         Section("Package dependency direction", "every arrow means: may depend on", 28, 42),
-        Section("Decision center", "policy remains independent of interfaces and storage", 824, 330),
+        Section("Decision center", "policy remains independent\nof interfaces and storage", 824, 330),
     ),
     guides=(
         Guide((250, 38), (1172, 38)),

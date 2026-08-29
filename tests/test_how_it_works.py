@@ -4,6 +4,7 @@ import tomllib
 import unittest
 from dataclasses import astuple
 from pathlib import Path
+from xml.etree import ElementTree
 
 from docs.how_it_works import database, journey, layers, product, render
 from docs.how_it_works.model import DAY_PALETTE, NIGHT_PALETTE, Box, Connector, Diagram, Palette, render_svg
@@ -100,6 +101,29 @@ class HowItWorksDocumentationTests(unittest.TestCase):
 
         for color in astuple(palette):
             self.assertIn(color, svg)
+
+    def test_renderer_keeps_text_above_geometry_and_protects_canvas_labels(self) -> None:
+        svg = render_svg(layers.DIAGRAM, "source-revision", NIGHT_PALETTE)
+        root = ElementTree.fromstring(svg)
+        text_started = False
+
+        for child in root:
+            tag = child.tag.rsplit("}", 1)[-1]
+            if tag == "text":
+                text_started = True
+            elif tag in {"line", "path", "rect"}:
+                self.assertFalse(text_started, f"{tag} is painted over text")
+
+        canvas_text_roles = {"section-label", "section-subtitle", "connector-label", "note", "note-meta"}
+        for text in root.findall("{http://www.w3.org/2000/svg}text"):
+            classes = set(text.attrib.get("class", "").split())
+            if classes & canvas_text_roles:
+                self.assertIn("canvas-text", classes)
+
+        self.assertIn(".canvas-text { paint-order: stroke fill;", svg)
+        self.assertIn(">policy remains independent<", svg)
+        self.assertIn(">of interfaces and storage<", svg)
+        self.assertNotIn(">policy remains independent of interfaces and storage<", svg)
 
     def test_renderer_rejects_fragile_connector_geometry(self) -> None:
         boxes = (
