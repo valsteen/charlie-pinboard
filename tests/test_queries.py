@@ -3,26 +3,26 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.database import initialize_database
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.actions import discover_actions
-from charlie_pinboard.application.decision_projection import project_decision_snapshot
-from charlie_pinboard.application.errors import ActionQueryError, QueryError, QueryErrorCode
-from charlie_pinboard.application.queries import (
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.actions import discover_actions
+from pinboard.application.decision_projection import project_decision_snapshot
+from pinboard.application.errors import ActionQueryError, QueryError, QueryErrorCode
+from pinboard.application.queries import (
     item_status,
     overview_from_state,
     preview_parallel,
 )
-from charlie_pinboard.application.query_models import ItemStatus, ItemStatusAttempt
-from charlie_pinboard.application.stored_state import (
+from pinboard.application.query_models import ItemStatus, ItemStatusAttempt
+from pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
 )
-from charlie_pinboard.domain import decision_models, work_models
-from charlie_pinboard.domain.errors import DecisionFailureCode
-from charlie_pinboard.domain.history import item_scope_digest
-from charlie_pinboard.domain.identifiers import (
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.errors import DecisionFailureCode
+from pinboard.domain.history import item_scope_digest
+from pinboard.domain.identifiers import (
     AttemptId,
     ItemId,
     LeaseId,

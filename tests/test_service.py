@@ -4,26 +4,26 @@ from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
-from charlie_pinboard.adapters.files.file_io import resolve_durable_roots
-from charlie_pinboard.adapters.sqlite.database import initialize_database
-from charlie_pinboard.adapters.sqlite.store import SQLiteWorkStore
-from charlie_pinboard.application.decision_projection import (
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application.decision_projection import (
     project_decision_snapshot,
     project_inactive_attempt_authority,
 )
-from charlie_pinboard.application.service import (
+from pinboard.application.service import (
     change_attempt_authority,
     change_coordination_authority,
     create_proposal,
     execute,
 )
-from charlie_pinboard.application.stored_state import (
+from pinboard.application.stored_state import (
     StoredWorkItemState,
     StoredWorkState,
     TransitionHistoryActionKind,
 )
-from charlie_pinboard.domain import decision_models, work_models
-from charlie_pinboard.domain.authority_models import (
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
     AttemptLeaseStatus,
@@ -35,12 +35,12 @@ from charlie_pinboard.domain.authority_models import (
     RevokeCoordinationAuthority,
     TransferAttemptAuthority,
 )
-from charlie_pinboard.domain.decisions import (
+from pinboard.domain.decisions import (
     available_actions,
     bind_transition,
 )
-from charlie_pinboard.domain.errors import DecisionFailure, DecisionFailureCode
-from charlie_pinboard.domain.identifiers import (
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from pinboard.domain.identifiers import (
     AttemptId,
     CandidateId,
     CheckpointId,
@@ -50,7 +50,7 @@ from charlie_pinboard.domain.identifiers import (
     ProposalId,
     TaskId,
 )
-from charlie_pinboard.domain.proposal_models import (
+from pinboard.domain.proposal_models import (
     CreateProposalOperation,
     ProposalIntake,
 )

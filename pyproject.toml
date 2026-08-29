@@ -3,7 +3,7 @@ requires = ["uv_build>=0.12,<0.13"]
 build-backend = "uv_build"
 
 [project]
-name = "charlie-pinboard"
+name = "pinboard"
 version = "0.1.0"
 description = "Validated coordination for one repository-owned work ledger"
 readme = "README.md"
@@ -13,16 +13,16 @@ dependencies = [
 ]
 
 [project.scripts]
-pinboard = "charlie_pinboard.interfaces.cli:main"
+pinboard = "pinboard.interfaces.cli:main"
 
 [tool.uv.build-backend]
-module-name = "charlie_pinboard"
+module-name = "pinboard"
 source-exclude = [".DS_Store"]
 
 [tool.ruff]
 target-version = "py314"
 line-length = 120
-src = ["src", "tests"]
+src = ["src", "tests", "docs/how_it_works"]
 
 [tool.ruff.lint]
 extend-select = ["ICN003"]
@@ -30,23 +30,24 @@ select = ["ANN", "ARG", "B", "BLE", "C4", "C90", "E4", "E7", "E9", "F", "I", "PE
 
 [tool.ruff.lint.flake8-import-conventions]
 banned-from = [
-    "charlie_pinboard.domain.decision_models",
-    "charlie_pinboard.domain.work_models",
+    "pinboard.domain.decision_models",
+    "pinboard.domain.work_models",
 ]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "enum.StrEnum".msg = "Use Enum so string behavior remains explicit."
+"src".msg = "Import the installed package as pinboard; src is only the source-tree layout."
 "typing.Any".msg = "Use a concrete type or a closed union."
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12
 
 [tool.ruff.lint.isort]
-known-first-party = ["charlie_pinboard", "tests"]
+known-first-party = ["pinboard", "tests"]
 
 [tool.pyrefly]
 python-version = "3.14"
-project-includes = ["src", "tests"]
+project-includes = ["src", "tests", "docs/how_it_works"]
 search-path = ["."]
 preset = "strict"
 min-severity = "warn"
@@ -65,7 +66,7 @@ unknown-variable-type = "warn"
 
 [tool.coverage.run]
 branch = true
-source = ["charlie_pinboard"]
+source = ["pinboard"]
 
 [tool.coverage.report]
 exclude_also = [

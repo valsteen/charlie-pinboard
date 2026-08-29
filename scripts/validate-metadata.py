@@ -8,10 +8,10 @@ import yaml
 
 ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
-PLUGIN_NAME: Final = "charlie-pinboard"
+PLUGIN_NAME: Final = "pinboard"
 EXPECTED_SKILLS: Final = frozenset({"pinboard", "pinboard-deliver", "pinboard-intake", "slop-cleanup"})
 EXPECTED_ENTRY_POINTS: Final = {
-    "pinboard": "charlie_pinboard.interfaces.cli:main",
+    "pinboard": "pinboard.interfaces.cli:main",
 }
 
 type YamlScalar = str | int | float | bool | None
@@ -147,7 +147,7 @@ def validate_marketplace() -> None:
     value = msgspec.json.decode(path.read_bytes(), type=MarketplaceManifest)
     expected = MarketplaceManifest(
         name=PLUGIN_NAME,
-        interface=MarketplaceInterface(display_name="Charlie's pinboard"),
+        interface=MarketplaceInterface(display_name="Pinboard"),
         plugins=(
             MarketplacePlugin(
                 name=PLUGIN_NAME,
