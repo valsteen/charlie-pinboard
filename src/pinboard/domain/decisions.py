@@ -599,6 +599,7 @@ def _resume(
         return DecisionFailure(
             DecisionFailureCode.DEPENDENCY_NOT_SATISFIED, f"Item '{item.item}' still has a live dependency."
         )
+    revised_brief: decision_models.RevisedAttemptBrief | None = None
     if value.brief_artifact_ref_id is not None:
         if item.attempt is None:
             return DecisionFailure(
@@ -614,6 +615,17 @@ def _resume(
                 DecisionFailureCode.TRANSITION_INPUT_INVALID,
                 "Resuming with a revised brief requires one existing brief artifact reference.",
             )
+        scope = next((candidate for candidate in snapshot.scopes if candidate.item == item.item), None)
+        if scope is None:
+            return DecisionFailure(
+                DecisionFailureCode.TRANSITION_INPUT_INVALID,
+                "Resuming with a revised brief requires the item's accepted scope.",
+            )
+        revised_brief = decision_models.RevisedAttemptBrief(
+            value.brief_artifact_ref_id,
+            scope.revision,
+            scope.digest,
+        )
     target = work_models.WorkState.ACTIVE if item.attempt is not None else work_models.WorkState.READY
     if item.attempt is not None:
         before = (
@@ -626,7 +638,7 @@ def _resume(
             item.state,
             item.attempt,
             before,
-            value.brief_artifact_ref_id,
+            revised_brief,
         )
     else:
         change = decision_models.ItemStateChange(item.item, item.state, target)

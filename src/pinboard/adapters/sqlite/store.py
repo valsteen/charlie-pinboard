@@ -878,7 +878,7 @@ class _StoredStateWriter:
         revision: int,
         now: datetime,
         *,
-        brief_artifact_ref_id: ArtifactRefId | None = None,
+        revised_brief: decision_models.RevisedAttemptBrief | None = None,
         result_artifact_ref_id: ArtifactRefId | None = None,
         candidate_revision: str | None = None,
         candidate_recorded_at: datetime | None = None,
@@ -903,16 +903,20 @@ class _StoredStateWriter:
                 UPDATE attempts
                 SET state = ?, brief_artifact_ref_id = ?, result_artifact_ref_id = ?,
                     result_artifact_kind = ?, candidate_revision = ?, candidate_recorded_at = ?,
-                    subject_revision = ?, updated_at = ?
+                    accepted_scope_revision = ?, accepted_scope_digest = ?, subject_revision = ?, updated_at = ?
                 WHERE attempt_id = ? AND state = ? AND subject_revision = ?
                 """,
                 (
                     after_state.value,
-                    brief_artifact_ref_id or current.brief_artifact_ref_id,
+                    revised_brief.artifact_ref_id if revised_brief is not None else current.brief_artifact_ref_id,
                     result_artifact_ref_id or current.result_artifact_ref_id,
                     "result" if (result_artifact_ref_id or current.result_artifact_ref_id) is not None else None,
                     stored_candidate,
                     stored_candidate_at,
+                    revised_brief.accepted_scope_revision
+                    if revised_brief is not None
+                    else current.accepted_scope_revision,
+                    revised_brief.accepted_scope_digest if revised_brief is not None else current.accepted_scope_digest,
                     revision,
                     now.isoformat(),
                     attempt_id,
@@ -1496,7 +1500,7 @@ class _StoredStateWriter:
                 item_before=item_before,
                 attempt=attempt,
                 attempt_before=attempt_before,
-                brief_artifact_ref_id=brief,
+                revised_brief=revised_brief,
             ):
                 self._set_item_state(state, item, item_before, stored_state.StoredWorkItemState.ACTIVE, revision, now)
                 self._set_attempt_state(
@@ -1506,7 +1510,7 @@ class _StoredStateWriter:
                     work_models.AttemptState.ACTIVE,
                     revision,
                     now,
-                    brief_artifact_ref_id=brief,
+                    revised_brief=revised_brief,
                 )
             case decision_models.ReviewSubmissionChange(
                 item=item,

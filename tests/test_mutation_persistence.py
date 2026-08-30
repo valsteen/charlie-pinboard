@@ -230,6 +230,7 @@ class MutationPersistenceTest(unittest.TestCase):
 
     def test_resume_replaces_the_attempt_brief_and_reloads_it_from_sqlite(self) -> None:
         state = complete_sqlite_state()
+        revised_scope_digest = "c" * 64
         current = state.artifact_references[0]
         replacement = replace(
             current,
@@ -241,7 +242,14 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         attempt = state.lifecycle.attempts[0]
         items = tuple(
-            replace(item, state=stored_state.StoredWorkItemState.PAUSED) if item.item_id == attempt.item_id else item
+            replace(
+                item,
+                state=stored_state.StoredWorkItemState.PAUSED,
+                scope_revision=2,
+                scope_digest=revised_scope_digest,
+            )
+            if item.item_id == attempt.item_id
+            else item
             for item in state.lifecycle.work_items
         )
         state = replace(
@@ -249,6 +257,16 @@ class MutationPersistenceTest(unittest.TestCase):
             lifecycle=replace(
                 state.lifecycle,
                 work_items=items,
+                scope_revisions=(
+                    *state.lifecycle.scope_revisions,
+                    stored_state.ItemScopeRevision(
+                        attempt.item_id,
+                        2,
+                        revised_scope_digest,
+                        state.lifecycle.project.revision,
+                        SQLITE_NOW,
+                    ),
+                ),
                 dependencies=tuple(value for value in state.lifecycle.dependencies if value.item_id != attempt.item_id),
                 attempts=(replace(attempt, state=work_models.AttemptState.PAUSED),),
             ),
@@ -274,6 +292,8 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         self.assertEqual(work_models.AttemptState.ACTIVE, persisted.state)
         self.assertEqual(replacement.artifact_ref_id, persisted.brief_artifact_ref_id)
+        self.assertEqual(2, persisted.accepted_scope_revision)
+        self.assertEqual(revised_scope_digest, persisted.accepted_scope_digest)
 
     def test_proposal_acceptance_round_trips_semantics_and_ordered_dependencies(self) -> None:
         store = self._store()

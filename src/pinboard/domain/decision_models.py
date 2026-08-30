@@ -681,12 +681,19 @@ class BlockItemChange:
 
 
 @dataclass(frozen=True, slots=True)
+class RevisedAttemptBrief:
+    artifact_ref_id: ArtifactRefId
+    accepted_scope_revision: int
+    accepted_scope_digest: str
+
+
+@dataclass(frozen=True, slots=True)
 class ResumeAttemptChange:
     item: ItemId
     item_before: work_models.WorkState
     attempt: AttemptId
     attempt_before: work_models.AttemptState
-    brief_artifact_ref_id: ArtifactRefId | None
+    revised_brief: RevisedAttemptBrief | None
 
 
 @dataclass(frozen=True, slots=True)

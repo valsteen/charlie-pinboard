@@ -18,7 +18,7 @@ from pinboard.domain.identifiers import (
 )
 from pinboard.domain.ledger import LedgerSnapshot
 from pinboard.interfaces.transition_input import parse_transition_input
-from tests.domain_support import action, expect_success
+from tests.domain_support import action, expect_success, item_scope, scope_anchor
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -186,6 +186,14 @@ class TypedTransitionContractTest(unittest.TestCase):
                 work_models.ArtifactRecord(ArtifactRefId(2), "brief"),
                 work_models.ArtifactRecord(ArtifactRefId(3), "design"),
             ),
+            scopes=(
+                scope_anchor(
+                    "ready-item",
+                    2,
+                    "d" * 64,
+                    item_scope("ready-item", "Ready item", "trigger", "why", "effect", "unlock"),
+                ),
+            ),
         )
         resume = action(decision_models.ResumeAction, ItemId("ready-item"))
 
@@ -198,7 +206,17 @@ class TypedTransitionContractTest(unittest.TestCase):
         accepted = decide(snapshot, bind_transition(resume, work_models.ResumeInput(ArtifactRefId(2))), SQLITE_NOW)
         self.assertIsInstance(accepted.change, decision_models.ResumeAttemptChange)
         assert isinstance(accepted.change, decision_models.ResumeAttemptChange)
-        self.assertEqual(ArtifactRefId(2), accepted.change.brief_artifact_ref_id)
+        revised_brief = accepted.change.revised_brief
+        self.assertIsNotNone(revised_brief)
+        assert revised_brief is not None
+        self.assertEqual(
+            (ArtifactRefId(2), 2, "d" * 64),
+            (
+                revised_brief.artifact_ref_id,
+                revised_brief.accepted_scope_revision,
+                revised_brief.accepted_scope_digest,
+            ),
+        )
 
 
 class ExactMutationAuthorityTest(unittest.TestCase):
