@@ -23,7 +23,7 @@ class StatusView(msgspec.Struct, frozen=True):
     active_attempts: tuple[str, ...]
     next_action: str
     counts: dict[str, int]
-    visible_candidate_count: int
+    intake_item_count: int
     coordinator: CoordinatorView | None
     authority: str = "v1"
 

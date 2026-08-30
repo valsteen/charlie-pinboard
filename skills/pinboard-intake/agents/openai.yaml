@@ -1,4 +1,4 @@
 interface:
   display_name: "Pinboard: Intake"
-  short_description: "Preserve a finding as visible intake"
-  default_prompt: "Use $pinboard-intake to preserve this finding as a visible intake candidate for the next coordination pass."
+  short_description: "Preserve proposed work as an intake item"
+  default_prompt: "Use $pinboard-intake to preserve this proposed work as an intake item for the next coordination pass."

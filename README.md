@@ -9,7 +9,7 @@
 
 Long-running coding-agent work rarely stays in one conversation. A feature uncovers a prerequisite, a review sends implementation back for correction, an interruption leaves work unfinished, and the next task has to recover what the project actually decided.
 
-Pinboard gives one repository a durable work ledger. Discoveries, priorities, dependencies, accepted briefs, current ownership, pauses, and review outcomes stay consistent across Codex tasks. A finding can survive the conversation that discovered it, and an implementation can reach another task without its brief being retold.
+Pinboard gives one repository a durable work ledger. Proposed work, priorities, dependencies, accepted briefs, current ownership, pauses, and review outcomes stay consistent across Codex tasks. A concern can survive the conversation that uncovered it, and an implementation can reach another task without its brief being retold.
 
 Pinboard does not decide the product, choose priorities, or create Codex tasks. It records project decisions, rejects changes that no longer fit the current state, and keeps current ownership explicit. A short isolated change probably does not need it. Work that spans tasks, interruptions, dependencies, or independent review often does.
 
@@ -19,15 +19,15 @@ Imagine you are building *Ashfall Keep*, a small action RPG. One Codex task is w
 
 Without shared project state, the original conversation becomes an accidental backlog. Useful conclusions disappear into old tasks, and a focused feature quietly turns into several unrelated changes. Pinboard gives each concern an explicit place while keeping the current work honest.
 
-![Pixel-art quest scroll](assets/quest-scroll.png) **Preserve the finding without changing the plan.** The scout invokes `$pinboard-intake` to record the save-game problem with its trigger, evidence, and likely consequence. It enters intake; it does not become approved work, replace the current focus, or interrupt the dragon attempt. A coordinating task can later make that decision.
+![Pixel-art quest scroll](assets/quest-scroll.png) **Preserve proposed work without changing the plan.** The scout invokes `$pinboard-intake` to record the save-game problem with its trigger, evidence, and likely consequence. It enters intake, the state for unstarted work awaiting a decision. It does not become ready, replace the current focus, or interrupt the dragon attempt. A coordinating task can later decide whether it belongs in the plan.
 
 The scout gets a compact receipt:
 
-> **Saved for later — the animation-state finding is now in `save-game-animation-state` (`intake`); dragon work continues.**
+> **Saved for later — the animation-state concern is now in `save-game-animation-state` (`intake`); dragon work continues.**
 
 <img align="right" width="390" src="assets/party-crossroads.png" alt="Pixel-art bard and adventurers considering routes toward a river village, a dragon keep, and a crystal cave">
 
-![Pixel-art open quest ledger](assets/quick-quest-log.png) **See the current work before deciding what moves.** Ask `$pinboard` where things stand and it reads one revision-stamped live overview: the dragon phase is active, controller mapping is ready, and the save-game finding remains in intake. The coordinating task can mark work ready, defer it, close it, connect a dependency, or preview which independent items could move together. Reading the map does not change it.
+![Pixel-art open quest ledger](assets/quick-quest-log.png) **See the current work before deciding what moves.** Ask `$pinboard` where things stand and it reads one revision-stamped live overview: the dragon phase is active, controller mapping is ready, and the save-game work remains in intake. The coordinating task can mark work ready, defer it, close it, connect a dependency, or preview which independent items could move together. Reading the map does not change it.
 
 ![Pixel-art campfire checkpoint](assets/safe-camp.png) **Pause and resume without reconstructing the journey.** If stable ability IDs become a real prerequisite, the dragon attempt records where it stopped, why it cannot continue, and what would make it resumable. After the prerequisite is completed and accepted, the same attempt resumes from preserved evidence instead of asking a new conversation to infer the missing history.
 

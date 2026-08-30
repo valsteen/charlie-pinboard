@@ -10,15 +10,15 @@ from tests.support import JsonObject
 def proposal() -> JsonObject:
     return {
         "schema": "pinboard-proposal/v1",
-        "proposal_id": "finding-1",
+        "proposal_id": "proposal-1",
         "created_at": "2026-08-25T00:00:00Z",
         "source_task_id": "task",
-        "user_label": "Finding",
+        "user_label": "Proposal",
         "trigger": "A current boundary exposed a missing behavior.",
         "evidence": ["source:test"],
         "why_it_matters": "The behavior must persist through SQLite.",
         "relation": {"kind": "independent", "item": None},
-        "effect": "The proposal appears as visible intake.",
+        "effect": "The proposal appears as an intake item.",
         "unlock": "Current proposal intake remains usable.",
         "urgency_evidence": "The installed command exercises this boundary.",
         "freshness_assumptions": ["SQLite remains authoritative."],
@@ -34,7 +34,7 @@ class ProposalInputTest(unittest.TestCase):
         self.assertIsInstance(decoded, Proposal)
         self.assertIsInstance(positioned, Proposal)
         self.assertIsInstance(unexpected, ProposalFailure)
-        self.assertEqual("finding-1", decoded.proposal_id)
+        self.assertEqual("proposal-1", decoded.proposal_id)
         self.assertEqual(2, positioned.position)
 
     def test_decoder_rejects_invalid_shapes_and_reports_paths(self) -> None:

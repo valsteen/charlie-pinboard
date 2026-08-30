@@ -29,7 +29,7 @@ class ProposalIntake:
 
 
 @dataclass(frozen=True, slots=True)
-class VisibleProposalItem:
+class IntakeWorkItem:
     item_id: ItemId
     position: int
     dependencies: tuple[ItemId, ...]
@@ -56,7 +56,7 @@ class CreateProposalOperation:
 @dataclass(frozen=True, slots=True)
 class ProposalCreationDecision:
     proposal: ProposalIntake
-    visible_item: VisibleProposalItem
+    intake_item: IntakeWorkItem
     prerequisite_change: PrerequisiteDependencyChange | None
     evidence: tuple[str, ...]
     freshness: tuple[str, ...]

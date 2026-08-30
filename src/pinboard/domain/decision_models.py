@@ -63,7 +63,7 @@ class ActionLifecyclePrecondition(Enum):
     READY_ITEM = "ready-item"
     REVIEW_ATTEMPT = "review-attempt"
     VALID_LEDGER = "valid-ledger"
-    VISIBLE_INTAKE_PROPOSAL = "visible-intake-proposal"
+    INTAKE_PROPOSAL = "intake-proposal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,11 +125,11 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
             )
         case ActionKind.ACCEPT_PROPOSAL:
             return ActionSemantics(
-                "Admit a visible proposal as accepted work.",
+                "Admit an intake proposal as accepted work.",
                 ActionEffect.MUTATING,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
-                ActionLifecyclePrecondition.VISIBLE_INTAKE_PROPOSAL,
+                ActionLifecyclePrecondition.INTAKE_PROPOSAL,
                 "Accept the proposal into its same-identity work item and dispose the proposal record.",
             )
         case ActionKind.ACTIVATE:
@@ -233,12 +233,12 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
             )
         case ActionKind.MERGE_PROPOSAL:
             return ActionSemantics(
-                "Merge a visible proposal into an existing work identity.",
+                "Merge an intake proposal into an existing work identity.",
                 ActionEffect.MUTATING,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
-                ActionLifecyclePrecondition.VISIBLE_INTAKE_PROPOSAL,
-                "Dispose the proposal as merged and remove its duplicate visible item.",
+                ActionLifecyclePrecondition.INTAKE_PROPOSAL,
+                "Dispose the proposal as merged and remove its duplicate intake item.",
             )
         case ActionKind.PAUSE:
             return ActionSemantics(
@@ -251,12 +251,12 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
             )
         case ActionKind.REJECT_PROPOSAL:
             return ActionSemantics(
-                "Reject a visible proposal.",
+                "Reject an intake proposal.",
                 ActionEffect.MUTATING,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
-                ActionLifecyclePrecondition.VISIBLE_INTAKE_PROPOSAL,
-                "Dispose the proposal as rejected and remove its visible item.",
+                ActionLifecyclePrecondition.INTAKE_PROPOSAL,
+                "Dispose the proposal as rejected and remove its intake item.",
             )
         case ActionKind.REOPEN:
             return ActionSemantics(
@@ -287,12 +287,12 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
             )
         case ActionKind.RETURN_PROPOSAL:
             return ActionSemantics(
-                "Return a visible proposal for more evidence or clarification.",
+                "Return an intake proposal for more evidence or clarification.",
                 ActionEffect.MUTATING,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
-                ActionLifecyclePrecondition.VISIBLE_INTAKE_PROPOSAL,
-                "Dispose the proposal as returned and remove its visible item.",
+                ActionLifecyclePrecondition.INTAKE_PROPOSAL,
+                "Dispose the proposal as returned and remove its intake item.",
             )
         case ActionKind.REVISE_ITEM:
             return ActionSemantics(

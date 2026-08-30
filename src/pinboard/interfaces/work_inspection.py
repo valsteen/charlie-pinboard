@@ -170,7 +170,7 @@ def status_view(work: Path, source_checkout: Path, shared_repository: Path) -> w
         active_attempts=overview_value.active_attempts,
         next_action=state.focus.next_action,
         counts=dict(Counter(item.state.value for item in state.lifecycle.work_items)),
-        visible_candidate_count=sum(1 for item in overview_value.items if item.state == work_models.WorkState.INTAKE),
+        intake_item_count=sum(1 for item in overview_value.items if item.state == work_models.WorkState.INTAKE),
         coordinator=(
             work_inspection_models.CoordinatorView(
                 str(coordinator.task_id),
@@ -194,7 +194,7 @@ def status(roots: cli_commands.ResolvedRoots, command: cli_commands.StatusComman
     else:
         print(f"OK WORK_STATE_VALID revision={value.revision}")
         print(f"focus_item={value.focus_item or 'none'} focus_attempt={value.focus_attempt or 'none'}")
-        print(f"next_action={value.next_action} visible_candidates={value.visible_candidate_count}")
+        print(f"next_action={value.next_action} intake_items={value.intake_item_count}")
     return 0
 
 
@@ -214,7 +214,7 @@ def overview(roots: cli_commands.ResolvedRoots, command: cli_commands.OverviewCo
             f"\tnext={next_action}{attempt}\t{item.label}"
         )
     print(
-        f"visible_candidates={sum(1 for item in value.items if item.state == work_models.WorkState.INTAKE)} "
+        f"intake_items={sum(1 for item in value.items if item.state == work_models.WorkState.INTAKE)} "
         f"immediate_options={len(value.immediate_options)}"
     )
     return 0

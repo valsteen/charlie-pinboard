@@ -86,7 +86,7 @@ DIAGRAM = Diagram(
     width=1200,
     height=850,
     sections=(
-        Section("Discovery", "findings before and after scheduling", 28, 42),
+        Section("Proposals", "proposal facts before and after scheduling", 28, 42),
         Section("Current work", "identity that survives execution", 424, 42),
         Section("Definitions + relationships", "accepted intent and dependency", 824, 42),
         Section("Accepted files", "briefs · ready reviews · checkpoint evidence", 28, 432),

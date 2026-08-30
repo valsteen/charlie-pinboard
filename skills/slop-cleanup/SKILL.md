@@ -1,6 +1,6 @@
 ---
 name: slop-cleanup
-description: Guide recursive repository cleanup after abandoned or repeatedly revised features leave dead production paths, test-only APIs, stale variants, archaeological names, stale documentation or tooling, or incoherent boundaries. Use for campaigns that must trace provenance and recurse to no new findings. Do not use for one known unused symbol or a localized refactor.
+description: Guide recursive repository cleanup after abandoned or repeatedly revised features leave dead production paths, test-only APIs, stale variants, archaeological names, stale documentation or tooling, or incoherent boundaries. Use for campaigns that must trace provenance and recurse to no new cleanup candidates. Do not use for one known unused symbol or a localized refactor.
 ---
 
 # Clean repository slop recursively
@@ -10,8 +10,8 @@ Turn accumulated implementation residue into deliberate cleanup whose deletions,
 ## Start from current product authority
 
 1. Inspect current requirements, product documentation, supported entry points, and live work before creating cleanup work. Do not infer current scope from old plans, branches, transcript memory, or code archaeology alone.
-2. Reuse an existing exact cleanup objective when it already owns the finding. Otherwise create one cleanup objective and preserve the accepted decisions in the project’s chosen planning system.
-3. Do not absorb cleanup into active work unless its accepted scope already covers that cleanup. Preserve discovered prerequisites or adjacent findings through the project’s normal planning workflow.
+2. Reuse an existing exact cleanup objective when it already owns the cleanup candidate. Otherwise create one cleanup objective and preserve the accepted decisions in the project’s chosen planning system.
+3. Do not absorb cleanup into active work unless its accepted scope already covers that cleanup. Preserve discovered prerequisites or adjacent concerns through the project’s normal planning workflow.
 4. Treat planning authority separately from deletion authority. Inspection and a cleanup plan do not authorize removing ambiguous features, migrating live data, or burning a compatibility bridge.
 
 ## Establish the production truth
@@ -83,7 +83,7 @@ Order checkpoints around semantic dependencies, not file count:
 4. Recurse through newly orphaned models, variants, persistence, serializers, tests, documentation, dependencies, lockfile entries, build and release configuration, and CI tooling.
 5. Collapse and regroup the surviving structure, then run a fresh repository-wide inventory.
 
-Do not freeze the initial candidate list as the whole scope: recursive discovery is part of the accepted outcome. Keep newly exposed work inside the cleanup objective only when it is a direct dependent of an approved removal. Preserve materially different product decisions as separate findings.
+Do not freeze the initial candidate list as the whole scope: recursive discovery is part of the accepted outcome. Keep newly exposed work inside the cleanup objective only when it is a direct dependent of an approved removal. Preserve materially different product decisions as separate concerns.
 
 Use the project’s existing planning system when it has one; otherwise keep a proportionate repository plan with the same decisions, dependencies, evidence, and stopping condition. If the user chooses Pinboard, read [references/pinboard-planning.md](references/pinboard-planning.md) and translate the plan and recursive dispositions into the canonical typed JSON brief; treat its generated Markdown view as read-only output. Do not require Pinboard or read that reference for a standalone cleanup.
 

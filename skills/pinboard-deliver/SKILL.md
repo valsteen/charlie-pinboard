@@ -77,7 +77,7 @@ The result must record:
 - any material test removal and its replacement evidence;
 - production-entry-point evidence for lifecycle claims;
 - preserved unrelated changes;
-- new findings or exact unknowns;
+- new concerns or exact unknowns;
 - whether the attempt is ready for review or blocked.
 
 For an independently buildable checkpoint, report the exact candidate and remaining-work boundary without claiming that the whole item is complete. Checkpoint acceptance belongs to an independent coordinator after review; the worker does not archive its own checkpoint evidence or resume the next checkpoint.
@@ -92,4 +92,4 @@ Send a concise review request containing the attempt ID, candidate identity, and
 
 Do not claim canonical completion until a current coordination lease authorizes the completion transition.
 
-If the attempt was returned for correction, report the new candidate normally. Do not present the return itself as a new finding or imply that the earlier review was accepted. The compact human outcome is: `Correction ready — <candidate>; the same attempt has been resubmitted for review by a separate Codex reviewer.`
+If the attempt was returned for correction, report the new candidate normally. Do not present the return itself as a new concern or imply that the earlier review was accepted. The compact human outcome is: `Correction ready — <candidate>; the same attempt has been resubmitted for review by a separate Codex reviewer.`

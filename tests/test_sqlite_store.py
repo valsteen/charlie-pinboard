@@ -955,7 +955,7 @@ class SQLiteStoreTest(unittest.TestCase):
         )
         decision = decide(
             snapshot,
-            bind_transition(action, work_models.ReasonInput("Address the review findings.")),
+            bind_transition(action, work_models.ReasonInput("Address the review feedback.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
 

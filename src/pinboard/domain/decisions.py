@@ -950,22 +950,22 @@ def _accept_proposal(
     proposal = snapshot.proposal(proposal_id)
     if proposal is None:
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
-    visible_item = snapshot.item(ItemId(proposal_id))
-    if visible_item is None or visible_item.state != work_models.WorkState.INTAKE or visible_item.attempt is not None:
+    intake_item = snapshot.item(ItemId(proposal_id))
+    if intake_item is None or intake_item.state != work_models.WorkState.INTAKE or intake_item.attempt is not None:
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
-            "Only a current visible intake proposal can be accepted.",
+            "Only a current intake proposal can be accepted.",
         )
     if value.item != ItemId(proposal_id):
         return DecisionFailure(
             DecisionFailureCode.TRANSITION_INPUT_INVALID,
-            "A visible proposal must be accepted with its same work-item identity.",
+            "An intake proposal must be accepted with its same work-item identity.",
         )
     current_item = snapshot.item(value.item)
     if current_item is None or current_item.state != work_models.WorkState.INTAKE or current_item.attempt is not None:
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
-            "Only the proposal's current visible intake item can be accepted.",
+            "Only the proposal's current intake item can be accepted.",
         )
     dependencies = tuple(dict.fromkeys((*current_item.depends_on, *value.depends_on)))
     if (
@@ -1028,11 +1028,11 @@ def _merge_proposal(
     proposal = snapshot.proposal(proposal_id)
     if proposal is None:
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
-    visible_item = snapshot.item(ItemId(proposal_id))
-    if visible_item is None or visible_item.state != work_models.WorkState.INTAKE or visible_item.attempt is not None:
+    intake_item = snapshot.item(ItemId(proposal_id))
+    if intake_item is None or intake_item.state != work_models.WorkState.INTAKE or intake_item.attempt is not None:
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
-            "Only a current visible intake proposal can be merged.",
+            "Only a current intake proposal can be merged.",
         )
     if snapshot.item(value.target) is None and value.target not in snapshot.history_items:
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{value.target}' does not exist.")
@@ -1053,11 +1053,11 @@ def _dispose_proposal(
     proposal = snapshot.proposal(proposal_id)
     if proposal is None:
         return DecisionFailure(DecisionFailureCode.PROPOSAL_NOT_FOUND, f"Proposal '{proposal_id}' does not exist.")
-    visible_item = snapshot.item(ItemId(proposal_id))
-    if visible_item is None or visible_item.state != work_models.WorkState.INTAKE or visible_item.attempt is not None:
+    intake_item = snapshot.item(ItemId(proposal_id))
+    if intake_item is None or intake_item.state != work_models.WorkState.INTAKE or intake_item.attempt is not None:
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
-            "Only a current visible intake proposal can be returned or rejected.",
+            "Only a current intake proposal can be returned or rejected.",
         )
     match command:
         case decision_models.ReturnProposalCommand(value=value):

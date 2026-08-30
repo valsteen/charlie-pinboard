@@ -340,10 +340,10 @@ def create_proposal(
 ) -> DecisionFailure | None:
     decision = mutation.decision
     intake = decision.proposal
-    visible = decision.visible_item
+    intake_item = decision.intake_item
     revision = mutation.receipt.project_revision
     now = mutation.receipt.transition.decided_at
-    if (failure := make_queue_space(connection, state, visible.position)) is not None:
+    if (failure := make_queue_space(connection, state, intake_item.position)) is not None:
         return failure
     relation = intake.relation
     connection.execute(
@@ -386,32 +386,32 @@ def create_proposal(
         ) VALUES (?, 'intake', NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
         """,
         (
-            visible.item_id,
+            intake_item.item_id,
             f"proposal:{intake.proposal_id}",
             intake.unlock,
             intake.urgency_evidence,
             revision,
             now.isoformat(),
             now.isoformat(),
-            visible.position,
+            intake_item.position,
         ),
     )
     append_definition_revision(
         connection,
         stored_state.ItemDefinitionRevision(
-            visible.item_id,
+            intake_item.item_id,
             1,
-            visible.definition_digest,
-            visible.definition,
+            intake_item.definition_digest,
+            intake_item.definition,
             "Accepted proposal definition.",
             intake.source_task_id,
             None,
-            visible.definition_digest,
+            intake_item.definition_digest,
             revision,
             now,
         ),
     )
-    replace_dependencies(connection, visible.item_id, visible.dependencies)
+    replace_dependencies(connection, intake_item.item_id, intake_item.dependencies)
     prerequisite = decision.prerequisite_change
     if prerequisite is None:
         return None
