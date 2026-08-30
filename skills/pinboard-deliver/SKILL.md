@@ -5,7 +5,7 @@ description: Deliver exactly one active pinboard attempt from its accepted brief
 
 # Deliver from the pinboard
 
-Implement one accepted attempt, verify it, leave a durable result, and return it accurately for independent coordination review.
+Deliver the accepted checkpoint of one active attempt: implement its complete scope, verify it, leave a durable result, and return it accurately for review.
 
 ## Establish the attempt
 
@@ -57,9 +57,11 @@ If a discovered problem blocks the attempt:
 
 Use the repository's selected testing mode. Prefer the smallest evidence that can disprove the important failure, then run the broader changed-surface gate required by the attempt.
 
+Continue through the complete accepted checkpoint while in-scope work can proceed without user input. A green internal seam, implementation milestone, or long-running turn is a commentary update, not a reason to end the turn. Once implementation begins, end delivery only with a stable candidate and `result.md` ready for review, a `blocker.md` naming the exact condition that prevents further work, or an explicit user request for a partial stop or background execution. If the execution host forces an earlier return, say so plainly, preserve the exact continuation point, and state whether any user action is required.
+
 Before review:
 
-1. finish the coherent implementation batch;
+1. finish the complete accepted checkpoint;
 2. run every command required by the attempt, without replacing it with a narrower package, test, formatter, or linter command;
 3. inspect the final diff;
 4. identify the stable candidate by commit or working-tree fingerprint;
@@ -80,7 +82,7 @@ The result must record:
 - new concerns or exact unknowns;
 - whether the attempt is ready for review or blocked.
 
-For an independently buildable checkpoint, report the exact candidate and remaining-work boundary without claiming that the whole item is complete. Checkpoint acceptance belongs to an independent coordinator after review; the worker does not archive its own checkpoint evidence or resume the next checkpoint.
+When the accepted checkpoint is one of several recorded for the item, report its exact candidate and the brief's remaining-work boundary without claiming that the whole item is complete. Do not turn an internal implementation seam into an unrecorded checkpoint. Checkpoint acceptance belongs to an independent coordinator after review; the worker does not archive its own checkpoint evidence or resume the next checkpoint.
 
 ## Return the candidate for review
 
