@@ -28,9 +28,9 @@ When reacquiring an attempt returned from review, read the durable correction re
 - Treat a stale instruction as an instruction defect before reshaping working code around it.
 - Do not edit generated views, SQLite authority, coordination leases, or another item's lifecycle state outside the executable workflow.
 - Do not accept or complete your own item.
-- Prepare the stable candidate for independent review, then return it using the confirmed-delivery rules below. A later chat may borrow coordination to review and accept it; no permanent coordinator chat is required. Do not invoke a generic reviewer-dispatch workflow or launch another reviewer from the worker role.
+- Prepare the stable candidate for independent review, then follow the current-responsibility and confirmed-delivery rules below. No permanent coordinator chat is required.
 
-Worker diff inspection, requirement mapping, and fresh verification are pre-review evidence. They do not replace independent review under a current coordination lease.
+Worker diff inspection, requirement mapping, and fresh verification are pre-review evidence. They do not replace independent review.
 
 For a cross-boundary attempt, map every observable behavior and behavior-defining test to an authorized Contract row before adding it. The row's `Authorization basis` must resolve to the current accepted scope or to an exact reviewed authority family. Ordinary internal choices that preserve supported behavior—such as helper names, local refactors, and equivalent algorithms—need no separate provenance record.
 
@@ -86,9 +86,9 @@ For an independently buildable checkpoint, report the exact candidate and remain
 
 `result.md` makes the candidate durably ready for review. It does not by itself notify another task.
 
-1. When the launch includes an exact `source_thread_id` and task messaging is available, send that task a concise review request containing the attempt ID, candidate identity, and absolute `result.md` path. Treat delivery as successful only after the messaging tool confirms it.
-2. If the launch has no exact return task, messaging is unavailable, or delivery fails, do not guess a destination or create a reviewer. Report `ready for coordination review` and state plainly that no task was notified. The durable receipt remains sufficient for any later chat to borrow coordination and review the candidate.
-3. Say `submitted for coordination review` only after confirmed delivery to the exact return task. A written receipt without confirmed delivery is `ready for coordination review`, not submitted.
+Apply the [current-responsibility review route](../pinboard/SKILL.md#coordinate-review-responsibility-and-checkout-use). By default, the task carrying this attempt commissions one fresh-context, candidate-read-only review subagent and processes its complete verdict. An exact `source_thread_id`, prior dispatch, scope clarification, earlier message, or former coordination is not sufficient reason to wake another visible task.
+
+Send a concise review request containing the attempt ID, candidate identity, and absolute `result.md` path to another visible task only when the user explicitly selected it or it remains the active user-facing coordinator for the same live workflow. Treat delivery as successful only after task messaging confirms it. Say `submitted for coordination review` only after that confirmed delivery; otherwise say `ready for coordination review` and state plainly that no visible task was notified. The durable receipt remains sufficient if reviewer creation or permitted delivery is unavailable.
 
 Do not claim canonical completion until a current coordination lease authorizes the completion transition.
 

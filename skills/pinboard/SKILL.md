@@ -57,6 +57,23 @@ This proportional behavior applies to mutation as well as status. After a succes
 
 One current coordination lease may authorize graph-wide transitions. Disjoint attempt leases may authorize item-local work concurrently. Expiry, release, revocation, and higher fencing generations invalidate retained actions.
 
+## Coordinate review responsibility and checkout use
+
+Route frozen candidates by explicit current responsibility, not conversational ancestry. The task carrying the attempt normally commissions one fresh-context, candidate-read-only review subagent after the candidate is stable, then processes that review's complete accept-or-correct verdict. Keep the reviewer independent, commission one reviewer by default, and do not duplicate the full review or add reviewers without a concrete risk.
+
+Use another visible Codex task for review only when the user explicitly requests that task or it remains the active user-facing coordinator for the same live workflow. Dispatching work, clarifying or widening scope, sending a prior message, or once holding coordination does not establish current responsibility. A task that merely receives a result remains status-only unless one of the explicit responsibility conditions applies; do not wake it or let it adopt coordination from the message alone.
+
+Before a task that began with a read-only request starts repository writes, inspect whether the exact target checkout or worktree is occupied. When it is, say so and name the owning Codex task with its real title when available. Make a bounded merge-risk assessment from:
+
+- target-checkout or worktree occupancy;
+- the intended write paths;
+- currently changed filenames; and
+- at most the active brief's named owners or source selectors.
+
+Separate direct observations from uncertainty and limitations. Recommend waiting when the same checkout is occupied or known overlap or unresolved uncertainty makes that safest. The human may knowingly choose an isolated worktree instead; state that isolation prevents competing writes in one checkout but does not remove later integration or merge-conflict risk.
+
+Stop after the bounded recommendation unless further evidence is necessary for the user's decision. Do not turn this assessment into a full-diff review, history walk, test run, open-ended investigation, persistent checkout registry, or generic resource-lock subsystem without concrete evidence that the bounded path fails.
+
 ## Coordinate delegated attempts
 
 When a coordinating chat launches a worker for an active attempt:
@@ -70,13 +87,13 @@ When a coordinating chat launches a worker for an active attempt:
 6. Run `pinboard dispatch` with the action tokens, stable checkpoint ID, and environment file. Launch the worker with the rendered prompt unchanged. Use `--prompt` to verify a prompt received through another transport before launch.
 7. Release coordination after dispatch preparation. Retain the worker identifier and its attempt lease. Do not edit the worker's checkout or review candidate while it is still changing.
 8. Wait until the worker finishes or needs attention. A wait timeout, progress update, or successful launch is not a terminal result.
-9. After completion, read `result.md` or `blocker.md`, inspect the stable candidate, and perform the review described below.
+9. After completion, read `result.md` or `blocker.md`, inspect the stable candidate, and follow the current-responsibility review route above.
 
 The dispatch prompt identifies the canonical brief, checkpoint, and execution environment. It must not repeat acceptance semantics, checks, deferrals, or source-reading instructions. Change the attempt first when its contract is wrong.
 
 Do not end the coordinating turn merely because implementation started. End with a running worker only when the user explicitly requested background execution; report that independent review remains pending and perform it before any acceptance transition.
 
-The chat performing acceptance reviews the frozen candidate without coordination. Only after reaching a complete verdict does it use one-shot coordination for the review outcome. Use `complete:<attempt>` only when the entire work-item outcome is accepted. When an independently buildable checkpoint is accepted and the canonical brief records remaining work, use `accept-checkpoint:<attempt>` with the stable checkpoint ID, exact candidate identity, and nonempty review evidence. That transition archives the exact current `result.md` and `review.md`, pauses the same item and attempt, and fences worker authority. Publish the revised canonical JSON brief at its next artifact revision, then use the ordinary `resume:<item>` with that accepted reference before dispatch. When the protected candidate is accepted but work should continue within the same active attempt, use `accept-review-and-continue:<attempt>` with that exact candidate identity and nonempty acceptance evidence. This distinct transition returns the item and attempt to active, clears the protected candidate, records the accepted candidate and evidence without a checkpoint, sets the next action to continue, and fences the previous worker authority before a worker reacquires it. When review finds an actionable defect, use `return-for-correction:<attempt>` with one concise reason that identifies the durable review evidence. The transition preserves the same attempt and evidence, fences its previous worker authority, and leaves it ready for an explicitly selected worker to reacquire. If an additional reviewer is useful, launch it after the worker freezes and returns the candidate; the bounded worker does not recruit or substitute its own reviewer.
+The responsible task reviews the frozen candidate without coordination. Only after reaching a complete verdict does it use one-shot coordination for the review outcome. Use `complete:<attempt>` only when the entire work-item outcome is accepted. When an independently buildable checkpoint is accepted and the canonical brief records remaining work, use `accept-checkpoint:<attempt>` with the stable checkpoint ID, exact candidate identity, and nonempty review evidence. That transition archives the exact current `result.md` and `review.md`, pauses the same item and attempt, and fences worker authority. Publish the revised canonical JSON brief at its next artifact revision, then use the ordinary `resume:<item>` with that accepted reference before dispatch. When the protected candidate is accepted but work should continue within the same active attempt, use `accept-review-and-continue:<attempt>` with that exact candidate identity and nonempty acceptance evidence. This distinct transition returns the item and attempt to active, clears the protected candidate, records the accepted candidate and evidence without a checkpoint, sets the next action to continue, and fences the previous worker authority before a worker reacquires it. When review finds an actionable defect, use `return-for-correction:<attempt>` with one concise reason that identifies the durable review evidence. The transition preserves the same attempt and evidence, fences its previous worker authority, and leaves it ready for an explicitly selected worker to reacquire.
 
 ## Interpret the available actions
 

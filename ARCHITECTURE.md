@@ -8,6 +8,8 @@ SQLite is the authority for the repository work ledger.
 
 Each invocation resolves two Git-backed roots with different owners. The source checkout root is the current or explicitly selected checkout's exact top level, including a linked worktree, and owns project-file and authority reads for that attempt. The shared repository root is derived from the Git common directory and owns repository-shared Pinboard state and local Git exclude configuration. In a primary checkout the two roots are equal; in a linked worktree they are intentionally different.
 
+Agent guidance has a separate dependency boundary from the Python runtime graph. Repository guidance routes a task to the installed Pinboard coordination skill before read-only work becomes repository writes, and the Pinboard delivery skill routes frozen-candidate return decisions to the same owner. The coordination skill owns the detailed current-responsibility and bounded checkout-risk procedure; the two callers remain thin routes and do not create persistent checkout ownership.
+
 One work root has three durable roles:
 
 ```text
