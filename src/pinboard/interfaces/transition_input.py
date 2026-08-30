@@ -21,9 +21,9 @@ from pinboard.interfaces.transition_models import (
     BlockInputPayload,
     CloseInputPayload,
     DeferInputPayload,
-    EmptyInputPayload,
     EvidenceInputPayload,
     InputModel,
+    InputPayload,
     MergeProposalInputPayload,
     ReasonInputPayload,
     ResumeInputPayload,
@@ -97,101 +97,154 @@ def _input_model(kind: decision_models.ActionKind) -> TransitionInputResult[Inpu
     return model
 
 
-def parse_transition_input(  # noqa: C901, PLR0912
-    kind: decision_models.ActionKind,
+def _decode[PayloadT: InputPayload](
     data: bytes | str,
-) -> TransitionInputResult[work_models.TransitionInput]:
-    model = _input_model(kind)
-    if isinstance(model, TransitionInputFailure):
-        return model
+    model: type[PayloadT],
+) -> TransitionInputResult[PayloadT]:
     try:
-        payload = msgspec.json.decode(data, type=model)
+        return msgspec.json.decode(data, type=model)
     except msgspec.DecodeError as error:
         return TransitionInputFailure(
             DecisionFailureCode.TRANSITION_INPUT_INVALID,
             f"Cannot decode transition JSON: {error}",
         )
-    match payload:
-        case EmptyInputPayload():
-            return work_models.EmptyInput()
-        case ResumeInputPayload(brief_artifact_ref_id=brief_artifact_ref_id):
-            return work_models.ResumeInput(
-                None if brief_artifact_ref_id is None else ArtifactRefId(brief_artifact_ref_id)
+
+
+def _revise_item_input(payload: ReviseItemInputPayload) -> work_models.ReviseItemDefinitionInput:
+    definition = payload.definition
+    return work_models.ReviseItemDefinitionInput(
+        ItemId(payload.item_id),
+        payload.expected_revision,
+        payload.expected_digest,
+        TaskId(payload.source_task),
+        payload.reason,
+        work_models.WorkItemDefinition(
+            definition.title,
+            definition.objective,
+            definition.hypothesis,
+            definition.evidence,
+            definition.scope,
+            definition.non_scope,
+            definition.acceptance_criteria,
+            tuple(ItemId(value) for value in definition.dependencies),
+            definition.effect,
+            definition.unlock,
+        ),
+    )
+
+
+def parse_item_revision_input(data: bytes | str) -> TransitionInputResult[work_models.ReviseItemDefinitionInput]:
+    if isinstance(payload := _decode(data, ReviseItemInputPayload), TransitionInputFailure):
+        return payload
+    return _revise_item_input(payload)
+
+
+def parse_transition_command(  # noqa: C901, PLR0912
+    action: decision_models.Action,
+    data: bytes | str,
+) -> TransitionInputResult[decision_models.TransitionCommand]:
+    match action:
+        case decision_models.AcceptCheckpointAction():
+            if isinstance(payload := _decode(data, AcceptCheckpointInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(
+                work_models.AcceptCheckpointInput(
+                    CheckpointId(payload.checkpoint), CandidateId(payload.candidate), payload.evidence
+                )
             )
-        case StoredActivateInputPayload(
-            attempt=attempt,
-            branch=branch,
-            base_revision=base_revision,
-            owner=owner,
-            brief_artifact_ref_id=brief_artifact_ref_id,
-        ):
-            return work_models.ActivateInput(
-                AttemptId(attempt),
-                branch,
-                base_revision,
-                owner,
-                ArtifactRefId(brief_artifact_ref_id),
+        case decision_models.AcceptReviewAndContinueAction():
+            if isinstance(payload := _decode(data, AcceptReviewAndContinueInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(
+                work_models.AcceptReviewAndContinueInput(CandidateId(payload.candidate), payload.evidence)
             )
-        case SubmitReviewInputPayload(candidate=candidate):
-            return work_models.SubmitReviewInput(CandidateId(candidate))
-        case ReasonInputPayload(reason=reason):
-            return work_models.ReasonInput(reason)
-        case BlockInputPayload(reason=reason, depends_on=depends_on):
-            return work_models.BlockInput(reason, tuple(ItemId(value) for value in depends_on))
-        case EvidenceInputPayload(evidence=evidence):
-            return work_models.EvidenceInput(evidence)
-        case AcceptCheckpointInputPayload(checkpoint=checkpoint, candidate=candidate, evidence=evidence):
-            return work_models.AcceptCheckpointInput(CheckpointId(checkpoint), CandidateId(candidate), evidence)
-        case AcceptReviewAndContinueInputPayload(candidate=candidate, evidence=evidence):
-            return work_models.AcceptReviewAndContinueInput(CandidateId(candidate), evidence)
-        case CloseInputPayload(outcome=outcome, reason=reason):
-            return work_models.CloseInput(outcome, reason)
-        case DeferInputPayload(timing=timing, reopen_condition=reopen_condition):
-            return work_models.DeferInput(work_models.Timing(timing), reopen_condition)
-        case AcceptProposalInputPayload(
-            item=item,
-            state=state,
-            next_action=next_action,
-            timing=timing,
-            depends_on=depends_on,
-        ):
-            return work_models.AcceptProposalInput(
-                ItemId(item),
-                state,
-                next_action,
-                work_models.Timing(timing) if timing is not None else None,
-                tuple(ItemId(value) for value in depends_on),
+        case decision_models.AcceptProposalAction():
+            if isinstance(payload := _decode(data, AcceptProposalInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(
+                work_models.AcceptProposalInput(
+                    ItemId(payload.item),
+                    payload.state,
+                    payload.next_action,
+                    work_models.Timing(payload.timing) if payload.timing is not None else None,
+                    tuple(ItemId(value) for value in payload.depends_on),
+                )
             )
-        case MergeProposalInputPayload(target=target):
-            return work_models.MergeProposalInput(ItemId(target))
-        case TransferCoordinatorInputPayload(task_id=task_id, host_id=host_id):
-            return work_models.TransferCoordinatorInput(TaskId(task_id), HostId(host_id))
-        case ReviseItemInputPayload(
-            item_id=item_id,
-            expected_revision=expected_revision,
-            expected_digest=expected_digest,
-            source_task=source_task,
-            reason=reason,
-            definition=definition,
+        case decision_models.ActivateAction():
+            if isinstance(payload := _decode(data, StoredActivateInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(
+                work_models.ActivateInput(
+                    AttemptId(payload.attempt),
+                    payload.branch,
+                    payload.base_revision,
+                    payload.owner,
+                    ArtifactRefId(payload.brief_artifact_ref_id),
+                )
+            )
+        case decision_models.BlockAttemptAction() | decision_models.BlockItemAction():
+            if isinstance(payload := _decode(data, BlockInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(
+                work_models.BlockInput(payload.reason, tuple(ItemId(value) for value in payload.depends_on))
+            )
+        case decision_models.CloseAction():
+            if isinstance(payload := _decode(data, CloseInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(work_models.CloseInput(payload.outcome, payload.reason))
+        case decision_models.CompleteAction() | decision_models.ReopenAction():
+            if isinstance(payload := _decode(data, EvidenceInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(work_models.EvidenceInput(payload.evidence))
+        case decision_models.DeferAction():
+            if isinstance(payload := _decode(data, DeferInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(work_models.DeferInput(work_models.Timing(payload.timing), payload.reopen_condition))
+        case (
+            decision_models.MarkReadyAction()
+            | decision_models.PauseAction()
+            | decision_models.RejectProposalAction()
+            | decision_models.ReturnForCorrectionAction()
+            | decision_models.ReturnProposalAction()
         ):
-            return work_models.ReviseItemDefinitionInput(
-                ItemId(item_id),
-                expected_revision,
-                expected_digest,
-                TaskId(source_task),
-                reason,
-                work_models.WorkItemDefinition(
-                    definition.title,
-                    definition.objective,
-                    definition.hypothesis,
-                    definition.evidence,
-                    definition.scope,
-                    definition.non_scope,
-                    definition.acceptance_criteria,
-                    tuple(ItemId(value) for value in definition.dependencies),
-                    definition.effect,
-                    definition.unlock,
-                ),
+            if isinstance(payload := _decode(data, ReasonInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(work_models.ReasonInput(payload.reason))
+        case decision_models.MergeProposalAction():
+            if isinstance(payload := _decode(data, MergeProposalInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(work_models.MergeProposalInput(ItemId(payload.target)))
+        case decision_models.ResumeAction():
+            if isinstance(payload := _decode(data, ResumeInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(
+                work_models.ResumeInput(
+                    None if payload.brief_artifact_ref_id is None else ArtifactRefId(payload.brief_artifact_ref_id)
+                )
+            )
+        case decision_models.ReviseItemAction():
+            if isinstance(payload := _decode(data, ReviseItemInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(_revise_item_input(payload))
+        case decision_models.SubmitReviewAction():
+            if isinstance(payload := _decode(data, SubmitReviewInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(work_models.SubmitReviewInput(CandidateId(payload.candidate)))
+        case decision_models.TransferCoordinatorAction():
+            if isinstance(payload := _decode(data, TransferCoordinatorInputPayload), TransitionInputFailure):
+                return payload
+            return action.command(
+                work_models.TransferCoordinatorInput(TaskId(payload.task_id), HostId(payload.host_id))
+            )
+        case (
+            decision_models.ContinueAction()
+            | decision_models.DispatchAction()
+            | decision_models.InspectAction()
+            | decision_models.ReportBlockerAction()
+        ):
+            return TransitionInputFailure(
+                DecisionFailureCode.ACTION_NOT_MUTATING,
+                f"Action '{action.kind.value}' is not a canonical transition.",
             )
         case _ as unreachable:
             assert_never(unreachable)

@@ -11,10 +11,6 @@ type Sha256 = Annotated[str, msgspec.Meta(pattern=r"^[0-9a-f]{64}$")]
 type PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
 
 
-class EmptyInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    pass
-
-
 class ResumeInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     brief_artifact_ref_id: Annotated[int, msgspec.Meta(ge=1)] | None = None
 
@@ -107,8 +103,7 @@ class ReviseItemInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=
 
 
 type InputPayload = (
-    EmptyInputPayload
-    | ResumeInputPayload
+    ResumeInputPayload
     | StoredActivateInputPayload
     | SubmitReviewInputPayload
     | ReasonInputPayload

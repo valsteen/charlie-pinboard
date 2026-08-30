@@ -1870,6 +1870,16 @@ Not launchable:
             )["actions"]
         )
         action = self.json_object(exact[0])
+        before_mismatch = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        mismatched_payload = project / "pause-payload.json"
+        mismatched_payload.write_text('{"reason":"pause"}\n', encoding="utf-8")
+
+        mismatch_result, _mismatch_stdout, mismatch_stderr = self.run_transition(common, action, mismatched_payload)
+
+        self.assertEqual(11, mismatch_result)
+        self.assertIn("TRANSITION_INPUT_INVALID:", mismatch_stderr)
+        self.assertEqual(before_mismatch, SQLiteWorkStore(work / "state.sqlite3").snapshot())
+
         payload = project / "submit-review.json"
         payload.write_text('{"candidate":"candidate-cli-direct"}\n', encoding="utf-8")
 

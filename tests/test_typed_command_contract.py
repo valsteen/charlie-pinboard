@@ -5,7 +5,6 @@ from datetime import datetime
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.decisions import available_actions as available_actions_outcome
-from pinboard.domain.decisions import bind_transition as bind_transition_outcome
 from pinboard.domain.decisions import decide as decision_outcome
 from pinboard.domain.decisions import rediscover_action as rediscover_action_outcome
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
@@ -17,9 +16,8 @@ from pinboard.domain.identifiers import (
     LeaseId,
 )
 from pinboard.domain.ledger import LedgerSnapshot
-from pinboard.interfaces.errors import TransitionInputFailure
-from pinboard.interfaces.transition_input import parse_transition_input
-from tests.domain_support import action, expect_success
+from pinboard.interfaces.transition_input import parse_transition_command
+from tests.domain_support import action, command, expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -38,12 +36,6 @@ def available_actions(
     snapshot: LedgerSnapshot, actor: decision_models.ActorAuthority
 ) -> tuple[decision_models.Action, ...]:
     return expect_success(available_actions_outcome(snapshot, actor))
-
-
-def bind_transition(
-    action_value: decision_models.Action, value: work_models.TransitionInput
-) -> decision_models.TransitionCommand:
-    return expect_success(bind_transition_outcome(action_value, value))
 
 
 def decide(
@@ -73,18 +65,15 @@ class TypedTransitionContractTest(unittest.TestCase):
         snapshot = project_decision_snapshot(complete_sqlite_state())
         submit = _stored_action(snapshot)
 
-        rejected = bind_transition_outcome(submit, work_models.EmptyInput())
-        self.assertIsInstance(rejected, DecisionFailure)
-        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
-
         candidate = CandidateId("candidate-that-is-not-a-subject-revision")
-        parsed = parse_transition_input(
-            decision_models.ActionKind.SUBMIT_REVIEW,
+        parsed = parse_transition_command(
+            submit,
             b'{"candidate":"candidate-that-is-not-a-subject-revision"}',
         )
-        assert not isinstance(parsed, TransitionInputFailure)
-        self.assertEqual(work_models.SubmitReviewInput(candidate), parsed)
-        decision = decide(snapshot, bind_transition(submit, parsed), SQLITE_NOW)
+        self.assertIsInstance(parsed, decision_models.SubmitReviewCommand)
+        assert isinstance(parsed, decision_models.SubmitReviewCommand)
+        self.assertEqual(work_models.SubmitReviewInput(candidate), parsed.value)
+        decision = decide(snapshot, parsed, SQLITE_NOW)
         self.assertIsInstance(decision.change, decision_models.ReviewSubmissionChange)
         assert isinstance(decision.change, decision_models.ReviewSubmissionChange)
         self.assertEqual(candidate, decision.change.protected_candidate_after)
@@ -104,9 +93,6 @@ class TypedTransitionContractTest(unittest.TestCase):
             ),
         )
         activation = action(decision_models.ActivateAction, ItemId("ready-item"))
-        rejected = bind_transition_outcome(activation, work_models.EmptyInput())
-        self.assertIsInstance(rejected, DecisionFailure)
-        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
         variants = (
             work_models.ActivateInput(AttemptId("ready-item-1"), "branch", "base", "task", ArtifactRefId(99)),
@@ -114,14 +100,14 @@ class TypedTransitionContractTest(unittest.TestCase):
         )
         for value in variants:
             with self.subTest(value=value):
-                command = bind_transition(activation, value)
-                rejected = decision_outcome(snapshot, command, SQLITE_NOW)
+                selected_command = command(activation, value)
+                rejected = decision_outcome(snapshot, selected_command, SQLITE_NOW)
                 self.assertIsInstance(rejected, DecisionFailure)
             self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
         accepted = decide(
             snapshot,
-            bind_transition(
+            command(
                 activation,
                 work_models.ActivateInput(AttemptId("ready-item-1"), "branch", "base", "task", ArtifactRefId(1)),
             ),
@@ -152,7 +138,7 @@ class TypedTransitionContractTest(unittest.TestCase):
         )
         rejected_without_attempt = decision_outcome(
             without_attempt,
-            bind_transition(
+            command(
                 action(decision_models.ResumeAction, ItemId("ready-item")), work_models.ResumeInput(ArtifactRefId(1))
             ),
             SQLITE_NOW,
@@ -203,11 +189,11 @@ class TypedTransitionContractTest(unittest.TestCase):
 
         for value in (work_models.ResumeInput(ArtifactRefId(99)), work_models.ResumeInput(ArtifactRefId(3))):
             with self.subTest(value=value):
-                rejected = decision_outcome(snapshot, bind_transition(resume, value), SQLITE_NOW)
+                rejected = decision_outcome(snapshot, command(resume, value), SQLITE_NOW)
                 self.assertIsInstance(rejected, DecisionFailure)
                 self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
-        accepted = decide(snapshot, bind_transition(resume, work_models.ResumeInput(ArtifactRefId(2))), SQLITE_NOW)
+        accepted = decide(snapshot, command(resume, work_models.ResumeInput(ArtifactRefId(2))), SQLITE_NOW)
         self.assertIsInstance(accepted.change, decision_models.ResumeAttemptChange)
         assert isinstance(accepted.change, decision_models.ResumeAttemptChange)
         revised_brief = accepted.change.revised_brief

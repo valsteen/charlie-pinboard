@@ -21,7 +21,6 @@ from pinboard.application.artifacts import (
 from pinboard.application.service import change_coordination_authority, execute, execute_checkpoint_acceptance
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_models import AcquireCoordinationAuthority, ReleaseCoordinationAuthority
-from pinboard.domain.decisions import bind_transition
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import ActionId, HostId, LeaseId, TaskId
@@ -32,7 +31,7 @@ from pinboard.interfaces.errors import (
     CommandResult,
     TransitionInputFailure,
 )
-from pinboard.interfaces.transition_input import parse_transition_input
+from pinboard.interfaces.transition_input import parse_item_revision_input, parse_transition_command
 from pinboard.interfaces.transition_models import CloseView, CoordinatedTransitionView, ItemRevisionView
 from pinboard.interfaces.work_briefs import read_transition_work_brief_identity
 
@@ -62,14 +61,9 @@ def revise_item(roots: cli_commands.ResolvedRoots, command: cli_commands.ItemRev
         payload = command.file.read_bytes()
     except OSError as error:
         return CommandFailure(DecisionFailureCode.TRANSITION_INPUT_INVALID, f"Cannot read item revision: {error}")
-    parsed = parse_transition_input(decision_models.ActionKind.REVISE_ITEM, payload)
+    parsed = parse_item_revision_input(payload)
     if isinstance(parsed, TransitionInputFailure):
         return CommandFailure(parsed.code, parsed.message)
-    if not isinstance(parsed, work_models.ReviseItemDefinitionInput):
-        return CommandFailure(
-            DecisionFailureCode.TRANSITION_INPUT_INVALID,
-            "The revision file did not decode as an item revision.",
-        )
     digest = work_item_definition_digest(parsed.definition)
     if not isinstance(digest, str):
         return CommandFailure(digest.code, digest.message)
@@ -110,11 +104,8 @@ def transition(roots: cli_commands.ResolvedRoots, cli_command: cli_commands.Tran
     action = action_selection.reselect_action(roots, action, role)
     if isinstance(action, CommandFailure):
         return action
-    parsed = parse_transition_input(action.kind, payload)
-    if isinstance(parsed, TransitionInputFailure):
-        return CommandFailure(parsed.code, parsed.message)
-    command = bind_transition(action, parsed)
-    if isinstance(command, DecisionFailure):
+    command = parse_transition_command(action, payload)
+    if isinstance(command, TransitionInputFailure):
         return CommandFailure(command.code, command.message)
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     artifacts = ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work))
@@ -371,11 +362,8 @@ def apply_borrowed_transition(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             "Borrowed coordination cannot transfer retained authority.",
         )
-    parsed = parse_transition_input(action.kind, payload)
-    if isinstance(parsed, TransitionInputFailure):
-        return CommandFailure(parsed.code, parsed.message)
-    command = bind_transition(action, parsed)
-    if isinstance(command, DecisionFailure):
+    command = parse_transition_command(action, payload)
+    if isinstance(command, TransitionInputFailure):
         return CommandFailure(command.code, command.message)
     transition_brief_identity = read_brief_identity(store, command, artifacts)
     if isinstance(transition_brief_identity, CommandFailure):
