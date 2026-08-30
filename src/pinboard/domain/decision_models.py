@@ -354,11 +354,17 @@ class AcceptCheckpointAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_CHECKPOINT)
 
+    def command(self, value: work_models.AcceptCheckpointInput) -> AcceptCheckpointCommand:
+        return AcceptCheckpointCommand(self, value)
+
 
 @dataclass(frozen=True, slots=True)
 class AcceptReviewAndContinueAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_REVIEW_AND_CONTINUE)
+
+    def command(self, value: work_models.AcceptReviewAndContinueInput) -> AcceptReviewAndContinueCommand:
+        return AcceptReviewAndContinueCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -366,11 +372,17 @@ class AcceptProposalAction:
     capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_PROPOSAL)
 
+    def command(self, value: work_models.AcceptProposalInput) -> AcceptProposalCommand:
+        return AcceptProposalCommand(self, value)
+
 
 @dataclass(frozen=True, slots=True)
 class ActivateAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.ACTIVATE)
+
+    def command(self, value: work_models.ActivateInput) -> ActivateCommand:
+        return ActivateCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,11 +390,17 @@ class BlockAttemptAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.BLOCK)
 
+    def command(self, value: work_models.BlockInput) -> BlockCommand:
+        return BlockCommand(self, value)
+
 
 @dataclass(frozen=True, slots=True)
 class BlockItemAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.BLOCK_ITEM)
+
+    def command(self, value: work_models.BlockInput) -> BlockItemCommand:
+        return BlockItemCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,11 +408,17 @@ class CompleteAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.COMPLETE)
 
+    def command(self, value: work_models.EvidenceInput) -> CompleteCommand:
+        return CompleteCommand(self, value)
+
 
 @dataclass(frozen=True, slots=True)
 class CloseAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.CLOSE)
+
+    def command(self, value: work_models.CloseInput) -> CloseCommand:
+        return CloseCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,6 +431,9 @@ class ContinueAction:
 class DeferAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.DEFER)
+
+    def command(self, value: work_models.DeferInput) -> DeferCommand:
+        return DeferCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -426,11 +453,17 @@ class MarkReadyAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.MARK_READY)
 
+    def command(self, value: work_models.ReasonInput) -> MarkReadyCommand:
+        return MarkReadyCommand(self, value)
+
 
 @dataclass(frozen=True, slots=True)
 class MergeProposalAction:
     capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.MERGE_PROPOSAL)
+
+    def command(self, value: work_models.MergeProposalInput) -> MergeProposalCommand:
+        return MergeProposalCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,17 +471,26 @@ class PauseAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.PAUSE)
 
+    def command(self, value: work_models.ReasonInput) -> PauseCommand:
+        return PauseCommand(self, value)
+
 
 @dataclass(frozen=True, slots=True)
 class RejectProposalAction:
     capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.REJECT_PROPOSAL)
 
+    def command(self, value: work_models.ReasonInput) -> RejectProposalCommand:
+        return RejectProposalCommand(self, value)
+
 
 @dataclass(frozen=True, slots=True)
 class ReopenAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.REOPEN)
+
+    def command(self, value: work_models.EvidenceInput) -> ReopenCommand:
+        return ReopenCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -462,11 +504,17 @@ class ResumeAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.RESUME)
 
+    def command(self, value: work_models.ResumeInput) -> ResumeCommand:
+        return ResumeCommand(self, value)
+
 
 @dataclass(frozen=True, slots=True)
 class ReturnForCorrectionAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.RETURN_FOR_CORRECTION)
+
+    def command(self, value: work_models.ReasonInput) -> ReturnForCorrectionCommand:
+        return ReturnForCorrectionCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -474,11 +522,17 @@ class ReturnProposalAction:
     capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.RETURN_PROPOSAL)
 
+    def command(self, value: work_models.ReasonInput) -> ReturnProposalCommand:
+        return ReturnProposalCommand(self, value)
+
 
 @dataclass(frozen=True, slots=True)
 class ReviseItemAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.REVISE_ITEM)
+
+    def command(self, value: work_models.ReviseItemDefinitionInput) -> ReviseItemCommand:
+        return ReviseItemCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -486,11 +540,17 @@ class SubmitReviewAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.SUBMIT_REVIEW)
 
+    def command(self, value: work_models.SubmitReviewInput) -> SubmitReviewCommand:
+        return SubmitReviewCommand(self, value)
+
 
 @dataclass(frozen=True, slots=True)
 class TransferCoordinatorAction:
     capability: MutationActionCapability[LedgerId]
     kind: ActionKind = field(init=False, default=ActionKind.TRANSFER_COORDINATOR)
+
+    def command(self, value: work_models.TransferCoordinatorInput) -> TransferCoordinatorCommand:
+        return TransferCoordinatorCommand(self, value)
 
 
 type AdvisoryAction = ContinueAction | DispatchAction | InspectAction | ReportBlockerAction

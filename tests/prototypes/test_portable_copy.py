@@ -23,10 +23,11 @@ from pinboard.domain.authority_models import (
     ReleaseCoordinationAuthority,
     RenewAttemptAuthority,
 )
-from pinboard.domain.decisions import available_actions, bind_transition
+from pinboard.domain.decisions import available_actions
 from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.identifiers import ArtifactRefId, CandidateId, CheckpointId
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
+from tests.domain_support import command
 from tests.prototypes.portable_copy import PortableCopyError, PortableCopyErrorCode, create_portable_copy
 from tests.support import SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import work_a_brief
@@ -183,8 +184,8 @@ class PortableCopyTest(unittest.TestCase):
         submit_action = next(
             value for value in worker_actions if value.kind == decision_models.ActionKind.SUBMIT_REVIEW
         )
-        submit = bind_transition(submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a")))
-        assert isinstance(submit, decision_models.SubmitReviewCommand)
+        assert isinstance(submit_action, decision_models.SubmitReviewAction)
+        submit = command(submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a")))
         self.assertNotIsInstance(execute(store, submit, SQLITE_NOW), DecisionFailure)
         review_snapshot = project_decision_snapshot(store.snapshot())
         coordination = review_snapshot.coordination_authority
@@ -201,7 +202,8 @@ class PortableCopyTest(unittest.TestCase):
         accept_action = next(
             value for value in coordinator_actions if value.kind == decision_models.ActionKind.ACCEPT_CHECKPOINT
         )
-        accept = bind_transition(
+        assert isinstance(accept_action, decision_models.AcceptCheckpointAction)
+        accept = command(
             accept_action,
             work_models.AcceptCheckpointInput(
                 CheckpointId("checkpoint-a"),
@@ -209,7 +211,6 @@ class PortableCopyTest(unittest.TestCase):
                 "Accepted for portable-copy proof.",
             ),
         )
-        assert isinstance(accept, decision_models.AcceptCheckpointCommand)
         result_bytes = b"portable checkpoint result\n"
         review_bytes = b"portable checkpoint review\n"
         roots = resolve_durable_roots(source.parent.parent)

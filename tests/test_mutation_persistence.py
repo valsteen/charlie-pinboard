@@ -26,7 +26,6 @@ from pinboard.domain.authority_models import (
     CoordinationAuthorityDecision,
 )
 from pinboard.domain.decisions import available_actions as available_actions_outcome
-from pinboard.domain.decisions import bind_transition as bind_transition_outcome
 from pinboard.domain.decisions import decide as decision_outcome
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.history import work_item_definition_digest
@@ -40,7 +39,9 @@ from pinboard.domain.identifiers import (
     TaskId,
 )
 from pinboard.domain.ledger import LedgerSnapshot
-from tests.domain_support import expect_success
+from pinboard.interfaces.transition_input import parse_transition_command
+from tests.domain_support import command as make_command
+from tests.domain_support import expect_success, expect_transition_command
 from tests.support import SQLITE_NOW, complete_sqlite_state, reject_table_deletes
 
 
@@ -48,12 +49,6 @@ def available_actions(
     snapshot: LedgerSnapshot, actor: decision_models.ActorAuthority
 ) -> tuple[decision_models.Action, ...]:
     return expect_success(available_actions_outcome(snapshot, actor))
-
-
-def bind_transition(
-    action: decision_models.Action, value: work_models.TransitionInput
-) -> decision_models.TransitionCommand:
-    return expect_success(bind_transition_outcome(action, value))
 
 
 def decide(
@@ -195,10 +190,11 @@ class MutationPersistenceTest(unittest.TestCase):
         action = next(
             value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.ACTIVATE
         )
+        assert isinstance(action, decision_models.ActivateAction)
         decided_at = SQLITE_NOW + timedelta(seconds=1)
         decision = decide(
             snapshot,
-            bind_transition(
+            make_command(
                 action,
                 work_models.ActivateInput(
                     AttemptId("work-c-1"),
@@ -291,9 +287,10 @@ class MutationPersistenceTest(unittest.TestCase):
             for value in available_actions(snapshot, actor)
             if value.kind == decision_models.ActionKind.REVISE_ITEM and value.capability.subject == ItemId("work-a")
         )
+        assert isinstance(action, decision_models.ReviseItemAction)
         decision = decide(
             snapshot,
-            bind_transition(
+            make_command(
                 action,
                 work_models.ReviseItemDefinitionInput(
                     ItemId("work-a"),
@@ -399,8 +396,9 @@ class MutationPersistenceTest(unittest.TestCase):
         action = next(
             value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.RESUME
         )
+        assert isinstance(action, decision_models.ResumeAction)
         decision = decide(
-            snapshot, bind_transition(action, work_models.ResumeInput(replacement.artifact_ref_id)), SQLITE_NOW
+            snapshot, make_command(action, work_models.ResumeInput(replacement.artifact_ref_id)), SQLITE_NOW
         )
 
         with store.write() as transaction:
@@ -425,9 +423,10 @@ class MutationPersistenceTest(unittest.TestCase):
             for value in available_actions(snapshot, actor)
             if value.kind == decision_models.ActionKind.ACCEPT_PROPOSAL
         )
+        assert isinstance(action, decision_models.AcceptProposalAction)
         decision = decide(
             snapshot,
-            bind_transition(
+            make_command(
                 action,
                 work_models.AcceptProposalInput(
                     ItemId("zz-proposal-a"),
@@ -516,40 +515,44 @@ class MutationPersistenceTest(unittest.TestCase):
         self.assertEqual(before.authority.attempt_leases, reloaded.authority.attempt_leases)
 
     def test_proposal_disposition_matrix_persists_each_closed_value(self) -> None:
-        for kind, payload, expected in (
+        for action_type, payload, expected in (
             (
-                decision_models.ActionKind.MERGE_PROPOSAL,
-                work_models.MergeProposalInput(ItemId("work-c")),
+                decision_models.MergeProposalAction,
+                b'{"target":"work-c"}',
                 work_models.MergedProposalDisposition(
                     ItemId("work-c"),
                     SQLITE_NOW + timedelta(seconds=1),
                 ),
             ),
             (
-                decision_models.ActionKind.RETURN_PROPOSAL,
-                work_models.ReasonInput("Clarify the evidence."),
+                decision_models.ReturnProposalAction,
+                b'{"reason":"Clarify the evidence."}',
                 work_models.ReturnedProposalDisposition(
                     "Clarify the evidence.",
                     SQLITE_NOW + timedelta(seconds=1),
                 ),
             ),
             (
-                decision_models.ActionKind.REJECT_PROPOSAL,
-                work_models.ReasonInput("The proposal is obsolete."),
+                decision_models.RejectProposalAction,
+                b'{"reason":"The proposal is obsolete."}',
                 work_models.RejectedProposalDisposition(
                     "The proposal is obsolete.",
                     SQLITE_NOW + timedelta(seconds=1),
                 ),
             ),
         ):
-            with self.subTest(kind=kind):
+            with self.subTest(action_type=action_type.__name__):
                 store = self._store()
                 snapshot = project_decision_snapshot(store.snapshot())
                 actor = decision_models.ActorAuthority(
                     decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
                 )
-                action = next(value for value in available_actions(snapshot, actor) if value.kind == kind)
-                decision = decide(snapshot, bind_transition(action, payload), SQLITE_NOW + timedelta(seconds=1))
+                action = next(value for value in available_actions(snapshot, actor) if isinstance(value, action_type))
+                decision = decide(
+                    snapshot,
+                    expect_transition_command(parse_transition_command(action, payload)),
+                    SQLITE_NOW + timedelta(seconds=1),
+                )
                 with store.write() as transaction:
                     transaction.commit(project_transition_mutation(transaction.snapshot(), decision))
                 proposal = store.snapshot().proposals.proposals[0]
@@ -566,9 +569,10 @@ class MutationPersistenceTest(unittest.TestCase):
             for value in available_actions(snapshot, actor)
             if value.kind == decision_models.ActionKind.DEFER and value.capability.subject == ItemId("intake-work")
         )
+        assert isinstance(action, decision_models.DeferAction)
         decision = decide(
             snapshot,
-            bind_transition(
+            make_command(
                 action,
                 work_models.DeferInput(work_models.Timing.SAFE_TO_DEFER, "Reopen when the prerequisite is accepted."),
             ),
@@ -620,72 +624,60 @@ class MutationPersistenceTest(unittest.TestCase):
                 SELECT RAISE(IGNORE);
             END
         """
-        scenarios: tuple[tuple[decision_models.ActionKind, work_models.TransitionInput, str], ...] = (
+        scenarios: tuple[tuple[type[decision_models.Action], bytes, str], ...] = (
             (
-                decision_models.ActionKind.PAUSE,
-                work_models.ReasonInput("Pause at the checkpoint boundary."),
+                decision_models.PauseAction,
+                b'{"reason":"Pause at the checkpoint boundary."}',
                 ignore_item_update,
             ),
             (
-                decision_models.ActionKind.PAUSE,
-                work_models.ReasonInput("Pause at the checkpoint boundary."),
+                decision_models.PauseAction,
+                b'{"reason":"Pause at the checkpoint boundary."}',
                 stale_attempt_after_item,
             ),
             (
-                decision_models.ActionKind.PAUSE,
-                work_models.ReasonInput("Pause at the checkpoint boundary."),
+                decision_models.PauseAction,
+                b'{"reason":"Pause at the checkpoint boundary."}',
                 stale_focus_after_attempt,
             ),
             (
-                decision_models.ActionKind.ACCEPT_PROPOSAL,
-                work_models.AcceptProposalInput(
-                    ItemId("zz-proposal-a"),
-                    work_models.AcceptedProposalState.READY,
-                    "activate",
-                    timing=None,
-                    depends_on=(ItemId("intake-work"),),
-                ),
+                decision_models.AcceptProposalAction,
+                b'{"item":"zz-proposal-a","state":"ready","next_action":"activate","depends_on":["intake-work"]}',
                 ignore_item_update,
             ),
             (
-                decision_models.ActionKind.ACCEPT_PROPOSAL,
-                work_models.AcceptProposalInput(
-                    ItemId("zz-proposal-a"),
-                    work_models.AcceptedProposalState.READY,
-                    "activate",
-                    timing=None,
-                    depends_on=(ItemId("intake-work"),),
-                ),
+                decision_models.AcceptProposalAction,
+                b'{"item":"zz-proposal-a","state":"ready","next_action":"activate","depends_on":["intake-work"]}',
                 stale_proposal_after_item,
             ),
             (
-                decision_models.ActionKind.MERGE_PROPOSAL,
-                work_models.MergeProposalInput(ItemId("work-c")),
+                decision_models.MergeProposalAction,
+                b'{"target":"work-c"}',
                 ignore_item_update,
             ),
             (
-                decision_models.ActionKind.MERGE_PROPOSAL,
-                work_models.MergeProposalInput(ItemId("work-c")),
+                decision_models.MergeProposalAction,
+                b'{"target":"work-c"}',
                 stale_proposal_after_item,
             ),
             (
-                decision_models.ActionKind.RETURN_PROPOSAL,
-                work_models.ReasonInput("Clarify the evidence."),
+                decision_models.ReturnProposalAction,
+                b'{"reason":"Clarify the evidence."}',
                 ignore_proposal_update,
             ),
             (
-                decision_models.ActionKind.REJECT_PROPOSAL,
-                work_models.ReasonInput("The proposal is obsolete."),
+                decision_models.RejectProposalAction,
+                b'{"reason":"The proposal is obsolete."}',
                 ignore_item_update,
             ),
             (
-                decision_models.ActionKind.REJECT_PROPOSAL,
-                work_models.ReasonInput("The proposal is obsolete."),
+                decision_models.RejectProposalAction,
+                b'{"reason":"The proposal is obsolete."}',
                 stale_proposal_after_item,
             ),
         )
-        for kind, payload, trigger in scenarios:
-            with self.subTest(kind=kind, trigger=trigger):
+        for action_type, payload, trigger in scenarios:
+            with self.subTest(action_type=action_type.__name__, trigger=trigger):
                 project = Path(tempfile.mkdtemp()).resolve()
                 roots = resolve_durable_roots(project)
                 initialize_database(roots, SQLITE_NOW)
@@ -698,10 +690,10 @@ class MutationPersistenceTest(unittest.TestCase):
                     decision_models.AuthorizationKind.COORDINATOR,
                     snapshot.generation,
                 )
-                action = next(value for value in available_actions(snapshot, actor) if value.kind == kind)
+                action = next(value for value in available_actions(snapshot, actor) if isinstance(value, action_type))
                 decision = decide(
                     snapshot,
-                    bind_transition(action, payload),
+                    expect_transition_command(parse_transition_command(action, payload)),
                     SQLITE_NOW + timedelta(seconds=1),
                 )
                 mutation = project_transition_mutation(before, decision)

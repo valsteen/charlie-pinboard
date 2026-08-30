@@ -18,13 +18,12 @@ from pinboard.application.mutations import project_checkpoint_acceptance_mutatio
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.decisions import (
     available_actions,
-    bind_transition,
     decide,
 )
 from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import AttemptId, CandidateId, CheckpointId, ItemId, TaskId
-from tests.domain_support import expect_success
+from tests.domain_support import command, expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -41,8 +40,9 @@ def _commit_same_pause(
     )
     actions = expect_success(available_actions(snapshot, actor))
     action = next(value for value in actions if value.kind == decision_models.ActionKind.PAUSE)
-    command = expect_success(bind_transition(action, work_models.ReasonInput("Concurrent pause.")))
-    decision = expect_success(decide(snapshot, command, SQLITE_NOW))
+    assert isinstance(action, decision_models.PauseAction)
+    selected_command = command(action, work_models.ReasonInput("Concurrent pause."))
+    decision = expect_success(decide(snapshot, selected_command, SQLITE_NOW))
     assert isinstance(decision, decision_models.TransitionDecision)
     mutation = project_transition_mutation(before, decision)
     barrier.wait()
@@ -71,17 +71,16 @@ def _commit_same_checkpoint(
     )
     actions = expect_success(available_actions(snapshot, actor))
     action = next(value for value in actions if value.kind == decision_models.ActionKind.ACCEPT_CHECKPOINT)
-    command = expect_success(
-        bind_transition(
-            action,
-            work_models.AcceptCheckpointInput(
-                CheckpointId("checkpoint-a"),
-                CandidateId("candidate-a"),
-                "Accept concurrent checkpoint evidence.",
-            ),
-        )
+    assert isinstance(action, decision_models.AcceptCheckpointAction)
+    selected_command = command(
+        action,
+        work_models.AcceptCheckpointInput(
+            CheckpointId("checkpoint-a"),
+            CandidateId("candidate-a"),
+            "Accept concurrent checkpoint evidence.",
+        ),
     )
-    decision = expect_success(decide(snapshot, command, SQLITE_NOW))
+    decision = expect_success(decide(snapshot, selected_command, SQLITE_NOW))
     assert isinstance(decision, decision_models.CheckpointAcceptanceDecision)
     result = write_revision(
         roots,
@@ -119,26 +118,25 @@ def _commit_same_definition_revision(
         for value in actions
         if value.kind == decision_models.ActionKind.REVISE_ITEM and value.capability.subject == ItemId("work-a")
     )
+    assert isinstance(action, decision_models.ReviseItemAction)
     current = next(value for value in before.lifecycle.definition_revisions if value.item_id == ItemId("work-a"))
     revised = replace(
         current.definition,
         objective="Commit exactly one concurrent definition revision.",
         dependencies=(ItemId("intake-work"),),
     )
-    command = expect_success(
-        bind_transition(
-            action,
-            work_models.ReviseItemDefinitionInput(
-                ItemId("work-a"),
-                current.revision,
-                current.digest,
-                TaskId("concurrent-owner"),
-                "Exercise concurrent revision fencing.",
-                revised,
-            ),
-        )
+    selected_command = command(
+        action,
+        work_models.ReviseItemDefinitionInput(
+            ItemId("work-a"),
+            current.revision,
+            current.digest,
+            TaskId("concurrent-owner"),
+            "Exercise concurrent revision fencing.",
+            revised,
+        ),
     )
-    decision = expect_success(decide(snapshot, command, SQLITE_NOW))
+    decision = expect_success(decide(snapshot, selected_command, SQLITE_NOW))
     assert isinstance(decision, decision_models.TransitionDecision)
     mutation = project_transition_mutation(before, decision)
     barrier.wait()
@@ -195,9 +193,8 @@ class SQLiteConcurrencyTest(unittest.TestCase):
             for value in expect_success(available_actions(snapshot, actor))
             if value.kind == decision_models.ActionKind.SUBMIT_REVIEW
         )
-        submit_command = expect_success(
-            bind_transition(submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a")))
-        )
+        assert isinstance(submit_action, decision_models.SubmitReviewAction)
+        submit_command = command(submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a")))
         submit_decision = expect_success(decide(snapshot, submit_command, SQLITE_NOW))
         assert isinstance(submit_decision, decision_models.TransitionDecision)
         with store.write() as transaction:

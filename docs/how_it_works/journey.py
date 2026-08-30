@@ -70,7 +70,7 @@ DIAGRAM = Diagram(
     ),
     boxes=(
         Box("request", "Request", "submit-review", (), ("CLI / JSON",), 170, 88, 150, 84, "muted"),
-        Box("command", "Exact command", "Fields decoded once", (), ("TransitionCommand",), 360, 88, 210, 84),
+        Box("command", "Exact command", "Action + strict input", (), ("TransitionCommand",), 360, 88, 210, 84),
         Box("result", "Applied result", "Receipt + revision", (), (), 1010, 88, 180, 84),
         Box(
             "use-case",

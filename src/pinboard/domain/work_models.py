@@ -164,11 +164,6 @@ class WorkItem:
 
 
 @dataclass(frozen=True, slots=True)
-class EmptyInput:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
 class ResumeInput:
     brief_artifact_ref_id: ArtifactRefId | None = None
 
@@ -270,25 +265,6 @@ class ReviseItemDefinitionInput:
     source_task: TaskId
     reason: str
     definition: WorkItemDefinition
-
-
-type TransitionInput = (
-    EmptyInput
-    | ResumeInput
-    | ActivateInput
-    | ReasonInput
-    | BlockInput
-    | EvidenceInput
-    | AcceptCheckpointInput
-    | AcceptReviewAndContinueInput
-    | CloseInput
-    | DeferInput
-    | AcceptProposalInput
-    | MergeProposalInput
-    | TransferCoordinatorInput
-    | ReviseItemDefinitionInput
-    | SubmitReviewInput
-)
 
 
 @dataclass(frozen=True, slots=True)

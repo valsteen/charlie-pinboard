@@ -30,7 +30,6 @@ from pinboard.application.mutations import project_transition_mutation
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_models import AttemptLeaseStatus
 from pinboard.domain.decisions import available_actions as available_actions_outcome
-from pinboard.domain.decisions import bind_transition as bind_transition_outcome
 from pinboard.domain.decisions import decide as decision_outcome
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import (
@@ -41,7 +40,7 @@ from pinboard.domain.identifiers import (
     LeaseId,
 )
 from pinboard.domain.ledger import LedgerSnapshot
-from tests.domain_support import expect_success
+from tests.domain_support import command, expect_success
 from tests.domain_support import replace as replace_dataclass
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 
@@ -50,12 +49,6 @@ def available_actions(
     snapshot: LedgerSnapshot, actor: decision_models.ActorAuthority
 ) -> tuple[decision_models.Action, ...]:
     return expect_success(available_actions_outcome(snapshot, actor))
-
-
-def bind_transition(
-    action: decision_models.Action, value: work_models.TransitionInput
-) -> decision_models.TransitionCommand:
-    return expect_success(bind_transition_outcome(action, value))
 
 
 def decide(
@@ -706,9 +699,10 @@ class SQLiteStoreTest(unittest.TestCase):
         action = next(
             value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.PAUSE
         )
+        assert isinstance(action, decision_models.PauseAction)
         decision = decide(
             snapshot,
-            bind_transition(action, work_models.ReasonInput("Pause at the checkpoint boundary.")),
+            command(action, work_models.ReasonInput("Pause at the checkpoint boundary.")),
             SQLITE_NOW,
         )
         mutation = project_transition_mutation(initial, decision)
@@ -759,9 +753,10 @@ class SQLiteStoreTest(unittest.TestCase):
             )
             if value.kind == decision_models.ActionKind.PAUSE
         )
+        assert isinstance(failed_action, decision_models.PauseAction)
         failed_decision = decide(
             failed_snapshot,
-            bind_transition(failed_action, work_models.ReasonInput("This write is interrupted.")),
+            command(failed_action, work_models.ReasonInput("This write is interrupted.")),
             SQLITE_NOW,
         )
         failed_mutation = project_transition_mutation(failed_initial, failed_decision)
@@ -798,9 +793,10 @@ class SQLiteStoreTest(unittest.TestCase):
         action = next(
             value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.PAUSE
         )
+        assert isinstance(action, decision_models.PauseAction)
         decision = decide(
             snapshot,
-            bind_transition(action, work_models.ReasonInput("This write raises a programming failure.")),
+            command(action, work_models.ReasonInput("This write raises a programming failure.")),
             SQLITE_NOW,
         )
         mutation = project_transition_mutation(before, decision)
@@ -830,9 +826,10 @@ class SQLiteStoreTest(unittest.TestCase):
         action = next(
             value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.PAUSE
         )
+        assert isinstance(action, decision_models.PauseAction)
         decision = decide(
             snapshot,
-            bind_transition(action, work_models.ReasonInput("Pause without rewriting unrelated relations.")),
+            command(action, work_models.ReasonInput("Pause without rewriting unrelated relations.")),
             SQLITE_NOW,
         )
 
@@ -865,9 +862,10 @@ class SQLiteStoreTest(unittest.TestCase):
         action = next(
             value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.COMPLETE
         )
+        assert isinstance(action, decision_models.CompleteAction)
         decision = decide(
             snapshot,
-            bind_transition(action, work_models.EvidenceInput("accepted direct completion")),
+            command(action, work_models.EvidenceInput("accepted direct completion")),
             SQLITE_NOW + timedelta(seconds=1),
         )
 
@@ -907,10 +905,11 @@ class SQLiteStoreTest(unittest.TestCase):
             for value in available_actions(snapshot, actor)
             if value.kind == decision_models.ActionKind.SUBMIT_REVIEW
         )
+        assert isinstance(action, decision_models.SubmitReviewAction)
         candidate = CandidateId("candidate-from-caller")
         decision = decide(
             snapshot,
-            bind_transition(action, work_models.SubmitReviewInput(candidate)),
+            command(action, work_models.SubmitReviewInput(candidate)),
             SQLITE_NOW + timedelta(seconds=1),
         )
 
@@ -953,9 +952,10 @@ class SQLiteStoreTest(unittest.TestCase):
             for value in available_actions(snapshot, actor)
             if value.kind == decision_models.ActionKind.RETURN_FOR_CORRECTION
         )
+        assert isinstance(action, decision_models.ReturnForCorrectionAction)
         decision = decide(
             snapshot,
-            bind_transition(action, work_models.ReasonInput("Address the review feedback.")),
+            command(action, work_models.ReasonInput("Address the review feedback.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
 

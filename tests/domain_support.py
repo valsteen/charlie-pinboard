@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
-from typing import Any  # noqa: TID251 - fixture corruption intentionally crosses the typed boundary
+from typing import Any, Protocol  # noqa: TID251 - fixture corruption intentionally crosses the typed boundary
 
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionResult
@@ -14,6 +14,7 @@ from pinboard.domain.identifiers import (
     SubjectId,
     TaskId,
 )
+from pinboard.interfaces.errors import TransitionInputFailure
 
 
 def replace(instance: Any, **changes: Any) -> Any:  # noqa: ANN401
@@ -32,6 +33,22 @@ def action[SubjectT: SubjectId, ActionT](
     subject: SubjectT,
 ) -> ActionT:
     return constructor(decision_models.MutationActionCapability(subject, "test action", "rev", 1))
+
+
+class CommandAction[InputT, CommandT](Protocol):
+    def command(self, value: InputT) -> CommandT: ...
+
+
+def command[InputT, CommandT](action_value: CommandAction[InputT, CommandT], value: InputT) -> CommandT:
+    return action_value.command(value)
+
+
+def expect_transition_command(
+    value: decision_models.TransitionCommand | TransitionInputFailure,
+) -> decision_models.TransitionCommand:
+    if isinstance(value, TransitionInputFailure):
+        raise AssertionError(f"Expected a transition command, received {value.code.value}: {value.message}")
+    return value
 
 
 def attempt_record(
