@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Literal, assert_never
 
 from pinboard.domain import work_models
+from pinboard.domain.definition_decisions import DefinitionRevisionDecision
 from pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -17,6 +18,7 @@ from pinboard.domain.identifiers import (
     LedgerId,
     ProposalId,
     SubjectId,
+    TaskId,
 )
 
 
@@ -56,6 +58,7 @@ class ActionLifecyclePrecondition(Enum):
     INTAKE_ITEM = "intake-item"
     INTAKE_READY_OR_BLOCKED_UNSTARTED_ITEM = "intake-ready-or-blocked-unstarted-item"
     ITEM_OUTSIDE_ACTIVE_AND_REVIEW = "item-outside-active-and-review"
+    NONTERMINAL_ITEM = "nonterminal-item"
     PAUSED_OR_BLOCKED_ITEM_WITHOUT_LIVE_DEPENDENCIES = "paused-or-blocked-item-without-live-dependencies"
     READY_ITEM = "ready-item"
     REVIEW_ATTEMPT = "review-attempt"
@@ -95,6 +98,7 @@ class ActionKind(Enum):
     RESUME = "resume"
     RETURN_FOR_CORRECTION = "return-for-correction"
     RETURN_PROPOSAL = "return-proposal"
+    REVISE_ITEM = "revise-item"
     SUBMIT_REVIEW = "submit-review"
     TRANSFER_COORDINATOR = "transfer-coordinator"
 
@@ -148,21 +152,21 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
             )
         case ActionKind.BLOCK:
             return ActionSemantics(
-                "Stop an active attempt on named dependencies.",
+                "Stop an active attempt on dependencies already accepted in its definition.",
                 ActionEffect.MUTATING,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
-                "Move the item and attempt to blocked and record their dependencies.",
+                "Move the item and attempt to blocked without changing accepted dependencies.",
             )
         case ActionKind.BLOCK_ITEM:
             return ActionSemantics(
-                "Stop unstarted intake work on named dependencies.",
+                "Stop unstarted intake work on dependencies already accepted in its definition.",
                 ActionEffect.MUTATING,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.INTAKE_ITEM,
-                "Move the item to blocked and record its dependencies without creating an attempt.",
+                "Move the item to blocked without changing accepted dependencies or creating an attempt.",
             )
         case ActionKind.COMPLETE:
             return ActionSemantics(
@@ -289,6 +293,15 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
                 ActionSubjectKind.PROPOSAL,
                 ActionLifecyclePrecondition.VISIBLE_INTAKE_PROPOSAL,
                 "Dispose the proposal as returned and remove its visible item.",
+            )
+        case ActionKind.REVISE_ITEM:
+            return ActionSemantics(
+                "Replace one nonterminal item's complete accepted definition.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ITEM,
+                ActionLifecyclePrecondition.NONTERMINAL_ITEM,
+                "Append an immutable definition revision and atomically replace its dependencies.",
             )
         case ActionKind.SUBMIT_REVIEW:
             return ActionSemantics(
@@ -463,6 +476,12 @@ class ReturnProposalAction:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviseItemAction:
+    capability: MutationActionCapability[ItemId]
+    kind: ActionKind = field(init=False, default=ActionKind.REVISE_ITEM)
+
+
+@dataclass(frozen=True, slots=True)
 class SubmitReviewAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.SUBMIT_REVIEW)
@@ -493,6 +512,7 @@ type LifecycleAction = (
     | ResumeAction
     | ReturnForCorrectionAction
     | ReturnProposalAction
+    | ReviseItemAction
     | SubmitReviewAction
 )
 type TransitionAction = LifecycleAction | TransferCoordinatorAction
@@ -513,6 +533,7 @@ type NonCheckpointTransitionAction = (
     | ResumeAction
     | ReturnForCorrectionAction
     | ReturnProposalAction
+    | ReviseItemAction
     | SubmitReviewAction
     | TransferCoordinatorAction
 )
@@ -626,6 +647,12 @@ class ReturnProposalCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviseItemCommand:
+    action: ReviseItemAction
+    value: work_models.ReviseItemDefinitionInput
+
+
+@dataclass(frozen=True, slots=True)
 class RejectProposalCommand:
     action: RejectProposalAction
     value: work_models.ReasonInput
@@ -655,6 +682,7 @@ type TransitionCommand = (
     | AcceptProposalCommand
     | MergeProposalCommand
     | ReturnProposalCommand
+    | ReviseItemCommand
     | RejectProposalCommand
     | TransferCoordinatorCommand
 )
@@ -675,6 +703,7 @@ type NonCheckpointTransitionCommand = (
     | AcceptProposalCommand
     | MergeProposalCommand
     | ReturnProposalCommand
+    | ReviseItemCommand
     | RejectProposalCommand
     | TransferCoordinatorCommand
 )
@@ -822,14 +851,13 @@ class AcceptedProposalItem:
     timing: work_models.Timing | None
     next_action: str
     dependencies: tuple[ItemId, ...]
-    user_label: str
     source: str
-    trigger: str
-    why_it_matters: str
-    effect: str
-    unlock: str
     notes: str
-    scope_digest: str
+    definition_revision: int
+    definition_digest_before: str
+    definition_digest_after: str
+    definition: work_models.WorkItemDefinition
+    definition_source_task: TaskId
 
 
 @dataclass(frozen=True, slots=True)
@@ -914,6 +942,7 @@ type DecisionChange = (
     | RejectedProposalChange
     | CheckpointAcceptanceChange
     | CoordinatorTransferChange
+    | DefinitionRevisionDecision
 )
 type NonCheckpointDecisionChange = (
     ItemStateChange
@@ -933,6 +962,7 @@ type NonCheckpointDecisionChange = (
     | ReturnedProposalChange
     | RejectedProposalChange
     | CoordinatorTransferChange
+    | DefinitionRevisionDecision
 )
 
 

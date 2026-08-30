@@ -7,6 +7,8 @@ from pinboard.domain import work_models
 type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
 type Identity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
 type TimingPayload = Literal["must-now", "cheaper-now", "safe-to-defer"]
+type Sha256 = Annotated[str, msgspec.Meta(pattern=r"^[0-9a-f]{64}$")]
+type PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
 
 
 class EmptyInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -80,6 +82,30 @@ class TransferCoordinatorInputPayload(msgspec.Struct, frozen=True, forbid_unknow
     host_id: NonEmptyLine
 
 
+class WorkItemDefinitionPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: Literal["pinboard-work-item-definition/v1"]
+    title: NonEmptyLine
+    objective: NonEmptyLine
+    hypothesis: NonEmptyLine
+    evidence: tuple[NonEmptyLine, ...]
+    scope: Annotated[tuple[NonEmptyLine, ...], msgspec.Meta(min_length=1)]
+    non_scope: tuple[NonEmptyLine, ...]
+    acceptance_criteria: Annotated[tuple[NonEmptyLine, ...], msgspec.Meta(min_length=1)]
+    dependencies: tuple[Identity, ...]
+    effect: NonEmptyLine
+    unlock: NonEmptyLine
+
+
+class ReviseItemInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: Literal["pinboard-item-revision/v1"]
+    item_id: Identity
+    expected_revision: PositiveInt
+    expected_digest: Sha256
+    source_task: NonEmptyLine
+    reason: NonEmptyLine
+    definition: WorkItemDefinitionPayload
+
+
 type InputPayload = (
     EmptyInputPayload
     | ResumeInputPayload
@@ -95,6 +121,7 @@ type InputPayload = (
     | AcceptProposalInputPayload
     | MergeProposalInputPayload
     | TransferCoordinatorInputPayload
+    | ReviseItemInputPayload
 )
 type InputModel = type[InputPayload]
 
@@ -109,3 +136,10 @@ class CloseView(msgspec.Struct, frozen=True):
 class CoordinatedTransitionView(msgspec.Struct, frozen=True):
     action_id: str
     revision: str
+
+
+class ItemRevisionView(msgspec.Struct, frozen=True):
+    item_id: str
+    definition_revision: int
+    definition_digest: str
+    project_revision: str

@@ -33,7 +33,8 @@ class VisibleProposalItem:
     item_id: ItemId
     position: int
     dependencies: tuple[ItemId, ...]
-    scope_digest: str
+    definition_digest: str
+    definition: work_models.WorkItemDefinition
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,9 +42,10 @@ class PrerequisiteDependencyChange:
     item_id: ItemId
     dependency_id: ItemId
     position: int
-    scope_revision: int
-    scope_digest_before: str
-    scope_digest_after: str
+    definition_revision: int
+    definition_digest_before: str
+    definition_digest_after: str
+    definition_after: work_models.WorkItemDefinition
 
 
 @dataclass(frozen=True, slots=True)

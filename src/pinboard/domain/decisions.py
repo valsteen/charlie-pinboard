@@ -3,8 +3,9 @@ from datetime import datetime
 from typing import assert_never, overload
 
 from pinboard.domain import decision_models, work_models
+from pinboard.domain.definition_decisions import decide_definition_revision, introduces_dependency_cycle
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
-from pinboard.domain.history import item_scope_digest
+from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import AttemptId, ItemId, LedgerId, SubjectId
 from pinboard.domain.ledger import LedgerSnapshot
 
@@ -50,6 +51,8 @@ def bind_transition(  # noqa: C901, PLR0912
             return decision_models.ReturnForCorrectionCommand(action, value)
         case decision_models.ReturnProposalAction(), work_models.ReasonInput():
             return decision_models.ReturnProposalCommand(action, value)
+        case decision_models.ReviseItemAction(), work_models.ReviseItemDefinitionInput():
+            return decision_models.ReviseItemCommand(action, value)
         case decision_models.SubmitReviewAction(), work_models.SubmitReviewInput():
             return decision_models.SubmitReviewCommand(action, value)
         case decision_models.TransferCoordinatorAction(), work_models.TransferCoordinatorInput():
@@ -84,6 +87,7 @@ def bind_transition(  # noqa: C901, PLR0912
             | decision_models.ResumeAction()
             | decision_models.ReturnForCorrectionAction()
             | decision_models.ReturnProposalAction()
+            | decision_models.ReviseItemAction()
             | decision_models.SubmitReviewAction()
             | decision_models.TransferCoordinatorAction()
         ):
@@ -127,14 +131,15 @@ def _authority(
     return snapshot.authority_for(attempt, actor.lease_id, actor.generation)
 
 
-def _scope_stale(snapshot: LedgerSnapshot, item: work_models.WorkItem) -> bool:
+def _definition_stale(snapshot: LedgerSnapshot, item: work_models.WorkItem) -> bool:
     if item.attempt is None:
         return False
     attempt = snapshot.attempts_by_id().get(item.attempt)
-    scope = next((value for value in snapshot.scopes if value.item == item.item), None)
-    if attempt is None or scope is None or attempt.accepted_scope_revision is None:
+    definition = snapshot.definition(item.item)
+    if attempt is None or attempt.accepted_scope_revision is None or definition is None:
         return False
-    return (attempt.accepted_scope_revision, attempt.accepted_scope_digest) != (scope.revision, scope.digest)
+    current_identity = definition.revision, definition.digest
+    return (attempt.accepted_scope_revision, attempt.accepted_scope_digest) != current_identity
 
 
 def _worker_actions(snapshot: LedgerSnapshot, factory: ActionCapabilityFactory) -> tuple[decision_models.Action, ...]:
@@ -149,20 +154,20 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionCapabilityFactory) 
             None,
         )
         revision = snapshot.subject_revision(item.item)
-        result.extend(
-            (
-                decision_models.ContinueAction(
-                    factory.make(attempt, f"Continue {item.item}", revision, command_authority)
-                ),
-                decision_models.ReportBlockerAction(
-                    factory.make(attempt, f"Prepare blocker report for {item.item}", revision, command_authority)
-                ),
+        result.append(
+            decision_models.ReportBlockerAction(
+                factory.make(attempt, f"Prepare blocker report for {item.item}", revision, command_authority)
             )
         )
-        if not _scope_stale(snapshot, item):
-            result.append(
-                decision_models.SubmitReviewAction(
-                    factory.make(attempt, f"Submit {item.item} for review", revision, command_authority)
+        if not _definition_stale(snapshot, item):
+            result.extend(
+                (
+                    decision_models.ContinueAction(
+                        factory.make(attempt, f"Continue {item.item}", revision, command_authority)
+                    ),
+                    decision_models.SubmitReviewAction(
+                        factory.make(attempt, f"Submit {item.item} for review", revision, command_authority)
+                    ),
                 )
             )
     return tuple(result)
@@ -176,11 +181,13 @@ def _active_coordinator_actions(
         if item.state not in {work_models.WorkState.ACTIVE, work_models.WorkState.REVIEW} or item.attempt is None:
             continue
         if item.state == work_models.WorkState.ACTIVE:
-            result.append(decision_models.ContinueAction(factory.make(item.attempt, f"Continue {item.item}")))
-            if not _scope_stale(snapshot, item):
-                result.append(
-                    decision_models.DispatchAction(
-                        factory.make(item.attempt, f"Prepare a worker launch for {item.item}")
+            if not _definition_stale(snapshot, item):
+                result.extend(
+                    (
+                        decision_models.ContinueAction(factory.make(item.attempt, f"Continue {item.item}")),
+                        decision_models.DispatchAction(
+                            factory.make(item.attempt, f"Prepare a worker launch for {item.item}")
+                        ),
                     )
                 )
             result.extend(
@@ -191,7 +198,7 @@ def _active_coordinator_actions(
                     ),
                 )
             )
-        if not _scope_stale(snapshot, item):
+        if not _definition_stale(snapshot, item):
             result.append(
                 decision_models.CompleteAction(factory.make(item.attempt, f"Accept and complete {item.item}"))
             )
@@ -200,22 +207,23 @@ def _active_coordinator_actions(
             and factory.actor.authorization == decision_models.AuthorizationKind.COORDINATION
         ):
             attempt = snapshot.attempt(item.attempt)
-            result.extend(
-                (
-                    decision_models.AcceptCheckpointAction(
-                        factory.make(item.attempt, f"Accept a checkpoint for {item.item}")
-                    ),
-                    decision_models.ReturnForCorrectionAction(
-                        factory.make(item.attempt, f"Return {item.item} for correction")
-                    ),
+            result.append(
+                decision_models.ReturnForCorrectionAction(
+                    factory.make(item.attempt, f"Return {item.item} for correction")
                 )
             )
-            if attempt is not None and attempt.state == work_models.AttemptState.REVIEW:
+            if not _definition_stale(snapshot, item):
                 result.append(
-                    decision_models.AcceptReviewAndContinueAction(
-                        factory.make(item.attempt, f"Accept the review and continue {item.item}")
+                    decision_models.AcceptCheckpointAction(
+                        factory.make(item.attempt, f"Accept a checkpoint for {item.item}")
                     )
                 )
+                if attempt is not None and attempt.state == work_models.AttemptState.REVIEW:
+                    result.append(
+                        decision_models.AcceptReviewAndContinueAction(
+                            factory.make(item.attempt, f"Accept the review and continue {item.item}")
+                        )
+                    )
     return result
 
 
@@ -285,6 +293,11 @@ def available_actions(
                 case decision_models.Role.COORDINATOR:
                     result = _active_coordinator_actions(snapshot, factory)
                     for item in snapshot.items:
+                        result.append(
+                            decision_models.ReviseItemAction(
+                                factory.make(item.item, f"Revise the accepted definition for {item.item}")
+                            )
+                        )
                         result.extend(_item_actions(snapshot, item, factory))
                     for proposal in snapshot.proposals:
                         result.extend(
@@ -458,20 +471,22 @@ def _block_dependencies(
     item: work_models.WorkItem,
     value: work_models.BlockInput,
 ) -> DecisionResult[tuple[ItemId, ...]]:
-    dependencies = tuple(dict.fromkeys((*item.depends_on, *value.depends_on)))
-    if (
-        len(value.depends_on) != len(set(value.depends_on))
-        or item.item in dependencies
-        or any(
-            snapshot.item(dependency) is None and dependency not in snapshot.history_items
-            for dependency in dependencies
+    if not value.depends_on:
+        return item.depends_on
+    definition = snapshot.definition(item.item)
+    if definition is None:
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_DEFINITION_INVALID,
+            "The blocked item has no current definition.",
         )
+    if len(value.depends_on) != len(set(value.depends_on)) or any(
+        dependency not in definition.definition.dependencies for dependency in value.depends_on
     ):
         return DecisionFailure(
             DecisionFailureCode.DEPENDENCY_NOT_SATISFIED,
-            "Blocker dependencies must be ordered unique existing identities other than their owner.",
+            "Blocker dependencies must be ordered unique identities from the current definition.",
         )
-    return dependencies
+    return item.depends_on
 
 
 def _pause_or_block(
@@ -543,9 +558,10 @@ def _complete(
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE, "The named attempt is not active or in review."
         )
-    if _scope_stale(snapshot, item):
+    if _definition_stale(snapshot, item):
         return DecisionFailure(
-            DecisionFailureCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
+            DecisionFailureCode.ITEM_DEFINITION_STALE,
+            "The attempt has not accepted the item's current definition.",
         )
     if item.item in snapshot.history_items:
         return DecisionFailure(DecisionFailureCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
@@ -644,16 +660,16 @@ def _resume(
                 DecisionFailureCode.TRANSITION_INPUT_INVALID,
                 "Resuming with a revised brief requires one existing brief artifact reference.",
             )
-        scope = next((candidate for candidate in snapshot.scopes if candidate.item == item.item), None)
-        if scope is None:
+        definition = snapshot.definition(item.item)
+        if definition is None:
             return DecisionFailure(
                 DecisionFailureCode.TRANSITION_INPUT_INVALID,
-                "Resuming with a revised brief requires the item's accepted scope.",
+                "Resuming with a revised brief requires the item's accepted definition.",
             )
         revised_brief = decision_models.RevisedAttemptBrief(
             value.brief_artifact_ref_id,
-            scope.revision,
-            scope.digest,
+            definition.revision,
+            definition.digest,
         )
     target = work_models.WorkState.ACTIVE if item.attempt is not None else work_models.WorkState.READY
     if item.attempt is not None:
@@ -692,9 +708,10 @@ def _submit_review(
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE, "Only an active attempt can be submitted for review."
         )
-    if _scope_stale(snapshot, item):
+    if _definition_stale(snapshot, item):
         return DecisionFailure(
-            DecisionFailureCode.ITEM_SCOPE_STALE, "The attempt has not accepted the item's current semantic scope."
+            DecisionFailureCode.ITEM_DEFINITION_STALE,
+            "The attempt has not accepted the item's current definition.",
         )
     attempt = snapshot.attempt(attempt_id)
     if attempt is None:
@@ -767,6 +784,11 @@ def _accept_checkpoint(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             "Only an attempt in review can have a checkpoint accepted.",
         )
+    if _definition_stale(snapshot, item):
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_DEFINITION_STALE,
+            "The attempt has not accepted the item's current definition.",
+        )
     authorities = tuple(candidate for candidate in snapshot.attempt_authorities if candidate.attempt == attempt_id)
     if len(authorities) != 1:
         return DecisionFailure(
@@ -808,6 +830,11 @@ def _accept_review_and_continue(
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             "Only an item in review can have its review accepted for continuation.",
+        )
+    if _definition_stale(snapshot, item):
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_DEFINITION_STALE,
+            "The attempt has not accepted the item's current definition.",
         )
     attempt = snapshot.attempt(attempt_id)
     if attempt is None or attempt.state != work_models.AttemptState.REVIEW:
@@ -953,32 +980,34 @@ def _accept_proposal(
             DecisionFailureCode.DEPENDENCY_NOT_SATISFIED,
             "Accepted proposal dependencies must be ordered unique existing identities other than their owner.",
         )
-    scope = work_models.ItemScope(
-        value.item,
-        proposal.user_label,
-        proposal.trigger,
-        proposal.why_it_matters,
-        proposal.effect,
-        proposal.unlock,
-        tuple(work_models.ScopeDependency(position, dependency) for position, dependency in enumerate(dependencies)),
-    )
-    scope_digest = item_scope_digest(scope)
-    if isinstance(scope_digest, DecisionFailure):
-        return scope_digest
+    if introduces_dependency_cycle(snapshot, value.item, dependencies):
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_DEPENDENCY_CYCLE,
+            "Accepted proposal dependencies must not introduce a cycle.",
+        )
+    current_definition = snapshot.definition(value.item)
+    if current_definition is None:
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_DEFINITION_INVALID,
+            "The accepted proposal item has no current definition.",
+        )
+    accepted_definition = replace(current_definition.definition, dependencies=dependencies)
+    definition_digest = work_item_definition_digest(accepted_definition)
+    if isinstance(definition_digest, DecisionFailure):
+        return definition_digest
     accepted_item = decision_models.AcceptedProposalItem(
         value.item,
         value.state,
         value.timing,
         value.next_action,
         dependencies,
-        proposal.user_label,
         f"proposal:{proposal.proposal}",
-        proposal.trigger,
-        proposal.why_it_matters,
-        proposal.effect,
-        proposal.unlock,
         proposal.urgency_evidence,
-        scope_digest,
+        current_definition.revision + (definition_digest != current_definition.digest),
+        current_definition.digest,
+        definition_digest,
+        accepted_definition,
+        proposal.source_task_id,
     )
     return _result(
         action,
@@ -1076,6 +1105,23 @@ def _transfer(
     )
 
 
+def _revise_item(
+    snapshot: LedgerSnapshot,
+    command: decision_models.ReviseItemCommand,
+    now: datetime,
+) -> DecisionResult[decision_models.TransitionDecision]:
+    revision = decide_definition_revision(snapshot, command.action.capability.subject, command.value, now)
+    if isinstance(revision, DecisionFailure):
+        return revision
+    return _result(
+        command.action,
+        now,
+        revision,
+        item=revision.item,
+        evidence=revision.reason,
+    )
+
+
 @overload
 def decide(
     snapshot: LedgerSnapshot,
@@ -1136,6 +1182,8 @@ def decide(  # noqa: C901, PLR0912
             return _merge_proposal(snapshot, command, now)
         case decision_models.ReturnProposalCommand() | decision_models.RejectProposalCommand():
             return _dispose_proposal(snapshot, command, now)
+        case decision_models.ReviseItemCommand():
+            return _revise_item(snapshot, command, now)
         case decision_models.TransferCoordinatorCommand():
             return _transfer(snapshot, command, now)
         case _ as unreachable:

@@ -1,4 +1,3 @@
-import hashlib
 import unittest
 from dataclasses import replace as replace_dataclass
 from datetime import UTC, datetime
@@ -8,12 +7,6 @@ from pinboard.domain.decisions import available_actions as available_actions_out
 from pinboard.domain.decisions import bind_transition as bind_transition_outcome
 from pinboard.domain.decisions import decide as decision_outcome
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
-from pinboard.domain.history import (
-    item_scope_bytes as item_scope_bytes_outcome,
-)
-from pinboard.domain.history import (
-    item_scope_digest as item_scope_digest_outcome,
-)
 from pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -40,16 +33,7 @@ from tests.domain_support import (
     defer_input as DeferInput,
 )
 from tests.domain_support import (
-    item_scope as make_item_scope,
-)
-from tests.domain_support import (
     proposal_record as ProposalRecord,
-)
-from tests.domain_support import (
-    scope_anchor as ScopeAnchor,
-)
-from tests.domain_support import (
-    scope_dependency as ScopeDependency,
 )
 from tests.domain_support import (
     transfer_coordinator_input as TransferCoordinatorInput,
@@ -78,14 +62,6 @@ def decide(
     return expect_success(decision_outcome(snapshot, command, now))
 
 
-def item_scope_bytes(scope: work_models.ItemScope) -> bytes:
-    return expect_success(item_scope_bytes_outcome(scope))
-
-
-def item_scope_digest(scope: work_models.ItemScope) -> str:
-    return expect_success(item_scope_digest_outcome(scope))
-
-
 def item(item_id: str, state: work_models.WorkState, *, attempt: str | None = None) -> work_models.WorkItem:
     return work_models.WorkItem(
         ItemId(item_id),
@@ -100,39 +76,27 @@ def item(item_id: str, state: work_models.WorkState, *, attempt: str | None = No
     )
 
 
-def native_scope(*, artifacts: tuple[work_models.ScopeArtifact, ...] | None = None) -> work_models.ItemScope:
-    return make_item_scope(
-        item_id="build-map",
-        user_label="Build the map",
-        trigger="A route is missing",
-        why_it_matters="The party cannot travel",
-        effect="Add navigable routes",
-        unlock="Reach the next area",
-        dependencies=(ScopeDependency(1, "survey-east"), ScopeDependency(0, "survey-west")),
-        artifacts=artifacts
-        if artifacts is not None
-        else (
-            work_models.ScopeArtifact(
-                work_models.ArtifactRole.PLAN, 0, "plan", "route-plan", 2, "artifacts/plans/route-plan/2.md", DIGEST_B
-            ),
-            work_models.ScopeArtifact(
-                work_models.ArtifactRole.REQUIREMENTS,
-                0,
-                "requirements",
-                "route-needs",
-                1,
-                "artifacts/requirements/route-needs/1.md",
-                DIGEST_A,
-            ),
-            work_models.ScopeArtifact(
-                work_models.ArtifactRole.DESIGN,
-                0,
-                "design",
-                "route-design",
-                1,
-                "artifacts/designs/route-design/1.md",
-                "c" * 64,
-            ),
+def definition_anchor(
+    item_id: str,
+    revision: int,
+    digest: str,
+    dependencies: tuple[ItemId, ...] = (),
+) -> work_models.DefinitionAnchor:
+    return work_models.DefinitionAnchor(
+        ItemId(item_id),
+        revision,
+        digest,
+        work_models.WorkItemDefinition(
+            "Build the map",
+            "Add navigable routes",
+            "The party cannot travel",
+            (),
+            ("Add navigable routes",),
+            (),
+            ("Reach the next area",),
+            dependencies,
+            "Add navigable routes",
+            "Reach the next area",
         ),
     )
 
@@ -245,7 +209,10 @@ class LifecycleDecisionTest(unittest.TestCase):
         self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, empty_evidence.code)
 
     def test_blocker_actions_expose_distinct_roles_subjects_preconditions_and_effects(self) -> None:
-        active = item("target", work_models.WorkState.ACTIVE, attempt="target-1")
+        active = replace(
+            item("target", work_models.WorkState.ACTIVE, attempt="target-1"),
+            depends_on=(ItemId("prerequisite"),),
+        )
         intake = item("unstarted", work_models.WorkState.INTAKE)
         prerequisite = item("prerequisite", work_models.WorkState.READY)
         snapshot = LedgerSnapshot(
@@ -253,6 +220,7 @@ class LifecycleDecisionTest(unittest.TestCase):
             1,
             (active, intake, prerequisite),
             attempts=(AttemptRecord("target-1", "target", work_models.AttemptState.ACTIVE),),
+            definitions=(definition_anchor("target", 1, DIGEST_A, (ItemId("prerequisite"),)),),
             attempt_authorities=(
                 work_models.AttemptAuthority(AttemptId("target-1"), ItemId("target"), LeaseId("worker-lease"), 4),
             ),
@@ -302,24 +270,24 @@ class LifecycleDecisionTest(unittest.TestCase):
                 "block:target-1",
                 "Block active attempt for target",
                 (
-                    "Stop an active attempt on named dependencies.",
+                    "Stop an active attempt on dependencies already accepted in its definition.",
                     "mutating",
                     ("coordinator",),
                     "attempt",
                     "active-attempt",
-                    "Move the item and attempt to blocked and record their dependencies.",
+                    "Move the item and attempt to blocked without changing accepted dependencies.",
                 ),
             ),
             decision_models.ActionKind.BLOCK_ITEM: (
                 "block-item:unstarted",
                 "Block unstarted work item unstarted",
                 (
-                    "Stop unstarted intake work on named dependencies.",
+                    "Stop unstarted intake work on dependencies already accepted in its definition.",
                     "mutating",
                     ("coordinator",),
                     "item",
                     "intake-item",
-                    "Move the item to blocked and record its dependencies without creating an attempt.",
+                    "Move the item to blocked without changing accepted dependencies or creating an attempt.",
                 ),
             ),
         }
@@ -359,6 +327,17 @@ class LifecycleDecisionTest(unittest.TestCase):
         self.assertIsInstance(blocked.change, decision_models.BlockAttemptChange)
         assert isinstance(blocked.change, decision_models.BlockAttemptChange)
         self.assertEqual((ItemId("prerequisite"),), blocked.change.dependencies_after)
+        rejected_dependency = decision_outcome(
+            snapshot,
+            bind_transition(
+                selected[decision_models.ActionKind.BLOCK],
+                work_models.BlockInput("Waiting for an unaccepted prerequisite.", (ItemId("unstarted"),)),
+            ),
+            NOW,
+        )
+        self.assertIsInstance(rejected_dependency, DecisionFailure)
+        assert isinstance(rejected_dependency, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.DEPENDENCY_NOT_SATISFIED, rejected_dependency.code)
 
     def test_resume_and_reopen_actions_name_their_distinct_contextual_results(self) -> None:
         snapshot = LedgerSnapshot(
@@ -447,15 +426,14 @@ class LifecycleDecisionTest(unittest.TestCase):
         self.assertEqual(("dropped", "no longer needed"), (closed.receipt.outcome, closed.receipt.evidence))
 
     def test_changed_semantic_scope_blocks_the_next_attempt_boundary(self) -> None:
-        current_scope = native_scope()
-        current = ScopeAnchor("build-map", 2, item_scope_digest(current_scope), current_scope)
+        current = definition_anchor("build-map", 2, DIGEST_B)
         active = item("build-map", work_models.WorkState.ACTIVE, attempt="build-map-1")
         snapshot = LedgerSnapshot(
             "revision",
             1,
             (active,),
             attempts=(AttemptRecord("build-map-1", "build-map", work_models.AttemptState.ACTIVE, 1, DIGEST_A),),
-            scopes=(current,),
+            definitions=(current,),
         )
 
         action_ids = {
@@ -467,14 +445,14 @@ class LifecycleDecisionTest(unittest.TestCase):
                 ),
             )
         }
-        self.assertIn("continue:build-map-1", action_ids)
+        self.assertNotIn("continue:build-map-1", action_ids)
         self.assertNotIn("dispatch:build-map-1", action_ids)
         self.assertNotIn("complete:build-map-1", action_ids)
         submit = action(decision_models.SubmitReviewAction, AttemptId("build-map-1"))
         command = bind_transition(submit, work_models.SubmitReviewInput(CandidateId("candidate")))
         rejected = decision_outcome(snapshot, command, NOW)
         self.assertIsInstance(rejected, DecisionFailure)
-        self.assertEqual(DecisionFailureCode.ITEM_SCOPE_STALE, rejected.code)
+        self.assertEqual(DecisionFailureCode.ITEM_DEFINITION_STALE, rejected.code)
 
     def test_transition_rejections_preserve_the_domain_boundary(self) -> None:
         ready = item("target", work_models.WorkState.READY)
@@ -483,7 +461,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         review = item("target", work_models.WorkState.REVIEW, attempt="target-1")
         attempt_active = AttemptRecord("target-1", "target", work_models.AttemptState.ACTIVE)
         attempt_review = AttemptRecord("target-1", "target", work_models.AttemptState.REVIEW)
-        stale_scope = ScopeAnchor("target", 2, DIGEST_B, replace(native_scope(), item_id="target"))
+        stale_definition = definition_anchor("target", 2, DIGEST_B)
         cases = (
             (
                 LedgerSnapshot("r", 1, ()),
@@ -539,11 +517,11 @@ class LifecycleDecisionTest(unittest.TestCase):
                     1,
                     (active,),
                     attempts=(replace(attempt_active, accepted_scope_revision=1, accepted_scope_digest=DIGEST_A),),
-                    scopes=(stale_scope,),
+                    definitions=(stale_definition,),
                 ),
                 action(decision_models.CompleteAction, AttemptId("target-1")),
                 work_models.EvidenceInput("done"),
-                "ITEM_SCOPE_STALE",
+                "ITEM_DEFINITION_STALE",
             ),
             (
                 LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,), history_items=(ItemId("target"),)),
@@ -609,11 +587,11 @@ class LifecycleDecisionTest(unittest.TestCase):
                     1,
                     (active,),
                     attempts=(replace(attempt_active, accepted_scope_revision=1, accepted_scope_digest=DIGEST_A),),
-                    scopes=(stale_scope,),
+                    definitions=(stale_definition,),
                 ),
                 action(decision_models.SubmitReviewAction, AttemptId("target-1")),
                 work_models.SubmitReviewInput(CandidateId("candidate")),
-                "ITEM_SCOPE_STALE",
+                "ITEM_DEFINITION_STALE",
             ),
             (
                 LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
@@ -727,105 +705,6 @@ class LifecycleDecisionTest(unittest.TestCase):
                     rejected = decision_outcome(snapshot, bound, NOW)
                     self.assertIsInstance(rejected, DecisionFailure)
                 self.assertEqual(DecisionFailureCode(code), rejected.code)
-
-
-class ScopeContractTest(unittest.TestCase):
-    def test_scope_has_frozen_canonical_bytes_and_evidence_is_operational(self) -> None:
-        scope = native_scope()
-        expected = (
-            b'{"artifacts":[{"content_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",'
-            b'"key":"route-design","kind":"design","position":0,"revision":1,"role":"design",'
-            b'"selector":"artifacts/designs/route-design/1.md"},{"content_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
-            b'"key":"route-plan","kind":"plan","position":0,"revision":2,"role":"plan",'
-            b'"selector":"artifacts/plans/route-plan/2.md"},{"content_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
-            b'"key":"route-needs","kind":"requirements","position":0,"revision":1,"role":"requirements",'
-            b'"selector":"artifacts/requirements/route-needs/1.md"}],"dependencies":[{"dependency_id":"survey-west","position":0},'
-            b'{"dependency_id":"survey-east","position":1}],"effect":"Add navigable routes","item_id":"build-map",'
-            b'"schema":"item-scope/v2",'
-            b'"trigger":"A route is missing","unlock":"Reach the next area","user_label":"Build the map",'
-            b'"why_it_matters":"The party cannot travel"}\n'
-        )
-        self.assertEqual(expected, item_scope_bytes(scope))
-        self.assertEqual(hashlib.sha256(expected).hexdigest(), item_scope_digest(scope))
-
-        evidence = work_models.ScopeArtifact(
-            work_models.ArtifactRole.EVIDENCE,
-            0,
-            "evidence",
-            "observation",
-            1,
-            "artifacts/evidence/observation/1.json",
-            DIGEST_A,
-        )
-        self.assertEqual(
-            item_scope_bytes(scope), item_scope_bytes(replace(scope, artifacts=(*scope.artifacts, evidence)))
-        )
-
-        sparse = make_item_scope("sparse-item", "Sparse item", None, None, None, None)
-        self.assertEqual(
-            b'{"artifacts":[],"dependencies":[],"effect":null,"item_id":"sparse-item",'
-            b'"schema":"item-scope/v2","trigger":null,"unlock":null,'
-            b'"user_label":"Sparse item","why_it_matters":null}\n',
-            item_scope_bytes(sparse),
-        )
-
-    def test_scope_rejects_noncanonical_positions_and_semantic_duplicates(self) -> None:
-        invalid = (
-            replace(native_scope(), dependencies=(ScopeDependency(1, "missing-zero"),)),
-            replace(
-                native_scope(),
-                artifacts=(
-                    work_models.ScopeArtifact(
-                        work_models.ArtifactRole.PLAN, 0, "plan", "same", 1, "artifacts/plans/same/1.md", DIGEST_A
-                    ),
-                    work_models.ScopeArtifact(
-                        work_models.ArtifactRole.PLAN, 0, "plan", "other", 1, "artifacts/plans/other/1.md", DIGEST_B
-                    ),
-                ),
-            ),
-        )
-        for scope in invalid:
-            with self.subTest(scope=scope):
-                rejected = item_scope_bytes_outcome(scope)
-                self.assertIsInstance(rejected, DecisionFailure)
-            self.assertEqual(DecisionFailureCode.ITEM_SCOPE_INVALID, rejected.code)
-
-    def test_scope_rejects_malformed_semantic_fields_as_one_contract(self) -> None:
-        artifact = work_models.ScopeArtifact(
-            work_models.ArtifactRole.PLAN,
-            0,
-            "plan",
-            "route-plan",
-            1,
-            "artifacts/plans/route-plan/1.md",
-            DIGEST_A,
-        )
-        invalid = (
-            replace(native_scope(artifacts=(artifact,)), item_id=""),
-            replace(native_scope(artifacts=(artifact,)), trigger=""),
-            replace(
-                native_scope(artifacts=(artifact,)),
-                dependencies=(ScopeDependency(0, "same"), ScopeDependency(1, "same")),
-            ),
-            native_scope(artifacts=(replace(artifact, position=-1),)),
-            native_scope(artifacts=(replace(artifact, kind="design"),)),
-            native_scope(artifacts=(replace(artifact, revision=0),)),
-            native_scope(artifacts=(replace(artifact, selector=""),)),
-            native_scope(artifacts=(replace(artifact, content_sha256="not-a-digest"),)),
-            native_scope(artifacts=(replace(artifact, selector="../route-plan.md"),)),
-            native_scope(
-                artifacts=(
-                    artifact,
-                    replace(artifact, position=1),
-                )
-            ),
-            native_scope(artifacts=(artifact, replace(artifact, key="other", position=2))),
-        )
-        for scope in invalid:
-            with self.subTest(scope=scope):
-                rejected = item_scope_bytes_outcome(scope)
-                self.assertIsInstance(rejected, DecisionFailure)
-            self.assertEqual(DecisionFailureCode.ITEM_SCOPE_INVALID, rejected.code)
 
 
 if __name__ == "__main__":

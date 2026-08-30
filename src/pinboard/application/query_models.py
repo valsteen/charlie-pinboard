@@ -123,3 +123,48 @@ class ParallelPreview(msgspec.Struct, frozen=True):
     selection: ParallelSelection
     safe: bool
     items: tuple[ParallelItem, ...]
+
+
+class WorkItemDefinitionView(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: Literal["pinboard-work-item-definition/v1"]
+    title: str
+    objective: str
+    hypothesis: str
+    evidence: tuple[str, ...]
+    scope: tuple[str, ...]
+    non_scope: tuple[str, ...]
+    acceptance_criteria: tuple[str, ...]
+    dependencies: tuple[str, ...]
+    effect: str
+    unlock: str
+
+
+class ItemDefinition(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: Literal["pinboard-item-definition/v1"]
+    authority: Literal["sqlite-v1"]
+    project_revision: int
+    item_id: str
+    definition_revision: int
+    definition_digest: str
+    definition: WorkItemDefinitionView
+
+
+class ItemDefinitionHistoryRow(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    revision: int
+    digest: str
+    definition: WorkItemDefinitionView
+    reason: str
+    source_task: str
+    timestamp: str
+    before_digest: str | None
+    after_digest: str
+    committed_project_revision: int
+
+
+class ItemDefinitionHistory(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: Literal["pinboard-item-definition-history/v1"]
+    authority: Literal["sqlite-v1"]
+    project_revision: int
+    item_id: str
+    revisions: tuple[ItemDefinitionHistoryRow, ...]
+    next_before_revision: int | None

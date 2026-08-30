@@ -1,6 +1,7 @@
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +11,7 @@ from pinboard.adapters.sqlite.models import OpenMode
 from pinboard.application import stored_state
 from pinboard.domain import work_models
 from pinboard.domain.authority_models import AttemptLeaseStatus
+from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -27,7 +29,93 @@ type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValu
 type JsonObject = dict[str, JsonValue]
 
 SQLITE_NOW = datetime(2026, 8, 22, 14, 0, tzinfo=UTC)
-SQLITE_DIGEST = "a" * 64
+SQLITE_DEFINITION = work_models.WorkItemDefinition(
+    "Work work-a",
+    "Make the state explicit.",
+    "The workflow needs this fact.",
+    ("artifacts/design.md",),
+    ("The state becomes explicit.",),
+    (),
+    ("The next decision can run.",),
+    (ItemId("work-c"),),
+    "The state becomes explicit.",
+    "The next decision can run.",
+)
+_SQLITE_DEFINITION_DIGEST = work_item_definition_digest(SQLITE_DEFINITION)
+assert isinstance(_SQLITE_DEFINITION_DIGEST, str)
+SQLITE_DIGEST = _SQLITE_DEFINITION_DIGEST
+
+
+def test_definition(item: ItemId) -> tuple[work_models.WorkItemDefinition, str]:
+    if item == ItemId("work-a"):
+        definition = SQLITE_DEFINITION
+    elif item == ItemId("zz-proposal-a"):
+        definition = work_models.WorkItemDefinition(
+            "Proposal A",
+            "Record the follow-up.",
+            "It may affect work C.",
+            ("evidence:observation",),
+            ("Record the follow-up.",),
+            (),
+            ("A later coordinator can assess it.",),
+            (ItemId("work-c"),),
+            "Record the follow-up.",
+            "A later coordinator can assess it.",
+        )
+    else:
+        definition = work_models.WorkItemDefinition(
+            f"Work {item}",
+            SQLITE_DEFINITION.objective,
+            SQLITE_DEFINITION.hypothesis,
+            SQLITE_DEFINITION.evidence,
+            SQLITE_DEFINITION.scope,
+            SQLITE_DEFINITION.non_scope,
+            SQLITE_DEFINITION.acceptance_criteria,
+            (),
+            SQLITE_DEFINITION.effect,
+            SQLITE_DEFINITION.unlock,
+        )
+    digest = work_item_definition_digest(definition)
+    assert isinstance(digest, str)
+    return definition, digest
+
+
+def with_definition_dependencies(
+    state: stored_state.StoredWorkState,
+    item_id: ItemId,
+    dependencies: tuple[ItemId, ...],
+) -> stored_state.StoredWorkState:
+    def revision_number(value: stored_state.ItemDefinitionRevision) -> int:
+        return value.revision
+
+    current = max(
+        (value for value in state.lifecycle.definition_revisions if value.item_id == item_id),
+        key=revision_number,
+    )
+    definition = replace(current.definition, dependencies=dependencies)
+    digest = work_item_definition_digest(definition)
+    assert isinstance(digest, str)
+    definitions = tuple(
+        replace(value, definition=definition, digest=digest, after_digest=digest)
+        if value.item_id == item_id and value.revision == current.revision
+        else value
+        for value in state.lifecycle.definition_revisions
+    )
+    attempts = tuple(
+        replace(value, accepted_scope_digest=digest)
+        if value.item_id == item_id
+        and value.accepted_scope_revision == current.revision
+        and value.accepted_scope_digest == current.digest
+        else value
+        for value in state.lifecycle.attempts
+    )
+    links = tuple(value for value in state.lifecycle.dependencies if value.item_id != item_id) + tuple(
+        stored_state.ItemDependency(item_id, dependency, position) for position, dependency in enumerate(dependencies)
+    )
+    return replace(
+        state,
+        lifecycle=replace(state.lifecycle, definition_revisions=definitions, dependencies=links, attempts=attempts),
+    )
 
 
 @contextmanager
@@ -69,19 +157,12 @@ def _stored_item(
 ) -> stored_state.StoredWorkItem:
     return stored_state.StoredWorkItem(
         item_id,
-        f"Work {item_id}",
         state,
         None if sparse else work_models.Timing.MUST_NOW,
         source if source is not None else (None if sparse else "accepted requirement"),
-        None if sparse else "A verified observation",
-        None if sparse else "The workflow needs this fact.",
-        None if sparse else "The state becomes explicit.",
-        None if sparse else "The next decision can run.",
         outcome_evidence,
         "continue" if state == stored_state.StoredWorkItemState.ACTIVE else "activate",
         None if sparse else "Current work remains bounded.",
-        1,
-        SQLITE_DIGEST,
         7,
         SQLITE_NOW,
         SQLITE_NOW,
@@ -150,10 +231,6 @@ def complete_sqlite_state() -> stored_state.StoredWorkState:
                 source="proposal:zz-proposal-a",
             ),
         ),
-        tuple(
-            stored_state.ItemScopeRevision(item, 1, SQLITE_DIGEST, 3, SQLITE_NOW)
-            for item in (intake_item, item_a, item_b, item_c, proposal_item)
-        ),
         (stored_state.ItemDependency(item_a, item_c, 0), stored_state.ItemDependency(proposal_item, item_c, 0)),
         (stored_state.ItemArtifactLink(item_a, design.artifact_ref_id, work_models.ArtifactRole.DESIGN, 0),),
         (
@@ -174,6 +251,21 @@ def complete_sqlite_state() -> stored_state.StoredWorkState:
                 SQLITE_NOW,
                 SQLITE_NOW,
             ),
+        ),
+        tuple(
+            stored_state.ItemDefinitionRevision(
+                item,
+                1,
+                test_definition(item)[1],
+                test_definition(item)[0],
+                "Accepted test definition.",
+                TaskId("test-source"),
+                None,
+                test_definition(item)[1],
+                3,
+                SQLITE_NOW,
+            )
+            for item in (intake_item, item_a, item_b, item_c, proposal_item)
         ),
     )
     proposal_id = ProposalId(proposal_item)

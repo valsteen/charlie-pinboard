@@ -120,7 +120,7 @@ class PortableCopyTest(unittest.TestCase):
         destination_store = SQLiteWorkStore(destination / "state.sqlite3")
         copied = destination_store.snapshot()
         self.assertEqual(source_state.lifecycle.work_items, copied.lifecycle.work_items)
-        self.assertEqual(source_state.lifecycle.scope_revisions, copied.lifecycle.scope_revisions)
+        self.assertEqual(source_state.lifecycle.definition_revisions, copied.lifecycle.definition_revisions)
         self.assertEqual(source_state.lifecycle.dependencies, copied.lifecycle.dependencies)
         self.assertEqual(source_state.lifecycle.item_artifacts, copied.lifecycle.item_artifacts)
         self.assertEqual(source_state.lifecycle.attempts, copied.lifecycle.attempts)

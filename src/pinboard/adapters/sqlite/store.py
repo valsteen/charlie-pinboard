@@ -34,6 +34,7 @@ from pinboard.adapters.sqlite.database import (
 )
 from pinboard.adapters.sqlite.lifecycle import (
     insert_attempt,
+    insert_definition_revision,
     replace_dependencies,
     set_attempt_state,
     set_item_state,
@@ -53,8 +54,33 @@ from pinboard.application.mutation_models import (
 )
 from pinboard.application.mutations import stored_transition_receipt
 from pinboard.domain import decision_models, work_models
+from pinboard.domain.definition_decisions import DefinitionRevisionDecision
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import ItemId
+
+
+def _persist_definition_revision(
+    connection: sqlite3.Connection,
+    state: stored_state.StoredWorkState,
+    decision: DefinitionRevisionDecision,
+    project_revision: int,
+) -> DecisionFailure | None:
+    stored = stored_state.ItemDefinitionRevision(
+        decision.item,
+        decision.revision,
+        decision.after_digest,
+        decision.definition,
+        decision.reason,
+        decision.source_task,
+        decision.before_digest,
+        decision.after_digest,
+        project_revision,
+        decision.decided_at,
+    )
+    if (failure := insert_definition_revision(connection, state, stored)) is not None:
+        return failure
+    replace_dependencies(connection, decision.item, decision.definition.dependencies)
+    return None
 
 
 def _persist_transition(  # noqa: C901, PLR0912, PLR0915
@@ -338,6 +364,9 @@ def _persist_transition(  # noqa: C901, PLR0912, PLR0915
                 return failure
         case decision_models.AcceptedProposalChange():
             if (failure := accept_proposal(connection, state, change, revision, now)) is not None:
+                return failure
+        case DefinitionRevisionDecision():
+            if (failure := _persist_definition_revision(connection, state, change, revision)) is not None:
                 return failure
         case decision_models.MergedProposalChange(proposal=proposal, target_item=target, disposed_at=disposed_at):
             if (

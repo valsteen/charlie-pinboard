@@ -6,14 +6,67 @@ reads the filesystem, or obtains time. Expected stale CAS writes return a
 """
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
 
 from pinboard.adapters.sqlite.database import decode_row, require_one_changed_row
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.application import stored_state
 from pinboard.domain import decision_models, work_models
-from pinboard.domain.errors import DecisionFailure
-from pinboard.domain.identifiers import ArtifactRefId, AttemptId, ItemId
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from pinboard.domain.history import decode_work_item_definition, work_item_definition_bytes
+from pinboard.domain.identifiers import ArtifactRefId, AttemptId, ItemId, TaskId
+
+
+@dataclass(frozen=True, slots=True)
+class _DefinitionRevisionRow:
+    item_id: ItemId
+    revision: int
+    digest: str
+    definition_json: work_models.CanonicalJson
+    reason: str
+    source_task_id: TaskId
+    before_digest: str | None
+    after_digest: str
+    accepted_project_revision: int
+    accepted_at: datetime
+
+
+def _definition_revision(row: sqlite3.Row) -> stored_state.ItemDefinitionRevision:
+    value = decode_row(row, _DefinitionRevisionRow)
+    definition = decode_work_item_definition(value.definition_json)
+    if isinstance(definition, DecisionFailure):
+        raise StorageError(StorageErrorCode.INVALID_STATE, definition.message)
+    return stored_state.ItemDefinitionRevision(
+        value.item_id,
+        value.revision,
+        value.digest,
+        definition,
+        value.reason,
+        value.source_task_id,
+        value.before_digest,
+        value.after_digest,
+        value.accepted_project_revision,
+        value.accepted_at,
+    )
+
+
+def _definition_revision_values(value: stored_state.ItemDefinitionRevision) -> tuple[str | int | bytes | None, ...]:
+    payload = work_item_definition_bytes(value.definition)
+    if isinstance(payload, DecisionFailure):
+        raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, payload.message)
+    return (
+        value.item_id,
+        value.revision,
+        value.digest,
+        payload,
+        value.reason,
+        value.source_task_id,
+        value.before_digest,
+        value.after_digest,
+        value.accepted_project_revision,
+        value.accepted_at.isoformat(),
+    )
 
 
 def read_lifecycle(
@@ -24,22 +77,10 @@ def read_lifecycle(
         decode_row(row, stored_state.StoredWorkItem)
         for row in connection.execute(
             """
-            SELECT item_id, user_label, state, timing, source, trigger, why_it_matters, effect, unlock,
-                   outcome_evidence, next_action, notes, scope_revision, scope_digest, subject_revision,
+            SELECT item_id, state, timing, source, outcome_evidence, next_action, notes, subject_revision,
                    recorded_at, updated_at, queue_position
             FROM work_items
             ORDER BY item_id
-            """
-        ).fetchall()
-    )
-    scopes = tuple(
-        decode_row(row, stored_state.ItemScopeRevision)
-        for row in connection.execute(
-            """
-            SELECT item_id, scope_revision AS revision, scope_digest AS digest,
-                   accepted_project_revision, accepted_at
-            FROM item_scope_revisions
-            ORDER BY item_id, scope_revision
             """
         ).fetchall()
     )
@@ -67,7 +108,19 @@ def read_lifecycle(
             """
         ).fetchall()
     )
-    return stored_state.LifecycleRecords(project, items, scopes, dependencies, item_artifacts, attempts)
+    definitions = tuple(
+        _definition_revision(row)
+        for row in connection.execute(
+            """
+            SELECT item_id, definition_revision AS revision, definition_digest AS digest,
+                   definition_json, reason, source_task_id, before_digest, after_digest,
+                   accepted_project_revision, accepted_at
+            FROM work_item_definition_revisions
+            ORDER BY item_id, definition_revision
+            """
+        ).fetchall()
+    )
+    return stored_state.LifecycleRecords(project, items, dependencies, item_artifacts, attempts, definitions)
 
 
 def read_focus(connection: sqlite3.Connection) -> stored_state.StoredFocus:
@@ -87,27 +140,19 @@ def insert_lifecycle(connection: sqlite3.Connection, records: stored_state.Lifec
     connection.executemany(
         """
         INSERT INTO work_items (
-            item_id, user_label, state, timing, source, trigger, why_it_matters,
-            effect, unlock, outcome_evidence, next_action, notes, scope_revision, scope_digest,
-            subject_revision, recorded_at, updated_at, queue_position
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            item_id, state, timing, source, outcome_evidence, next_action, notes, subject_revision,
+            recorded_at, updated_at, queue_position
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         tuple(
             (
                 value.item_id,
-                value.user_label,
                 value.state.value,
                 None if value.timing is None else value.timing.value,
                 value.source,
-                value.trigger,
-                value.why_it_matters,
-                value.effect,
-                value.unlock,
                 value.outcome_evidence,
                 value.next_action,
                 value.notes,
-                value.scope_revision,
-                value.scope_digest,
                 value.subject_revision,
                 value.recorded_at.isoformat(),
                 value.updated_at.isoformat(),
@@ -117,25 +162,17 @@ def insert_lifecycle(connection: sqlite3.Connection, records: stored_state.Lifec
         ),
     )
     connection.executemany(
-        """
-        INSERT INTO item_scope_revisions (
-            item_id, scope_revision, scope_digest, accepted_project_revision, accepted_at
-        ) VALUES (?, ?, ?, ?, ?)
-        """,
-        tuple(
-            (
-                value.item_id,
-                value.revision,
-                value.digest,
-                value.accepted_project_revision,
-                value.accepted_at.isoformat(),
-            )
-            for value in records.scope_revisions
-        ),
-    )
-    connection.executemany(
         "INSERT INTO item_dependencies (item_id, dependency_id, position) VALUES (?, ?, ?)",
         tuple((value.item_id, value.dependency_id, value.position) for value in records.dependencies),
+    )
+    connection.executemany(
+        """
+        INSERT INTO work_item_definition_revisions (
+            item_id, definition_revision, definition_digest, definition_json, reason,
+            source_task_id, before_digest, after_digest, accepted_project_revision, accepted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        tuple(_definition_revision_values(value) for value in records.definition_revisions),
     )
     connection.executemany(
         "INSERT INTO item_artifacts (item_id, artifact_ref_id, role, position) VALUES (?, ?, ?, ?)",
@@ -374,6 +411,56 @@ def replace_dependencies(connection: sqlite3.Connection, item_id: ItemId, depend
     )
 
 
+def insert_definition_revision(
+    connection: sqlite3.Connection,
+    state: stored_state.StoredWorkState,
+    revision: stored_state.ItemDefinitionRevision,
+) -> DecisionFailure | None:
+    current = next(
+        (value for value in reversed(state.lifecycle.definition_revisions) if value.item_id == revision.item_id),
+        None,
+    )
+    if current is None or revision.revision != current.revision + 1 or revision.before_digest != current.digest:
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_DEFINITION_STALE,
+            "The current definition changed before persistence.",
+        )
+    append_definition_revision(connection, revision)
+    current_item = item(state, revision.item_id)
+    return require_one_changed_row(
+        connection.execute(
+            """
+            UPDATE work_items
+            SET subject_revision = ?, updated_at = ?
+            WHERE item_id = ? AND subject_revision = ?
+            """,
+            (
+                revision.accepted_project_revision,
+                revision.accepted_at.isoformat(),
+                revision.item_id,
+                current_item.subject_revision,
+            ),
+        ),
+        "The work item changed before definition persistence.",
+    )
+
+
+def append_definition_revision(
+    connection: sqlite3.Connection,
+    revision: stored_state.ItemDefinitionRevision,
+) -> None:
+    values = _definition_revision_values(revision)
+    connection.execute(
+        """
+        INSERT INTO work_item_definition_revisions (
+            item_id, definition_revision, definition_digest, definition_json, reason,
+            source_task_id, before_digest, after_digest, accepted_project_revision, accepted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        values,
+    )
+
+
 def insert_attempt(
     connection: sqlite3.Connection,
     state: stored_state.StoredWorkState,
@@ -381,7 +468,16 @@ def insert_attempt(
     revision: int,
     now: datetime,
 ) -> DecisionFailure | None:
-    current = item(state, change.item)
+    item(state, change.item)
+    definition = next(
+        (value for value in reversed(state.lifecycle.definition_revisions) if value.item_id == change.item),
+        None,
+    )
+    if definition is None:
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_DEFINITION_INVALID,
+            "The activated work item has no current definition.",
+        )
     return require_one_changed_row(
         connection.execute(
             """
@@ -400,8 +496,8 @@ def insert_attempt(
                 change.base_revision,
                 change.owner,
                 change.brief_artifact_ref_id,
-                current.scope_revision,
-                current.scope_digest,
+                definition.revision,
+                definition.digest,
                 revision,
                 now.isoformat(),
                 now.isoformat(),

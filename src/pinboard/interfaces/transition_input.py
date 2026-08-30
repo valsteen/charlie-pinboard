@@ -27,6 +27,7 @@ from pinboard.interfaces.transition_models import (
     MergeProposalInputPayload,
     ReasonInputPayload,
     ResumeInputPayload,
+    ReviseItemInputPayload,
     StoredActivateInputPayload,
     SubmitReviewInputPayload,
     TransferCoordinatorInputPayload,
@@ -63,6 +64,8 @@ def _input_model_or_none(kind: decision_models.ActionKind) -> InputModel | None:
             return MergeProposalInputPayload
         case decision_models.ActionKind.RESUME:
             return ResumeInputPayload
+        case decision_models.ActionKind.REVISE_ITEM:
+            return ReviseItemInputPayload
         case decision_models.ActionKind.SUBMIT_REVIEW:
             return SubmitReviewInputPayload
         case decision_models.ActionKind.TRANSFER_COORDINATOR:
@@ -163,6 +166,33 @@ def parse_transition_input(  # noqa: C901, PLR0912
             return work_models.MergeProposalInput(ItemId(target))
         case TransferCoordinatorInputPayload(task_id=task_id, host_id=host_id):
             return work_models.TransferCoordinatorInput(TaskId(task_id), HostId(host_id))
+        case ReviseItemInputPayload(
+            item_id=item_id,
+            expected_revision=expected_revision,
+            expected_digest=expected_digest,
+            source_task=source_task,
+            reason=reason,
+            definition=definition,
+        ):
+            return work_models.ReviseItemDefinitionInput(
+                ItemId(item_id),
+                expected_revision,
+                expected_digest,
+                TaskId(source_task),
+                reason,
+                work_models.WorkItemDefinition(
+                    definition.title,
+                    definition.objective,
+                    definition.hypothesis,
+                    definition.evidence,
+                    definition.scope,
+                    definition.non_scope,
+                    definition.acceptance_criteria,
+                    tuple(ItemId(value) for value in definition.dependencies),
+                    definition.effect,
+                    definition.unlock,
+                ),
+            )
         case _ as unreachable:
             assert_never(unreachable)
 

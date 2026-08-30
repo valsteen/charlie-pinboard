@@ -248,6 +248,30 @@ class TransferCoordinatorInput:
     host_id: HostId
 
 
+@dataclass(frozen=True, slots=True)
+class WorkItemDefinition:
+    title: str
+    objective: str
+    hypothesis: str
+    evidence: tuple[str, ...]
+    scope: tuple[str, ...]
+    non_scope: tuple[str, ...]
+    acceptance_criteria: tuple[str, ...]
+    dependencies: tuple[ItemId, ...]
+    effect: str
+    unlock: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseItemDefinitionInput:
+    item_id: ItemId
+    expected_revision: int
+    expected_digest: str
+    source_task: TaskId
+    reason: str
+    definition: WorkItemDefinition
+
+
 type TransitionInput = (
     EmptyInput
     | ResumeInput
@@ -262,6 +286,7 @@ type TransitionInput = (
     | AcceptProposalInput
     | MergeProposalInput
     | TransferCoordinatorInput
+    | ReviseItemDefinitionInput
     | SubmitReviewInput
 )
 
@@ -280,40 +305,11 @@ class ArtifactRole(Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class ScopeArtifact:
-    role: ArtifactRole
-    position: int
-    kind: str
-    key: str
-    revision: int
-    selector: str
-    content_sha256: str
-
-
-@dataclass(frozen=True, slots=True)
-class ScopeDependency:
-    position: int
-    dependency_id: ItemId
-
-
-@dataclass(frozen=True, slots=True)
-class ItemScope:
-    item_id: ItemId
-    user_label: str
-    trigger: str | None
-    why_it_matters: str | None
-    effect: str | None
-    unlock: str | None
-    dependencies: tuple[ScopeDependency, ...] = ()
-    artifacts: tuple[ScopeArtifact, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class ScopeAnchor:
+class DefinitionAnchor:
     item: ItemId
     revision: int
     digest: str
-    scope: ItemScope
+    definition: WorkItemDefinition
 
 
 class CoordinationLeaseStatus(Enum):

@@ -13,6 +13,7 @@ from pinboard.application.mutation_models import (
     TransitionMutation,
 )
 from pinboard.domain import decision_models, work_models
+from pinboard.domain.definition_decisions import DefinitionRevisionDecision
 from pinboard.domain.history import HistoryOutcome, encode_transition_receipt_outcome
 from pinboard.domain.identifiers import (
     ArtifactRefId,
@@ -56,6 +57,7 @@ def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
                     | decision_models.RejectedProposalChange()
                     | decision_models.ResumeAttemptChange()
                     | decision_models.ReviewReturnChange()
+                    | DefinitionRevisionDecision()
                 ):
                     pass
                 case _ as unreachable:
@@ -126,6 +128,7 @@ def _history_action_kind(value: decision_models.ActionKind) -> stored_state.Tran
             | decision_models.ActionKind.RESUME
             | decision_models.ActionKind.RETURN_FOR_CORRECTION
             | decision_models.ActionKind.RETURN_PROPOSAL
+            | decision_models.ActionKind.REVISE_ITEM
             | decision_models.ActionKind.SUBMIT_REVIEW
             | decision_models.ActionKind.TRANSFER_COORDINATOR
         ):
@@ -218,6 +221,8 @@ def _change_subjects(change: decision_models.DecisionChange) -> tuple[ItemId | N
             return item, None, True
         case decision_models.BlockItemChange(item=item):
             return item, None, False
+        case DefinitionRevisionDecision(item=item):
+            return item, None, False
         case decision_models.AcceptedProposalChange(accepted_item=accepted):
             return accepted.item, None, False
         case (
@@ -232,6 +237,8 @@ def _change_subjects(change: decision_models.DecisionChange) -> tuple[ItemId | N
 
 
 def _focus_after(decision: decision_models.Decision, revision: int) -> stored_state.StoredFocus | None:
+    if isinstance(decision.action, decision_models.ReviseItemAction):
+        return None
     item, attempt, terminal = _change_subjects(decision.change)
     if item is None:
         return None

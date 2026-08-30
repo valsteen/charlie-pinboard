@@ -112,6 +112,7 @@ class TransitionHistoryActionKind(Enum):
     RESUME = "resume"
     RETURN_FOR_CORRECTION = "return-for-correction"
     RETURN_PROPOSAL = "return-proposal"
+    REVISE_ITEM = "revise-item"
     SUBMIT_REVIEW = "submit-review"
     TRANSFER_COORDINATOR = "transfer-coordinator"
 
@@ -148,19 +149,12 @@ class ArtifactReference:
 @dataclass(frozen=True, slots=True)
 class StoredWorkItem:
     item_id: ItemId
-    user_label: str
     state: StoredWorkItemState
     timing: work_models.Timing | None
     source: str | None
-    trigger: str | None
-    why_it_matters: str | None
-    effect: str | None
-    unlock: str | None
     outcome_evidence: str | None
     next_action: str | None
     notes: str | None
-    scope_revision: int
-    scope_digest: str
     subject_revision: int
     recorded_at: datetime
     updated_at: datetime
@@ -168,10 +162,15 @@ class StoredWorkItem:
 
 
 @dataclass(frozen=True, slots=True)
-class ItemScopeRevision:
+class ItemDefinitionRevision:
     item_id: ItemId
     revision: int
     digest: str
+    definition: work_models.WorkItemDefinition
+    reason: str
+    source_task_id: TaskId
+    before_digest: str | None
+    after_digest: str
     accepted_project_revision: int
     accepted_at: datetime
 
@@ -306,10 +305,10 @@ class StoredTransitionReceipt:
 class LifecycleRecords:
     project: ProjectRecord
     work_items: tuple[StoredWorkItem, ...] = ()
-    scope_revisions: tuple[ItemScopeRevision, ...] = ()
     dependencies: tuple[ItemDependency, ...] = ()
     item_artifacts: tuple[ItemArtifactLink, ...] = ()
     attempts: tuple[StoredAttempt, ...] = ()
+    definition_revisions: tuple[ItemDefinitionRevision, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,7 +8,6 @@ from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import query_models, stored_state
 from pinboard.application.actions import discover_actions
-from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.queries import (
     item_status,
     overview_from_state,
@@ -16,47 +15,22 @@ from pinboard.application.queries import (
 )
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
-from pinboard.domain.history import item_scope_digest
 from pinboard.domain.identifiers import (
     AttemptId,
     ItemId,
     LeaseId,
 )
 from tests.domain_support import expect_success
-from tests.support import SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_NOW, complete_sqlite_state, test_definition, with_definition_dependencies
 
 
 class SQLiteQueriesTest(unittest.TestCase):
-    def _valid_scope_digests(self, state: stored_state.StoredWorkState) -> stored_state.StoredWorkState:
-        digests: dict[ItemId, str] = {}
-        for scope in project_decision_snapshot(state).scopes:
-            digest = item_scope_digest(scope.scope)
-            if not isinstance(digest, str):
-                self.fail(digest.message)
-            digests[scope.item] = digest
-        items = tuple(
-            replace(item, scope_digest=digests.get(item.item_id, item.scope_digest))
-            for item in state.lifecycle.work_items
-        )
-        anchors = tuple(
-            replace(anchor, digest=digests.get(anchor.item_id, anchor.digest))
-            for anchor in state.lifecycle.scope_revisions
-        )
-        attempts = tuple(
-            replace(attempt, accepted_scope_digest=digests.get(attempt.item_id, attempt.accepted_scope_digest))
-            for attempt in state.lifecycle.attempts
-        )
-        return replace(
-            state,
-            lifecycle=replace(state.lifecycle, work_items=items, scope_revisions=anchors, attempts=attempts),
-        )
-
     def _store(self, state: stored_state.StoredWorkState | None = None) -> SQLiteWorkStore:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(self._valid_scope_digests(state or complete_sqlite_state()))
+        store.initialize_state(state or complete_sqlite_state())
         return store
 
     def test_overview_and_parallel_preview_read_only_sqlite_state(self) -> None:
@@ -94,6 +68,7 @@ class SQLiteQueriesTest(unittest.TestCase):
             dependencies = tuple(
                 value for value in state.lifecycle.dependencies if value.item_id != ItemId("zz-proposal-a")
             )
+            state = with_definition_dependencies(state, ItemId("zz-proposal-a"), ())
             store = self._store(
                 replace(
                     state,
@@ -139,6 +114,7 @@ class SQLiteQueriesTest(unittest.TestCase):
                 attempt_id=AttemptId("work-b-z"),
                 item_id=done_item.item_id,
                 state=work_models.AttemptState.DONE,
+                accepted_scope_digest=test_definition(done_item.item_id)[1],
                 candidate_revision="candidate-z",
                 candidate_recorded_at=SQLITE_NOW,
             ),
@@ -229,7 +205,7 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertEqual(DecisionFailureCode.ITEM_NOT_FOUND, missing.code)
 
     def test_action_and_query_failure_matrix_is_stable_and_read_only(self) -> None:
-        state = self._valid_scope_digests(complete_sqlite_state())
+        state = complete_sqlite_state()
         store = self._store(state)
         coordination = state.authority.coordination
         assert coordination is not None

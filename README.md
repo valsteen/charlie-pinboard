@@ -33,7 +33,7 @@ The scout gets a compact receipt:
 
 Resume restores paused or blocked work, returning a retained attempt to active or unstarted work to ready. Reopen is different: it returns deferred work to intake for reconsideration. Continue only confirms that an already-active attempt proceeds; it does not change lifecycle state.
 
-![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **Deliver the work that was actually accepted.** Pinboard publishes one canonical brief for the dragon attempt. `$pinboard-deliver` claims that attempt, follows its exact scope and checks, and records the result for independent review. The coordinating task accepts the evidence or returns the same attempt for correction; the implementing task never reviews its own work.
+![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **Deliver the work that was actually accepted.** Pinboard publishes one canonical brief pinned to an immutable work-item definition revision. `$pinboard-deliver` claims that attempt, follows that exact definition and its checks, and records the result for independent review. If the definition changes, the attempt must pause and resume from a matching revised brief before continuation or acceptance. The coordinating task accepts the evidence or returns the same attempt for correction; the implementing task never reviews its own work.
 
 The code, branch, and conversation remain ordinary repository work. Pinboard keeps the decisions and execution around them durable. [How Pinboard works](HOW_IT_WORKS.md) follows these ideas through the product, package layers, and relational ledger.
 
@@ -41,6 +41,7 @@ The code, branch, and conversation remain ordinary repository work. Pinboard kee
 
 - **Intake:** preserve a discovery without silently changing priority or starting work.
 - **Planning:** make readiness, deferral, closure, dependencies, and current focus explicit.
+- **Revisioned definitions:** replace a complete accepted definition with compare-and-swap safety, retain every prior revision, and inspect current or paginated history as typed JSON.
 - **Execution:** give each accepted attempt an exact brief and independent renewable ownership.
 - **Interruption and recovery:** block, pause, resume, or recover work without rebuilding its context from chat history.
 - **Parallel work:** preview independent items and recheck the group as each attempt starts, without creating tasks on the user's behalf.
@@ -59,6 +60,16 @@ Private working state stays in ignored local files:
 ```
 
 SQLite is the current ledger authority. Commands read its complete typed state, then commit only the relations named by one accepted mutation; stale or failed changes leave the prior ledger intact. Immutable artifacts retain long-form contracts and review evidence; generated views are convenient projections, not fallback state. The [architecture map](ARCHITECTURE.md) explains package ownership, persistence boundaries, and failure semantics for contributors and agents.
+
+The installed definition commands are:
+
+```sh
+pinboard item definition --item-id <item> --json
+pinboard item definition-history --item-id <item> --limit 20 --json
+pinboard item revise --file <pinboard-item-revision-v1.json> --task-id <task> --host-id <host> --json
+```
+
+Revision files replace the whole `pinboard-work-item-definition/v1`; partial patches are rejected. Blocking can only name dependencies already present in that definition and never changes accepted dependencies itself.
 
 ## Install from GitHub
 

@@ -9,7 +9,7 @@ from pinboard.interfaces import cli_commands
 from pinboard.interfaces.errors import CommandErrorCode, CommandFailure, CommandResult
 
 
-def action_from_command(  # noqa: C901, PLR0912
+def action_from_command(  # noqa: C901, PLR0912, PLR0915
     command: cli_commands.TransitionCommand | cli_commands.DispatchCommand,
 ) -> CommandResult[decision_models.Action]:
     selected_action_id = command.action_id
@@ -97,6 +97,8 @@ def action_from_command(  # noqa: C901, PLR0912
             return decision_models.ReturnForCorrectionAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.RETURN_PROPOSAL:
             return decision_models.ReturnProposalAction(capability(ProposalId(subject)))
+        case decision_models.ActionKind.REVISE_ITEM:
+            return decision_models.ReviseItemAction(capability(ItemId(subject)))
         case decision_models.ActionKind.SUBMIT_REVIEW:
             return decision_models.SubmitReviewAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.TRANSFER_COORDINATOR:
