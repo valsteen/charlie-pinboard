@@ -1,20 +1,22 @@
-from collections.abc import Callable
 from datetime import datetime
 from typing import assert_never
 
 from pinboard.application import stored_state
-from pinboard.application.artifacts import CheckpointArtifacts
+from pinboard.application.artifact_publication import validate_transition_work_brief
+from pinboard.application.artifacts import CheckpointArtifacts, WorkBriefIdentity
 from pinboard.application.decision_projection import (
     project_decision_snapshot,
 )
-from pinboard.application.errors import MutationContractError
 from pinboard.application.mutation_models import (
     AttemptAuthorityMutation,
     CoordinationAuthorityMutation,
     MutationReceipt,
     ProposalCreationMutation,
 )
-from pinboard.application.mutations import project_transition_mutation
+from pinboard.application.mutations import (
+    project_checkpoint_acceptance_mutation,
+    project_transition_mutation,
+)
 from pinboard.application.ports import WorkStore
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_decisions import (
@@ -278,7 +280,7 @@ def create_proposal(
 
 def _actor_for(
     snapshot: LedgerSnapshot,
-    action: decision_models.Action,
+    action: decision_models.TransitionAction,
     now: datetime,
 ) -> DecisionResult[decision_models.ActorAuthority]:
     capability = action.capability
@@ -326,25 +328,16 @@ def _actor_for(
                 (authority.attempt,),
                 False,
             )
-        case decision_models.AuthorizationKind.OBSERVER:
-            return DecisionFailure(
-                DecisionFailureCode.ACTION_NOT_MUTATING,
-                "Observer actions cannot mutate repository work.",
-            )
         case _ as unreachable:
             assert_never(unreachable)
 
 
 def execute(
     store: WorkStore,
-    command: decision_models.TransitionCommand,
+    command: decision_models.NonCheckpointTransitionCommand,
     now: datetime,
-    transition_guard: Callable[
-        [stored_state.StoredWorkState, decision_models.TransitionCommand], DecisionFailure | None
-    ]
-    | None = None,
     *,
-    checkpoint_artifacts: CheckpointArtifacts | None = None,
+    transition_brief_identity: WorkBriefIdentity | None = None,
 ) -> DecisionResult[decision_models.TransitionReceipt]:
     """Rediscover, decide, and persist one lifecycle mutation under one write lock."""
 
@@ -358,13 +351,37 @@ def execute(
         rediscovered = rediscover_action(snapshot, actor, supplied)
         if isinstance(rediscovered, DecisionFailure):
             return rediscovered
-        if transition_guard is not None and (failure := transition_guard(before, command)) is not None:
+        if (failure := validate_transition_work_brief(before, command, transition_brief_identity)) is not None:
             return failure
         decision = decide(snapshot, command, now)
         if isinstance(decision, DecisionFailure):
             return decision
-        try:
-            mutation = project_transition_mutation(before, decision, checkpoint_artifacts)
-        except MutationContractError as error:
-            return DecisionFailure(DecisionFailureCode.TRANSITION_INPUT_INVALID, str(error))
-        return transaction.commit(mutation)
+        return transaction.commit(project_transition_mutation(before, decision))
+
+
+def execute_checkpoint_acceptance(
+    store: WorkStore,
+    command: decision_models.AcceptCheckpointCommand,
+    now: datetime,
+    checkpoint_artifacts: CheckpointArtifacts,
+    *,
+    transition_brief_identity: WorkBriefIdentity | None = None,
+) -> DecisionResult[decision_models.TransitionReceipt]:
+    """Rediscover, decide, and persist checkpoint acceptance with its required artifacts."""
+
+    supplied = command.action
+    with store.write() as transaction:
+        before = transaction.snapshot()
+        snapshot = project_decision_snapshot(before)
+        actor = _actor_for(snapshot, supplied, now)
+        if isinstance(actor, DecisionFailure):
+            return actor
+        rediscovered = rediscover_action(snapshot, actor, supplied)
+        if isinstance(rediscovered, DecisionFailure):
+            return rediscovered
+        if (failure := validate_transition_work_brief(before, command, transition_brief_identity)) is not None:
+            return failure
+        decision = decide(snapshot, command, now)
+        if isinstance(decision, DecisionFailure):
+            return decision
+        return transaction.commit(project_checkpoint_acceptance_mutation(before, decision, checkpoint_artifacts))

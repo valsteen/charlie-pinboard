@@ -17,7 +17,7 @@ from pinboard.application import stored_state
 from pinboard.application.artifact_publication import validate_transition_work_brief
 from pinboard.application.artifacts import NewArtifact
 from pinboard.domain import decision_models, work_models
-from pinboard.domain.errors import DecisionFailureCode
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import ArtifactRefId, AttemptId, ItemId
 from pinboard.interfaces.cli import main
 from pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
@@ -33,6 +33,8 @@ from pinboard.interfaces.work_brief_models import (
     ReadOnlyArchitecture,
     RequiredLifecyclePartition,
     ReviewCoverageResult,
+    ReviewedAuthorityDigestMismatch,
+    ReviewedAuthoritySelectionFailure,
     WorkBriefReview,
 )
 from pinboard.interfaces.work_briefs import (
@@ -40,9 +42,10 @@ from pinboard.interfaces.work_briefs import (
     canonical_reviewed_authority_set_bytes,
     canonical_work_brief_bytes,
     decode_work_brief,
-    decode_work_brief_identity,
     decode_work_brief_review,
+    read_transition_work_brief_identity,
     render_work_brief_markdown,
+    validate_reviewed_authority_digests,
     validate_work_brief_review,
 )
 from tests.support import complete_sqlite_state
@@ -56,6 +59,29 @@ class WorkBriefBoundaryTest(unittest.TestCase):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             result = main(arguments)
         return result, stdout.getvalue(), stderr.getvalue()
+
+    def test_reviewed_authority_validation_returns_exact_expected_failures(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        brief = work_a_brief(project)
+        checkpoint = brief.checkpoint
+        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
+
+        self.assertIsNone(validate_reviewed_authority_digests(project, checkpoint.reviewed_authorities))
+
+        source = project / "architecture.md"
+        source.write_text("# Architecture\n\n## Contract\n\nChanged.\n", encoding="utf-8")
+        stale = validate_reviewed_authority_digests(project, checkpoint.reviewed_authorities)
+        self.assertIsInstance(stale, ReviewedAuthorityDigestMismatch)
+        assert isinstance(stale, ReviewedAuthorityDigestMismatch)
+        self.assertEqual("architecture", stale.authority_id)
+        self.assertNotEqual(stale.expected_sha256, stale.observed_sha256)
+
+        source.unlink()
+        unreadable = validate_reviewed_authority_digests(project, checkpoint.reviewed_authorities)
+        self.assertIsInstance(unreadable, ReviewedAuthoritySelectionFailure)
+        assert isinstance(unreadable, ReviewedAuthoritySelectionFailure)
+        self.assertEqual("architecture", unreadable.authority_id)
+        self.assertIn("Cannot read authority", unreadable.reason)
 
     def test_candidate_decodes_strictly_and_canonicalizes(self) -> None:
         value = example_work_brief()
@@ -263,7 +289,7 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                 roots = resolve_durable_roots(project)
                 if name == "activate":
                     value = work_c_brief()
-                    capability = decision_models.ActionCapability(ItemId("work-c"), *capability_values)
+                    capability = decision_models.MutationActionCapability(ItemId("work-c"), *capability_values)
                     command = decision_models.ActivateCommand(
                         decision_models.ActivateAction(capability),
                         work_models.ActivateInput(
@@ -276,7 +302,7 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                     )
                 else:
                     value = work_a_brief(project)
-                    capability = decision_models.ActionCapability(ItemId("work-a"), *capability_values)
+                    capability = decision_models.MutationActionCapability(ItemId("work-a"), *capability_values)
                     command = decision_models.ResumeCommand(
                         decision_models.ResumeAction(capability), work_models.ResumeInput(ArtifactRefId(1))
                     )
@@ -301,7 +327,34 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                 )
                 artifacts = ArtifactRepository(roots)
 
-                self.assertIsNone(validate_transition_work_brief(state, command, artifacts, decode_work_brief_identity))
+                identity = read_transition_work_brief_identity(state, command, artifacts)
+                self.assertNotIsInstance(identity, DecisionFailure)
+                self.assertIsNone(validate_transition_work_brief(state, command, identity))
+                with (
+                    patch.object(ArtifactRepository, "verify"),
+                    patch.object(ArtifactRepository, "path", return_value=project / "missing-accepted-brief.json"),
+                    self.assertRaises(OSError),
+                ):
+                    read_transition_work_brief_identity(state, command, artifacts)
+                invalid = project / "invalid-accepted-brief.json"
+                invalid.write_bytes(b"{}")
+                with (
+                    patch.object(ArtifactRepository, "verify"),
+                    patch.object(ArtifactRepository, "path", return_value=invalid),
+                ):
+                    invalid_identity = read_transition_work_brief_identity(state, command, artifacts)
+                self.assertIsInstance(invalid_identity, DecisionFailure)
+                assert isinstance(invalid_identity, DecisionFailure)
+                self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, invalid_identity.code)
+                self.assertIn("not a valid canonical typed work brief", invalid_identity.message)
+                with (
+                    patch(
+                        "pinboard.interfaces.work_briefs.decode_work_brief_identity",
+                        side_effect=ValueError("unrelated value failure"),
+                    ),
+                    self.assertRaisesRegex(ValueError, "unrelated value failure"),
+                ):
+                    read_transition_work_brief_identity(state, command, artifacts)
 
                 mismatched = replace(value, branch="codex/different")
                 mismatch = write_revision(
@@ -325,12 +378,9 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                     state,
                     artifact_references=(mismatched_reference, *state.artifact_references[1:]),
                 )
-                failure = validate_transition_work_brief(
-                    mismatched_state,
-                    command,
-                    artifacts,
-                    decode_work_brief_identity,
-                )
+                mismatched_identity = read_transition_work_brief_identity(mismatched_state, command, artifacts)
+                self.assertNotIsInstance(mismatched_identity, DecisionFailure)
+                failure = validate_transition_work_brief(mismatched_state, command, mismatched_identity)
                 self.assertIsNotNone(failure)
                 assert failure is not None
                 self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, failure.code)

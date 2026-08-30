@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from pinboard.application import stored_state
-from pinboard.application.artifacts import ArtifactRef
+from pinboard.application.artifacts import EvidenceArtifactRef, ResultArtifactRef
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_models import AttemptAuthorityDecision, CoordinationAuthorityDecision
 from pinboard.domain.identifiers import ArtifactRefId, HistoryId, HistorySubjectId, HostId, TaskId
@@ -37,9 +37,9 @@ class ProposalCreationMutation:
 class CheckpointArtifactChanges:
     """Exact identities assigned to one accepted checkpoint result and review."""
 
-    result: ArtifactRef
+    result: ResultArtifactRef
     result_id: ArtifactRefId
-    review: ArtifactRef
+    review: EvidenceArtifactRef
     review_id: ArtifactRefId
 
 
@@ -47,10 +47,19 @@ class CheckpointArtifactChanges:
 class TransitionMutation:
     """Persists one accepted closed lifecycle decision as an exact relational delta."""
 
-    decision: decision_models.Decision
+    decision: decision_models.TransitionDecision
     receipt: MutationReceipt
     focus_after: stored_state.StoredFocus | None
-    checkpoint_artifacts: CheckpointArtifactChanges | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointAcceptanceMutation:
+    """Persists checkpoint acceptance with its required result and review artifacts."""
+
+    decision: decision_models.CheckpointAcceptanceDecision
+    receipt: MutationReceipt
+    focus_after: stored_state.StoredFocus | None
+    checkpoint_artifacts: CheckpointArtifactChanges
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,5 +79,9 @@ class AttemptAuthorityMutation:
 
 
 type StoredStateMutation = (
-    TransitionMutation | ProposalCreationMutation | CoordinationAuthorityMutation | AttemptAuthorityMutation
+    TransitionMutation
+    | CheckpointAcceptanceMutation
+    | ProposalCreationMutation
+    | CoordinationAuthorityMutation
+    | AttemptAuthorityMutation
 )

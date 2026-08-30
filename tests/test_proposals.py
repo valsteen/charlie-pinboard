@@ -1,9 +1,8 @@
 import json
 import unittest
 
-import msgspec
-
-from pinboard.interfaces.errors import ProposalError
+from pinboard.interfaces.errors import ProposalFailure
+from pinboard.interfaces.proposal_models import Proposal
 from pinboard.interfaces.proposals import parse_proposal
 from tests.support import JsonObject
 
@@ -29,10 +28,14 @@ def proposal() -> JsonObject:
 class ProposalInputTest(unittest.TestCase):
     def test_current_proposal_decodes_exact_model(self) -> None:
         value = proposal()
-        self.assertEqual("finding-1", parse_proposal(json.dumps(value)).proposal_id)
-        self.assertEqual(2, parse_proposal(json.dumps({**value, "position": 2})).position)
-        with self.assertRaises(ProposalError):
-            parse_proposal(json.dumps({**value, "unexpected": True}))
+        decoded = parse_proposal(json.dumps(value))
+        positioned = parse_proposal(json.dumps({**value, "position": 2}))
+        unexpected = parse_proposal(json.dumps({**value, "unexpected": True}))
+        self.assertIsInstance(decoded, Proposal)
+        self.assertIsInstance(positioned, Proposal)
+        self.assertIsInstance(unexpected, ProposalFailure)
+        self.assertEqual("finding-1", decoded.proposal_id)
+        self.assertEqual(2, positioned.position)
 
     def test_decoder_rejects_invalid_shapes_and_reports_paths(self) -> None:
         valid = proposal()
@@ -48,10 +51,11 @@ class ProposalInputTest(unittest.TestCase):
             ({**valid, "relation": {"kind": "prerequisite", "item": None}}, "relation.item"),
         )
         for value, field in cases:
-            with self.subTest(field=field), self.assertRaisesRegex(ProposalError, "PROPOSAL_INVALID") as caught:
-                parse_proposal(json.dumps(value))
-            self.assertIsInstance(caught.exception.__cause__, msgspec.ValidationError)
-            self.assertIn(field, str(caught.exception.__cause__))
+            with self.subTest(field=field):
+                failure = parse_proposal(json.dumps(value))
+            self.assertIsInstance(failure, ProposalFailure)
+            self.assertEqual("PROPOSAL_INVALID", failure.code.value)
+            self.assertIn(field, failure.message)
 
 
 if __name__ == "__main__":

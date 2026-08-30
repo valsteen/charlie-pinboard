@@ -4,16 +4,16 @@ from pathlib import Path
 from typing import Protocol
 
 from pinboard.application import stored_state
-from pinboard.application.artifacts import ArtifactRef
+from pinboard.application.artifacts import ArtifactRef, ArtifactRelationship
 from pinboard.application.mutation_models import StoredStateMutation
-from pinboard.domain import decision_models, work_models
-from pinboard.domain.identifiers import ItemId
+from pinboard.domain import decision_models
+from pinboard.domain.errors import DecisionResult
 
 
 class WorkTransaction(Protocol):
     def snapshot(self) -> stored_state.StoredWorkState: ...
 
-    def commit(self, mutation: StoredStateMutation) -> decision_models.TransitionReceipt: ...
+    def commit(self, mutation: StoredStateMutation) -> DecisionResult[decision_models.TransitionReceipt]: ...
 
 
 class WorkStore(Protocol):
@@ -27,6 +27,5 @@ class WorkStore(Protocol):
         published: ArtifactRef,
         accepted_at: datetime,
         *,
-        item_id: ItemId | None = None,
-        role: work_models.ArtifactRole | None = None,
-    ) -> stored_state.ArtifactReference: ...
+        relationship: ArtifactRelationship | None = None,
+    ) -> DecisionResult[stored_state.ArtifactReference]: ...

@@ -13,7 +13,7 @@ from pinboard.domain.identifiers import (
     ItemId,
     TaskId,
 )
-from pinboard.interfaces.errors import TransitionInputError
+from pinboard.interfaces.errors import TransitionInputFailure, TransitionInputResult
 from pinboard.interfaces.transition_models import (
     AcceptCheckpointInputPayload,
     AcceptProposalInputPayload,
@@ -84,10 +84,10 @@ TRANSITION_ACTION_KINDS: Final = tuple(
 INPUT_CONTRACT_ACTION_KINDS: Final = tuple(kind.value for kind in decision_models.ActionKind)
 
 
-def _input_model(kind: decision_models.ActionKind) -> InputModel:
+def _input_model(kind: decision_models.ActionKind) -> TransitionInputResult[InputModel]:
     model = _input_model_or_none(kind)
     if model is None:
-        raise TransitionInputError(
+        return TransitionInputFailure(
             DecisionFailureCode.ACTION_NOT_MUTATING,
             f"Action '{kind.value}' is not a canonical transition.",
         )
@@ -97,15 +97,17 @@ def _input_model(kind: decision_models.ActionKind) -> InputModel:
 def parse_transition_input(  # noqa: C901, PLR0912
     kind: decision_models.ActionKind,
     data: bytes | str,
-) -> work_models.TransitionInput:
+) -> TransitionInputResult[work_models.TransitionInput]:
     model = _input_model(kind)
+    if isinstance(model, TransitionInputFailure):
+        return model
     try:
         payload = msgspec.json.decode(data, type=model)
     except msgspec.DecodeError as error:
-        raise TransitionInputError(
+        return TransitionInputFailure(
             DecisionFailureCode.TRANSITION_INPUT_INVALID,
             f"Cannot decode transition JSON: {error}",
-        ) from error
+        )
     match payload:
         case EmptyInputPayload():
             return work_models.EmptyInput()
@@ -165,6 +167,8 @@ def parse_transition_input(  # noqa: C901, PLR0912
             assert_never(unreachable)
 
 
-def encoded_transition_input_schema(kind: decision_models.ActionKind) -> bytes:
+def encoded_transition_input_schema(kind: decision_models.ActionKind) -> TransitionInputResult[bytes]:
     model = _input_model(kind)
+    if isinstance(model, TransitionInputFailure):
+        return model
     return msgspec.json.encode(msgspec.json.schema(model), order="sorted")

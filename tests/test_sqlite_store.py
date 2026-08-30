@@ -32,6 +32,7 @@ from pinboard.domain.authority_models import AttemptLeaseStatus
 from pinboard.domain.decisions import available_actions as available_actions_outcome
 from pinboard.domain.decisions import bind_transition as bind_transition_outcome
 from pinboard.domain.decisions import decide as decision_outcome
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
@@ -59,8 +60,11 @@ def bind_transition(
 
 def decide(
     snapshot: LedgerSnapshot, command: decision_models.TransitionCommand, now: datetime
-) -> decision_models.Decision:
-    return expect_success(decision_outcome(snapshot, command, now))
+) -> decision_models.TransitionDecision:
+    result = expect_success(decision_outcome(snapshot, command, now))
+    if not isinstance(result, decision_models.TransitionDecision):
+        raise AssertionError(f"Expected a non-checkpoint decision, received {result!r}")
+    return result
 
 
 class SQLiteStoreTest(unittest.TestCase):
@@ -81,6 +85,11 @@ class SQLiteStoreTest(unittest.TestCase):
             store.initialize_state(state)
         self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, raised.exception.code, state_name)
         self.assertEqual(0, store.snapshot().lifecycle.project.revision)
+
+    def _assert_action_not_available[T](self, result: T | DecisionFailure) -> None:
+        self.assertIsInstance(result, DecisionFailure)
+        assert isinstance(result, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ACTION_NOT_AVAILABLE, result.code)
 
     def test_schema_identity_initialization_backup_and_reopen_contract(self) -> None:
         path, store = self._store()
@@ -196,15 +205,16 @@ class SQLiteStoreTest(unittest.TestCase):
             self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, invariant_error.exception.code)
             self.assertEqual(0, connection.execute("SELECT revision FROM project_meta").fetchone()[0])
 
-            storage_error = StorageError(StorageErrorCode.STALE_WRITE, "injected stale write")
+            storage_error = StorageError(StorageErrorCode.IO_ERROR, "injected storage failure")
             with self.assertRaises(StorageError) as preserved, write_transaction(connection):
                 raise storage_error
             self.assertIs(storage_error, preserved.exception)
 
-            with self.assertRaises(StorageError) as operation_error, write_transaction(connection):
+            application_error = RuntimeError("injected application failure")
+            with self.assertRaises(RuntimeError) as propagated, write_transaction(connection):
                 connection.execute("UPDATE project_meta SET revision = 9")
-                raise RuntimeError("injected application failure")
-            self.assertEqual(StorageErrorCode.OPERATION_FAILED, operation_error.exception.code)
+                raise application_error
+            self.assertIs(application_error, propagated.exception)
             self.assertEqual(0, connection.execute("SELECT revision FROM project_meta").fetchone()[0])
         finally:
             connection.close()
@@ -705,7 +715,7 @@ class SQLiteStoreTest(unittest.TestCase):
 
         with store.write() as transaction:
             self.assertEqual(initial, transaction.snapshot())
-            receipt = transaction.commit(mutation)
+            receipt = expect_success(transaction.commit(mutation))
         committed = store.snapshot()
         self.assertEqual(decision_models.ActionKind.PAUSE.value, receipt.outcome)
         self.assertEqual(13, committed.lifecycle.project.revision)
@@ -713,9 +723,9 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(work_models.AttemptState.PAUSED, committed.lifecycle.attempts[0].state)
         self.assertEqual(stored_state.TransitionHistoryActionKind.PAUSE, committed.transition_receipts[-1].action_kind)
 
-        with self.assertRaises(StorageError) as stale, store.write() as transaction:
-            transaction.commit(mutation)
-        self.assertEqual(StorageErrorCode.STALE_WRITE, stale.exception.code)
+        with store.write() as transaction:
+            stale = transaction.commit(mutation)
+        self._assert_action_not_available(stale)
         self.assertEqual(committed, store.snapshot())
 
         stale_subject_decision = replace(
@@ -729,9 +739,9 @@ class SQLiteStoreTest(unittest.TestCase):
                 ),
             ),
         )
-        with self.assertRaises(StorageError) as stale_subject, store.write() as transaction:
-            transaction.commit(replace(mutation, decision=stale_subject_decision))
-        self.assertEqual(StorageErrorCode.STALE_WRITE, stale_subject.exception.code)
+        with store.write() as transaction:
+            stale_subject = transaction.commit(replace(mutation, decision=stale_subject_decision))
+        self._assert_action_not_available(stale_subject)
         self.assertEqual(committed, store.snapshot())
 
         failed_path, failed_store = self._store()
@@ -776,6 +786,40 @@ class SQLiteStoreTest(unittest.TestCase):
             cleanup.close()
         self.assertEqual(failed_initial, failed_store.snapshot())
 
+    def test_runtime_write_scope_propagates_programming_failure_and_closes(self) -> None:
+        path, store = self._store()
+        before = store.snapshot()
+        snapshot = project_decision_snapshot(before)
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR,
+            decision_models.AuthorizationKind.COORDINATOR,
+            snapshot.generation,
+        )
+        action = next(
+            value for value in available_actions(snapshot, actor) if value.kind == decision_models.ActionKind.PAUSE
+        )
+        decision = decide(
+            snapshot,
+            bind_transition(action, work_models.ReasonInput("This write raises a programming failure.")),
+            SQLITE_NOW,
+        )
+        mutation = project_transition_mutation(before, decision)
+        application_error = RuntimeError("injected runtime store failure")
+        runtime_connection = open_database(path, OpenMode.READ_WRITE)
+
+        with (
+            patch("pinboard.adapters.sqlite.store.open_database", return_value=runtime_connection),
+            patch("pinboard.adapters.sqlite.store._persist", side_effect=application_error),
+            self.assertRaises(RuntimeError) as propagated,
+            store.write() as transaction,
+        ):
+            transaction.commit(mutation)
+
+        self.assertIs(application_error, propagated.exception)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            runtime_connection.execute("SELECT 1")
+        self.assertEqual(before, store.snapshot())
+
     def test_pause_updates_only_affected_relations_and_reloads(self) -> None:
         path, store = self._store()
         before = store.snapshot()
@@ -793,14 +837,14 @@ class SQLiteStoreTest(unittest.TestCase):
         )
 
         with store.write() as transaction:
-            transaction._connection.execute(
+            transaction.connection.execute(
                 """
                 CREATE TRIGGER reject_unrelated_artifact_rewrite BEFORE DELETE ON artifact_refs
                 BEGIN SELECT RAISE(ABORT, 'unrelated artifact relation was rewritten'); END
                 """
             )
             transaction.commit(project_transition_mutation(before, decision))
-            transaction._connection.execute("DROP TRIGGER reject_unrelated_artifact_rewrite")
+            transaction.connection.execute("DROP TRIGGER reject_unrelated_artifact_rewrite")
 
         reopened = SQLiteWorkStore(path).snapshot()
         self.assertEqual(before.artifact_references, reopened.artifact_references)
@@ -828,7 +872,7 @@ class SQLiteStoreTest(unittest.TestCase):
         )
 
         with store.write() as transaction:
-            receipt = transaction.commit(project_transition_mutation(before, decision))
+            receipt = expect_success(transaction.commit(project_transition_mutation(before, decision)))
 
         completed = store.snapshot()
         item = next(value for value in completed.lifecycle.work_items if value.item_id == ItemId("work-a"))

@@ -1,11 +1,12 @@
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
 import msgspec
 
 from pinboard.domain import decision_models, work_models
-from pinboard.domain.identifiers import ActionId, AttemptId, HostId, ItemId, LeaseId, TaskId
+from pinboard.domain.identifiers import ActionId, AttemptId, HostId, ItemId, LeaseId, ReviewId, TaskId
 
 _STABLE_ID = msgspec.Meta(min_length=1, pattern=r"^(?!\.{1,2}$)[^/\x00]+$")
 type StableActionId = Annotated[ActionId, _STABLE_ID]
@@ -14,6 +15,36 @@ type StableHostId = Annotated[HostId, _STABLE_ID]
 type StableItemId = Annotated[ItemId, _STABLE_ID]
 type StableLeaseId = Annotated[LeaseId, _STABLE_ID]
 type StableTaskId = Annotated[TaskId, _STABLE_ID]
+
+
+class CliRoute(Enum):
+    ROOT = "root"
+    VALIDATE = "validate"
+    STATUS = "status"
+    OVERVIEW = "overview"
+    ITEM_STATUS = "item-status"
+    CLOSE = "close"
+    ACTIONS = "actions"
+    INPUT_CONTRACT = "input-contract"
+    BRIEF_SOURCES = "brief-sources"
+    BRIEF_PUBLISH = "brief-publish"
+    INITIALIZE = "initialize"
+    PROPOSAL = "proposal"
+    TRANSITION = "transition"
+    DISPATCH = "dispatch"
+    COORDINATION_APPLY = "coordination-apply"
+    COORDINATION_ACQUIRE = "coordination-acquire"
+    COORDINATION_RENEW = "coordination-renew"
+    COORDINATION_RELEASE = "coordination-release"
+    COORDINATION_REVOKE = "coordination-revoke"
+    COORDINATION_STATUS = "coordination-status"
+    ATTEMPT_ACQUIRE = "attempt-acquire"
+    ATTEMPT_RENEW = "attempt-renew"
+    ATTEMPT_RELEASE = "attempt-release"
+    ATTEMPT_REVOKE = "attempt-revoke"
+    ATTEMPT_STATUS = "attempt-status"
+    PARALLEL_PREVIEW = "parallel-preview"
+    REBUILD_VIEWS = "rebuild-views"
 
 
 class RootSelection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -151,8 +182,8 @@ class CoordinatorReviewedDispatchCommand(msgspec.Struct, frozen=True, forbid_unk
     checkpoint: str
     environment: Path
     brief_review: Path
+    review_id: ReviewId
     prompt: Path | None = None
-    review_id: str | None = None
 
 
 class CoordinationDispatchCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -173,8 +204,8 @@ class CoordinationReviewedDispatchCommand(msgspec.Struct, frozen=True, forbid_un
     checkpoint: str
     environment: Path
     brief_review: Path
+    review_id: ReviewId
     prompt: Path | None = None
-    review_id: str | None = None
 
 
 type DispatchCommand = (

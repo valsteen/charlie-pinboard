@@ -28,10 +28,10 @@ def expect_success[T](value: DecisionResult[T]) -> T:
 
 
 def action[SubjectT: SubjectId, ActionT](
-    constructor: Callable[[decision_models.ActionCapability[SubjectT]], ActionT],
+    constructor: Callable[[decision_models.MutationActionCapability[SubjectT]], ActionT],
     subject: SubjectT,
 ) -> ActionT:
-    return constructor(decision_models.ActionCapability(subject, "test action", "rev", 1))
+    return constructor(decision_models.MutationActionCapability(subject, "test action", "rev", 1))
 
 
 def item_scope(

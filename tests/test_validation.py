@@ -12,13 +12,12 @@ from pinboard.adapters.files.artifacts import write_revision
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
-from pinboard.adapters.sqlite.registration import initialize_work_state
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.artifacts import NewArtifact
-from pinboard.application.validation import validate_work_state
 from pinboard.interfaces.cli import main
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
+from pinboard.interfaces.work_state import initialize_work_state, validate_work_state
 from tests.support import SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import work_a_brief
 

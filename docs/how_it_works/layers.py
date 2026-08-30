@@ -3,7 +3,7 @@ from pathlib import Path
 from .model import Box, Connector, Diagram, Guide, Note, Section
 
 LAYER_DIRECTORIES: dict[str, str] = {
-    "interfaces": "Turn outside input into exact commands and exact output.",
+    "interfaces": "Turn outside input into exact commands and compose one thematic use case at a time.",
     "application": "Read complete stored state and project accepted decisions into focused storage mutations.",
     "domain": "Decide what is legal without reading files, issuing SQL, or presenting commands.",
     "adapters": "Store and recover accepted facts without deciding workflow policy.",
@@ -33,8 +33,9 @@ DIAGRAM = Diagram(
     slug="layers",
     title="Four package layers with distinct responsibilities",
     description=(
-        "Interfaces compose commands, application services coordinate operations, adapters implement application "
-        "capabilities, and domain code owns pure decisions. Every arrow is package dependency direction."
+        "A small interface root routes exact commands to thematic composition modules, application services coordinate "
+        "operations, adapters implement capabilities, and domain code owns pure decisions. Every arrow is package "
+        "dependency direction."
     ),
     width=1200,
     height=760,
@@ -70,7 +71,7 @@ DIAGRAM = Diagram(
             "interfaces",
             "Interfaces",
             "Make the request exact",
-            ("decode CLI / JSON / files", "compose installed commands"),
+            ("small exhaustive route", "thematic command composition"),
             ("src/pinboard/interfaces",),
             60,
             100,
@@ -113,7 +114,7 @@ DIAGRAM = Diagram(
     ),
     notes=(
         Note(
-            "Runtime data flow appears in the next view. Two maintenance workflows compose adapters directly; ordinary application services use ports.",
+            "Runtime data flow appears in the next view. The interface root only routes; thematic interface modules own concrete composition.",
             28,
             690,
             12,

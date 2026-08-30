@@ -4,10 +4,11 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from pinboard.adapters.files.file_io import resolve_durable_roots
-from pinboard.adapters.sqlite.database import initialize_database
-from pinboard.adapters.sqlite.errors import StorageError
+from pinboard.adapters.sqlite.database import initialize_database, open_database
+from pinboard.adapters.sqlite.models import OpenMode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
@@ -27,6 +28,7 @@ from pinboard.domain.authority_models import (
 from pinboard.domain.decisions import available_actions as available_actions_outcome
 from pinboard.domain.decisions import bind_transition as bind_transition_outcome
 from pinboard.domain.decisions import decide as decision_outcome
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -54,8 +56,11 @@ def bind_transition(
 
 def decide(
     snapshot: LedgerSnapshot, command: decision_models.TransitionCommand, now: datetime
-) -> decision_models.Decision:
-    return expect_success(decision_outcome(snapshot, command, now))
+) -> decision_models.TransitionDecision:
+    result = expect_success(decision_outcome(snapshot, command, now))
+    if not isinstance(result, decision_models.TransitionDecision):
+        raise AssertionError(f"Expected a non-checkpoint decision, received {result!r}")
+    return result
 
 
 class MutationPersistenceTest(unittest.TestCase):
@@ -375,8 +380,11 @@ class MutationPersistenceTest(unittest.TestCase):
             self._mutation_receipt(stale_receipt, stale_after),
             self._attempt_renewal_decision(before),
         )
-        with self.assertRaises(StorageError), second.write() as transaction:
-            transaction.commit(stale_mutation)
+        with second.write() as transaction:
+            rejected = transaction.commit(stale_mutation)
+        self.assertIsInstance(rejected, DecisionFailure)
+        assert isinstance(rejected, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ACTION_NOT_AVAILABLE, rejected.code)
         reloaded = second.snapshot()
         self.assertEqual(after, reloaded)
         self.assertEqual(before.authority.attempt_counters, reloaded.authority.attempt_counters)
@@ -447,6 +455,145 @@ class MutationPersistenceTest(unittest.TestCase):
         reopened = store.snapshot()
         self.assertEqual(stored_state.StoredWorkItemState.DEFERRED, reopened.lifecycle.work_items[0].state)
         self.assertEqual("reopen", reopened.focus.next_action)
+
+    def test_real_stale_transition_effects_return_failure_and_roll_back(self) -> None:
+        ignore_item_update = """
+            CREATE TEMP TRIGGER arrange_real_transition_staleness
+            BEFORE UPDATE OF state ON work_items
+            BEGIN
+                SELECT RAISE(IGNORE);
+            END
+        """
+        stale_attempt_after_item = """
+            CREATE TEMP TRIGGER arrange_real_transition_staleness
+            AFTER UPDATE OF state ON work_items
+            BEGIN
+                UPDATE attempts SET subject_revision = subject_revision + 1
+                WHERE attempt_id = 'work-a-1';
+            END
+        """
+        stale_focus_after_attempt = """
+            CREATE TEMP TRIGGER arrange_real_transition_staleness
+            AFTER UPDATE OF state ON attempts
+            BEGIN
+                UPDATE current_focus SET subject_revision = subject_revision + 1;
+            END
+        """
+        stale_proposal_after_item = f"""
+            CREATE TEMP TRIGGER arrange_real_transition_staleness
+            AFTER UPDATE OF state ON work_items
+            BEGIN
+                UPDATE proposals
+                SET disposition = 'returned', disposition_reason = 'Competing disposition.',
+                    disposition_recorded_at = '{SQLITE_NOW.isoformat()}'
+                WHERE proposal_id = 'zz-proposal-a';
+            END
+        """
+        ignore_proposal_update = """
+            CREATE TEMP TRIGGER arrange_real_transition_staleness
+            BEFORE UPDATE OF disposition ON proposals
+            BEGIN
+                SELECT RAISE(IGNORE);
+            END
+        """
+        scenarios: tuple[tuple[decision_models.ActionKind, work_models.TransitionInput, str], ...] = (
+            (
+                decision_models.ActionKind.PAUSE,
+                work_models.ReasonInput("Pause at the checkpoint boundary."),
+                ignore_item_update,
+            ),
+            (
+                decision_models.ActionKind.PAUSE,
+                work_models.ReasonInput("Pause at the checkpoint boundary."),
+                stale_attempt_after_item,
+            ),
+            (
+                decision_models.ActionKind.PAUSE,
+                work_models.ReasonInput("Pause at the checkpoint boundary."),
+                stale_focus_after_attempt,
+            ),
+            (
+                decision_models.ActionKind.ACCEPT_PROPOSAL,
+                work_models.AcceptProposalInput(
+                    ItemId("zz-proposal-a"),
+                    work_models.AcceptedProposalState.READY,
+                    "activate",
+                    timing=None,
+                    depends_on=(ItemId("intake-work"),),
+                ),
+                ignore_item_update,
+            ),
+            (
+                decision_models.ActionKind.ACCEPT_PROPOSAL,
+                work_models.AcceptProposalInput(
+                    ItemId("zz-proposal-a"),
+                    work_models.AcceptedProposalState.READY,
+                    "activate",
+                    timing=None,
+                    depends_on=(ItemId("intake-work"),),
+                ),
+                stale_proposal_after_item,
+            ),
+            (
+                decision_models.ActionKind.MERGE_PROPOSAL,
+                work_models.MergeProposalInput(ItemId("work-c")),
+                ignore_item_update,
+            ),
+            (
+                decision_models.ActionKind.MERGE_PROPOSAL,
+                work_models.MergeProposalInput(ItemId("work-c")),
+                stale_proposal_after_item,
+            ),
+            (
+                decision_models.ActionKind.RETURN_PROPOSAL,
+                work_models.ReasonInput("Clarify the evidence."),
+                ignore_proposal_update,
+            ),
+            (
+                decision_models.ActionKind.REJECT_PROPOSAL,
+                work_models.ReasonInput("The finding is obsolete."),
+                ignore_item_update,
+            ),
+            (
+                decision_models.ActionKind.REJECT_PROPOSAL,
+                work_models.ReasonInput("The finding is obsolete."),
+                stale_proposal_after_item,
+            ),
+        )
+        for kind, payload, trigger in scenarios:
+            with self.subTest(kind=kind, trigger=trigger):
+                project = Path(tempfile.mkdtemp()).resolve()
+                roots = resolve_durable_roots(project)
+                initialize_database(roots, SQLITE_NOW)
+                store = SQLiteWorkStore(roots.database_path)
+                store.initialize_state(complete_sqlite_state())
+                before = store.snapshot()
+                snapshot = project_decision_snapshot(before)
+                actor = decision_models.ActorAuthority(
+                    decision_models.Role.COORDINATOR,
+                    decision_models.AuthorizationKind.COORDINATOR,
+                    snapshot.generation,
+                )
+                action = next(value for value in available_actions(snapshot, actor) if value.kind == kind)
+                decision = decide(
+                    snapshot,
+                    bind_transition(action, payload),
+                    SQLITE_NOW + timedelta(seconds=1),
+                )
+                mutation = project_transition_mutation(before, decision)
+                connection = open_database(roots.database_path, OpenMode.READ_WRITE)
+                connection.execute(trigger)
+
+                with (
+                    patch("pinboard.adapters.sqlite.store.open_database", return_value=connection),
+                    store.write() as transaction,
+                ):
+                    result = transaction.commit(mutation)
+
+                self.assertIsInstance(result, DecisionFailure)
+                assert isinstance(result, DecisionFailure)
+                self.assertEqual(DecisionFailureCode.ACTION_NOT_AVAILABLE, result.code)
+                self.assertEqual(before, store.snapshot())
 
 
 if __name__ == "__main__":

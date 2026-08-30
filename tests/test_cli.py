@@ -15,11 +15,14 @@ from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
-from pinboard.application import stored_state
+from pinboard.application import service, stored_state
 from pinboard.application.artifacts import NewArtifact
-from pinboard.domain import work_models
+from pinboard.application.ports import WorkStore
+from pinboard.domain import authority_models, decision_models, work_models
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId, ItemId
 from pinboard.interfaces.cli import build_parser, main
+from pinboard.interfaces.errors import CommandFailure
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 
 from .support import SQLITE_NOW, JsonObject, JsonValue, complete_sqlite_state
@@ -484,7 +487,7 @@ class CliTest(unittest.TestCase):
         (attempt_root / "review.md").write_bytes(review_bytes)
 
         with patch(
-            "pinboard.adapters.sqlite.store._StoredStateWriter._history",
+            "pinboard.adapters.sqlite.state.append_history",
             side_effect=StorageError(StorageErrorCode.IO_ERROR, "injected checkpoint write failure"),
         ):
             failed_result, _failed_stdout, failed_stderr = self.run_transition(common, action, payload)
@@ -1192,6 +1195,319 @@ Not launchable:
         self.assertIsNotNone(coordination)
         assert coordination is not None
         self.assertEqual("released", coordination.state.value)
+
+    def test_borrowed_coordination_rejects_retained_authority_transfer_and_releases_its_lease(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, authority=replace(state.authority, coordination=None))
+        project, work, store = self.initialized_state(state)
+        payload = project / "transfer-coordinator.json"
+        payload.write_text('{"task_id":"next-task","host_id":"next-host"}\n', encoding="utf-8")
+        before = store.snapshot()
+
+        result, _, stderr = self.run_cli(
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(work),
+            "coordination",
+            "apply",
+            "--task-id",
+            "borrowing-task",
+            "--host-id",
+            "borrowing-host",
+            "--action-id",
+            "transfer-coordinator:ledger",
+            "--payload",
+            str(payload),
+        )
+
+        self.assertEqual(11, result)
+        self.assertIn("ACTION_NOT_AVAILABLE: Borrowed coordination cannot transfer retained authority.", stderr)
+        current = store.snapshot()
+        coordination = current.authority.coordination
+        assert coordination is not None
+        self.assertEqual(work_models.CoordinationLeaseStatus.RELEASED, coordination.state)
+        self.assertEqual(before.lifecycle.work_items, current.lifecycle.work_items)
+        self.assertNotIn(
+            "transfer-coordinator",
+            tuple(receipt.action_kind.value for receipt in current.transition_receipts),
+        )
+
+    def test_borrowed_coordination_reports_release_failure_after_the_transition_applies(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, authority=replace(state.authority, coordination=None))
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        original = service.change_coordination_authority
+
+        def fail_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "injected release failure")
+            return original(selected_store, operation)
+
+        with patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=fail_release):
+            result, _, stderr = self.run_cli(
+                *common,
+                "close",
+                "work-c",
+                "--outcome",
+                "done",
+                "--reason",
+                "The prerequisite outcome is already complete.",
+                "--task-id",
+                "coordinator-task",
+                "--host-id",
+                "studio",
+            )
+
+        self.assertEqual(11, result)
+        self.assertIn(
+            "LEASE_FENCED: Borrowed coordination release failed after transition revision 14: injected release failure",
+            stderr,
+        )
+        current = store.snapshot()
+        closed = next(value for value in current.lifecycle.work_items if value.item_id == ItemId("work-c"))
+        self.assertEqual(stored_state.StoredWorkItemState.DONE, closed.state)
+        coordination = current.authority.coordination
+        assert coordination is not None
+        self.assertEqual(work_models.CoordinationLeaseStatus.ACTIVE, coordination.state)
+
+    def test_borrowed_coordination_reports_cleanup_rejection_over_transition_rejection(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, _store = self.initialized_state(state)
+        payload = project / "payload.json"
+        payload.write_text("{}\n", encoding="utf-8")
+        original = service.change_coordination_authority
+
+        def reject_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "cleanup rejected")
+            return original(selected_store, operation)
+
+        with (
+            patch(
+                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                return_value=CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "transition rejected"),
+            ),
+            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=reject_release),
+        ):
+            result, _, stderr = self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "coordination",
+                "apply",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+                "--action-id",
+                "close:work-c",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual(11, result)
+        self.assertIn(
+            "LEASE_FENCED: Borrowed coordination release failed after transition rejection "
+            "ACTION_NOT_AVAILABLE: transition rejected: cleanup rejected",
+            stderr,
+        )
+
+    def test_borrowed_coordination_keeps_transition_exception_primary_over_cleanup_rejection(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, _store = self.initialized_state(state)
+        payload = project / "payload.json"
+        payload.write_text("{}\n", encoding="utf-8")
+        original = service.change_coordination_authority
+
+        def reject_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "cleanup rejected")
+            return original(selected_store, operation)
+
+        with (
+            patch(
+                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                side_effect=RuntimeError("transition broke"),
+            ),
+            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=reject_release),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "coordination",
+                "apply",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+                "--action-id",
+                "close:work-c",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual("transition broke", str(raised.exception))
+        self.assertEqual(
+            ["Borrowed coordination cleanup failed with LEASE_FENCED: cleanup rejected"],
+            raised.exception.__notes__,
+        )
+
+    def test_borrowed_coordination_raises_cleanup_exception_over_transition_rejection(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, _store = self.initialized_state(state)
+        payload = project / "payload.json"
+        payload.write_text("{}\n", encoding="utf-8")
+        original = service.change_coordination_authority
+
+        def raise_on_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                raise RuntimeError("cleanup broke")
+            return original(selected_store, operation)
+
+        with (
+            patch(
+                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                return_value=CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "transition rejected"),
+            ),
+            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=raise_on_release),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "coordination",
+                "apply",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+                "--action-id",
+                "close:work-c",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual("cleanup broke", str(raised.exception))
+        self.assertEqual(
+            ["Original transition rejection ACTION_NOT_AVAILABLE: transition rejected"],
+            raised.exception.__notes__,
+        )
+
+    def test_borrowed_coordination_keeps_transition_exception_primary_over_cleanup_exception(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, _store = self.initialized_state(state)
+        payload = project / "payload.json"
+        payload.write_text("{}\n", encoding="utf-8")
+        original = service.change_coordination_authority
+
+        def raise_on_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                raise ValueError("cleanup broke")
+            return original(selected_store, operation)
+
+        with (
+            patch(
+                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                side_effect=RuntimeError("transition broke"),
+            ),
+            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=raise_on_release),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "coordination",
+                "apply",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+                "--action-id",
+                "close:work-c",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual("transition broke", str(raised.exception))
+        self.assertEqual(
+            ["Borrowed coordination cleanup raised ValueError: cleanup broke"],
+            raised.exception.__notes__,
+        )
+
+    def test_borrowed_coordination_cleanup_exception_identifies_committed_revision(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, _store = self.initialized_state(state)
+        original = service.change_coordination_authority
+
+        def raise_on_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                raise RuntimeError("cleanup broke")
+            return original(selected_store, operation)
+
+        with (
+            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=raise_on_release),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "close",
+                "work-c",
+                "--outcome",
+                "done",
+                "--reason",
+                "The prerequisite outcome is already complete.",
+                "--task-id",
+                "coordinator-task",
+                "--host-id",
+                "studio",
+            )
+
+        self.assertEqual("cleanup broke", str(raised.exception))
+        self.assertEqual(
+            ["Transition committed at revision 14 before cleanup failed."],
+            raised.exception.__notes__,
+        )
 
     def test_proposal_persists_once_through_native_intake(self) -> None:
         project, work, store = self.initialized_state(complete_sqlite_state())

@@ -17,6 +17,7 @@ from pinboard.domain.identifiers import (
     LeaseId,
 )
 from pinboard.domain.ledger import LedgerSnapshot
+from pinboard.interfaces.errors import TransitionInputFailure
 from pinboard.interfaces.transition_input import parse_transition_input
 from tests.domain_support import action, expect_success, item_scope, scope_anchor
 from tests.support import SQLITE_NOW, complete_sqlite_state
@@ -81,6 +82,7 @@ class TypedTransitionContractTest(unittest.TestCase):
             decision_models.ActionKind.SUBMIT_REVIEW,
             b'{"candidate":"candidate-that-is-not-a-subject-revision"}',
         )
+        assert not isinstance(parsed, TransitionInputFailure)
         self.assertEqual(work_models.SubmitReviewInput(candidate), parsed)
         decision = decide(snapshot, bind_transition(submit, parsed), SQLITE_NOW)
         self.assertIsInstance(decision.change, decision_models.ReviewSubmissionChange)

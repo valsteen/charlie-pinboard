@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Literal, Protocol
@@ -7,12 +7,30 @@ import msgspec
 
 from pinboard.application import stored_state
 from pinboard.application.artifacts import ArtifactRef, NewArtifact
+from pinboard.domain.errors import DecisionFailureCode
 
 type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
 
 type DispatchSchema = Literal["pinboard-dispatch/v1"]
 
-type BriefReviewPublisher = Callable[[str, bytes | None, str | None], tuple[bytes, str]]
+
+class DispatchRejectionCode(Enum):
+    ACTION_INVALID = "action-invalid"
+    ACTION_UNAVAILABLE = "action-unavailable"
+    ATTEMPT_NOT_ACTIVE = "attempt-not-active"
+    BRIEF_MISSING = "brief-missing"
+    REVIEW_COLLISION = "review-collision"
+    REVIEW_MISSING = "review-missing"
+    STALE_ACTION = "stale-action"
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchFailure:
+    code: DispatchRejectionCode | DecisionFailureCode
+    message: str
+
+
+type DispatchResult[T] = T | DispatchFailure
 
 
 class DispatchPermission(Enum):
@@ -40,23 +58,3 @@ class DispatchArtifactPort(Protocol):
     def path(self, reference: stored_state.ArtifactReference) -> Path: ...
 
     def publish(self, artifact: NewArtifact) -> ArtifactRef: ...
-
-
-class DispatchBriefPreparer(Protocol):
-    def __call__(
-        self,
-        attempt_path: Path,
-        attempt_id: str,
-        attempt_branch: str,
-        source_checkout_root: Path,
-        checkpoint: str,
-        environment: DispatchEnvironment,
-        *,
-        accepted_item_id: str | None = None,
-        accepted_scope_revision: int | None = None,
-        accepted_scope_digest: str | None = None,
-        supplied_prompt: bytes | None = None,
-        brief_review: bytes | None = None,
-        review_id: str | None = None,
-        review_publisher: BriefReviewPublisher | None = None,
-    ) -> str: ...

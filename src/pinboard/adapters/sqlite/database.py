@@ -1,3 +1,13 @@
+"""Own SQLite connection setup, schema identity, publication, and backup effects.
+
+Database initialization owns its staging connection and transaction because it
+must publish an unverified schema atomically. ``write_transaction`` scopes that
+supplied staging or diagnostic connection: it begins, commits, or rolls back,
+but never opens or closes the connection and never classifies typed results.
+Runtime store writes instead own their complete connection and transaction
+lifecycle in ``store.py``. This module never obtains time or invokes callbacks.
+"""
+
 import os
 import sqlite3
 from collections.abc import Generator
@@ -13,6 +23,7 @@ from pinboard.adapters.files.errors import FileIOError
 from pinboard.adapters.files.file_io import DurableRoots, ensure_directory_chain
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.adapters.sqlite.models import OpenMode
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 
 APPLICATION = "pinboard"
 SCHEMA_VERSION = 1
@@ -20,12 +31,33 @@ SCHEMA_ID = "sqlite-v1"
 BUSY_TIMEOUT_MS = 2_000
 
 
+def decode_row[Record](row: sqlite3.Row, record_type: type[Record]) -> Record:
+    """Convert one SQLite row into its exact typed boundary record."""
+
+    try:
+        return msgspec.convert(dict(row), type=record_type, strict=True)
+    except msgspec.ValidationError as error:
+        raise StorageError(StorageErrorCode.INVALID_STATE, f"Stored row is invalid: {error}") from error
+
+
+def stale_write(message: str) -> DecisionFailure:
+    return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, message)
+
+
+def require_one_changed_row(cursor: sqlite3.Cursor, message: str) -> DecisionFailure | None:
+    """Report a failed compare-and-set without changing transaction ownership."""
+
+    if cursor.rowcount != 1:
+        return stale_write(message)
+    return None
+
+
 def _database_uri(path: Path, mode: OpenMode, *, immutable: bool = False) -> str:
     immutable_query = "&immutable=1" if immutable else ""
     return f"file:{quote(str(path.absolute()), safe='/')}?mode={mode.value}{immutable_query}"
 
 
-def _translate_database_error(error: sqlite3.Error, *, opening: bool = False) -> StorageError:
+def translate_database_error(error: sqlite3.Error, *, opening: bool = False) -> StorageError:
     message = str(error).lower()
     if isinstance(error, sqlite3.IntegrityError):
         return StorageError(
@@ -70,7 +102,7 @@ def _required_meta(connection: sqlite3.Connection) -> tuple[str, int]:
             raise StorageError(StorageErrorCode.INVALID_STATE, "The database has no current project metadata.")
         rows = connection.execute("SELECT application, schema_version FROM project_meta").fetchall()
     except sqlite3.Error as error:
-        raise _translate_database_error(error, opening=True) from error
+        raise translate_database_error(error, opening=True) from error
     if len(rows) != 1:
         raise StorageError(StorageErrorCode.INVALID_STATE, "The database must contain exactly one metadata row.")
     try:
@@ -133,7 +165,7 @@ def _verify_current_schema(connection: sqlite3.Connection) -> None:
         quick_check = connection.execute("PRAGMA quick_check").fetchone()
         foreign_key_errors = connection.execute("PRAGMA foreign_key_check").fetchone()
     except sqlite3.Error as error:
-        raise _translate_database_error(error, opening=True) from error
+        raise translate_database_error(error, opening=True) from error
     if quick_check is None or quick_check[0] != "ok" or foreign_key_errors is not None:
         raise StorageError(StorageErrorCode.INVALID_STATE, "SQLite reported invalid current work state.")
 
@@ -301,7 +333,7 @@ def initialize_database(roots: DurableRoots, now: datetime) -> None:
         raise StorageError(StorageErrorCode.IO_ERROR, "The SQLite database could not be initialized.") from error
     except sqlite3.Error as error:
         _cleanup_database_files(staging)
-        raise _translate_database_error(error) from error
+        raise translate_database_error(error) from error
     _publish_database(staging, path)
 
 
@@ -333,7 +365,7 @@ def _open_verified_database(
     except sqlite3.Error as error:
         if connection is not None:
             connection.close()
-        raise _translate_database_error(error, opening=True) from error
+        raise translate_database_error(error, opening=True) from error
 
 
 def open_database(path: Path, mode: OpenMode) -> sqlite3.Connection:
@@ -349,7 +381,7 @@ def read_operation(connection: sqlite3.Connection) -> Generator[sqlite3.Connecti
     except StorageError:
         raise
     except sqlite3.Error as error:
-        raise _translate_database_error(error, opening=True) from error
+        raise translate_database_error(error, opening=True) from error
 
 
 @contextmanager
@@ -363,22 +395,19 @@ def write_transaction(connection: sqlite3.Connection) -> Generator[sqlite3.Conne
             raise
         except sqlite3.Error as error:
             connection.rollback()
-            raise _translate_database_error(error) from error
-        except Exception as error:
+            raise translate_database_error(error) from error
+        except Exception:
             connection.rollback()
-            raise StorageError(
-                StorageErrorCode.OPERATION_FAILED,
-                "The application operation failed inside the SQLite transaction.",
-            ) from error
+            raise
         try:
             connection.commit()
         except sqlite3.Error as error:
             connection.rollback()
-            raise _translate_database_error(error) from error
+            raise translate_database_error(error) from error
     except StorageError:
         raise
     except sqlite3.Error as error:
-        raise _translate_database_error(error) from error
+        raise translate_database_error(error) from error
 
 
 def backup_database(source: Path, destination: Path) -> None:
@@ -404,6 +433,6 @@ def backup_database(source: Path, destination: Path) -> None:
     except (OSError, sqlite3.Error) as error:
         _cleanup_database_files(staging)
         if isinstance(error, sqlite3.Error):
-            raise _translate_database_error(error) from error
+            raise translate_database_error(error) from error
         raise StorageError(StorageErrorCode.IO_ERROR, "The SQLite backup could not be published.") from error
     _publish_database(staging, destination)

@@ -9,18 +9,18 @@ from pathlib import Path
 from pinboard.adapters.files.artifacts import write_revision
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
-from pinboard.adapters.sqlite.errors import StorageError
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
-from pinboard.application.artifacts import CheckpointArtifacts, NewArtifact
+from pinboard.application.artifacts import CheckpointArtifacts, EvidenceArtifactRef, NewArtifact, ResultArtifactRef
 from pinboard.application.decision_projection import project_decision_snapshot
-from pinboard.application.mutations import project_transition_mutation
+from pinboard.application.mutations import project_checkpoint_acceptance_mutation, project_transition_mutation
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.decisions import (
     available_actions,
     bind_transition,
     decide,
 )
+from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.identifiers import AttemptId, CandidateId, CheckpointId
 from tests.domain_support import expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
@@ -41,15 +41,12 @@ def _commit_same_pause(
     action = next(value for value in actions if value.kind == decision_models.ActionKind.PAUSE)
     command = expect_success(bind_transition(action, work_models.ReasonInput("Concurrent pause.")))
     decision = expect_success(decide(snapshot, command, SQLITE_NOW))
+    assert isinstance(decision, decision_models.TransitionDecision)
     mutation = project_transition_mutation(before, decision)
     barrier.wait()
-    try:
-        with store.write() as transaction:
-            transaction.commit(mutation)
-    except StorageError as error:
-        results.put(error.code.value)
-    else:
-        results.put("committed")
+    with store.write() as transaction:
+        result = transaction.commit(mutation)
+    results.put(result.code.value if isinstance(result, DecisionFailure) else "committed")
 
 
 def _commit_same_checkpoint(
@@ -83,25 +80,24 @@ def _commit_same_checkpoint(
         )
     )
     decision = expect_success(decide(snapshot, command, SQLITE_NOW))
-    artifacts = CheckpointArtifacts(
-        write_revision(
-            roots,
-            NewArtifact(stored_state.ArtifactKind.RESULT, "work-a-1-checkpoint-a-result", 1, ".md", b"result\n"),
-        ),
-        write_revision(
-            roots,
-            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "work-a-1-checkpoint-a-review", 1, ".md", b"review\n"),
-        ),
+    assert isinstance(decision, decision_models.CheckpointAcceptanceDecision)
+    result = write_revision(
+        roots,
+        NewArtifact(stored_state.ArtifactKind.RESULT, "work-a-1-checkpoint-a-result", 1, ".md", b"result\n"),
     )
-    mutation = project_transition_mutation(before, decision, artifacts)
+    review = write_revision(
+        roots,
+        NewArtifact(stored_state.ArtifactKind.EVIDENCE, "work-a-1-checkpoint-a-review", 1, ".md", b"review\n"),
+    )
+    artifacts = CheckpointArtifacts(
+        ResultArtifactRef(result.key, result.revision, result.selector, result.content_sha256, result.size_bytes),
+        EvidenceArtifactRef(review.key, review.revision, review.selector, review.content_sha256, review.size_bytes),
+    )
+    mutation = project_checkpoint_acceptance_mutation(before, decision, artifacts)
     barrier.wait()
-    try:
-        with store.write() as transaction:
-            transaction.commit(mutation)
-    except StorageError as error:
-        results.put(error.code.value)
-    else:
-        results.put("committed")
+    with store.write() as transaction:
+        result = transaction.commit(mutation)
+    results.put(result.code.value if isinstance(result, DecisionFailure) else "committed")
 
 
 class SQLiteConcurrencyTest(unittest.TestCase):
@@ -156,6 +152,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
             bind_transition(submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a")))
         )
         submit_decision = expect_success(decide(snapshot, submit_command, SQLITE_NOW))
+        assert isinstance(submit_decision, decision_models.TransitionDecision)
         with store.write() as transaction:
             transaction.commit(project_transition_mutation(transaction.snapshot(), submit_decision))
         state = store.snapshot()

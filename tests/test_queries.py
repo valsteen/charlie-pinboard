@@ -6,24 +6,23 @@ from pathlib import Path
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
-from pinboard.application import stored_state
+from pinboard.application import query_models, stored_state
 from pinboard.application.actions import discover_actions
 from pinboard.application.decision_projection import project_decision_snapshot
-from pinboard.application.errors import ActionQueryError, QueryError, QueryErrorCode
 from pinboard.application.queries import (
     item_status,
     overview_from_state,
     preview_parallel,
 )
-from pinboard.application.query_models import ItemStatus, ItemStatusAttempt
 from pinboard.domain import decision_models, work_models
-from pinboard.domain.errors import DecisionFailureCode
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.history import item_scope_digest
 from pinboard.domain.identifiers import (
     AttemptId,
     ItemId,
     LeaseId,
 )
+from tests.domain_support import expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -65,6 +64,8 @@ class SQLiteQueriesTest(unittest.TestCase):
 
         overview = overview_from_state(store.snapshot())
         preview = preview_parallel(store, now=SQLITE_NOW)
+        self.assertIsInstance(preview, query_models.ParallelPreview)
+        assert isinstance(preview, query_models.ParallelPreview)
 
         self.assertEqual("sqlite-v1", overview.authority)
         self.assertEqual("12", overview.revision)
@@ -115,6 +116,8 @@ class SQLiteQueriesTest(unittest.TestCase):
         store = self._store(replace(state, lifecycle=replace(state.lifecycle, attempts=(historical, active))))
 
         preview = preview_parallel(store, selected=("work-a",), now=SQLITE_NOW)
+        self.assertIsInstance(preview, query_models.ParallelPreview)
+        assert isinstance(preview, query_models.ParallelPreview)
 
         selected = preview.items[0]
         self.assertEqual("work-a-1", selected.attempt_id)
@@ -151,11 +154,11 @@ class SQLiteQueriesTest(unittest.TestCase):
             )
         )
 
-        live = item_status(store, ItemId("work-a"))
-        done = item_status(store, done_item.item_id)
+        live = expect_success(item_status(store, ItemId("work-a")))
+        done = expect_success(item_status(store, done_item.item_id))
 
         self.assertEqual(
-            ItemStatus(
+            query_models.ItemStatus(
                 "pinboard-item-status/v1",
                 "sqlite-v1",
                 "12",
@@ -166,12 +169,12 @@ class SQLiteQueriesTest(unittest.TestCase):
                 None,
                 "continue",
                 "Current work remains bounded.",
-                (ItemStatusAttempt("work-a-1", work_models.AttemptState.ACTIVE, None),),
+                (query_models.ItemStatusAttempt("work-a-1", work_models.AttemptState.ACTIVE, None),),
             ),
             live,
         )
         self.assertEqual(
-            ItemStatus(
+            query_models.ItemStatus(
                 "pinboard-item-status/v1",
                 "sqlite-v1",
                 "12",
@@ -182,7 +185,7 @@ class SQLiteQueriesTest(unittest.TestCase):
                 "accepted completion",
                 None,
                 "",
-                (ItemStatusAttempt("work-b-z", work_models.AttemptState.DONE, "candidate-z"),),
+                (query_models.ItemStatusAttempt("work-b-z", work_models.AttemptState.DONE, "candidate-z"),),
             ),
             done,
         )
@@ -211,7 +214,7 @@ class SQLiteQueriesTest(unittest.TestCase):
             )
 
             with self.subTest(terminal=terminal.value):
-                status = item_status(store, terminal_item.item_id)
+                status = expect_success(item_status(store, terminal_item.item_id))
                 self.assertEqual(terminal.value, status.state.value)
                 self.assertEqual((), status.attempts)
                 self.assertEqual("", status.notes)
@@ -219,10 +222,11 @@ class SQLiteQueriesTest(unittest.TestCase):
     def test_item_status_rejects_an_unknown_canonical_identity(self) -> None:
         store = self._store()
 
-        with self.assertRaises(QueryError) as missing:
-            item_status(store, ItemId("missing-item"))
+        missing = item_status(store, ItemId("missing-item"))
 
-        self.assertEqual(QueryErrorCode.ITEM_NOT_FOUND, missing.exception.code)
+        self.assertIsInstance(missing, DecisionFailure)
+        assert isinstance(missing, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ITEM_NOT_FOUND, missing.code)
 
     def test_action_and_query_failure_matrix_is_stable_and_read_only(self) -> None:
         state = self._valid_scope_digests(complete_sqlite_state())
@@ -230,45 +234,53 @@ class SQLiteQueriesTest(unittest.TestCase):
         coordination = state.authority.coordination
         assert coordination is not None
 
-        observer = discover_actions(store, decision_models.Role.OBSERVER, now=SQLITE_NOW)
-        coordinator = discover_actions(
-            store,
-            decision_models.Role.COORDINATOR,
-            lease_id=coordination.lease_id,
-            generation=coordination.generation,
-            now=SQLITE_NOW,
+        observer = expect_success(discover_actions(store, decision_models.Role.OBSERVER, now=SQLITE_NOW))
+        coordinator = expect_success(
+            discover_actions(
+                store,
+                decision_models.Role.COORDINATOR,
+                lease_id=coordination.lease_id,
+                generation=coordination.generation,
+                now=SQLITE_NOW,
+            )
         )
-        worker = discover_actions(
-            store,
-            decision_models.Role.WORKER,
-            lease_id=LeaseId("attempt-lease-a"),
-            generation=3,
-            now=SQLITE_NOW,
+        worker = expect_success(
+            discover_actions(
+                store,
+                decision_models.Role.WORKER,
+                lease_id=LeaseId("attempt-lease-a"),
+                generation=3,
+                now=SQLITE_NOW,
+            )
         )
 
         self.assertEqual((decision_models.ActionKind.INSPECT,), tuple(action.kind for action in observer))
         self.assertTrue(any(action.kind == decision_models.ActionKind.DISPATCH for action in coordinator))
         self.assertTrue(any(action.kind == decision_models.ActionKind.CONTINUE for action in worker))
-        with self.assertRaises(ActionQueryError) as stale_coordination:
-            discover_actions(
-                store,
-                decision_models.Role.COORDINATOR,
-                lease_id=LeaseId("wrong"),
-                generation=coordination.generation,
-                now=SQLITE_NOW,
-            )
-        self.assertEqual(DecisionFailureCode.COORDINATION_LEASE_REQUIRED, stale_coordination.exception.code)
-        with self.assertRaises(ActionQueryError) as missing_worker:
-            discover_actions(store, decision_models.Role.WORKER, now=SQLITE_NOW)
-        self.assertEqual(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, missing_worker.exception.code)
+        stale_coordination = discover_actions(
+            store,
+            decision_models.Role.COORDINATOR,
+            lease_id=LeaseId("wrong"),
+            generation=coordination.generation,
+            now=SQLITE_NOW,
+        )
+        self.assertIsInstance(stale_coordination, DecisionFailure)
+        assert isinstance(stale_coordination, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.COORDINATION_LEASE_REQUIRED, stale_coordination.code)
+        missing_worker = discover_actions(store, decision_models.Role.WORKER, now=SQLITE_NOW)
+        self.assertIsInstance(missing_worker, DecisionFailure)
+        assert isinstance(missing_worker, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, missing_worker.code)
         self.assertEqual(state, store.snapshot())
 
-        with self.assertRaises(QueryError) as invalid_selection:
-            preview_parallel(store, selected=("missing",), now=SQLITE_NOW)
-        self.assertEqual(QueryErrorCode.PARALLEL_SELECTION_INVALID, invalid_selection.exception.code)
-        with self.assertRaises(QueryError) as invalid_time:
-            preview_parallel(store, now=SQLITE_NOW.replace(tzinfo=None))
-        self.assertEqual(QueryErrorCode.PARALLEL_TIME_INVALID, invalid_time.exception.code)
+        invalid_selection = preview_parallel(store, selected=("missing",), now=SQLITE_NOW)
+        self.assertIsInstance(invalid_selection, query_models.QueryFailure)
+        assert isinstance(invalid_selection, query_models.QueryFailure)
+        self.assertEqual(query_models.QueryRejectionCode.PARALLEL_SELECTION_INVALID, invalid_selection.code)
+        invalid_time = preview_parallel(store, now=SQLITE_NOW.replace(tzinfo=None))
+        self.assertIsInstance(invalid_time, query_models.QueryFailure)
+        assert isinstance(invalid_time, query_models.QueryFailure)
+        self.assertEqual(query_models.QueryRejectionCode.PARALLEL_TIME_INVALID, invalid_time.code)
 
 
 if __name__ == "__main__":

@@ -1,20 +1,16 @@
-"""Portable-copy production workflow awaiting a future installed CLI route.
+"""Deferred portable-copy evidence, excluded from the installed package.
 
-This module is intentionally unreachable from the current command surface. Treat
-``create_portable_copy`` and the production code that supports it as retained
-work in progress: lack of callers is not grounds to delete or relocate it. The
-implementation may be refactored or simplified as normal production code while
-its tested portable-copy behavior remains intact.
+The prototype preserves the tested relocation behavior until an accepted product
+brief supplies a real installed consumer.
 """
 
-import json
 import os
 import shutil
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
-from typing import cast
 
 import msgspec
 
@@ -31,9 +27,25 @@ from pinboard.adapters.sqlite.errors import StorageError
 from pinboard.adapters.sqlite.models import OpenMode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application.artifacts import NewArtifact
-from pinboard.application.errors import PortableCopyError, PortableCopyErrorCode
 from pinboard.domain import work_models
 from pinboard.domain.authority_models import AttemptLeaseStatus
+
+
+class PortableCopyErrorCode(Enum):
+    PORTABLE_COPY_DESTINATION_EXISTS = "PORTABLE_COPY_DESTINATION_EXISTS"
+    PORTABLE_COPY_DESTINATION_INVALID = "PORTABLE_COPY_DESTINATION_INVALID"
+    PORTABLE_COPY_SOURCE_NOT_QUIESCENT = "PORTABLE_COPY_SOURCE_NOT_QUIESCENT"
+    STORAGE_INVARIANT_VIOLATION = "STORAGE_INVARIANT_VIOLATION"
+    STORAGE_IO_ERROR = "STORAGE_IO_ERROR"
+    WORK_STATE_INVALID = "WORK_STATE_INVALID"
+
+
+class PortableCopyError(RuntimeError):
+    code: PortableCopyErrorCode
+
+    def __init__(self, code: PortableCopyErrorCode, message: str) -> None:
+        self.code = code
+        super().__init__(f"{code.value}: {message}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,10 +60,6 @@ class PortableCopyReceipt:
 class _PortableMetadata(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     revision: int
     host_epoch: int
-
-
-def _canonical_json(value: dict[str, int]) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def _quiescent_source(store: SQLiteWorkStore) -> None:
@@ -132,57 +140,14 @@ def _neutralize(database: Path, now: datetime) -> tuple[int, int, int, int]:
             ) from error
         source_revision = metadata.revision
         source_host_epoch = metadata.host_epoch
-        destination_revision = source_revision + 1
+        destination_revision = source_revision
         destination_host_epoch = source_host_epoch + 1
-        history_row = connection.execute("SELECT COALESCE(MAX(history_id), 0) FROM transition_history").fetchone()
-        if history_row is None:
-            raise PortableCopyError(
-                PortableCopyErrorCode.WORK_STATE_INVALID,
-                "The copied database history could not be read.",
-            )
-        history_value = cast("int | float | str | bytes | None", history_row[0])
-        try:
-            history_id = msgspec.convert(history_value, type=int, strict=True) + 1
-        except msgspec.ValidationError as error:
-            raise PortableCopyError(
-                PortableCopyErrorCode.WORK_STATE_INVALID,
-                f"The copied database has invalid history metadata: {error}",
-            ) from error
         with write_transaction(connection):
             connection.execute("UPDATE coordination_lease SET status = 'released' WHERE status = 'active'")
             connection.execute("UPDATE attempt_leases SET status = 'released' WHERE status = 'active'")
             connection.execute(
-                "UPDATE project_meta SET revision = ?, host_epoch = ?, updated_at = ? WHERE singleton = 1",
-                (destination_revision, destination_host_epoch, now.isoformat()),
-            )
-            connection.execute(
-                """
-                INSERT INTO transition_history (
-                    history_id, project_revision, action_id, action_kind, subject_id, artifact_ref_id,
-                    artifact_kind, authorization_kind, actor_task_id, actor_host_id, input_schema,
-                    input_json, outcome_schema, outcome_json, committed_at
-                ) VALUES (?, ?, ?, 'portable-copy', 'ledger', NULL, NULL, 'portable-copy',
-                          'portable-copy', NULL, 'portable-copy-input/v1', ?,
-                          'portable-copy-outcome/v1', ?, ?)
-                """,
-                (
-                    history_id,
-                    destination_revision,
-                    f"portable-copy:{destination_host_epoch}",
-                    _canonical_json(
-                        {
-                            "source_host_epoch": source_host_epoch,
-                            "source_revision": source_revision,
-                        }
-                    ),
-                    _canonical_json(
-                        {
-                            "destination_host_epoch": destination_host_epoch,
-                            "destination_revision": destination_revision,
-                        }
-                    ),
-                    now.isoformat(),
-                ),
+                "UPDATE project_meta SET host_epoch = ?, updated_at = ? WHERE singleton = 1",
+                (destination_host_epoch, now.isoformat()),
             )
         return source_revision, destination_revision, source_host_epoch, destination_host_epoch
     finally:

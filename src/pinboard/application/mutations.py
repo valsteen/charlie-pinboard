@@ -1,10 +1,10 @@
 from typing import assert_never
 
 from pinboard.application import stored_state
-from pinboard.application.artifacts import ArtifactRef, CheckpointArtifacts
-from pinboard.application.errors import MutationContractError, MutationContractErrorCode
+from pinboard.application.artifacts import CheckpointArtifacts, EvidenceArtifactRef, ResultArtifactRef
 from pinboard.application.mutation_models import (
     AttemptAuthorityMutation,
+    CheckpointAcceptanceMutation,
     CheckpointArtifactChanges,
     CoordinationAuthorityMutation,
     MutationReceipt,
@@ -21,13 +21,14 @@ from pinboard.domain.identifiers import (
     HistorySubjectId,
     HostId,
     ItemId,
+    SubjectId,
     TaskId,
 )
 
 
 def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
     match mutation:
-        case TransitionMutation(decision=decision):
+        case TransitionMutation(decision=decision) | CheckpointAcceptanceMutation(decision=decision):
             checkpoint = None
             candidate = None
             match decision.change:
@@ -143,11 +144,6 @@ def _history_authorization_kind(
             | decision_models.AuthorizationKind.ATTEMPT
         ):
             return stored_state.TransitionHistoryAuthorizationKind(value.value)
-        case decision_models.AuthorizationKind.OBSERVER:
-            raise MutationContractError(
-                MutationContractErrorCode.RECEIPT_MISMATCH,
-                "An observer action cannot produce mutation history.",
-            )
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -170,23 +166,13 @@ def _checkpoint_artifact_ids(
     ]
     next_id = 1 + max((int(value[3]) for value in assigned), default=0)
 
-    def identify(published: ArtifactRef, expected_kind: stored_state.ArtifactKind) -> ArtifactRefId:
+    def identify(published: ResultArtifactRef | EvidenceArtifactRef) -> ArtifactRefId:
         nonlocal next_id
-        if published.kind != expected_kind:
-            raise MutationContractError(
-                MutationContractErrorCode.CHECKPOINT_ARTIFACTS_INVALID,
-                f"Checkpoint evidence requires one {expected_kind.value} artifact.",
-            )
         existing = next(
             (value for value in assigned if value[:3] == (published.kind, published.key, published.revision)),
             None,
         )
         if existing is not None:
-            if existing[4:] != (published.selector, published.content_sha256, published.size_bytes):
-                raise MutationContractError(
-                    MutationContractErrorCode.CHECKPOINT_ARTIFACTS_INVALID,
-                    "An accepted checkpoint artifact identity already names different bytes.",
-                )
             return existing[3]
         result = ArtifactRefId(next_id)
         next_id += 1
@@ -203,13 +189,8 @@ def _checkpoint_artifact_ids(
         )
         return result
 
-    result_id = identify(artifacts.result, stored_state.ArtifactKind.RESULT)
-    review_id = identify(artifacts.review, stored_state.ArtifactKind.EVIDENCE)
-    if result_id == review_id:
-        raise MutationContractError(
-            MutationContractErrorCode.CHECKPOINT_ARTIFACTS_INVALID,
-            "Checkpoint result and review require distinct artifact identities.",
-        )
+    result_id = identify(artifacts.result)
+    review_id = identify(artifacts.review)
     return CheckpointArtifactChanges(artifacts.result, result_id, artifacts.review, review_id)
 
 
@@ -288,14 +269,13 @@ def _focus_after(decision: decision_models.Decision, revision: int) -> stored_st
     return stored_state.StoredFocus(item, attempt, next_action, revision)
 
 
-def project_transition_mutation(
+def _transition_receipt[SubjectT: SubjectId](
     before: stored_state.StoredWorkState,
-    decision: decision_models.Decision,
-    checkpoint_artifacts: CheckpointArtifacts | None = None,
-) -> TransitionMutation:
-    """Project one pure lifecycle decision into its focused accepted mutation."""
-
-    capability = decision.action.capability
+    capability: decision_models.MutationActionCapability[SubjectT],
+    action_kind: decision_models.ActionKind,
+    transition: decision_models.TransitionReceipt,
+    artifact_ref_id: ArtifactRefId | None,
+) -> MutationReceipt:
     actor_task_id: TaskId | None = None
     actor_host_id: HostId | None = None
     if capability.authorization == decision_models.AuthorizationKind.ATTEMPT and capability.lease_id is not None:
@@ -313,53 +293,55 @@ def project_transition_mutation(
         coordination = before.authority.coordination
         if coordination is not None:
             actor_task_id, actor_host_id = coordination.task_id, coordination.host_id
-    checkpoint_changes: CheckpointArtifactChanges | None = None
-    match decision.change:
-        case decision_models.CheckpointAcceptanceChange():
-            if checkpoint_artifacts is None:
-                raise MutationContractError(
-                    MutationContractErrorCode.CHECKPOINT_ARTIFACTS_INVALID,
-                    "Checkpoint acceptance requires exact result and review artifacts.",
-                )
-            checkpoint_changes = _checkpoint_artifact_ids(before, checkpoint_artifacts)
-        case (
-            decision_models.AcceptedProposalChange()
-            | decision_models.ActivationChange()
-            | decision_models.AttemptClosureChange()
-            | decision_models.AttemptStateChange()
-            | decision_models.BlockAttemptChange()
-            | decision_models.BlockItemChange()
-            | decision_models.CompletionChange()
-            | decision_models.CoordinatorTransferChange()
-            | decision_models.ItemClosureChange()
-            | decision_models.ItemStateChange()
-            | decision_models.MergedProposalChange()
-            | decision_models.RejectedProposalChange()
-            | decision_models.ResumeAttemptChange()
-            | decision_models.ReturnedProposalChange()
-            | decision_models.ReviewAcceptanceChange()
-            | decision_models.ReviewReturnChange()
-            | decision_models.ReviewSubmissionChange()
-        ):
-            if checkpoint_artifacts is not None:
-                raise MutationContractError(
-                    MutationContractErrorCode.CHECKPOINT_ARTIFACTS_INVALID,
-                    "Only checkpoint acceptance can accept checkpoint artifacts.",
-                )
-        case _ as unreachable:
-            assert_never(unreachable)
     revision = before.lifecycle.project.revision + 1
-    receipt = MutationReceipt(
-        decision.receipt,
+    authorization = _history_authorization_kind(capability.authorization)
+    return MutationReceipt(
+        transition,
         HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
         revision,
-        _history_action_kind(decision.action.kind),
+        _history_action_kind(action_kind),
         HistorySubjectId(capability.subject),
-        checkpoint_changes.review_id if checkpoint_changes is not None else None,
-        _history_authorization_kind(capability.authorization),
+        artifact_ref_id,
+        authorization,
         actor_task_id,
         actor_host_id,
         "decision/v1",
         work_models.CanonicalJson(b"{}"),
     )
-    return TransitionMutation(decision, receipt, _focus_after(decision, revision), checkpoint_changes)
+
+
+def project_transition_mutation(
+    before: stored_state.StoredWorkState,
+    decision: decision_models.TransitionDecision,
+) -> TransitionMutation:
+    """Project one accepted non-checkpoint decision into its focused mutation."""
+
+    revision = before.lifecycle.project.revision + 1
+    return TransitionMutation(
+        decision,
+        _transition_receipt(before, decision.action.capability, decision.action.kind, decision.receipt, None),
+        _focus_after(decision, revision),
+    )
+
+
+def project_checkpoint_acceptance_mutation(
+    before: stored_state.StoredWorkState,
+    decision: decision_models.CheckpointAcceptanceDecision,
+    artifacts: CheckpointArtifacts,
+) -> CheckpointAcceptanceMutation:
+    """Project checkpoint acceptance with its exact result and review artifacts."""
+
+    revision = before.lifecycle.project.revision + 1
+    checkpoint_changes = _checkpoint_artifact_ids(before, artifacts)
+    return CheckpointAcceptanceMutation(
+        decision,
+        _transition_receipt(
+            before,
+            decision.action.capability,
+            decision.action.kind,
+            decision.receipt,
+            checkpoint_changes.review_id,
+        ),
+        _focus_after(decision, revision),
+        checkpoint_changes,
+    )
