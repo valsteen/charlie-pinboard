@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Literal
 
@@ -40,6 +41,20 @@ class ParallelReasonCode(Enum):
     ATTEMPT_OWNED = "attempt-owned"
     DEPENDENCY_LIVE = "dependency-live"
     STATE_NOT_LAUNCHABLE = "state-not-launchable"
+
+
+class QueryRejectionCode(Enum):
+    PARALLEL_SELECTION_INVALID = "PARALLEL_SELECTION_INVALID"
+    PARALLEL_TIME_INVALID = "PARALLEL_TIME_INVALID"
+
+
+@dataclass(frozen=True, slots=True)
+class QueryFailure:
+    code: QueryRejectionCode
+    message: str
+
+
+type QueryResult[Value] = Value | QueryFailure
 
 
 class DependencyReason(msgspec.Struct, frozen=True, forbid_unknown_fields=True):

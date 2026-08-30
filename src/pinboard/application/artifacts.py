@@ -1,6 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
 
 from pinboard.application import stored_state
+from pinboard.domain import work_models
+from pinboard.domain.identifiers import ItemId
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,9 +26,35 @@ class ArtifactRef:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactRelationship:
+    item_id: ItemId
+    role: work_models.ArtifactRole
+
+
+@dataclass(frozen=True, slots=True)
+class ResultArtifactRef:
+    key: str
+    revision: int
+    selector: str
+    content_sha256: str
+    size_bytes: int
+    kind: Literal[stored_state.ArtifactKind.RESULT] = field(init=False, default=stored_state.ArtifactKind.RESULT)
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceArtifactRef:
+    key: str
+    revision: int
+    selector: str
+    content_sha256: str
+    size_bytes: int
+    kind: Literal[stored_state.ArtifactKind.EVIDENCE] = field(init=False, default=stored_state.ArtifactKind.EVIDENCE)
+
+
+@dataclass(frozen=True, slots=True)
 class CheckpointArtifacts:
-    result: ArtifactRef
-    review: ArtifactRef
+    result: ResultArtifactRef
+    review: EvidenceArtifactRef
 
 
 @dataclass(frozen=True, slots=True)

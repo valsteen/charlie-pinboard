@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Annotated, Literal
 
 import msgspec
@@ -124,6 +125,22 @@ class ReviewedAuthority(msgspec.Struct, frozen=True, forbid_unknown_fields=True)
     selector: NonEmptyLine
     reviewed_sha256: Sha256
     families: Annotated[tuple[KebabId, ...], msgspec.Meta(min_length=1)]
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedAuthoritySelectionFailure:
+    authority_id: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewedAuthorityDigestMismatch:
+    authority_id: str
+    expected_sha256: str
+    observed_sha256: str
+
+
+type ReviewedAuthorityValidationFailure = ReviewedAuthoritySelectionFailure | ReviewedAuthorityDigestMismatch
 
 
 class ContractCoverageOwner(

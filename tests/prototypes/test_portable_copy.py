@@ -9,11 +9,14 @@ from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
-from pinboard.application.artifacts import CheckpointArtifacts, NewArtifact
+from pinboard.application.artifacts import CheckpointArtifacts, EvidenceArtifactRef, NewArtifact, ResultArtifactRef
 from pinboard.application.decision_projection import project_decision_snapshot
-from pinboard.application.errors import PortableCopyError, PortableCopyErrorCode
-from pinboard.application.service import change_attempt_authority, change_coordination_authority, execute
-from pinboard.application.transfer import create_portable_copy
+from pinboard.application.service import (
+    change_attempt_authority,
+    change_coordination_authority,
+    execute,
+    execute_checkpoint_acceptance,
+)
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_models import (
     AttemptLeaseStatus,
@@ -24,6 +27,7 @@ from pinboard.domain.decisions import available_actions, bind_transition
 from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.identifiers import ArtifactRefId, CandidateId, CheckpointId
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
+from tests.prototypes.portable_copy import PortableCopyError, PortableCopyErrorCode, create_portable_copy
 from tests.support import SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import work_a_brief
 
@@ -128,10 +132,8 @@ class PortableCopyTest(unittest.TestCase):
         )
         self.assertTrue(all(lease.state != AttemptLeaseStatus.ACTIVE for lease in copied.authority.attempt_leases))
         self.assertEqual(source_state.lifecycle.project.host_epoch + 1, copied.lifecycle.project.host_epoch)
-        self.assertEqual(source_state.lifecycle.project.revision + 1, copied.lifecycle.project.revision)
-        self.assertEqual(
-            stored_state.TransitionHistoryActionKind.PORTABLE_COPY, copied.transition_receipts[-1].action_kind
-        )
+        self.assertEqual(source_state.lifecycle.project.revision, copied.lifecycle.project.revision)
+        self.assertEqual(source_state.transition_receipts, copied.transition_receipts)
         self.assertEqual(source_state.lifecycle.project.revision, receipt.source_revision)
         self.assertEqual(copied.lifecycle.project.revision, receipt.destination_revision)
         self.assertEqual(len(source_state.artifact_references), receipt.artifacts_copied)
@@ -182,7 +184,7 @@ class PortableCopyTest(unittest.TestCase):
             value for value in worker_actions if value.kind == decision_models.ActionKind.SUBMIT_REVIEW
         )
         submit = bind_transition(submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a")))
-        assert not isinstance(submit, DecisionFailure)
+        assert isinstance(submit, decision_models.SubmitReviewCommand)
         self.assertNotIsInstance(execute(store, submit, SQLITE_NOW), DecisionFailure)
         review_snapshot = project_decision_snapshot(store.snapshot())
         coordination = review_snapshot.coordination_authority
@@ -207,22 +209,24 @@ class PortableCopyTest(unittest.TestCase):
                 "Accepted for portable-copy proof.",
             ),
         )
-        assert not isinstance(accept, DecisionFailure)
+        assert isinstance(accept, decision_models.AcceptCheckpointCommand)
         result_bytes = b"portable checkpoint result\n"
         review_bytes = b"portable checkpoint review\n"
         roots = resolve_durable_roots(source.parent.parent)
+        result = write_revision(
+            roots,
+            NewArtifact(stored_state.ArtifactKind.RESULT, "work-a-1-checkpoint-a-result", 1, ".md", result_bytes),
+        )
+        review = write_revision(
+            roots,
+            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "work-a-1-checkpoint-a-review", 1, ".md", review_bytes),
+        )
         artifacts = CheckpointArtifacts(
-            write_revision(
-                roots,
-                NewArtifact(stored_state.ArtifactKind.RESULT, "work-a-1-checkpoint-a-result", 1, ".md", result_bytes),
-            ),
-            write_revision(
-                roots,
-                NewArtifact(stored_state.ArtifactKind.EVIDENCE, "work-a-1-checkpoint-a-review", 1, ".md", review_bytes),
-            ),
+            ResultArtifactRef(result.key, result.revision, result.selector, result.content_sha256, result.size_bytes),
+            EvidenceArtifactRef(review.key, review.revision, review.selector, review.content_sha256, review.size_bytes),
         )
         self.assertNotIsInstance(
-            execute(store, accept, SQLITE_NOW, checkpoint_artifacts=artifacts),
+            execute_checkpoint_acceptance(store, accept, SQLITE_NOW, artifacts),
             DecisionFailure,
         )
         retained = project_decision_snapshot(store.snapshot()).coordination_authority

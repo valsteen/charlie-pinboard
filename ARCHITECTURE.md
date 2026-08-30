@@ -29,9 +29,9 @@ interfaces ────────> application ────────> domai
      └────────────> adapters ───────────────┘
 ```
 
-`domain` depends only on the Python standard library and `msgspec` for exact canonical records. `application` normally depends on domain values and capability protocols rather than concrete storage. `adapters` implement those capabilities with SQLite and the filesystem. `interfaces` decode external values, compose the installed command, and present results.
+`domain` depends only on the Python standard library and `msgspec` for exact canonical records. `application` depends on domain values and storage-independent capability protocols. `adapters` implement those capabilities with SQLite and the filesystem. `interfaces` decode external values, compose concrete adapters with application use cases, and present results. Production dependency tests keep domain independent of outer layers, application independent of adapters and interfaces, and adapters independent of interfaces. They also keep interface composition acyclic and constrain the CLI entry point to routing and final error presentation.
 
-Two application modules currently compose concrete adapters for workflows that span them: `application.validation` verifies SQLite plus referenced artifacts and derived views, while `application.transfer` creates a portable copy from the SQLite backup, artifact repository, and view builder. They are current composition seams, not permission for domain decisions or ordinary application services to import infrastructure.
+The method used to preserve these boundaries, expose effects, and stop decomposition at a useful fixed point is recorded in [the design principles](DESIGN_PRINCIPLES.md).
 
 ## Runtime ownership
 
@@ -56,7 +56,7 @@ Only distribution version lookup and command composition live at the package roo
 | `proposal_models.py`, `proposal_decisions.py` | Closed proposal intake values, visible queue placement, and relation-derived dependency decisions |
 | `history.py` | Exact history scope records, canonical codecs, digests, and receipt relationships |
 
-Expected rejection over constructed domain values is returned as a typed `DecisionFailure`. Boundary decoding and infrastructure failures remain typed exceptions until input has become a valid domain value.
+Expected rejections return typed failure values. Domain and stale-persistence paths use `DecisionFailure`; application-owned queries and dispatch selection use their own closed failures where the installed interface must preserve a more specific public error. The interface returns closed command, proposal, and dispatch failures through one CLI presenter. Low-level decoders may raise while values are still external representations, but an installed use case converts its exact advertised invalid-input outcomes into its typed result. Infrastructure failures, malformed persisted relationships, and programming-contract failures remain typed exceptions.
 
 ### Application
 
@@ -67,10 +67,8 @@ Expected rejection over constructed domain values is returned as a typed `Decisi
 | `stored_state.py` | Complete typed read and initialization aggregate plus explicit storage vocabulary |
 | `mutation_models.py`, `mutations.py`, `ports.py` | Closed focused mutation records, exhaustive decision-to-relational conversion, and storage-independent transactional capabilities |
 | `decision_projection.py`, `service.py` | Shared-index projection of complete stored collections into domain decision facts and locked mutation orchestration |
-| `actions.py`, `query_models.py`, `queries.py` | Legal-action discovery plus current overview, exact item-status, and parallel-preview records and queries |
-| `artifacts.py`, `artifact_publication.py`, `dispatch_models.py`, `dispatch.py` | Immutable artifact references and typed brief identity, application-owned artifact acceptance, activation and resume brief guards, dispatch contracts, accepted review publication, dispatch eligibility, and prompt preparation |
-| `errors.py` | Exact application exception families and their code enums |
-| `validation.py`, `transfer.py` | Whole-work-root validation and portable-copy workflow |
+| `actions.py`, `query_models.py`, `queries.py` | Legal-action discovery plus current overview, exact item-status, parallel-preview records, and result-shaped queries with closed query rejection codes |
+| `artifacts.py`, `artifact_publication.py`, `dispatch_models.py`, `dispatch.py` | Immutable artifact references and typed brief identity, artifact-acceptance capabilities, activation and resume brief guards, and result-shaped dispatch selection, review publication, and final authority confirmation |
 
 SQLite rows are not active domain objects. `StoredWorkState` is the exact typed read and initialization aggregate without SQL handles or filesystem paths, while live mutations carry only the accepted decision, receipt, and affected auxiliary values. `LedgerSnapshot` remains the storage-independent decision input.
 
@@ -83,30 +81,35 @@ Adapters own concrete persistence and filesystem mechanics without deciding prod
 | `files/root.py`, `files/file_io.py`, `files/models.py`, `files/errors.py` | Distinct Git-backed source-checkout and shared-repository discovery, repository-local exclusion of the default durable root, durable-root resolution, file-operation records, exact failure families, directory creation, and atomic file publication |
 | `files/artifacts.py` | Immutable artifact naming, publication, digest verification, and reference resolution |
 | `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections; interface composition supplies complete live-v2 brief projections |
-| `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, schema verification, connection records, transactions, backup, synchronization, and exact storage failures |
-| `sqlite/store.py` | Complete `StoredWorkState` loading, initialization-only aggregate insertion, and exhaustive focused persistence of accepted live mutations |
-| `sqlite/registration.py` | Fresh initialization, safe reopen of SQLite, and initial view generation |
+| `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, typed row conversion, compare-and-set result helpers, schema verification, initialization and diagnostic transaction scopes, backup, synchronization, and exact storage failures |
+| `sqlite/store.py` | Complete runtime connection and transaction lifetime, public store capabilities, exhaustive accepted-mutation routing, project revision advancement, expected-result rollback selection, and post-write readback |
+| `sqlite/state.py` | Complete `StoredWorkState` assembly, cross-record validation, initialization-only aggregate insertion, project metadata, and transition history |
+| `sqlite/lifecycle.py`, `sqlite/proposals.py`, `sqlite/artifacts.py`, `sqlite/authority.py` | Thematic row conversion, initialization, reads, and focused effects over an explicitly supplied connection |
 
 ### Interfaces
 
-Interfaces own user-facing boundaries. They may depend on application use cases, concrete adapters for composition, and domain identifiers needed to construct typed input. They do not own lifecycle legality or persistence policy.
+Interfaces own user-facing boundaries. They may depend on application use cases, concrete adapters for composition, and domain identifiers needed to construct typed input. They do not own lifecycle legality or persistence policy. The entry point owns one exhaustive route and process exit policy; thematic interface modules own concrete cross-layer composition for one command family.
 
 | Owner group | Responsibility |
 | --- | --- |
-| `cli_commands.py`, `cli.py` | Exact leaf command records, parser-owned declarative decoding, exhaustive dispatch, authority-token comparison, SQLite composition, and generated-view refresh |
-| `cli_models.py` | JSON and text presentation records for the installed command surface |
-| `transition_models.py`, `transition_input.py` | Strict external transition payload records and conversion to typed command input |
-| `brief_source_models.py`, `brief_sources.py` | Strict source manifests, source-checkout-relative file and Markdown-heading selection, deterministic digests, overlap rejection, and context-bounded batch planning |
+| `cli_commands.py`, `cli_parser.py` | Exact leaf command records, complete command grammar, and one conversion from the selected parser leaf into the closed command union |
+| `cli.py`, `cli_output.py` | Sole exhaustive command-family route, final typed-result-to-exit policy, and canonical JSON output effect |
+| `work_inspection_models.py`, `work_inspection.py` | Read-only status, overview, item, action, input-contract, and parallel-preview composition and presentation |
+| `action_selection.py`, `transition_models.py`, `transition_input.py`, `transitions.py` | Advertised-action reselection, strict transition payloads, typed conversion, checkpoint identity checks, coordination lifetime, and transition presentation |
+| `coordination_authority.py`, `attempt_authority.py` | Thematic coordination- and attempt-authority command composition |
+| `brief_source_models.py`, `brief_sources.py`, `brief_source_commands.py` | Strict source manifests, deterministic source planning and selection, and installed plan or batch presentation |
 | `work_brief_models.py`, `work_briefs.py` | Strict v2 brief and review records, exact canonical codecs and semantic validation, digest computation, reviewed-authority checks, and complete Markdown rendering |
-| `dispatch_brief.py` | Typed accepted-brief identity checks, cross-boundary review validation, and canonical launch prompt rendering |
-| `proposal_models.py`, `proposals.py` | Strict proposal-file records and decoding into current SQLite intake input |
-| `errors.py` | Exact interface exception families and their code enums |
+| `work_brief_publication.py`, `dispatch_brief.py` | Canonical brief publication, typed accepted-brief identity checks, cross-boundary review validation, dispatch orchestration, and canonical launch prompt rendering |
+| `work_views.py` | Shared live-attempt brief projection plus post-commit generated-view refresh and rebuild composition |
+| `work_state.py`, `work_state_models.py`, `work_state_commands.py` | Fresh initialization, whole-work-root validation, root resolution, validation presentation, and repair commands |
+| `proposal_models.py`, `proposals.py`, `proposal_commands.py` | Strict proposal-file records, decoding, explicit boundary-to-domain conversion, SQLite intake composition, and result presentation |
+| `errors.py` | Closed command, proposal, and dispatch result families plus exact boundary and infrastructure exception families |
 
 ## Storage boundaries
 
 ### Authoritative SQLite state
 
-`.codex/pinboard/state.sqlite3` owns project revision and host epoch; item, attempt, focus, dependency, requirement, and proposal state; coordination and attempt authority; accepted artifact references; and transition history. A mutation opens a write transaction, reselects current state and authority, updates only the relations named by one accepted closed mutation, and advances the revision with its history receipt. Revision and affected-row guards reject stale actions or fencing tokens. A rejected or failed transition leaves the previous valid ledger intact. Complete aggregate insertion is reserved for initialization and portable-copy construction, not live mutation persistence.
+`.codex/pinboard/state.sqlite3` owns project revision and host epoch; item, attempt, focus, dependency, requirement, and proposal state; coordination and attempt authority; accepted artifact references; and transition history. A mutation opens a write transaction, reselects current state and authority, updates only the relations named by one accepted closed mutation, and advances the revision with its history receipt. Revision and affected-row guards return typed stale-action or fencing rejection values. The transaction owner rolls back those expected failures; SQLite, persisted-invariant, and programming failures roll back and remain exceptional. Complete aggregate insertion is reserved for initialization, not live mutation persistence.
 
 ### Immutable artifacts
 
@@ -124,11 +127,11 @@ Pinboard does not require or produce a companion notes directory. Project docume
 
 ### Initialization and reopen
 
-`pinboard init` resolves the default `.codex/pinboard` root below the shared repository root and idempotently adds only `/.codex/pinboard/` to that repository's local Git exclude file. Invoking initialization from a linked worktree therefore reuses the repository ledger and does not create a worktree-local authority. It never edits a committed `.gitignore`, so unrelated `.codex` content remains visible. An explicit `--work-root` selects that exact path instead. Initialization creates the SQLite schema when `state.sqlite3` is absent. When the database exists, initialization verifies that exact schema before reconciling the fixed publication staging path: a same-file staging alias left after publication is removed, while a different-file conflict is rejected without replacement. It then ensures the artifact directories exist and rebuilds views.
+`pinboard init` resolves the default `.codex/pinboard` root below the shared repository root and idempotently adds only `/.codex/pinboard/` to that repository's local Git exclude file. Invoking initialization from a linked worktree therefore reuses the repository ledger and does not create a worktree-local authority. It never edits a committed `.gitignore`, so unrelated `.codex` content remains visible. An explicit `--work-root` selects that exact path instead. Interface-owned work-state composition creates the SQLite schema when `state.sqlite3` is absent. When the database exists, it verifies that exact schema before reconciling the fixed publication staging path: a same-file staging alias left after publication is removed, while a different-file conflict is rejected without replacement. It then ensures the artifact directories exist and rebuilds views.
 
 ### Reads and validation
 
-Status, overview, exact item status, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. Each selected SQLite row is converted directly into its declared stored-state record; explicit storage checks are reserved for row cardinality, canonical history JSON, and relationships spanning records. These reads never parse generated Markdown. Validation verifies the database and every accepted artifact reference, validates live v2 brief identity and structure through the typed boundary, keeps historical terminal brief bytes opaque, then reports generated-view drift separately.
+Status, overview, exact item status, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. Expected absence or an unavailable selection returns a typed result. Each selected SQLite row is converted directly into its declared stored-state record; explicit storage checks are reserved for row cardinality, canonical history JSON, and relationships spanning records. These reads never parse generated Markdown. Interface-owned work-state composition verifies the database and every accepted artifact reference, validates live v2 brief identity and structure through the typed boundary, keeps historical terminal brief bytes opaque, then reports generated-view drift separately.
 
 ### Brief source planning
 
@@ -136,21 +139,17 @@ The installed `pinboard brief-sources` command reads a strict source manifest wi
 
 ### Mutations and proposal intake
 
-Each argparse leaf selects its exact command record and parser before dispatch. The interface converts the raw namespace once, reports structural or coupled-option failures through that leaf parser, and dispatches a closed command union; handlers never receive a general argument namespace or reparse command and operation strings. The selected handler then reselects the advertised action. `application.service` rechecks authority and legality inside the store transaction, then commits one closed focused mutation. The SQLite adapter exhaustively matches that mutation and applies its guarded relational writes. Proposal intake follows the same SQLite transaction boundary: the proposal file is decoded at the interface, duplicate identities and invalid positions are rejected, and one mutation stores both the immutable proposal facts and a same-identity `intake` work item. Queue positions are one-based and contiguous across live items. Intake appends by default or minimally shifts positions for an explicit insertion. Follow-up candidates depend on their related item; a prerequisite candidate becomes a dependency of its live related item. Intake never changes focus, creates an attempt, or activates work.
+Each argparse leaf selects its exact command record and parser before dispatch. The interface converts the raw namespace once, reports structural or coupled-option failures through that leaf parser, and dispatches a closed command union; handlers never receive a general argument namespace or reparse command and operation strings. Command, proposal, and dispatch handlers propagate their closed expected failures to one exhaustive CLI presenter, which owns the stable text and exit status for each family. The selected handler reselects the advertised action. `application.service` rechecks authority and legality inside the store transaction, then commits one closed focused mutation. The SQLite adapter exhaustively matches that mutation and explicitly propagates expected stale results from thematic effect functions before advancing revision and history. Proposal intake follows the same SQLite transaction boundary: the proposal file is decoded at the interface, invalid input is returned as a proposal failure, duplicate identities and invalid positions are rejected, and one mutation stores both the immutable proposal facts and a same-identity `intake` work item. Queue positions are one-based and contiguous across live items. Intake appends by default or minimally shifts positions for an explicit insertion. Follow-up candidates depend on their related item; a prerequisite candidate becomes a dependency of its live related item. Intake never changes focus, creates an attempt, or activates work.
 
 ### Worker dispatch and review publication
 
-Dispatch reselects the current action, active attempt, and accepted JSON brief reference from the shared SQLite ledger. `application.dispatch` passes the selected attempt's item and accepted scope identity into brief validation. The artifact adapter verifies the canonical bytes, and `interfaces.dispatch_brief` requires the dispatch environment checkout to match the selected source checkout before it decodes the strict record and checks attempt, item, branch, stable checkpoint ID, accepted scope, architecture impact, contracts, authorization bases, verification, reviewed-authority digests, coverage, lifecycle disposition, and independent ready review. Reviewed-authority digests are recomputed from that source checkout rather than the shared repository root. Accepted-scope authorization must match the reselected attempt; source-derived authorization must name one exact reviewed authority family. The independent reviewer verifies that each selected source truthfully serves its claimed product-authority, repository-policy, or existing-consumer role and that each mandatory check's tool, threshold, platform, compatibility obligation, or hardening target is supported by accepted scope or selected source bytes.
+`application.dispatch` returns expected selection, review-publication, and final-authority outcomes as typed results. `interfaces.dispatch_brief` composes those operations with artifact verification and prompt rendering, converting its advertised environment, identity, source, review, and prompt rejections into one closed dispatch result. It requires the dispatch environment checkout to match the selected source checkout before decoding the strict record and checking attempt, item, branch, stable checkpoint ID, accepted scope, architecture impact, contracts, authorization bases, verification, reviewed-authority digests, coverage, lifecycle disposition, and independent ready review. Reviewed-authority digests are recomputed from that source checkout rather than the shared repository root. Accepted-scope authorization must match the reselected attempt; source-derived authorization must name one exact reviewed authority family. The independent reviewer verifies that each selected source truthfully serves its claimed product-authority, repository-policy, or existing-consumer role and that each mandatory check's tool, threshold, platform, compatibility obligation, or hardening target is supported by accepted scope or selected source bytes.
 
-Ready review evidence is strict JSON bound to the stable checkpoint ID, canonical checkpoint-record digest, and canonical ordered authority-set digest. It is published as an immutable artifact and accepted through the application-owned SQLite workflow. The launch prompt only points the worker to the canonical JSON brief and names the execution environment; it does not duplicate or reinterpret the task contract.
+Ready review evidence is strict JSON bound to the stable checkpoint ID, canonical checkpoint-record digest, and canonical ordered authority-set digest. The interface canonicalizes it, the application publishes and accepts it through the result-shaped artifact capability, and the interface verifies the accepted bytes before rendering the launch prompt. The launch prompt only points the worker to the canonical JSON brief and names the execution environment; it does not duplicate or reinterpret the task contract.
 
 ### Checkpoint and terminal acceptance
 
 An accepted nonterminal checkpoint uses the brief's stable checkpoint ID, preserves exact result and review evidence, pauses the same attempt, and fences its worker authority. When review accepts the protected candidate but the current attempt should continue, review acceptance returns the item and attempt to active, clears the protected candidate, preserves the accepted candidate and evidence in the transition receipt, and fences the prior worker authority. Terminal completion records accepted evidence and removes the item from live work in the same SQLite transition. Review return keeps the same attempt and evidence while fencing the rejected worker lease.
-
-### Portable copy
-
-Portable copy requires a quiescent source and preserves the exact explicit destination path. It backs up `state.sqlite3`, copies and verifies every referenced artifact without interpreting its brief schema, advances the destination revision and host epoch, neutralizes host-local leases, rebuilds views, synchronizes the staged tree, and atomically publishes the relocated work root. Live v2 JSON and historical terminal v1 bytes therefore retain exact reference and integrity evidence. The source remains unchanged. Project-local source authorities named by accepted briefs are outside the portable work root and must be supplied by the relocated project when dispatch needs them.
 
 ## Stored formats
 

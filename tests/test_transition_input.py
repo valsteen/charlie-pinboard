@@ -1,11 +1,10 @@
 import json
 import unittest
 
-import msgspec
-
 from pinboard.domain import decision_models, work_models
+from pinboard.domain.errors import DecisionFailureCode
 from pinboard.domain.identifiers import ArtifactRefId, AttemptId, CandidateId
-from pinboard.interfaces.errors import TransitionInputError
+from pinboard.interfaces.errors import TransitionInputFailure
 from pinboard.interfaces.transition_input import (
     INPUT_CONTRACT_ACTION_KINDS,
     TRANSITION_ACTION_KINDS,
@@ -13,6 +12,20 @@ from pinboard.interfaces.transition_input import (
     parse_transition_input,
 )
 from tests.support import JsonObject, JsonValue
+
+
+def expect_transition_input(
+    value: work_models.TransitionInput | TransitionInputFailure,
+) -> work_models.TransitionInput:
+    if isinstance(value, TransitionInputFailure):
+        raise AssertionError(str(value))
+    return value
+
+
+def expect_schema(value: bytes | TransitionInputFailure) -> bytes:
+    if isinstance(value, TransitionInputFailure):
+        raise AssertionError(str(value))
+    return value
 
 
 class TransitionInputTest(unittest.TestCase):
@@ -23,17 +36,19 @@ class TransitionInputTest(unittest.TestCase):
         )
 
     def test_current_inputs_decode_exact_models(self) -> None:
-        activation = parse_transition_input(
-            decision_models.ActionKind.ACTIVATE,
-            json.dumps(
-                {
-                    "attempt": "attempt-1",
-                    "branch": "codex/attempt-1",
-                    "base_revision": "abc123",
-                    "owner": "worker",
-                    "brief_artifact_ref_id": 7,
-                }
-            ),
+        activation = expect_transition_input(
+            parse_transition_input(
+                decision_models.ActionKind.ACTIVATE,
+                json.dumps(
+                    {
+                        "attempt": "attempt-1",
+                        "branch": "codex/attempt-1",
+                        "base_revision": "abc123",
+                        "owner": "worker",
+                        "brief_artifact_ref_id": 7,
+                    }
+                ),
+            )
         )
         self.assertEqual(
             work_models.ActivateInput(AttemptId("attempt-1"), "codex/attempt-1", "abc123", "worker", ArtifactRefId(7)),
@@ -41,22 +56,28 @@ class TransitionInputTest(unittest.TestCase):
         )
         self.assertEqual(
             work_models.ResumeInput(),
-            parse_transition_input(decision_models.ActionKind.RESUME, "{}"),
+            expect_transition_input(parse_transition_input(decision_models.ActionKind.RESUME, "{}")),
         )
         self.assertEqual(
             work_models.ResumeInput(ArtifactRefId(8)),
-            parse_transition_input(decision_models.ActionKind.RESUME, '{"brief_artifact_ref_id":8}'),
+            expect_transition_input(
+                parse_transition_input(decision_models.ActionKind.RESUME, '{"brief_artifact_ref_id":8}')
+            ),
         )
 
-        checkpoint = parse_transition_input(
-            decision_models.ActionKind.ACCEPT_CHECKPOINT,
-            '{"checkpoint":"design-accepted","candidate":"sha256:candidate","evidence":"accepted"}',
+        checkpoint = expect_transition_input(
+            parse_transition_input(
+                decision_models.ActionKind.ACCEPT_CHECKPOINT,
+                '{"checkpoint":"design-accepted","candidate":"sha256:candidate","evidence":"accepted"}',
+            )
         )
         self.assertIsInstance(checkpoint, work_models.AcceptCheckpointInput)
 
-        continuation = parse_transition_input(
-            decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE,
-            '{"candidate":"sha256:candidate","evidence":"review accepted"}',
+        continuation = expect_transition_input(
+            parse_transition_input(
+                decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE,
+                '{"candidate":"sha256:candidate","evidence":"review accepted"}',
+            )
         )
         self.assertEqual(
             work_models.AcceptReviewAndContinueInput(CandidateId("sha256:candidate"), "review accepted"),
@@ -87,15 +108,16 @@ class TransitionInputTest(unittest.TestCase):
             (decision_models.ActionKind.SUBMIT_REVIEW, {"candidate": 1}),
         )
         for kind, value in cases:
-            with (
-                self.subTest(kind=kind),
-                self.assertRaisesRegex(TransitionInputError, "TRANSITION_INPUT_INVALID") as caught,
-            ):
-                parse_transition_input(kind, json.dumps(value))
-            self.assertIsInstance(caught.exception.__cause__, msgspec.ValidationError)
+            with self.subTest(kind=kind):
+                rejected = parse_transition_input(kind, json.dumps(value))
+                self.assertIsInstance(rejected, TransitionInputFailure)
+                assert isinstance(rejected, TransitionInputFailure)
+                self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
-        with self.assertRaisesRegex(TransitionInputError, "ACTION_NOT_MUTATING"):
-            parse_transition_input(decision_models.ActionKind.REPORT_BLOCKER, "{}")
+        advisory = parse_transition_input(decision_models.ActionKind.REPORT_BLOCKER, "{}")
+        self.assertIsInstance(advisory, TransitionInputFailure)
+        assert isinstance(advisory, TransitionInputFailure)
+        self.assertEqual(DecisionFailureCode.ACTION_NOT_MUTATING, advisory.code)
 
     def test_every_current_kind_decodes_and_has_a_schema(self) -> None:
         payloads: dict[decision_models.ActionKind, JsonObject] = {
@@ -138,8 +160,8 @@ class TransitionInputTest(unittest.TestCase):
         self.assertEqual(set(TRANSITION_ACTION_KINDS), {kind.value for kind in payloads})
         for kind, payload in payloads.items():
             with self.subTest(kind=kind):
-                self.assertIsNotNone(parse_transition_input(kind, json.dumps(payload)))
-                schema = encoded_transition_input_schema(kind)
+                expect_transition_input(parse_transition_input(kind, json.dumps(payload)))
+                schema = expect_schema(encoded_transition_input_schema(kind))
                 self.assertIn(b'"type":"object"', schema)
 
     def test_activate_rejects_non_string_attempt(self) -> None:
@@ -152,8 +174,9 @@ class TransitionInputTest(unittest.TestCase):
                 "owner": "worker",
                 "brief_artifact_ref_id": 1,
             }
-            with self.subTest(invalid=invalid), self.assertRaises(TransitionInputError):
-                parse_transition_input(decision_models.ActionKind.ACTIVATE, json.dumps(value))
+            with self.subTest(invalid=invalid):
+                rejected = parse_transition_input(decision_models.ActionKind.ACTIVATE, json.dumps(value))
+                self.assertIsInstance(rejected, TransitionInputFailure)
 
 
 if __name__ == "__main__":

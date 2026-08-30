@@ -97,3 +97,15 @@ type InputPayload = (
     | TransferCoordinatorInputPayload
 )
 type InputModel = type[InputPayload]
+
+
+class CloseView(msgspec.Struct, frozen=True):
+    item_id: str
+    outcome: str
+    reason: str
+    revision: str
+
+
+class CoordinatedTransitionView(msgspec.Struct, frozen=True):
+    action_id: str
+    revision: str

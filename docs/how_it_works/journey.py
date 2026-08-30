@@ -2,12 +2,12 @@ from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application.mutations import project_transition_mutation
 from pinboard.application.service import execute
 from pinboard.domain import decision_models
-from pinboard.interfaces.cli_commands import TransitionCommand
+from pinboard.interfaces import cli_commands
 
 from .model import Box, Connector, Diagram, Guide, Note, Section
 
 SOURCE_SYMBOL_NAMES: dict[str, str] = {
-    "TransitionCommand": TransitionCommand.__name__,
+    "TransitionCommand": cli_commands.TransitionCommand.__name__,
     "SubmitReviewCommand": decision_models.SubmitReviewCommand.__name__,
     "execute": execute.__name__,
     "ReviewSubmissionChange": decision_models.ReviewSubmissionChange.__name__,
@@ -28,7 +28,7 @@ DIAGRAM = Diagram(
     title="A review submission through four layers",
     description=(
         "A submit-review request is decoded, rechecked against current mutation ownership, decided in the domain, "
-        "projected into a focused stored mutation, committed atomically, and returned as a durable receipt."
+        "projected into a focused stored mutation, and either committed atomically or returned as an expected rejection."
     ),
     width=1200,
     height=820,
@@ -52,6 +52,13 @@ DIAGRAM = Diagram(
         Connector(((650, 472), (560, 472)), "decision", "rejection", "rejected", (605, 458)),
         Connector(((750, 430), (750, 294), (800, 294)), "decision", "mutation", "accepted", (710, 356)),
         Connector(((870, 346), (870, 620)), "mutation", "transaction", "commit", (840, 554)),
+        Connector(
+            ((760, 680), (680, 680), (680, 565), (455, 565), (455, 532)),
+            "transaction",
+            "rejection",
+            "stale",
+            (590, 551),
+        ),
         Connector(
             ((900, 620), (900, 550), (1100, 550), (1100, 172)),
             "transaction",
@@ -91,7 +98,7 @@ DIAGRAM = Diagram(
             "rejection",
             "Expected rejection",
             "No stored change",
-            ("reason returned to caller",),
+            ("domain legality · stale write",),
             (),
             350,
             430,
@@ -124,8 +131,8 @@ DIAGRAM = Diagram(
         Box(
             "transaction",
             "Transaction",
-            "Commit together",
-            ("or change nothing",),
+            "Commit facts",
+            ("or return stale result",),
             ("SQLiteWorkStore.write",),
             760,
             620,
@@ -147,7 +154,7 @@ DIAGRAM = Diagram(
     ),
     notes=(
         Note(
-            "An expected rejection skips mutation and commit. View refresh happens after the accepted transaction and can be rebuilt.",
+            "Domain rejection skips persistence; a guarded stale write rolls back. Infrastructure and programming failures also roll back but remain exceptions.",
             190,
             783,
             11,

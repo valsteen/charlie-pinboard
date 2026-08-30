@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import assert_never
+from typing import Literal, assert_never
 
 from pinboard.domain import work_models
 from pinboard.domain.identifiers import (
@@ -24,13 +24,15 @@ class AuthorizationKind(Enum):
     COORDINATOR = "coordinator"
     COORDINATION = "coordination"
     ATTEMPT = "attempt"
-    OBSERVER = "observer"
 
 
 class Role(Enum):
     COORDINATOR = "coordinator"
     WORKER = "worker"
     OBSERVER = "observer"
+
+
+type MutationRole = Literal[Role.COORDINATOR, Role.WORKER]
 
 
 class ActionEffect(Enum):
@@ -317,6 +319,18 @@ class ActionCapability[SubjectT: SubjectId]:
     expected_revision: str
     coordinator_generation: int
     subject_revision: str | None = None
+    authorization: AuthorizationKind | None = AuthorizationKind.COORDINATOR
+    lease_id: LeaseId | None = None
+    command_authority: work_models.CommandAttemptAuthority | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MutationActionCapability[SubjectT: SubjectId]:
+    subject: SubjectT
+    label: str
+    expected_revision: str
+    coordinator_generation: int
+    subject_revision: str | None = None
     authorization: AuthorizationKind = AuthorizationKind.COORDINATOR
     lease_id: LeaseId | None = None
     command_authority: work_models.CommandAttemptAuthority | None = None
@@ -324,139 +338,139 @@ class ActionCapability[SubjectT: SubjectId]:
 
 @dataclass(frozen=True, slots=True)
 class AcceptCheckpointAction:
-    capability: ActionCapability[AttemptId]
+    capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_CHECKPOINT)
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptReviewAndContinueAction:
-    capability: ActionCapability[AttemptId]
+    capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_REVIEW_AND_CONTINUE)
 
 
 @dataclass(frozen=True, slots=True)
 class AcceptProposalAction:
-    capability: ActionCapability[ProposalId]
+    capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_PROPOSAL)
 
 
 @dataclass(frozen=True, slots=True)
 class ActivateAction:
-    capability: ActionCapability[ItemId]
+    capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.ACTIVATE)
 
 
 @dataclass(frozen=True, slots=True)
 class BlockAttemptAction:
-    capability: ActionCapability[AttemptId]
+    capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.BLOCK)
 
 
 @dataclass(frozen=True, slots=True)
 class BlockItemAction:
-    capability: ActionCapability[ItemId]
+    capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.BLOCK_ITEM)
 
 
 @dataclass(frozen=True, slots=True)
 class CompleteAction:
-    capability: ActionCapability[AttemptId]
+    capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.COMPLETE)
 
 
 @dataclass(frozen=True, slots=True)
 class CloseAction:
-    capability: ActionCapability[ItemId]
+    capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.CLOSE)
 
 
 @dataclass(frozen=True, slots=True)
 class ContinueAction:
-    capability: ActionCapability[AttemptId]
+    capability: ActionCapability[AttemptId] | MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.CONTINUE)
 
 
 @dataclass(frozen=True, slots=True)
 class DeferAction:
-    capability: ActionCapability[ItemId]
+    capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.DEFER)
 
 
 @dataclass(frozen=True, slots=True)
 class DispatchAction:
-    capability: ActionCapability[AttemptId]
+    capability: ActionCapability[AttemptId] | MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.DISPATCH)
 
 
 @dataclass(frozen=True, slots=True)
 class InspectAction:
-    capability: ActionCapability[LedgerId]
+    capability: ActionCapability[LedgerId] | MutationActionCapability[LedgerId]
     kind: ActionKind = field(init=False, default=ActionKind.INSPECT)
 
 
 @dataclass(frozen=True, slots=True)
 class MarkReadyAction:
-    capability: ActionCapability[ItemId]
+    capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.MARK_READY)
 
 
 @dataclass(frozen=True, slots=True)
 class MergeProposalAction:
-    capability: ActionCapability[ProposalId]
+    capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.MERGE_PROPOSAL)
 
 
 @dataclass(frozen=True, slots=True)
 class PauseAction:
-    capability: ActionCapability[AttemptId]
+    capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.PAUSE)
 
 
 @dataclass(frozen=True, slots=True)
 class RejectProposalAction:
-    capability: ActionCapability[ProposalId]
+    capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.REJECT_PROPOSAL)
 
 
 @dataclass(frozen=True, slots=True)
 class ReopenAction:
-    capability: ActionCapability[ItemId]
+    capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.REOPEN)
 
 
 @dataclass(frozen=True, slots=True)
 class ReportBlockerAction:
-    capability: ActionCapability[AttemptId]
+    capability: ActionCapability[AttemptId] | MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.REPORT_BLOCKER)
 
 
 @dataclass(frozen=True, slots=True)
 class ResumeAction:
-    capability: ActionCapability[ItemId]
+    capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.RESUME)
 
 
 @dataclass(frozen=True, slots=True)
 class ReturnForCorrectionAction:
-    capability: ActionCapability[AttemptId]
+    capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.RETURN_FOR_CORRECTION)
 
 
 @dataclass(frozen=True, slots=True)
 class ReturnProposalAction:
-    capability: ActionCapability[ProposalId]
+    capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.RETURN_PROPOSAL)
 
 
 @dataclass(frozen=True, slots=True)
 class SubmitReviewAction:
-    capability: ActionCapability[AttemptId]
+    capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.SUBMIT_REVIEW)
 
 
 @dataclass(frozen=True, slots=True)
 class TransferCoordinatorAction:
-    capability: ActionCapability[LedgerId]
+    capability: MutationActionCapability[LedgerId]
     kind: ActionKind = field(init=False, default=ActionKind.TRANSFER_COORDINATOR)
 
 
@@ -482,6 +496,26 @@ type LifecycleAction = (
     | SubmitReviewAction
 )
 type TransitionAction = LifecycleAction | TransferCoordinatorAction
+type NonCheckpointTransitionAction = (
+    AcceptReviewAndContinueAction
+    | AcceptProposalAction
+    | ActivateAction
+    | BlockAttemptAction
+    | BlockItemAction
+    | CompleteAction
+    | CloseAction
+    | DeferAction
+    | MarkReadyAction
+    | MergeProposalAction
+    | PauseAction
+    | RejectProposalAction
+    | ReopenAction
+    | ResumeAction
+    | ReturnForCorrectionAction
+    | ReturnProposalAction
+    | SubmitReviewAction
+    | TransferCoordinatorAction
+)
 type Action = TransitionAction | AdvisoryAction
 
 
@@ -624,16 +658,49 @@ type TransitionCommand = (
     | RejectProposalCommand
     | TransferCoordinatorCommand
 )
+type NonCheckpointTransitionCommand = (
+    AcceptReviewAndContinueCommand
+    | ActivateCommand
+    | PauseCommand
+    | BlockCommand
+    | CompleteCommand
+    | CloseCommand
+    | ResumeCommand
+    | SubmitReviewCommand
+    | ReturnForCorrectionCommand
+    | ReopenCommand
+    | MarkReadyCommand
+    | BlockItemCommand
+    | DeferCommand
+    | AcceptProposalCommand
+    | MergeProposalCommand
+    | ReturnProposalCommand
+    | RejectProposalCommand
+    | TransferCoordinatorCommand
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ActorAuthority:
-    role: Role
+    role: MutationRole
     authorization: AuthorizationKind
     generation: int
     lease_id: LeaseId | None = None
     attempts: tuple[AttemptId, ...] = ()
     revision_scoped: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class ObserverActorAuthority:
+    role: Literal[Role.OBSERVER] = Role.OBSERVER
+    authorization: None = None
+    generation: int = 0
+    lease_id: None = None
+    attempts: tuple[AttemptId, ...] = ()
+    revision_scoped: bool = True
+
+
+type ActionActorAuthority = ActorAuthority | ObserverActorAuthority
 
 
 @dataclass(frozen=True, slots=True)
@@ -848,10 +915,39 @@ type DecisionChange = (
     | CheckpointAcceptanceChange
     | CoordinatorTransferChange
 )
+type NonCheckpointDecisionChange = (
+    ItemStateChange
+    | ActivationChange
+    | AttemptStateChange
+    | BlockAttemptChange
+    | BlockItemChange
+    | ResumeAttemptChange
+    | ReviewSubmissionChange
+    | ReviewReturnChange
+    | ReviewAcceptanceChange
+    | CompletionChange
+    | ItemClosureChange
+    | AttemptClosureChange
+    | AcceptedProposalChange
+    | MergedProposalChange
+    | ReturnedProposalChange
+    | RejectedProposalChange
+    | CoordinatorTransferChange
+)
 
 
 @dataclass(frozen=True, slots=True)
-class Decision:
-    action: TransitionAction
-    change: DecisionChange
+class TransitionDecision:
+    action: NonCheckpointTransitionAction
+    change: NonCheckpointDecisionChange
     receipt: TransitionReceipt
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointAcceptanceDecision:
+    action: AcceptCheckpointAction
+    change: CheckpointAcceptanceChange
+    receipt: TransitionReceipt
+
+
+type Decision = TransitionDecision | CheckpointAcceptanceDecision

@@ -20,6 +20,7 @@ DARK_OUTPUT_PATHS = {
 
 WATCHED_AUTHORITIES = (
     Path("ARCHITECTURE.md"),
+    Path("DESIGN_PRINCIPLES.md"),
     Path("docs/how_it_works/VISUAL_LANGUAGE.md"),
     Path("src/pinboard/domain/work_models.py"),
     Path("src/pinboard/domain/decision_models.py"),
@@ -28,8 +29,25 @@ WATCHED_AUTHORITIES = (
     Path("src/pinboard/application/mutation_models.py"),
     Path("src/pinboard/application/mutations.py"),
     Path("src/pinboard/application/stored_state.py"),
+    Path("src/pinboard/application/actions.py"),
+    Path("src/pinboard/application/queries.py"),
+    Path("src/pinboard/application/artifact_publication.py"),
+    Path("src/pinboard/application/dispatch.py"),
+    Path("src/pinboard/application/ports.py"),
     Path("src/pinboard/adapters/sqlite/schema.sql"),
+    Path("src/pinboard/adapters/sqlite/database.py"),
     Path("src/pinboard/adapters/sqlite/store.py"),
+    Path("src/pinboard/adapters/sqlite/state.py"),
+    Path("src/pinboard/adapters/sqlite/lifecycle.py"),
+    Path("src/pinboard/adapters/sqlite/proposals.py"),
+    Path("src/pinboard/adapters/sqlite/artifacts.py"),
+    Path("src/pinboard/adapters/sqlite/authority.py"),
+    Path("src/pinboard/interfaces/cli.py"),
+    Path("src/pinboard/interfaces/cli_parser.py"),
+    Path("src/pinboard/interfaces/transitions.py"),
+    Path("src/pinboard/interfaces/dispatch_brief.py"),
+    Path("src/pinboard/interfaces/work_state.py"),
+    Path("src/pinboard/interfaces/attempt_authority.py"),
 )
 
 
@@ -91,11 +109,11 @@ The package is split into four layers because each removes a different kind of a
 
 {_picture("layers", "Four package layers showing interfaces, application, domain, and adapters, connected by package dependencies")}
 
-Every arrow in this view means “may depend on”; the next view shows runtime flow. Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. Application code reads complete stored state for each operation and projects an accepted decision into one focused storage mutation. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
+Every arrow in this view means “may depend on”; the next view shows runtime flow. Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. A small exhaustive entry point routes exact commands, while thematic interface modules own composition that needs concrete adapters. Application code reads complete stored state through capabilities and projects an accepted decision into one focused storage mutation. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
 
 ## Follow one change
 
-Submitting work for review is one visible action, but it strengthens meaning at every boundary. External values become an exact command. The application reloads complete current state and mutation ownership inside the write operation. Domain evaluation returns either an accepted change or an expected rejection; rejection leaves the ledger unchanged. The application projects an accepted decision, its receipt, and its affected auxiliary values into a focused storage mutation. SQLite applies only those guarded relational changes and commits them with one history receipt, or rolls the transaction back without changing the prior ledger.
+Submitting work for review is one visible action, but it strengthens meaning at every boundary. External values become an exact command. Advertised command, proposal, and dispatch rejections return as typed failures to one CLI presenter. The application reloads complete current state and mutation ownership inside the write operation. Domain evaluation returns either an accepted change or an expected rejection; rejection leaves the ledger unchanged. The application projects an accepted decision, its receipt, and its affected auxiliary values into a focused storage mutation. SQLite applies only those guarded relational changes. A stale guard returns an expected failure, while infrastructure or programming failures remain exceptions; every unsuccessful path rolls back the transaction without changing the prior ledger.
 
 {_picture("journey", "A submit-review request travelling through interface decoding, application orchestration, domain decision, mutation projection, and atomic SQLite commit")}
 
@@ -115,7 +133,7 @@ Checkpoint acceptance publishes the exact result and independent review as immut
 
 Mutation ownership has two scopes. Shared-change authority is temporary: any task may borrow the single coordination lease for one shared scheduling or graph-wide change, then release it. It is not a coordinator task and does not create or message other tasks. Its exclusivity prevents a conflicting shared decision during that operation and authorizes replacement or revocation of an attempt owner. An attempt lease records which task session—identified by task, host, and lease id—owns one implementation attempt. Its generation fences an older owner after transfer or revocation, while leases for unrelated attempts remain independent. Project state holds the current revision, and committed history records each accepted input, outcome, and actor.
 
-For installation and the product story, return to the [README](README.md). For contributor-facing ownership, storage boundaries, and representative command flows, continue to the [architecture map](ARCHITECTURE.md).
+For installation and the product story, return to the [README](README.md). For contributor-facing ownership, storage boundaries, and representative command flows, continue to the [architecture map](ARCHITECTURE.md). The [design principles](DESIGN_PRINCIPLES.md) explain the method used to keep those boundaries explicit.
 
 ---
 

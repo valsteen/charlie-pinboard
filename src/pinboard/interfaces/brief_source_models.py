@@ -92,3 +92,40 @@ class BriefSourcePlan:
     max_batch_bytes: int
     sources: tuple[PlannedBriefSource, ...]
     batches: tuple[BriefSourceBatch, ...]
+
+
+class BriefSourceSegmentView(msgspec.Struct, frozen=True):
+    authority_id: str
+    selector: str
+    index: int
+    start_line: int
+    end_line: int
+    content_byte_count: int
+    content_sha256: str
+
+
+class BriefSourceView(msgspec.Struct, frozen=True):
+    authority_id: str
+    selector: str
+    families: tuple[str, ...]
+    selected_sha256: str
+    selected_byte_count: int
+    start_line: int
+    end_line: int
+    whole_file: bool
+    segments: tuple[BriefSourceSegmentView, ...]
+
+
+class BriefSourceBatchView(msgspec.Struct, frozen=True):
+    index: int
+    content_byte_count: int
+    estimated_rendered_byte_count: int
+    segments: tuple[BriefSourceSegmentView, ...]
+
+
+class BriefSourcePlanView(msgspec.Struct, frozen=True):
+    schema: str
+    manifest_sha256: str
+    max_batch_bytes: int
+    sources: tuple[BriefSourceView, ...]
+    batches: tuple[BriefSourceBatchView, ...]

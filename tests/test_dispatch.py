@@ -18,12 +18,17 @@ from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.actions import discover_actions
 from pinboard.application.artifacts import NewArtifact
-from pinboard.application.dispatch import prepare_dispatch
 from pinboard.application.dispatch_models import DispatchEnvironment, DispatchPermission
-from pinboard.application.errors import DispatchError, DispatchErrorCode
 from pinboard.domain import decision_models
+from pinboard.domain.identifiers import ReviewId
 from pinboard.interfaces.cli import main
-from pinboard.interfaces.dispatch_brief import prepare_dispatch_from_artifact, read_dispatch_environment
+from pinboard.interfaces.dispatch_brief import (
+    SuppliedDispatchReview,
+    prepare_dispatch,
+    prepare_dispatch_from_artifact,
+    read_dispatch_environment,
+)
+from pinboard.interfaces.errors import DispatchErrorCode, DispatchFailure, DispatchResult
 from pinboard.interfaces.work_brief_models import (
     CrossBoundaryCheckpoint,
     LocalCheckpoint,
@@ -31,12 +36,23 @@ from pinboard.interfaces.work_brief_models import (
     WorkBriefReview,
 )
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes, canonical_work_brief_review_bytes
+from tests.domain_support import expect_success
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import CHECKPOINT_ID, ready_review, work_a_brief
 
 
-def _reuse_review(_digest: str, review: bytes | None, _review_id: str | None) -> tuple[bytes, str]:
-    return review or b"", "review"
+def expect_dispatch_success[T](result: DispatchResult[T]) -> T:
+    if isinstance(result, DispatchFailure):
+        raise AssertionError(str(result))
+    return result
+
+
+def expect_dispatch_failure[T](result: DispatchResult[T], code: DispatchErrorCode) -> DispatchFailure:
+    if not isinstance(result, DispatchFailure):
+        raise AssertionError(f"Expected {code.value}, got success: {result!r}")
+    if result.code != code:
+        raise AssertionError(f"Expected {code.value}, got {result.code.value}: {result.message}")
+    return result
 
 
 class DispatchTest(unittest.TestCase):
@@ -109,16 +125,15 @@ class DispatchTest(unittest.TestCase):
         store.initialize_state(state)
 
         def action() -> decision_models.DispatchAction:
-            selected = next(
-                candidate
-                for candidate in discover_actions(
+            actions = expect_success(
+                discover_actions(
                     store,
                     decision_models.Role.COORDINATOR,
                     lease_id=coordination.lease_id,
                     generation=coordination.generation,
                 )
-                if candidate.kind == decision_models.ActionKind.DISPATCH
             )
+            selected = next(candidate for candidate in actions if candidate.kind == decision_models.ActionKind.DISPATCH)
             assert isinstance(selected, decision_models.DispatchAction)
             return selected
 
@@ -132,24 +147,24 @@ class DispatchTest(unittest.TestCase):
         environment = self.environment(project)
         candidate = ready_review(value)
 
-        prompt = prepare_dispatch_from_artifact(
-            path,
-            value.attempt_id,
-            value.branch,
-            project,
-            CHECKPOINT_ID,
-            environment,
-            accepted_item_id=value.item_id,
-            accepted_scope_revision=value.accepted_scope.revision,
-            accepted_scope_digest=value.accepted_scope.digest,
-            brief_review=candidate,
-            review_id="review-id",
-            review_publisher=lambda _digest, review, _review_id: (review or b"", "review"),
+        prompt = expect_dispatch_success(
+            prepare_dispatch_from_artifact(
+                path,
+                value.attempt_id,
+                value.branch,
+                project,
+                CHECKPOINT_ID,
+                environment,
+                accepted_item_id=value.item_id,
+                accepted_scope_revision=value.accepted_scope.revision,
+                accepted_scope_digest=value.accepted_scope.digest,
+                accepted_review=candidate,
+            )
         )
 
         self.assertIn(f"Checkpoint: {CHECKPOINT_ID}", prompt)
         self.assertIn(f"Canonical brief: {path}", prompt)
-        with self.assertRaises(DispatchError) as altered_prompt:
+        altered_prompt = expect_dispatch_failure(
             prepare_dispatch_from_artifact(
                 path,
                 value.attempt_id,
@@ -161,14 +176,14 @@ class DispatchTest(unittest.TestCase):
                 accepted_scope_revision=value.accepted_scope.revision,
                 accepted_scope_digest=value.accepted_scope.digest,
                 supplied_prompt=(prompt + "extra").encode(),
-                brief_review=candidate,
-                review_id="review-id",
-                review_publisher=lambda _digest, review, _review_id: (review or b"", "review"),
-            )
-        self.assertEqual(DispatchErrorCode.DISPATCH_PROMPT_NOT_CANONICAL, altered_prompt.exception.code)
+                accepted_review=candidate,
+            ),
+            DispatchErrorCode.DISPATCH_PROMPT_NOT_CANONICAL,
+        )
+        self.assertIn("launch adds or changes instructions", altered_prompt.message)
 
         project.joinpath("architecture.md").write_text("# Architecture\n\n## Contract\n\nChanged.\n", encoding="utf-8")
-        with self.assertRaises(DispatchError) as stale_source:
+        stale_source = expect_dispatch_failure(
             prepare_dispatch_from_artifact(
                 path,
                 value.attempt_id,
@@ -179,11 +194,11 @@ class DispatchTest(unittest.TestCase):
                 accepted_item_id=value.item_id,
                 accepted_scope_revision=value.accepted_scope.revision,
                 accepted_scope_digest=value.accepted_scope.digest,
-                brief_review=candidate,
-                review_id="review-id",
-                review_publisher=lambda _digest, review, _review_id: (review or b"", "review"),
-            )
-        self.assertEqual(DispatchErrorCode.DISPATCH_AUTHORITY_STALE, stale_source.exception.code)
+                accepted_review=candidate,
+            ),
+            DispatchErrorCode.DISPATCH_AUTHORITY_STALE,
+        )
+        self.assertIn("changed after review", stale_source.message)
 
     def test_identity_review_and_environment_failure_matrix_is_stable(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
@@ -225,14 +240,11 @@ class DispatchTest(unittest.TestCase):
                 "accepted_item_id": value.item_id,
                 "accepted_scope_revision": value.accepted_scope.revision,
                 "accepted_scope_digest": value.accepted_scope.digest,
-                "brief_review": ready_review(value),
-                "review_id": "review-id",
-                "review_publisher": _reuse_review,
+                "accepted_review": ready_review(value),
             }
             arguments.update(changed)
-            with self.subTest(name=_name), self.assertRaises(DispatchError) as raised:
-                prepare_dispatch_from_artifact(**arguments)
-            self.assertEqual(code, raised.exception.code)
+            with self.subTest(name=_name):
+                expect_dispatch_failure(prepare_dispatch_from_artifact(**arguments), code)
 
         review = msgspec.json.decode(ready_review(value), type=WorkBriefReview)
         for changed, code in (
@@ -240,8 +252,8 @@ class DispatchTest(unittest.TestCase):
             ({"checkpoint_sha256": "f" * 64}, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_STALE),
             ({"coverage": ()}, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID),
         ):
-            with self.subTest(changed=changed), self.assertRaises(DispatchError) as raised:
-                prepare_dispatch_from_artifact(
+            with self.subTest(changed=changed):
+                failure = prepare_dispatch_from_artifact(
                     path,
                     value.attempt_id,
                     value.branch,
@@ -251,11 +263,9 @@ class DispatchTest(unittest.TestCase):
                     accepted_item_id=value.item_id,
                     accepted_scope_revision=value.accepted_scope.revision,
                     accepted_scope_digest=value.accepted_scope.digest,
-                    brief_review=canonical_work_brief_review_bytes(replace(review, **changed)),
-                    review_id="review-id",
-                    review_publisher=lambda _digest, candidate, _review_id: (candidate or b"", "review"),
+                    accepted_review=canonical_work_brief_review_bytes(replace(review, **changed)),
                 )
-            self.assertEqual(code, raised.exception.code)
+                expect_dispatch_failure(failure, code)
 
     def test_local_checkpoint_rejects_review_arguments(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
@@ -275,19 +285,7 @@ class DispatchTest(unittest.TestCase):
         path = project / "local.json"
         path.write_bytes(canonical_work_brief_bytes(value))
 
-        prompt = prepare_dispatch_from_artifact(
-            path,
-            value.attempt_id,
-            value.branch,
-            project,
-            local.checkpoint_id,
-            self.environment(project),
-            accepted_item_id=value.item_id,
-            accepted_scope_revision=1,
-            accepted_scope_digest=SQLITE_DIGEST,
-        )
-        self.assertIn("Checkpoint: local-cutover", prompt)
-        with self.assertRaises(DispatchError) as raised:
+        prompt = expect_dispatch_success(
             prepare_dispatch_from_artifact(
                 path,
                 value.attempt_id,
@@ -298,24 +296,37 @@ class DispatchTest(unittest.TestCase):
                 accepted_item_id=value.item_id,
                 accepted_scope_revision=1,
                 accepted_scope_digest=SQLITE_DIGEST,
-                brief_review=b"{}",
             )
-        self.assertEqual(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID, raised.exception.code)
+        )
+        self.assertIn("Checkpoint: local-cutover", prompt)
+        rejected = prepare_dispatch_from_artifact(
+            path,
+            value.attempt_id,
+            value.branch,
+            project,
+            local.checkpoint_id,
+            self.environment(project),
+            accepted_item_id=value.item_id,
+            accepted_scope_revision=1,
+            accepted_scope_digest=SQLITE_DIGEST,
+            accepted_review=b"{}",
+        )
+        expect_dispatch_failure(rejected, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID)
 
     def test_sqlite_dispatch_publishes_reuses_and_preserves_review_collisions(self) -> None:
         project, roots, store, value, action, environment = self.initialized()
         first_review = ready_review(value)
 
-        prompt = prepare_dispatch(
-            store,
-            ArtifactRepository(roots),
-            prepare_dispatch_from_artifact,
-            project,
-            action(),
-            CHECKPOINT_ID,
-            environment,
-            brief_review=first_review,
-            review_id="first-review",
+        prompt = expect_dispatch_success(
+            prepare_dispatch(
+                store,
+                ArtifactRepository(roots),
+                project,
+                action(),
+                CHECKPOINT_ID,
+                environment,
+                supplied_review=SuppliedDispatchReview(first_review, ReviewId("first-review")),
+            )
         )
 
         self.assertIn(f"Checkpoint: {CHECKPOINT_ID}", prompt)
@@ -328,31 +339,32 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(1, len(ready))
         self.assertTrue(ready[0].selector.endswith(".json"))
 
-        reused = prepare_dispatch(
-            store,
-            ArtifactRepository(roots),
-            prepare_dispatch_from_artifact,
-            project,
-            action(),
-            CHECKPOINT_ID,
-            environment,
-        )
-        self.assertEqual(prompt, reused)
-        self.assertEqual(after_first, store.snapshot())
-
-        with self.assertRaises(DispatchError) as collision:
+        reused = expect_dispatch_success(
             prepare_dispatch(
                 store,
                 ArtifactRepository(roots),
-                prepare_dispatch_from_artifact,
                 project,
                 action(),
                 CHECKPOINT_ID,
                 environment,
-                brief_review=ready_review(value, result="Different complete result."),
-                review_id="later-review",
             )
-        self.assertEqual(DispatchErrorCode.DISPATCH_BRIEF_REVIEW_COLLISION, collision.exception.code)
+        )
+        self.assertEqual(prompt, reused)
+        self.assertEqual(after_first, store.snapshot())
+
+        collision = prepare_dispatch(
+            store,
+            ArtifactRepository(roots),
+            project,
+            action(),
+            CHECKPOINT_ID,
+            environment,
+            supplied_review=SuppliedDispatchReview(
+                ready_review(value, result="Different complete result."),
+                ReviewId("later-review"),
+            ),
+        )
+        expect_dispatch_failure(collision, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_COLLISION)
         self.assertTrue(
             any("rejected-later-review" in reference.key for reference in store.snapshot().artifact_references)
         )
@@ -360,26 +372,25 @@ class DispatchTest(unittest.TestCase):
     def test_sqlite_dispatch_rejects_stale_action_and_cli_verifies_prompt(self) -> None:
         project, roots, store, value, action, environment = self.initialized()
         selected = action()
-        store.accept_artifact_reference(
-            roots.work_root,
-            write_revision(
-                roots, NewArtifact(stored_state.ArtifactKind.EVIDENCE, "revision-bump", 1, ".json", b"{}\n")
-            ),
-            datetime.now(UTC),
-        )
-        with self.assertRaises(DispatchError) as stale:
-            prepare_dispatch(
-                store,
-                ArtifactRepository(roots),
-                prepare_dispatch_from_artifact,
-                project,
-                selected,
-                CHECKPOINT_ID,
-                environment,
-                brief_review=ready_review(value),
-                review_id="review-id",
+        expect_success(
+            store.accept_artifact_reference(
+                roots.work_root,
+                write_revision(
+                    roots, NewArtifact(stored_state.ArtifactKind.EVIDENCE, "revision-bump", 1, ".json", b"{}\n")
+                ),
+                datetime.now(UTC),
             )
-        self.assertEqual(DispatchErrorCode.STALE_ACTION, stale.exception.code)
+        )
+        stale = prepare_dispatch(
+            store,
+            ArtifactRepository(roots),
+            project,
+            selected,
+            CHECKPOINT_ID,
+            environment,
+            supplied_review=SuppliedDispatchReview(ready_review(value), ReviewId("review-id")),
+        )
+        expect_dispatch_failure(stale, DispatchErrorCode.STALE_ACTION)
 
         project, roots, store, value, action, environment = self.initialized()
         selected = action()
@@ -494,9 +505,109 @@ class DispatchTest(unittest.TestCase):
             '{"schema":"pinboard-dispatch/v2","checkout":"x","branch":"b","starting_revision":"r","permissions":[]}',
             encoding="utf-8",
         )
-        with self.assertRaises(DispatchError) as raised:
-            read_dispatch_environment(path)
-        self.assertEqual(DispatchErrorCode.DISPATCH_ENVIRONMENT_INVALID, raised.exception.code)
+        expect_dispatch_failure(
+            read_dispatch_environment(path),
+            DispatchErrorCode.DISPATCH_ENVIRONMENT_INVALID,
+        )
+        missing_environment = project / "missing-environment.json"
+        unreadable = expect_dispatch_failure(
+            read_dispatch_environment(missing_environment),
+            DispatchErrorCode.DISPATCH_ENVIRONMENT_UNREADABLE,
+        )
+        self.assertTrue(unreadable.message.startswith(f"Cannot read '{missing_environment}': "))
+
+        project, roots, _store, _value, action, _environment = self.initialized()
+        selected = action()
+        path = project / "invalid-environment.json"
+        path.write_text(
+            '{"schema":"pinboard-dispatch/v2","checkout":"x","branch":"b","starting_revision":"r","permissions":[]}',
+            encoding="utf-8",
+        )
+        base_arguments = (
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(roots.work_root),
+            "dispatch",
+            "--action-id",
+            str(decision_models.action_id(selected)),
+            "--expected-revision",
+            selected.capability.expected_revision,
+            "--generation",
+            str(selected.capability.coordinator_generation),
+            "--lease-id",
+            str(selected.capability.lease_id),
+            "--checkpoint",
+            CHECKPOINT_ID,
+        )
+        result, stdout, stderr = self.run_cli(
+            *base_arguments,
+            "--environment",
+            str(path),
+        )
+        self.assertEqual(14, result)
+        self.assertEqual("", stdout)
+        self.assertTrue(stderr.startswith("DISPATCH_ENVIRONMENT_INVALID: Cannot decode dispatch environment: "))
+
+        valid_environment = project / "valid-environment.json"
+        valid_environment.write_bytes(msgspec.json.encode(self.environment(project)))
+        missing_prompt = project / "missing-prompt.txt"
+        result, stdout, stderr = self.run_cli(
+            *base_arguments,
+            "--environment",
+            str(valid_environment),
+            "--prompt",
+            str(missing_prompt),
+        )
+        self.assertEqual(14, result)
+        self.assertEqual("", stdout)
+        self.assertTrue(stderr.startswith(f"DISPATCH_PROMPT_UNREADABLE: Cannot read '{missing_prompt}': "))
+
+        missing_review = project / "missing-review.json"
+        result, stdout, stderr = self.run_cli(
+            *base_arguments,
+            "--environment",
+            str(valid_environment),
+            "--brief-review",
+            str(missing_review),
+            "--review-id",
+            "missing-review",
+        )
+        self.assertEqual(14, result)
+        self.assertEqual("", stdout)
+        self.assertTrue(stderr.startswith(f"DISPATCH_BRIEF_REVIEW_INVALID: Cannot read '{missing_review}': "))
+
+        review_without_id = project / "review-without-id.json"
+        review_without_id.write_bytes(b"{}")
+        result, stdout, stderr = self.run_cli(
+            *base_arguments,
+            "--environment",
+            str(valid_environment),
+            "--brief-review",
+            str(review_without_id),
+        )
+        self.assertEqual(14, result)
+        self.assertEqual("", stdout)
+        self.assertEqual(
+            "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID: --brief-review requires one kebab-case --review-id.\n",
+            stderr,
+        )
+
+        result, stdout, stderr = self.run_cli(
+            *base_arguments,
+            "--environment",
+            str(valid_environment),
+            "--brief-review",
+            str(review_without_id),
+            "--review-id",
+            "NOT KEBAB",
+        )
+        self.assertEqual(14, result)
+        self.assertEqual("", stdout)
+        self.assertEqual(
+            "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID: --brief-review requires one kebab-case --review-id.\n",
+            stderr,
+        )
 
 
 if __name__ == "__main__":

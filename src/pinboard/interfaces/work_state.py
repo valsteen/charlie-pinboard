@@ -1,48 +1,48 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
-from enum import Enum
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pinboard.adapters.files.artifacts import verify_reference
-from pinboard.adapters.files.errors import ArtifactError
-from pinboard.adapters.files.views import expected_view_bytes
+from pinboard.adapters.files.errors import ArtifactError, FileIOError, FileIOErrorCode
+from pinboard.adapters.files.file_io import ensure_directory_chain, resolve_durable_roots
+from pinboard.adapters.files.root import ensure_default_git_exclude
+from pinboard.adapters.files.views import expected_view_bytes, rebuild
+from pinboard.adapters.sqlite.database import initialize_database, open_database, reconcile_database_publication
 from pinboard.adapters.sqlite.errors import StorageError
+from pinboard.adapters.sqlite.models import InitReceipt, OpenMode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.domain.identifiers import AttemptId
+from pinboard.interfaces.work_state_models import Diagnostic, Severity, ValidationReport
 
 
-class Severity(Enum):
-    ERROR = "error"
-    WARNING = "warning"
-
-
-@dataclass(frozen=True, slots=True)
-class Diagnostic:
-    code: str
-    severity: Severity
-    path: Path
-    message: str
-    hint: str | None = None
-
-    def render(self) -> str:
-        result = f"{self.severity.value.upper()} {self.code} {self.path}: {self.message}"
-        if self.hint:
-            result += f" Hint: {self.hint}"
-        return result
-
-
-@dataclass(frozen=True, slots=True)
-class ValidationReport:
-    diagnostics: tuple[Diagnostic, ...]
-
-    @property
-    def valid(self) -> bool:
-        return not any(diagnostic.severity == Severity.ERROR for diagnostic in self.diagnostics)
-
-    def render(self) -> str:
-        if not self.diagnostics:
-            return "OK WORK_STATE_VALID"
-        return "\n".join(diagnostic.render() for diagnostic in self.diagnostics)
+def initialize_work_state(
+    shared_repository_root: Path,
+    work_root: Path | None = None,
+    *,
+    now: datetime | None = None,
+) -> InitReceipt:
+    if work_root is None:
+        ensure_default_git_exclude(shared_repository_root)
+    roots = resolve_durable_roots(shared_repository_root, work_root)
+    resumed = roots.database_path.exists()
+    current = now or datetime.now(UTC)
+    if resumed:
+        connection = open_database(roots.database_path, OpenMode.READ_WRITE)
+        connection.close()
+        reconcile_database_publication(roots.database_path)
+        ensure_directory_chain(roots)
+    else:
+        initialize_database(roots, current)
+    store = SQLiteWorkStore(roots.database_path)
+    result = rebuild(store, roots.work_root)
+    if result.warning is not None:
+        raise FileIOError(FileIOErrorCode.VIEW_REFRESH_FAILED, result.warning.message)
+    return InitReceipt(
+        roots.work_root,
+        roots.database_path,
+        store.snapshot().lifecycle.project.revision,
+        resumed,
+    )
 
 
 def _error(code: str, path: Path, message: str, hint: str | None = None) -> Diagnostic:

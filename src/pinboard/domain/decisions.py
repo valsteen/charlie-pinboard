@@ -1,6 +1,6 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import assert_never
+from typing import assert_never, overload
 
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
@@ -106,8 +106,8 @@ class ActionCapabilityFactory:
         label: str,
         subject_revision: str | None = None,
         command_authority: work_models.CommandAttemptAuthority | None = None,
-    ) -> decision_models.ActionCapability[SubjectT]:
-        return decision_models.ActionCapability(
+    ) -> decision_models.MutationActionCapability[SubjectT]:
+        return decision_models.MutationActionCapability(
             subject=subject,
             label=label,
             expected_revision=self.revision,
@@ -255,71 +255,85 @@ def _item_actions(
 
 
 def available_actions(
-    snapshot: LedgerSnapshot, actor: decision_models.ActorAuthority
+    snapshot: LedgerSnapshot, actor: decision_models.ActionActorAuthority
 ) -> DecisionResult[tuple[decision_models.Action, ...]]:
     revision = snapshot.revision if actor.revision_scoped else ""
-    factory = ActionCapabilityFactory(revision, actor)
-    match actor.role:
-        case decision_models.Role.OBSERVER:
-            return (decision_models.InspectAction(factory.make(LedgerId("ledger"), "Inspect current work")),)
-        case decision_models.Role.WORKER:
-            result = _worker_actions(snapshot, factory)
-            if not result:
-                return DecisionFailure(
-                    DecisionFailureCode.ATTEMPT_LEASE_REQUIRED,
-                    "The supplied attempt lease is not current for an active item.",
-                )
-            return result
-        case decision_models.Role.COORDINATOR:
-            result = _active_coordinator_actions(snapshot, factory)
-            for item in snapshot.items:
-                result.extend(_item_actions(snapshot, item, factory))
-            for proposal in snapshot.proposals:
-                result.extend(
-                    (
-                        decision_models.AcceptProposalAction(
-                            factory.make(
-                                proposal.proposal,
-                                f"Accept proposal {proposal.proposal}",
-                                proposal.revision,
-                            )
-                        ),
-                        decision_models.MergeProposalAction(
-                            factory.make(
-                                proposal.proposal,
-                                f"Merge proposal {proposal.proposal}",
-                                proposal.revision,
-                            )
-                        ),
-                        decision_models.ReturnProposalAction(
-                            factory.make(
-                                proposal.proposal,
-                                f"Return proposal {proposal.proposal}",
-                                proposal.revision,
-                            )
-                        ),
-                        decision_models.RejectProposalAction(
-                            factory.make(
-                                proposal.proposal,
-                                f"Reject proposal {proposal.proposal}",
-                                proposal.revision,
-                            )
-                        ),
+    match actor:
+        case decision_models.ObserverActorAuthority():
+            return (
+                decision_models.InspectAction(
+                    decision_models.ActionCapability(
+                        LedgerId("ledger"),
+                        "Inspect current work",
+                        revision,
+                        actor.generation,
+                        authorization=actor.authorization,
                     )
-                )
-            if snapshot.can_transfer_coordinator:
-                result.append(
-                    decision_models.TransferCoordinatorAction(
-                        factory.make(LedgerId("ledger"), "Transfer coordinator ownership")
-                    )
-                )
-            return tuple(result)
+                ),
+            )
+        case decision_models.ActorAuthority():
+            factory = ActionCapabilityFactory(revision, actor)
+            match actor.role:
+                case decision_models.Role.WORKER:
+                    result = _worker_actions(snapshot, factory)
+                    if not result:
+                        return DecisionFailure(
+                            DecisionFailureCode.ATTEMPT_LEASE_REQUIRED,
+                            "The supplied attempt lease is not current for an active item.",
+                        )
+                    return result
+                case decision_models.Role.COORDINATOR:
+                    result = _active_coordinator_actions(snapshot, factory)
+                    for item in snapshot.items:
+                        result.extend(_item_actions(snapshot, item, factory))
+                    for proposal in snapshot.proposals:
+                        result.extend(
+                            (
+                                decision_models.AcceptProposalAction(
+                                    factory.make(
+                                        proposal.proposal,
+                                        f"Accept proposal {proposal.proposal}",
+                                        proposal.revision,
+                                    )
+                                ),
+                                decision_models.MergeProposalAction(
+                                    factory.make(
+                                        proposal.proposal,
+                                        f"Merge proposal {proposal.proposal}",
+                                        proposal.revision,
+                                    )
+                                ),
+                                decision_models.ReturnProposalAction(
+                                    factory.make(
+                                        proposal.proposal,
+                                        f"Return proposal {proposal.proposal}",
+                                        proposal.revision,
+                                    )
+                                ),
+                                decision_models.RejectProposalAction(
+                                    factory.make(
+                                        proposal.proposal,
+                                        f"Reject proposal {proposal.proposal}",
+                                        proposal.revision,
+                                    )
+                                ),
+                            )
+                        )
+                    if snapshot.can_transfer_coordinator:
+                        result.append(
+                            decision_models.TransferCoordinatorAction(
+                                factory.make(LedgerId("ledger"), "Transfer coordinator ownership")
+                            )
+                        )
+                    return tuple(result)
+                case _ as unreachable:
+                    assert_never(unreachable)
         case _ as unreachable:
             assert_never(unreachable)
 
 
 def rediscover_action(
-    snapshot: LedgerSnapshot, actor: decision_models.ActorAuthority, supplied: decision_models.Action
+    snapshot: LedgerSnapshot, actor: decision_models.ActionActorAuthority, supplied: decision_models.Action
 ) -> DecisionResult[decision_models.Action]:
     """Reselect one action and compare its complete subject-scoped mutation authority."""
 
@@ -371,24 +385,39 @@ def _receipt(
 
 
 def _result(
-    action: decision_models.TransitionAction,
+    action: decision_models.NonCheckpointTransitionAction,
     now: datetime,
-    change: decision_models.DecisionChange,
+    change: decision_models.NonCheckpointDecisionChange,
     *,
     item: ItemId | None = None,
     outcome: str | None = None,
     evidence: str | None = None,
-) -> decision_models.Decision:
-    return decision_models.Decision(
+) -> decision_models.TransitionDecision:
+    return decision_models.TransitionDecision(
         action,
         change,
         _receipt(action, item, outcome or action.kind.value, evidence, now),
     )
 
 
+def _checkpoint_result(
+    action: decision_models.AcceptCheckpointAction,
+    now: datetime,
+    change: decision_models.CheckpointAcceptanceChange,
+    *,
+    item: ItemId,
+    evidence: str,
+) -> decision_models.CheckpointAcceptanceDecision:
+    return decision_models.CheckpointAcceptanceDecision(
+        action,
+        change,
+        _receipt(action, item, action.kind.value, evidence, now),
+    )
+
+
 def _activate(
     snapshot: LedgerSnapshot, command: decision_models.ActivateCommand, now: datetime
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     value = command.value
     item_id = action.capability.subject
@@ -449,7 +478,7 @@ def _pause_or_block(
     snapshot: LedgerSnapshot,
     command: decision_models.PauseCommand | decision_models.BlockCommand,
     now: datetime,
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     attempt_id = action.capability.subject
     item = snapshot.item_for_attempt(attempt_id)
@@ -459,7 +488,7 @@ def _pause_or_block(
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "The named attempt is not active.")
     match command:
         case decision_models.PauseCommand():
-            change: decision_models.DecisionChange = decision_models.AttemptStateChange(
+            change: decision_models.NonCheckpointDecisionChange = decision_models.AttemptStateChange(
                 item.item,
                 item.state,
                 work_models.WorkState.PAUSED,
@@ -503,7 +532,7 @@ def _fence_retained_attempt_authority(
 
 def _complete(
     snapshot: LedgerSnapshot, command: decision_models.CompleteCommand, now: datetime
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     value = command.value
     attempt_id = action.capability.subject
@@ -537,7 +566,7 @@ def _complete(
 
 def _close(
     snapshot: LedgerSnapshot, command: decision_models.CloseCommand, now: datetime
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     value = command.value
     item_id = action.capability.subject
@@ -556,7 +585,7 @@ def _close(
         return DecisionFailure(DecisionFailureCode.HISTORY_RECORD_EXISTS, f"History already contains '{item.item}'.")
     authority_change = None if item.attempt is None else _fence_retained_attempt_authority(snapshot, item.attempt)
     if item.attempt is None:
-        change: decision_models.DecisionChange = decision_models.ItemClosureChange(
+        change: decision_models.NonCheckpointDecisionChange = decision_models.ItemClosureChange(
             item.item, item.state, value.outcome, value.reason
         )
     else:
@@ -584,7 +613,7 @@ def _close(
 
 def _resume(
     snapshot: LedgerSnapshot, command: decision_models.ResumeCommand, now: datetime
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     value = command.value
     item_id = action.capability.subject
@@ -633,7 +662,7 @@ def _resume(
             if item.state == work_models.WorkState.PAUSED
             else work_models.AttemptState.BLOCKED
         )
-        change: decision_models.DecisionChange = decision_models.ResumeAttemptChange(
+        change: decision_models.NonCheckpointDecisionChange = decision_models.ResumeAttemptChange(
             item.item,
             item.state,
             item.attempt,
@@ -652,7 +681,7 @@ def _resume(
 
 def _submit_review(
     snapshot: LedgerSnapshot, command: decision_models.SubmitReviewCommand, now: datetime
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     value = command.value
     attempt_id = action.capability.subject
@@ -687,7 +716,7 @@ def _return_for_correction(
     snapshot: LedgerSnapshot,
     command: decision_models.ReturnForCorrectionCommand,
     now: datetime,
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     value = command.value
     attempt_id = action.capability.subject
@@ -726,7 +755,7 @@ def _accept_checkpoint(
     snapshot: LedgerSnapshot,
     command: decision_models.AcceptCheckpointCommand,
     now: datetime,
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.CheckpointAcceptanceDecision]:
     action = command.action
     value = command.value
     attempt_id = action.capability.subject
@@ -749,7 +778,7 @@ def _accept_checkpoint(
         authority,
         replace(authority, lease_id=None, generation=authority.generation + 1),
     )
-    return _result(
+    return _checkpoint_result(
         action,
         now,
         decision_models.CheckpointAcceptanceChange(
@@ -768,7 +797,7 @@ def _accept_review_and_continue(
     snapshot: LedgerSnapshot,
     command: decision_models.AcceptReviewAndContinueCommand,
     now: datetime,
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     value = command.value
     attempt_id = action.capability.subject
@@ -813,7 +842,7 @@ def _accept_review_and_continue(
 
 def _block_item(
     snapshot: LedgerSnapshot, command: decision_models.BlockItemCommand, now: datetime
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     item_id = action.capability.subject
     item = snapshot.item(item_id)
@@ -839,7 +868,7 @@ def _simple_item_transition(
     snapshot: LedgerSnapshot,
     command: decision_models.ReopenCommand | decision_models.MarkReadyCommand,
     now: datetime,
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     match command:
         case decision_models.ReopenCommand():
@@ -864,7 +893,7 @@ def _simple_item_transition(
 
 def _defer(
     snapshot: LedgerSnapshot, command: decision_models.DeferCommand, now: datetime
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     item_id = action.capability.subject
     item = snapshot.item(item_id)
@@ -887,7 +916,7 @@ def _accept_proposal(
     snapshot: LedgerSnapshot,
     command: decision_models.AcceptProposalCommand,
     now: datetime,
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     value = command.value
     proposal_id = action.capability.subject
@@ -963,7 +992,7 @@ def _merge_proposal(
     snapshot: LedgerSnapshot,
     command: decision_models.MergeProposalCommand,
     now: datetime,
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     value = command.value
     proposal_id = action.capability.subject
@@ -989,7 +1018,7 @@ def _dispose_proposal(
     snapshot: LedgerSnapshot,
     command: decision_models.ReturnProposalCommand | decision_models.RejectProposalCommand,
     now: datetime,
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     proposal_id = action.capability.subject
     proposal = snapshot.proposal(proposal_id)
@@ -1020,7 +1049,7 @@ def _dispose_proposal(
 
 def _transfer(
     snapshot: LedgerSnapshot, command: decision_models.TransferCoordinatorCommand, now: datetime
-) -> DecisionResult[decision_models.Decision]:
+) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     if not snapshot.can_transfer_coordinator:
         return DecisionFailure(
@@ -1045,6 +1074,30 @@ def _transfer(
             )
         ),
     )
+
+
+@overload
+def decide(
+    snapshot: LedgerSnapshot,
+    command: decision_models.AcceptCheckpointCommand,
+    now: datetime,
+) -> DecisionResult[decision_models.CheckpointAcceptanceDecision]: ...
+
+
+@overload
+def decide(
+    snapshot: LedgerSnapshot,
+    command: decision_models.NonCheckpointTransitionCommand,
+    now: datetime,
+) -> DecisionResult[decision_models.TransitionDecision]: ...
+
+
+@overload
+def decide(
+    snapshot: LedgerSnapshot,
+    command: decision_models.TransitionCommand,
+    now: datetime,
+) -> DecisionResult[decision_models.Decision]: ...
 
 
 def decide(  # noqa: C901, PLR0912

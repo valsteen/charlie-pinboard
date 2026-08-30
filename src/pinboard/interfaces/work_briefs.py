@@ -6,9 +6,10 @@ from typing import assert_never
 import msgspec
 
 from pinboard.application import stored_state
-from pinboard.application.artifact_publication import ArtifactReader
+from pinboard.application.artifact_publication import ArtifactReader, transition_work_brief_reference
 from pinboard.application.artifacts import WorkBriefIdentity
-from pinboard.domain import work_models
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId
 from pinboard.interfaces.brief_sources import parse_authority_selector, select_brief_source
 from pinboard.interfaces.errors import BriefSourceError, WorkBriefError, WorkBriefErrorCode
@@ -30,6 +31,9 @@ from pinboard.interfaces.work_brief_models import (
     RepositoryPolicyAuthorization,
     RequiredLifecyclePartition,
     ReviewedAuthority,
+    ReviewedAuthorityDigestMismatch,
+    ReviewedAuthoritySelectionFailure,
+    ReviewedAuthorityValidationFailure,
     UpdateRequiredArchitecture,
     WorkBrief,
     WorkBriefCheckpoint,
@@ -239,7 +243,10 @@ def canonical_reviewed_authority_set_bytes(authorities: tuple[ReviewedAuthority,
     return _canonical_bytes(authorities)
 
 
-def validate_reviewed_authority_digests(source_checkout_root: Path, authorities: tuple[ReviewedAuthority, ...]) -> None:
+def validate_reviewed_authority_digests(
+    source_checkout_root: Path,
+    authorities: tuple[ReviewedAuthority, ...],
+) -> ReviewedAuthorityValidationFailure | None:
     for authority in authorities:
         try:
             selected = select_brief_source(
@@ -248,15 +255,15 @@ def validate_reviewed_authority_digests(source_checkout_root: Path, authorities:
                 require_utf8=True,
             )
         except BriefSourceError as error:
-            raise WorkBriefError(
-                WorkBriefErrorCode.BRIEF_INVALID,
-                f"Cannot read reviewed authority '{authority.authority_id}': {error.message}",
-            ) from error
-        if hashlib.sha256(selected.content).hexdigest() != authority.reviewed_sha256:
-            raise WorkBriefError(
-                WorkBriefErrorCode.BRIEF_INVALID,
-                f"Reviewed authority '{authority.authority_id}' changed after review.",
+            return ReviewedAuthoritySelectionFailure(authority.authority_id, error.message)
+        observed_sha256 = hashlib.sha256(selected.content).hexdigest()
+        if observed_sha256 != authority.reviewed_sha256:
+            return ReviewedAuthorityDigestMismatch(
+                authority.authority_id,
+                authority.reviewed_sha256,
+                observed_sha256,
             )
+    return None
 
 
 def decode_work_brief_review(data: bytes) -> WorkBriefReview:
@@ -485,6 +492,24 @@ def decode_work_brief_identity(data: bytes) -> WorkBriefIdentity:
         brief.accepted_scope.revision,
         brief.accepted_scope.digest,
     )
+
+
+def read_transition_work_brief_identity(
+    state: stored_state.StoredWorkState,
+    command: decision_models.TransitionCommand,
+    artifacts: ArtifactReader,
+) -> DecisionResult[WorkBriefIdentity | None]:
+    reference = transition_work_brief_reference(state, command)
+    if reference is None:
+        return None
+    artifacts.verify(reference)
+    try:
+        return decode_work_brief_identity(artifacts.path(reference).read_bytes())
+    except WorkBriefError as error:
+        return DecisionFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
+            f"The selected brief artifact is not a valid canonical typed work brief: {error}",
+        )
 
 
 def build_attempt_brief_views(state: stored_state.StoredWorkState, artifacts: ArtifactReader) -> dict[AttemptId, bytes]:

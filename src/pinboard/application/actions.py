@@ -2,12 +2,11 @@ from datetime import UTC, datetime
 
 from pinboard.application import stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
-from pinboard.application.errors import ActionQueryError
 from pinboard.application.ports import WorkStore
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_models import AttemptLeaseStatus
 from pinboard.domain.decisions import available_actions
-from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId, LeaseId
 
 
@@ -38,16 +37,14 @@ def discover_actions(
     lease_id: LeaseId | None = None,
     generation: int | None = None,
     now: datetime | None = None,
-) -> tuple[decision_models.Action, ...]:
+) -> DecisionResult[tuple[decision_models.Action, ...]]:
     state = store.snapshot()
     snapshot = project_decision_snapshot(state)
     current = (now or datetime.now(UTC)).astimezone(UTC)
     selected_generation = generation if generation is not None else snapshot.generation
     match role:
         case decision_models.Role.OBSERVER:
-            actor = decision_models.ActorAuthority(
-                decision_models.Role.OBSERVER, decision_models.AuthorizationKind.OBSERVER, 0
-            )
+            actor = decision_models.ObserverActorAuthority()
         case decision_models.Role.COORDINATOR:
             coordination = state.authority.coordination
             if lease_id is not None:
@@ -58,7 +55,7 @@ def discover_actions(
                     or coordination.generation != selected_generation
                     or coordination.expires_at <= current
                 ):
-                    raise ActionQueryError(
+                    return DecisionFailure(
                         DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
                         "The coordination lease is not current.",
                     )
@@ -78,7 +75,4 @@ def discover_actions(
                 attempts,
                 False,
             )
-    result = available_actions(snapshot, actor)
-    if isinstance(result, DecisionFailure):
-        raise ActionQueryError(result.code, result.message)
-    return result
+    return available_actions(snapshot, actor)

@@ -1,34 +1,6 @@
+"""Installed read-only work-inspection presentation records."""
+
 import msgspec
-
-
-class BriefPublicationView(msgspec.Struct, frozen=True):
-    artifact_ref_id: int
-    kind: str
-    key: str
-    revision: int
-    selector: str
-    content_sha256: str
-    size_bytes: int
-    accepted_revision: int
-
-
-class RootView(msgspec.Struct, frozen=True):
-    source_checkout_root: str
-    shared_repository_root: str
-    work_root: str
-
-
-class DiagnosticView(msgspec.Struct, frozen=True):
-    code: str
-    severity: str
-    path: str
-    message: str
-    hint: str | None
-
-
-class ValidationView(msgspec.Struct, frozen=True):
-    valid: bool
-    diagnostics: tuple[DiagnosticView, ...]
 
 
 class CoordinatorView(msgspec.Struct, frozen=True):
@@ -93,13 +65,6 @@ class OverviewView(msgspec.Struct, frozen=True):
     immediate_options: tuple[str, ...]
 
 
-class CloseView(msgspec.Struct, frozen=True):
-    item_id: str
-    outcome: str
-    reason: str
-    revision: str
-
-
 class ActionSemanticsView(msgspec.Struct, frozen=True):
     use_case: str
     effect: str
@@ -113,43 +78,6 @@ class InputContractView(msgspec.Struct, frozen=True):
     action_kind: str
     semantics: ActionSemanticsView
     payload_schema: msgspec.Raw | None
-
-
-class BriefSourceSegmentView(msgspec.Struct, frozen=True):
-    authority_id: str
-    selector: str
-    index: int
-    start_line: int
-    end_line: int
-    content_byte_count: int
-    content_sha256: str
-
-
-class BriefSourceView(msgspec.Struct, frozen=True):
-    authority_id: str
-    selector: str
-    families: tuple[str, ...]
-    selected_sha256: str
-    selected_byte_count: int
-    start_line: int
-    end_line: int
-    whole_file: bool
-    segments: tuple[BriefSourceSegmentView, ...]
-
-
-class BriefSourceBatchView(msgspec.Struct, frozen=True):
-    index: int
-    content_byte_count: int
-    estimated_rendered_byte_count: int
-    segments: tuple[BriefSourceSegmentView, ...]
-
-
-class BriefSourcePlanView(msgspec.Struct, frozen=True):
-    schema: str
-    manifest_sha256: str
-    max_batch_bytes: int
-    sources: tuple[BriefSourceView, ...]
-    batches: tuple[BriefSourceBatchView, ...]
 
 
 class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
@@ -168,11 +96,6 @@ class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
 
 class ActionsView(msgspec.Struct, frozen=True):
     actions: tuple[ActionView, ...]
-
-
-class CoordinatedTransitionView(msgspec.Struct, frozen=True):
-    action_id: str
-    revision: str
 
 
 class ParallelReasonView(msgspec.Struct, frozen=True):
