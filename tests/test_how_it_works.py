@@ -9,6 +9,8 @@ from xml.etree import ElementTree
 from docs.how_it_works import database, journey, layers, product, render
 from docs.how_it_works.model import DAY_PALETTE, NIGHT_PALETTE, Box, Connector, Diagram, Palette, render_svg
 
+from pinboard.domain import decision_models
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -39,7 +41,13 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         self.assertIn("## The durable memory underneath", guide)
         self.assertIn("A canonical work brief is published before an item is activated or resumed", guide)
         self.assertIn("ready-review evidence can be published during dispatch preparation", guide)
-        self.assertIn("does not currently publish them into this registry", guide)
+        self.assertIn("Resume restores paused or blocked work", guide)
+        self.assertIn("Reopen returns deferred work to intake", guide)
+        self.assertIn("Continue is advisory", guide)
+        self.assertIn("Checkpoint acceptance publishes the exact result and independent review", guide)
+        self.assertIn("focused storage mutation", guide)
+        self.assertNotIn("complete stored facts", guide)
+        self.assertNotIn("does not currently publish them into this registry", guide)
         self.assertIn("any task may borrow the single coordination lease", guide)
         self.assertIn("It is not a coordinator task", guide)
         self.assertIn("An attempt lease records which task session", guide)
@@ -74,6 +82,28 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                     re.sub(r"#[0-9a-fA-F]{3,6}\b", "#COLOR", day),
                     re.sub(r"#[0-9a-fA-F]{3,6}\b", "#COLOR", night),
                 )
+
+    def test_diagrams_expose_accessible_names_and_descriptions(self) -> None:
+        outputs = render.build_outputs(ROOT)
+        namespace = {"svg": "http://www.w3.org/2000/svg"}
+
+        for path, svg in outputs.items():
+            if path.suffix != ".svg":
+                continue
+            with self.subTest(path=path):
+                root = ElementTree.fromstring(svg)
+                labelled_by = root.attrib["aria-labelledby"].split()
+                self.assertEqual("img", root.attrib["role"])
+                self.assertEqual(2, len(labelled_by))
+                title = root.find("svg:title", namespace)
+                description = root.find("svg:desc", namespace)
+                self.assertIsNotNone(title)
+                self.assertIsNotNone(description)
+                assert title is not None
+                assert description is not None
+                self.assertEqual([title.attrib["id"], description.attrib["id"]], labelled_by)
+                self.assertTrue(title.text)
+                self.assertTrue(description.text)
 
     def test_maintained_python_checks_include_the_generator(self) -> None:
         configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -161,7 +191,7 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                     (),
                     (),
                     (),
-                    (Box("crowded", "", "Complete stored change", (), (), 10, 10, 100, 60),),
+                    (Box("crowded", "", "Overlong card heading", (), (), 10, 10, 100, 60),),
                 ),
                 "source-revision",
                 DAY_PALETTE,
@@ -244,6 +274,33 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         self.assertEqual("Accepted artifacts", database_boxes["artifact-refs"].title)
         self.assertEqual("Item evidence link", database_boxes["item-artifacts"].title)
         self.assertEqual("Shared authority", database_boxes["coordination"].title)
+
+    def test_product_view_distinguishes_advisory_continue_from_review_acceptance(self) -> None:
+        advisory = decision_models.action_semantics(decision_models.ActionKind.CONTINUE)
+        review_acceptance = decision_models.action_semantics(decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE)
+        self.assertEqual(decision_models.ActionEffect.ADVISORY, advisory.effect)
+        self.assertEqual(decision_models.ActionLifecyclePrecondition.ACTIVE_ATTEMPT, advisory.lifecycle_precondition)
+        self.assertEqual(decision_models.ActionEffect.MUTATING, review_acceptance.effect)
+        self.assertEqual(
+            decision_models.ActionLifecyclePrecondition.REVIEW_ATTEMPT,
+            review_acceptance.lifecycle_precondition,
+        )
+
+        product_boxes = {value.key: value for value in product.DIAGRAM.boxes}
+        self.assertEqual(("return · accept + continue",), product_boxes["review"].meta)
+        self.assertEqual(("accept + continue → active",), product_boxes["attempt-review"].details)
+
+        outputs = render.build_outputs(ROOT)
+        for path in (
+            Path("assets/how-it-works/product.svg"),
+            Path("assets/how-it-works/product-dark.svg"),
+        ):
+            with self.subTest(path=path):
+                svg = outputs[path]
+                self.assertIn(">return · accept + continue<", svg)
+                self.assertIn(">accept + continue → active<", svg)
+                self.assertNotIn(">return · continue<", svg)
+                self.assertNotIn(">correction / continue → active<", svg)
 
     def test_write_and_stale_check_round_trip(self) -> None:
         outputs = render.build_outputs(ROOT)

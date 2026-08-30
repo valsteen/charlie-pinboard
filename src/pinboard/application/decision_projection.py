@@ -1,14 +1,6 @@
 from datetime import datetime
 
-from pinboard.application.stored_state import (
-    ItemArtifactLink,
-    ItemDependency,
-    ProposalEvidence,
-    ProposalFreshness,
-    StoredWorkItem,
-    StoredWorkState,
-    live_work_state,
-)
+from pinboard.application import stored_state
 from pinboard.domain import work_models
 from pinboard.domain.authority_models import (
     AttemptLeaseStatus,
@@ -20,7 +12,7 @@ from pinboard.domain.ledger import LedgerSnapshot
 
 
 def project_inactive_attempt_authority(
-    state: StoredWorkState,
+    state: stored_state.StoredWorkState,
     attempt_id: AttemptId,
     now: datetime,
 ) -> DecisionResult[InactiveAttemptAuthority]:
@@ -64,24 +56,24 @@ def project_inactive_attempt_authority(
     )
 
 
-def _dependency_order(value: ItemDependency) -> tuple[str, int]:
+def _dependency_order(value: stored_state.ItemDependency) -> tuple[str, int]:
     return str(value.item_id), value.position
 
 
-def _artifact_order(value: ItemArtifactLink) -> tuple[str, str, int]:
+def _artifact_order(value: stored_state.ItemArtifactLink) -> tuple[str, str, int]:
     return str(value.item_id), value.role.value, value.position
 
 
-def _proposal_evidence_order(value: ProposalEvidence) -> tuple[str, int]:
+def _proposal_evidence_order(value: stored_state.ProposalEvidence) -> tuple[str, int]:
     return str(value.proposal_id), value.position
 
 
-def _proposal_freshness_order(value: ProposalFreshness) -> tuple[str, int]:
+def _proposal_freshness_order(value: stored_state.ProposalFreshness) -> tuple[str, int]:
     return str(value.proposal_id), value.position
 
 
 def _work_item(
-    value: StoredWorkItem, state: work_models.WorkState, attempt_by_item: dict[ItemId, AttemptId]
+    value: stored_state.StoredWorkItem, state: work_models.WorkState, attempt_by_item: dict[ItemId, AttemptId]
 ) -> work_models.WorkItem:
     return work_models.WorkItem(
         value.item_id,
@@ -97,7 +89,7 @@ def _work_item(
     )
 
 
-def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
+def project_decision_snapshot(state: stored_state.StoredWorkState) -> LedgerSnapshot:
     """Project complete persisted state into the narrower facts consumed by pure decisions."""
 
     attempts_by_item = {
@@ -108,7 +100,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
     live_items = tuple(
         _work_item(item, live_state, attempts_by_item)
         for item in state.lifecycle.work_items
-        if (live_state := live_work_state(item.state)) is not None
+        if (live_state := stored_state.live_work_state(item.state)) is not None
     )
     stored_items_by_id = {item.item_id: item for item in state.lifecycle.work_items}
     dependency_groups: dict[ItemId, list[work_models.ScopeDependency]] = {item_id: [] for item_id in stored_items_by_id}
@@ -151,7 +143,7 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
             ),
         )
         for item in state.lifecycle.work_items
-        if live_work_state(item.state) is not None
+        if stored_state.live_work_state(item.state) is not None
         for anchor in (scope_revisions_by_identity.get((item.item_id, item.scope_revision, item.scope_digest)),)
         if anchor is not None
     )
@@ -277,7 +269,9 @@ def project_decision_snapshot(state: StoredWorkState) -> LedgerSnapshot:
         attempt_authorities=attempt_authorities,
         command_attempt_authorities=command_attempt_authorities,
         coordination_authority=coordination_authority,
-        history_items=tuple(item.item_id for item in state.lifecycle.work_items if live_work_state(item.state) is None),
+        history_items=tuple(
+            item.item_id for item in state.lifecycle.work_items if stored_state.live_work_state(item.state) is None
+        ),
         scopes=scopes,
         host_epoch=state.lifecycle.project.host_epoch,
         focus_item=state.focus.item_id,

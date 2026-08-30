@@ -30,6 +30,7 @@ select = ["ANN", "ARG", "B", "BLE", "C4", "C90", "E4", "E7", "E9", "F", "I", "PE
 
 [tool.ruff.lint.flake8-import-conventions]
 banned-from = [
+    "pinboard.application.stored_state",
     "pinboard.domain.decision_models",
     "pinboard.domain.work_models",
 ]

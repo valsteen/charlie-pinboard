@@ -25,7 +25,9 @@ WATCHED_AUTHORITIES = (
     Path("src/pinboard/domain/decision_models.py"),
     Path("src/pinboard/domain/decisions.py"),
     Path("src/pinboard/application/service.py"),
+    Path("src/pinboard/application/mutation_models.py"),
     Path("src/pinboard/application/mutations.py"),
+    Path("src/pinboard/application/stored_state.py"),
     Path("src/pinboard/adapters/sqlite/schema.sql"),
     Path("src/pinboard/adapters/sqlite/store.py"),
 )
@@ -66,7 +68,9 @@ A work item is the durable project decision. An attempt is one execution of that
 
 {_picture("product", "A work item lifecycle above the legal branches of an active attempt, with related facts shown separately")}
 
-The primary path is intentionally familiar: intake becomes ready, active work enters review, and accepted work becomes a terminal outcome. Deferred, paused, and blocked work are optional branches rather than required stages. Paused and blocked work can resume the same attempt; review can request correction, pause at an accepted checkpoint, continue the attempt, or complete it. Completion can also be accepted directly from active work.
+The primary path is intentionally familiar: intake becomes ready, active work enters review, and accepted work becomes a terminal outcome. Deferred, paused, and blocked work are optional branches rather than required stages. Review can request correction, pause at an accepted checkpoint, accept the candidate and continue the attempt, or complete it. Completion can also be accepted directly from active work.
+
+Resume restores paused or blocked work: a retained attempt becomes active, while an item without one becomes ready. Reopen returns deferred work to intake with new evidence. Continue is advisory: it confirms that an already-active attempt proceeds without changing lifecycle state or accepting mutation input.
 
 Proposals and dependencies are not extra states. Accepted scope is the exact authorized revision an attempt uses. Mutation ownership records who may act now: either one graph-wide coordination holder or one attempt lease. A review candidate identifies the exact result under review, and evidence supports its acceptance.
 
@@ -87,11 +91,11 @@ The package is split into four layers because each removes a different kind of a
 
 {_picture("layers", "Four package layers showing interfaces, application, domain, and adapters, connected by package dependencies")}
 
-Every arrow in this view means “may depend on”; the next view shows runtime flow. Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. Application code coordinates complete operations against current state. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
+Every arrow in this view means “may depend on”; the next view shows runtime flow. Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. Application code reads complete stored state for each operation and projects an accepted decision into one focused storage mutation. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
 
 ## Follow one change
 
-Submitting work for review is one visible action, but it strengthens meaning at every boundary. External values become an exact command. The application reloads current state and mutation ownership inside the write operation. Domain evaluation returns either an accepted change or an expected rejection; rejection leaves the ledger unchanged. The application projects an accepted change into complete stored facts, and SQLite either commits all of them with a history receipt or commits nothing.
+Submitting work for review is one visible action, but it strengthens meaning at every boundary. External values become an exact command. The application reloads complete current state and mutation ownership inside the write operation. Domain evaluation returns either an accepted change or an expected rejection; rejection leaves the ledger unchanged. The application projects an accepted decision, its receipt, and its affected auxiliary values into a focused storage mutation. SQLite applies only those guarded relational changes and commits them with one history receipt, or rolls the transaction back without changing the prior ledger.
 
 {_picture("journey", "A submit-review request travelling through interface decoding, application orchestration, domain decision, mutation projection, and atomic SQLite commit")}
 
@@ -105,9 +109,9 @@ The relational ledger groups sixteen tables into six kinds of memory: current wo
 
 A work item survives attempts. Accepted versions preserve current scope and its revision history. Proposal evidence records why possible work was raised, while its freshness assumptions record which facts must be checked again.
 
-Pinboard currently publishes two kinds of immutable artifact. A canonical work brief is published before an item is activated or resumed. The attempt selects that brief, and dispatch later resolves its accepted reference and verifies the exact bytes. Independent ready-review evidence can be published during dispatch preparation and linked to the work item, allowing the same review to be verified and reused.
+Pinboard publishes immutable artifacts along three current paths. A canonical work brief is published before an item is activated or resumed. The attempt selects that brief, and dispatch later resolves its accepted reference and verifies the exact bytes. Independent ready-review evidence can be published during dispatch preparation and linked to the work item, allowing the same review to be verified and reused.
 
-The database can represent additional artifact kinds and relationships, but those storage shapes are not active publication paths. Attempt-local result, review, and blocker files support delivery and review; the installed application does not currently publish them into this registry.
+Checkpoint acceptance publishes the exact result and independent review as immutable artifacts. It then atomically records the result on the attempt, the review on the accepted history receipt, the lifecycle change, and the single receipt. Publication alone does not change lifecycle state; a rejected or rolled-back acceptance leaves the prior ledger relationships intact.
 
 Mutation ownership has two scopes. Shared-change authority is temporary: any task may borrow the single coordination lease for one shared scheduling or graph-wide change, then release it. It is not a coordinator task and does not create or message other tasks. Its exclusivity prevents a conflicting shared decision during that operation and authorizes replacement or revocation of an attempt owner. An attempt lease records which task session—identified by task, host, and lease id—owns one implementation attempt. Its generation fences an older owner after transfer or revocation, while leases for unrelated attempts remain independent. Project state holds the current revision, and committed history records each accepted input, outcome, and actor.
 

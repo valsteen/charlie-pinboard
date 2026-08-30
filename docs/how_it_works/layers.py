@@ -4,7 +4,7 @@ from .model import Box, Connector, Diagram, Guide, Note, Section
 
 LAYER_DIRECTORIES: dict[str, str] = {
     "interfaces": "Turn outside input into exact commands and exact output.",
-    "application": "Sequence complete use cases and project accepted changes into storage mutations.",
+    "application": "Read complete stored state and project accepted decisions into focused storage mutations.",
     "domain": "Decide what is legal without reading files, issuing SQL, or presenting commands.",
     "adapters": "Store and recover accepted facts without deciding workflow policy.",
 }
@@ -81,7 +81,7 @@ DIAGRAM = Diagram(
             "application",
             "Application",
             "Make the operation coherent",
-            ("reselect · sequence · project", "own storage capability ports"),
+            ("read state · project focused mutations", "own storage capability ports"),
             ("src/pinboard/application",),
             450,
             100,

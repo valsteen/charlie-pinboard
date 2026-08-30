@@ -5,9 +5,9 @@ from typing import assert_never
 
 import msgspec
 
+from pinboard.application import stored_state
 from pinboard.application.artifact_publication import ArtifactReader
 from pinboard.application.artifacts import WorkBriefIdentity
-from pinboard.application.stored_state import ArtifactKind, StoredWorkState
 from pinboard.domain import work_models
 from pinboard.domain.identifiers import AttemptId
 from pinboard.interfaces.brief_sources import parse_authority_selector, select_brief_source
@@ -487,14 +487,14 @@ def decode_work_brief_identity(data: bytes) -> WorkBriefIdentity:
     )
 
 
-def build_attempt_brief_views(state: StoredWorkState, artifacts: ArtifactReader) -> dict[AttemptId, bytes]:
+def build_attempt_brief_views(state: stored_state.StoredWorkState, artifacts: ArtifactReader) -> dict[AttemptId, bytes]:
     result: dict[AttemptId, bytes] = {}
     references = {value.artifact_ref_id: value for value in state.artifact_references}
     for attempt in state.lifecycle.attempts:
         if attempt.state == work_models.AttemptState.DONE:
             continue
         reference = references.get(attempt.brief_artifact_ref_id)
-        if reference is None or reference.kind != ArtifactKind.BRIEF:
+        if reference is None or reference.kind != stored_state.ArtifactKind.BRIEF:
             raise _invalid(f"Live attempt '{attempt.attempt_id}' has no accepted brief reference.")
         if not reference.selector.endswith(".json"):
             raise _invalid(f"Live attempt '{attempt.attempt_id}' accepted brief is not canonical v2 JSON.")

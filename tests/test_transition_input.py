@@ -7,6 +7,7 @@ from pinboard.domain import decision_models, work_models
 from pinboard.domain.identifiers import ArtifactRefId, AttemptId, CandidateId
 from pinboard.interfaces.errors import TransitionInputError
 from pinboard.interfaces.transition_input import (
+    INPUT_CONTRACT_ACTION_KINDS,
     TRANSITION_ACTION_KINDS,
     encoded_transition_input_schema,
     parse_transition_input,
@@ -15,6 +16,12 @@ from tests.support import JsonObject, JsonValue
 
 
 class TransitionInputTest(unittest.TestCase):
+    def test_input_contract_describes_every_action_kind(self) -> None:
+        self.assertEqual(
+            tuple(kind.value for kind in decision_models.ActionKind),
+            INPUT_CONTRACT_ACTION_KINDS,
+        )
+
     def test_current_inputs_decode_exact_models(self) -> None:
         activation = parse_transition_input(
             decision_models.ActionKind.ACTIVATE,

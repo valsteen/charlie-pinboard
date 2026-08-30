@@ -15,6 +15,7 @@ from pinboard.domain.history import (
     item_scope_digest as item_scope_digest_outcome,
 )
 from pinboard.domain.identifiers import (
+    ActionId,
     ArtifactRefId,
     AttemptId,
     CandidateId,
@@ -137,6 +138,20 @@ def native_scope(*, artifacts: tuple[work_models.ScopeArtifact, ...] | None = No
 
 
 class LifecycleDecisionTest(unittest.TestCase):
+    def test_every_action_kind_has_one_complete_domain_semantics_descriptor(self) -> None:
+        descriptors = tuple(decision_models.action_semantics(kind) for kind in decision_models.ActionKind)
+
+        self.assertEqual(len(decision_models.ActionKind), len(descriptors))
+        for kind, descriptor in zip(decision_models.ActionKind, descriptors, strict=True):
+            with self.subTest(kind=kind):
+                self.assertTrue(descriptor.use_case)
+                self.assertTrue(descriptor.permitted_roles)
+                self.assertTrue(descriptor.practical_result)
+        self.assertEqual(
+            (decision_models.Role.COORDINATOR, decision_models.Role.WORKER),
+            decision_models.action_semantics(decision_models.ActionKind.CONTINUE).permitted_roles,
+        )
+
     def test_review_continuation_is_coordination_only_and_requires_the_protected_candidate(self) -> None:
         review = item("target", work_models.WorkState.REVIEW, attempt="target-1")
         attempt = AttemptRecord(
@@ -274,35 +289,56 @@ class LifecycleDecisionTest(unittest.TestCase):
             decision_models.ActionKind.REPORT_BLOCKER: (
                 "report-blocker:target-1",
                 "Prepare blocker report for target",
-                ("advisory", "worker", "attempt", "active-attempt"),
+                (
+                    "Preserve blocker evidence for coordination.",
+                    "advisory",
+                    ("worker",),
+                    "attempt",
+                    "active-attempt",
+                    "Prepare a blocker report without changing shared lifecycle state.",
+                ),
             ),
             decision_models.ActionKind.BLOCK: (
                 "block:target-1",
                 "Block active attempt for target",
-                ("mutating", "coordinator", "attempt", "active-attempt"),
+                (
+                    "Stop an active attempt on named dependencies.",
+                    "mutating",
+                    ("coordinator",),
+                    "attempt",
+                    "active-attempt",
+                    "Move the item and attempt to blocked and record their dependencies.",
+                ),
             ),
             decision_models.ActionKind.BLOCK_ITEM: (
                 "block-item:unstarted",
                 "Block unstarted work item unstarted",
-                ("mutating", "coordinator", "item", "intake-item"),
+                (
+                    "Stop unstarted intake work on named dependencies.",
+                    "mutating",
+                    ("coordinator",),
+                    "item",
+                    "intake-item",
+                    "Move the item to blocked and record its dependencies without creating an attempt.",
+                ),
             ),
         }
         self.assertEqual(set(expected), set(selected))
         for kind, (expected_action_id, label, semantics) in expected.items():
             with self.subTest(kind=kind):
                 action = selected[kind]
-                descriptor = decision_models.blocker_action_descriptor(action.kind)
-                self.assertIsNotNone(descriptor)
-                assert descriptor is not None
+                descriptor = decision_models.action_semantics(action.kind)
                 self.assertEqual(expected_action_id, decision_models.action_id(action))
                 self.assertEqual(label, action.capability.label)
                 self.assertEqual(
                     semantics,
                     (
+                        descriptor.use_case,
                         descriptor.effect.value,
-                        descriptor.required_role.value,
+                        tuple(role.value for role in descriptor.permitted_roles),
                         descriptor.subject_kind.value,
                         descriptor.lifecycle_precondition.value,
+                        descriptor.practical_result,
                     ),
                 )
 
@@ -323,6 +359,44 @@ class LifecycleDecisionTest(unittest.TestCase):
         self.assertIsInstance(blocked.change, decision_models.BlockAttemptChange)
         assert isinstance(blocked.change, decision_models.BlockAttemptChange)
         self.assertEqual((ItemId("prerequisite"),), blocked.change.dependencies_after)
+
+    def test_resume_and_reopen_actions_name_their_distinct_contextual_results(self) -> None:
+        snapshot = LedgerSnapshot(
+            "revision",
+            1,
+            (
+                item("paused-attempt", work_models.WorkState.PAUSED, attempt="paused-attempt-1"),
+                item("blocked-unstarted", work_models.WorkState.BLOCKED),
+                item("deferred", work_models.WorkState.DEFERRED),
+            ),
+            attempts=(AttemptRecord("paused-attempt-1", "paused-attempt", work_models.AttemptState.PAUSED),),
+        )
+
+        actions = {
+            decision_models.action_id(value): value
+            for value in available_actions(
+                snapshot,
+                decision_models.ActorAuthority(
+                    decision_models.Role.COORDINATOR,
+                    decision_models.AuthorizationKind.COORDINATOR,
+                    1,
+                ),
+            )
+        }
+
+        self.assertEqual("Return paused-attempt to active", actions[ActionId("resume:paused-attempt")].capability.label)
+        self.assertEqual(
+            "Return blocked-unstarted to ready", actions[ActionId("resume:blocked-unstarted")].capability.label
+        )
+        self.assertEqual("Reopen deferred for intake", actions[ActionId("reopen:deferred")].capability.label)
+        self.assertEqual(
+            "Return paused or blocked work to active when an attempt exists, otherwise ready.",
+            decision_models.action_semantics(decision_models.ActionKind.RESUME).practical_result,
+        )
+        self.assertEqual(
+            "Return deferred work to intake.",
+            decision_models.action_semantics(decision_models.ActionKind.REOPEN).practical_result,
+        )
 
     def test_missing_attempt_is_a_returned_failure(self) -> None:
         snapshot = LedgerSnapshot("revision", 1, ())

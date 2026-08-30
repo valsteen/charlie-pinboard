@@ -238,8 +238,9 @@ def _item_actions(
         ]
     dependencies_live = any(dependency in snapshot.items_by_id() for dependency in item.depends_on)
     if item.state in {work_models.WorkState.PAUSED, work_models.WorkState.BLOCKED} and not dependencies_live:
+        target = "active" if item.attempt is not None else "ready"
         result: list[decision_models.Action] = [
-            decision_models.ResumeAction(factory.make(item.item, f"Return {item.item} to ready"))
+            decision_models.ResumeAction(factory.make(item.item, f"Return {item.item} to {target}"))
         ]
         if item.attempt is None:
             result.append(

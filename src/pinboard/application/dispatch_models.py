@@ -5,8 +5,8 @@ from typing import Annotated, Literal, Protocol
 
 import msgspec
 
+from pinboard.application import stored_state
 from pinboard.application.artifacts import ArtifactRef, NewArtifact
-from pinboard.application.stored_state import ArtifactReference
 
 type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
 
@@ -35,9 +35,9 @@ class DispatchArtifactPort(Protocol):
     @property
     def work_root(self) -> Path: ...
 
-    def verify(self, reference: ArtifactReference) -> None: ...
+    def verify(self, reference: stored_state.ArtifactReference) -> None: ...
 
-    def path(self, reference: ArtifactReference) -> Path: ...
+    def path(self, reference: stored_state.ArtifactReference) -> Path: ...
 
     def publish(self, artifact: NewArtifact) -> ArtifactRef: ...
 

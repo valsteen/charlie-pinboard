@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pinboard.application import stored_state
 from pinboard.application.actions import discover_actions
 from pinboard.application.artifacts import NewArtifact
 from pinboard.application.dispatch_models import (
@@ -12,7 +13,6 @@ from pinboard.application.dispatch_models import (
 )
 from pinboard.application.errors import ActionQueryError, DispatchError, DispatchErrorCode
 from pinboard.application.ports import WorkStore
-from pinboard.application.stored_state import ArtifactKind
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.identifiers import AttemptId, ItemId
 
@@ -62,7 +62,7 @@ def _review_publisher(
             (
                 value
                 for value in state.artifact_references
-                if value.kind == ArtifactKind.EVIDENCE and value.key == key and value.revision == 1
+                if value.kind == stored_state.ArtifactKind.EVIDENCE and value.key == key and value.revision == 1
             ),
             None,
         )
@@ -94,7 +94,7 @@ def _review_publisher(
                 return candidate, str(ready_path)
             rejected = artifacts.publish(
                 NewArtifact(
-                    ArtifactKind.EVIDENCE,
+                    stored_state.ArtifactKind.EVIDENCE,
                     f"{key}-rejected-{review_id}",
                     1,
                     ".json",
@@ -112,7 +112,7 @@ def _review_publisher(
                 DispatchErrorCode.DISPATCH_BRIEF_REVIEW_COLLISION,
                 f"Ready review already differs; later evidence is preserved at '{rejected.selector}'.",
             )
-        published = artifacts.publish(NewArtifact(ArtifactKind.EVIDENCE, key, 1, ".json", candidate))
+        published = artifacts.publish(NewArtifact(stored_state.ArtifactKind.EVIDENCE, key, 1, ".json", candidate))
         accepted = store.accept_artifact_reference(
             artifacts.work_root,
             published,
@@ -154,7 +154,7 @@ def prepare_dispatch(
         (
             value
             for value in state.artifact_references
-            if value.artifact_ref_id == attempt.brief_artifact_ref_id and value.kind == ArtifactKind.BRIEF
+            if value.artifact_ref_id == attempt.brief_artifact_ref_id and value.kind == stored_state.ArtifactKind.BRIEF
         ),
         None,
     )

@@ -41,19 +41,34 @@ class ActionEffect(Enum):
 class ActionSubjectKind(Enum):
     ATTEMPT = "attempt"
     ITEM = "item"
+    LEDGER = "ledger"
+    PROPOSAL = "proposal"
 
 
 class ActionLifecyclePrecondition(Enum):
     ACTIVE_ATTEMPT = "active-attempt"
+    ACTIVE_ATTEMPT_CURRENT_SCOPE = "active-attempt-current-scope"
+    ACTIVE_OR_REVIEW_ATTEMPT_CURRENT_SCOPE = "active-or-review-attempt-current-scope"
+    ACTIVE_TRANSFERABLE_COORDINATION = "active-transferable-coordination"
+    DEFERRED_ITEM = "deferred-item"
     INTAKE_ITEM = "intake-item"
+    INTAKE_READY_OR_BLOCKED_UNSTARTED_ITEM = "intake-ready-or-blocked-unstarted-item"
+    ITEM_OUTSIDE_ACTIVE_AND_REVIEW = "item-outside-active-and-review"
+    PAUSED_OR_BLOCKED_ITEM_WITHOUT_LIVE_DEPENDENCIES = "paused-or-blocked-item-without-live-dependencies"
+    READY_ITEM = "ready-item"
+    REVIEW_ATTEMPT = "review-attempt"
+    VALID_LEDGER = "valid-ledger"
+    VISIBLE_INTAKE_PROPOSAL = "visible-intake-proposal"
 
 
 @dataclass(frozen=True, slots=True)
-class BlockerActionDescriptor:
+class ActionSemantics:
+    use_case: str
     effect: ActionEffect
-    required_role: Role
+    permitted_roles: tuple[Role, ...]
     subject_kind: ActionSubjectKind
     lifecycle_precondition: ActionLifecyclePrecondition
+    practical_result: str
 
 
 class ActionKind(Enum):
@@ -82,52 +97,215 @@ class ActionKind(Enum):
     TRANSFER_COORDINATOR = "transfer-coordinator"
 
 
-def blocker_action_descriptor(kind: ActionKind) -> BlockerActionDescriptor | None:
+def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR0912
     match kind:
+        case ActionKind.ACCEPT_CHECKPOINT:
+            return ActionSemantics(
+                "Accept one independently reviewed checkpoint without completing its item.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.REVIEW_ATTEMPT,
+                "Archive the checkpoint evidence, pause the retained attempt, and fence its worker authority.",
+            )
+        case ActionKind.ACCEPT_REVIEW_AND_CONTINUE:
+            return ActionSemantics(
+                "Accept a reviewed candidate while continuing the same attempt.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.REVIEW_ATTEMPT,
+                "Record the accepted review, return the attempt to active, and fence its prior worker authority.",
+            )
+        case ActionKind.ACCEPT_PROPOSAL:
+            return ActionSemantics(
+                "Admit a visible proposal as accepted work.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.PROPOSAL,
+                ActionLifecyclePrecondition.VISIBLE_INTAKE_PROPOSAL,
+                "Accept the proposal into its same-identity work item and dispose the proposal record.",
+            )
+        case ActionKind.ACTIVATE:
+            return ActionSemantics(
+                "Start one ready item from an accepted brief.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ITEM,
+                ActionLifecyclePrecondition.READY_ITEM,
+                "Create and activate the item's attempt.",
+            )
         case ActionKind.REPORT_BLOCKER:
-            return BlockerActionDescriptor(
+            return ActionSemantics(
+                "Preserve blocker evidence for coordination.",
                 ActionEffect.ADVISORY,
-                Role.WORKER,
+                (Role.WORKER,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
+                "Prepare a blocker report without changing shared lifecycle state.",
             )
         case ActionKind.BLOCK:
-            return BlockerActionDescriptor(
+            return ActionSemantics(
+                "Stop an active attempt on named dependencies.",
                 ActionEffect.MUTATING,
-                Role.COORDINATOR,
+                (Role.COORDINATOR,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
+                "Move the item and attempt to blocked and record their dependencies.",
             )
         case ActionKind.BLOCK_ITEM:
-            return BlockerActionDescriptor(
+            return ActionSemantics(
+                "Stop unstarted intake work on named dependencies.",
                 ActionEffect.MUTATING,
-                Role.COORDINATOR,
+                (Role.COORDINATOR,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.INTAKE_ITEM,
+                "Move the item to blocked and record its dependencies without creating an attempt.",
             )
-        case (
-            ActionKind.ACCEPT_CHECKPOINT
-            | ActionKind.ACCEPT_REVIEW_AND_CONTINUE
-            | ActionKind.ACCEPT_PROPOSAL
-            | ActionKind.ACTIVATE
-            | ActionKind.CLOSE
-            | ActionKind.COMPLETE
-            | ActionKind.CONTINUE
-            | ActionKind.DEFER
-            | ActionKind.DISPATCH
-            | ActionKind.INSPECT
-            | ActionKind.MARK_READY
-            | ActionKind.MERGE_PROPOSAL
-            | ActionKind.PAUSE
-            | ActionKind.REJECT_PROPOSAL
-            | ActionKind.REOPEN
-            | ActionKind.RESUME
-            | ActionKind.RETURN_FOR_CORRECTION
-            | ActionKind.RETURN_PROPOSAL
-            | ActionKind.SUBMIT_REVIEW
-            | ActionKind.TRANSFER_COORDINATOR
-        ):
-            return None
+        case ActionKind.COMPLETE:
+            return ActionSemantics(
+                "Accept and finish an active or reviewed attempt.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.ACTIVE_OR_REVIEW_ATTEMPT_CURRENT_SCOPE,
+                "Record terminal completion and remove the item from live work.",
+            )
+        case ActionKind.CLOSE:
+            return ActionSemantics(
+                "Record a terminal decision for non-active work.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ITEM,
+                ActionLifecyclePrecondition.ITEM_OUTSIDE_ACTIVE_AND_REVIEW,
+                "Record the done or dropped outcome and remove the item from live work.",
+            )
+        case ActionKind.CONTINUE:
+            return ActionSemantics(
+                "Continue work already active in an accepted attempt.",
+                ActionEffect.ADVISORY,
+                (Role.COORDINATOR, Role.WORKER),
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
+                "Continue the attempt without changing shared lifecycle state.",
+            )
+        case ActionKind.DEFER:
+            return ActionSemantics(
+                "Set aside unstarted work with an explicit reopen condition.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ITEM,
+                ActionLifecyclePrecondition.INTAKE_READY_OR_BLOCKED_UNSTARTED_ITEM,
+                "Move the item to deferred and retain its reopen condition.",
+            )
+        case ActionKind.DISPATCH:
+            return ActionSemantics(
+                "Prepare or verify a worker launch for an active attempt.",
+                ActionEffect.ADVISORY,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.ACTIVE_ATTEMPT_CURRENT_SCOPE,
+                "Produce a canonical worker launch without changing lifecycle state.",
+            )
+        case ActionKind.INSPECT:
+            return ActionSemantics(
+                "Inspect current work without taking authority.",
+                ActionEffect.ADVISORY,
+                (Role.OBSERVER,),
+                ActionSubjectKind.LEDGER,
+                ActionLifecyclePrecondition.VALID_LEDGER,
+                "Return current ledger facts without changing shared state.",
+            )
+        case ActionKind.MARK_READY:
+            return ActionSemantics(
+                "Admit an intake item to ready work.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ITEM,
+                ActionLifecyclePrecondition.INTAKE_ITEM,
+                "Move the item from intake to ready.",
+            )
+        case ActionKind.MERGE_PROPOSAL:
+            return ActionSemantics(
+                "Merge a visible proposal into an existing work identity.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.PROPOSAL,
+                ActionLifecyclePrecondition.VISIBLE_INTAKE_PROPOSAL,
+                "Dispose the proposal as merged and remove its duplicate visible item.",
+            )
+        case ActionKind.PAUSE:
+            return ActionSemantics(
+                "Preserve an active attempt without a named dependency condition.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
+                "Move the item and attempt to paused for later resume.",
+            )
+        case ActionKind.REJECT_PROPOSAL:
+            return ActionSemantics(
+                "Reject a visible proposal.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.PROPOSAL,
+                ActionLifecyclePrecondition.VISIBLE_INTAKE_PROPOSAL,
+                "Dispose the proposal as rejected and remove its visible item.",
+            )
+        case ActionKind.REOPEN:
+            return ActionSemantics(
+                "Return deferred work for intake reconsideration.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ITEM,
+                ActionLifecyclePrecondition.DEFERRED_ITEM,
+                "Return deferred work to intake.",
+            )
+        case ActionKind.RESUME:
+            return ActionSemantics(
+                "Restore paused or blocked work after its dependencies are clear.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ITEM,
+                ActionLifecyclePrecondition.PAUSED_OR_BLOCKED_ITEM_WITHOUT_LIVE_DEPENDENCIES,
+                "Return paused or blocked work to active when an attempt exists, otherwise ready.",
+            )
+        case ActionKind.RETURN_FOR_CORRECTION:
+            return ActionSemantics(
+                "Return a reviewed attempt for correction.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.REVIEW_ATTEMPT,
+                "Return the same attempt to active and fence its prior worker authority.",
+            )
+        case ActionKind.RETURN_PROPOSAL:
+            return ActionSemantics(
+                "Return a visible proposal for more evidence or clarification.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.PROPOSAL,
+                ActionLifecyclePrecondition.VISIBLE_INTAKE_PROPOSAL,
+                "Dispose the proposal as returned and remove its visible item.",
+            )
+        case ActionKind.SUBMIT_REVIEW:
+            return ActionSemantics(
+                "Submit an active attempt's exact candidate for review.",
+                ActionEffect.MUTATING,
+                (Role.WORKER,),
+                ActionSubjectKind.ATTEMPT,
+                ActionLifecyclePrecondition.ACTIVE_ATTEMPT_CURRENT_SCOPE,
+                "Move the item and attempt to review and protect the candidate.",
+            )
+        case ActionKind.TRANSFER_COORDINATOR:
+            return ActionSemantics(
+                "Transfer graph-wide coordination ownership.",
+                ActionEffect.MUTATING,
+                (Role.COORDINATOR,),
+                ActionSubjectKind.LEDGER,
+                ActionLifecyclePrecondition.ACTIVE_TRANSFERABLE_COORDINATION,
+                "Replace the coordination owner and advance its fencing generation.",
+            )
         case _ as unreachable:
             assert_never(unreachable)
 

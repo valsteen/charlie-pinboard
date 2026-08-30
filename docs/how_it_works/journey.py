@@ -28,7 +28,7 @@ DIAGRAM = Diagram(
     title="A review submission through four layers",
     description=(
         "A submit-review request is decoded, rechecked against current mutation ownership, decided in the domain, "
-        "projected into a stored mutation, committed atomically, and returned as a durable receipt."
+        "projected into a focused stored mutation, committed atomically, and returned as a durable receipt."
     ),
     width=1200,
     height=820,
@@ -78,9 +78,9 @@ DIAGRAM = Diagram(
         ),
         Box(
             "mutation",
-            "Stored mutation",
-            "Complete stored change",
-            ("before + after + receipt",),
+            "Focused mutation",
+            "Accepted stored change",
+            ("receipt · focus · exact extras",),
             ("project_transition_mutation",),
             800,
             244,

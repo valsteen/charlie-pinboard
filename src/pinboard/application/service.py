@@ -1,28 +1,21 @@
 from collections.abc import Callable
-from dataclasses import replace
 from datetime import datetime
 from typing import assert_never
 
+from pinboard.application import stored_state
+from pinboard.application.artifacts import CheckpointArtifacts
 from pinboard.application.decision_projection import (
     project_decision_snapshot,
 )
+from pinboard.application.errors import MutationContractError
 from pinboard.application.mutation_models import (
     AttemptAuthorityMutation,
     CoordinationAuthorityMutation,
     MutationReceipt,
     ProposalCreationMutation,
 )
-from pinboard.application.mutations import (
-    expected_stored_state,
-    project_transition_mutation,
-)
+from pinboard.application.mutations import project_transition_mutation
 from pinboard.application.ports import WorkStore
-from pinboard.application.stored_state import (
-    StoredCoordinationLease,
-    StoredWorkState,
-    TransitionHistoryActionKind,
-    TransitionHistoryAuthorizationKind,
-)
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_decisions import (
     decide_attempt_authority,
@@ -74,28 +67,19 @@ def change_coordination_authority(
         if isinstance(decision, DecisionFailure):
             return decision
         after_authority = decision.after
-        stored_after = StoredCoordinationLease(
-            after_authority.lease_id,
-            after_authority.task_id,
-            after_authority.host_id,
-            after_authority.generation,
-            after_authority.acquired_at,
-            after_authority.expires_at,
-            after_authority.state,
-        )
         match operation:
             case AcquireCoordinationAuthority(acquired_at=decided_at):
                 outcome = "acquire-coordination-authority"
-                authorization = TransitionHistoryAuthorizationKind.COORDINATOR
+                authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
             case RenewCoordinationAuthority(renewed_at=decided_at):
                 outcome = "renew-coordination-authority"
-                authorization = TransitionHistoryAuthorizationKind.COORDINATION
+                authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
             case ReleaseCoordinationAuthority(released_at=decided_at):
                 outcome = "release-coordination-authority"
-                authorization = TransitionHistoryAuthorizationKind.COORDINATION
+                authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
             case RevokeCoordinationAuthority(revoked_at=decided_at):
                 outcome = "revoke-coordination-authority"
-                authorization = TransitionHistoryAuthorizationKind.COORDINATOR
+                authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
             case _ as unreachable:
                 assert_never(unreachable)
         transition = decision_models.TransitionReceipt(
@@ -109,7 +93,7 @@ def change_coordination_authority(
             transition,
             HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
             before.lifecycle.project.revision + 1,
-            TransitionHistoryActionKind.CONTINUE,
+            stored_state.TransitionHistoryActionKind.CONTINUE,
             HistorySubjectId("ledger"),
             None,
             authorization,
@@ -118,17 +102,11 @@ def change_coordination_authority(
             "coordination-authority/v1",
             work_models.CanonicalJson(b"{}"),
         )
-        supplied_after = replace(
-            before,
-            authority=replace(before.authority, coordination=stored_after),
-        )
-        draft = CoordinationAuthorityMutation(before, supplied_after, receipt, decision)
-        mutation = replace(draft, after=expected_stored_state(draft))
-        return transaction.commit(mutation)
+        return transaction.commit(CoordinationAuthorityMutation(receipt, decision))
 
 
 def _retained_attempt_authority(
-    state: StoredWorkState,
+    state: stored_state.StoredWorkState,
     attempt_id: AttemptId,
 ) -> AttemptLeaseAuthority | None:
     lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
@@ -176,22 +154,22 @@ def change_attempt_authority(
     match operation:
         case AcquireInitialAttemptAuthority(attempt=attempt_id, acquired_at=decided_at):
             outcome = "acquire-initial-attempt-authority"
-            authorization = TransitionHistoryAuthorizationKind.COORDINATOR
+            authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
         case TransferAttemptAuthority(current=current, acquired_at=decided_at):
             attempt_id = current.attempt
             outcome = "transfer-attempt-authority"
-            authorization = TransitionHistoryAuthorizationKind.COORDINATION
+            authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
         case RenewAttemptAuthority(current=current, renewed_at=decided_at):
             attempt_id = current.attempt
             outcome = "renew-attempt-authority"
-            authorization = TransitionHistoryAuthorizationKind.ATTEMPT
+            authorization = stored_state.TransitionHistoryAuthorizationKind.ATTEMPT
         case ReleaseAttemptAuthority(current=current, released_at=decided_at):
             attempt_id = current.attempt
             outcome = "release-attempt-authority"
-            authorization = TransitionHistoryAuthorizationKind.ATTEMPT
+            authorization = stored_state.TransitionHistoryAuthorizationKind.ATTEMPT
         case RevokeAttemptAuthority(attempt=attempt_id, revoked_at=decided_at):
             outcome = "revoke-attempt-authority"
-            authorization = TransitionHistoryAuthorizationKind.COORDINATION
+            authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
         case _ as unreachable:
             assert_never(unreachable)
     with store.write() as transaction:
@@ -242,7 +220,7 @@ def change_attempt_authority(
             transition,
             HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
             before.lifecycle.project.revision + 1,
-            TransitionHistoryActionKind.CONTINUE,
+            stored_state.TransitionHistoryActionKind.CONTINUE,
             HistorySubjectId(attempt_id),
             None,
             authorization,
@@ -251,9 +229,7 @@ def change_attempt_authority(
             "attempt-authority/v1",
             work_models.CanonicalJson(b"{}"),
         )
-        draft = AttemptAuthorityMutation(before, before, receipt, decision)
-        mutation = replace(draft, after=expected_stored_state(draft))
-        return transaction.commit(mutation)
+        return transaction.commit(AttemptAuthorityMutation(receipt, decision))
 
 
 def create_proposal(
@@ -288,18 +264,16 @@ def create_proposal(
             transition,
             HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
             project.revision + 1,
-            TransitionHistoryActionKind.INSPECT,
+            stored_state.TransitionHistoryActionKind.INSPECT,
             HistorySubjectId(intake.proposal_id),
             None,
-            TransitionHistoryAuthorizationKind.COORDINATOR,
+            stored_state.TransitionHistoryAuthorizationKind.COORDINATOR,
             intake.source_task_id,
             None,
             "proposal-intake/v1",
             work_models.CanonicalJson(b"{}"),
         )
-        draft = ProposalCreationMutation(before, before, receipt, decision)
-        mutation = replace(draft, after=expected_stored_state(draft))
-        return transaction.commit(mutation)
+        return transaction.commit(ProposalCreationMutation(receipt, decision))
 
 
 def _actor_for(
@@ -365,8 +339,12 @@ def execute(
     store: WorkStore,
     command: decision_models.TransitionCommand,
     now: datetime,
-    transition_guard: Callable[[StoredWorkState, decision_models.TransitionCommand], DecisionFailure | None]
+    transition_guard: Callable[
+        [stored_state.StoredWorkState, decision_models.TransitionCommand], DecisionFailure | None
+    ]
     | None = None,
+    *,
+    checkpoint_artifacts: CheckpointArtifacts | None = None,
 ) -> DecisionResult[decision_models.TransitionReceipt]:
     """Rediscover, decide, and persist one lifecycle mutation under one write lock."""
 
@@ -385,4 +363,8 @@ def execute(
         decision = decide(snapshot, command, now)
         if isinstance(decision, DecisionFailure):
             return decision
-        return transaction.commit(project_transition_mutation(before, decision))
+        try:
+            mutation = project_transition_mutation(before, decision, checkpoint_artifacts)
+        except MutationContractError as error:
+            return DecisionFailure(DecisionFailureCode.TRANSITION_INPUT_INVALID, str(error))
+        return transaction.commit(mutation)

@@ -1,31 +1,13 @@
+import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest.mock import patch
 
-from pinboard.application.stored_state import (
-    ArtifactKind,
-    ArtifactReference,
-    AttemptLeaseCounter,
-    AttemptLeaseGeneration,
-    AuthorityRecords,
-    ItemArtifactLink,
-    ItemDependency,
-    ItemScopeRevision,
-    LifecycleRecords,
-    ProjectRecord,
-    ProposalEvidence,
-    ProposalFreshness,
-    ProposalRecords,
-    StoredAttempt,
-    StoredAttemptLease,
-    StoredCoordinationLease,
-    StoredFocus,
-    StoredProposal,
-    StoredTransitionReceipt,
-    StoredWorkItem,
-    StoredWorkItemState,
-    StoredWorkState,
-    TransitionHistoryActionKind,
-    TransitionHistoryAuthorizationKind,
-)
+from pinboard.adapters.sqlite import store as sqlite_store
+from pinboard.adapters.sqlite.models import OpenMode
+from pinboard.application import stored_state
 from pinboard.domain import work_models
 from pinboard.domain.authority_models import AttemptLeaseStatus
 from pinboard.domain.identifiers import (
@@ -48,16 +30,44 @@ SQLITE_NOW = datetime(2026, 8, 22, 14, 0, tzinfo=UTC)
 SQLITE_DIGEST = "a" * 64
 
 
+@contextmanager
+def reject_table_deletes(table_name: str) -> Generator[None]:
+    """Reject deletion of one unrelated live relation."""
+
+    original_open = sqlite_store.open_database
+
+    def guarded_open(path: Path, mode: OpenMode) -> sqlite3.Connection:
+        connection = original_open(path, mode)
+        if mode == OpenMode.READ_WRITE:
+
+            def authorize(
+                action: int,
+                argument: str | None,
+                _secondary_argument: str | None,
+                _database: str | None,
+                _trigger: str | None,
+            ) -> int:
+                if action == sqlite3.SQLITE_DELETE and argument == table_name:
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            connection.set_authorizer(authorize)
+        return connection
+
+    with patch.object(sqlite_store, "open_database", guarded_open):
+        yield
+
+
 def _stored_item(
     item_id: ItemId,
-    state: StoredWorkItemState,
+    state: stored_state.StoredWorkItemState,
     *,
     outcome_evidence: str | None = None,
     sparse: bool = False,
     queue_position: int | None = 1,
     source: str | None = None,
-) -> StoredWorkItem:
-    return StoredWorkItem(
+) -> stored_state.StoredWorkItem:
+    return stored_state.StoredWorkItem(
         item_id,
         f"Work {item_id}",
         state,
@@ -68,7 +78,7 @@ def _stored_item(
         None if sparse else "The state becomes explicit.",
         None if sparse else "The next decision can run.",
         outcome_evidence,
-        "continue" if state == StoredWorkItemState.ACTIVE else "activate",
+        "continue" if state == stored_state.StoredWorkItemState.ACTIVE else "activate",
         None if sparse else "Current work remains bounded.",
         1,
         SQLITE_DIGEST,
@@ -79,7 +89,7 @@ def _stored_item(
     )
 
 
-def complete_sqlite_state() -> StoredWorkState:
+def complete_sqlite_state() -> stored_state.StoredWorkState:
     item_a = ItemId("work-a")
     item_b = ItemId("work-b")
     item_c = ItemId("work-c")
@@ -87,67 +97,67 @@ def complete_sqlite_state() -> StoredWorkState:
     proposal_item = ItemId("zz-proposal-a")
     attempt_id = AttemptId("work-a-1")
     attempt_lease_id = LeaseId("attempt-lease-a")
-    brief = ArtifactReference(
+    brief = stored_state.ArtifactReference(
         ArtifactRefId(1),
         "work-a-brief",
         1,
-        ArtifactKind.BRIEF,
+        stored_state.ArtifactKind.BRIEF,
         "artifacts/briefs/work-a-brief/1.opaque",
         SQLITE_DIGEST,
         100,
         3,
         SQLITE_NOW,
     )
-    design = ArtifactReference(
+    design = stored_state.ArtifactReference(
         ArtifactRefId(2),
         "work-a-design",
         1,
-        ArtifactKind.DESIGN,
+        stored_state.ArtifactKind.DESIGN,
         "artifacts/design.md",
         SQLITE_DIGEST,
         200,
         3,
         SQLITE_NOW,
     )
-    evidence = ArtifactReference(
+    evidence = stored_state.ArtifactReference(
         ArtifactRefId(3),
         "work-a-evidence",
         1,
-        ArtifactKind.EVIDENCE,
+        stored_state.ArtifactKind.EVIDENCE,
         "artifacts/evidence.md",
         SQLITE_DIGEST,
         50,
         4,
         SQLITE_NOW,
     )
-    lifecycle = LifecycleRecords(
-        ProjectRecord("pinboard", 1, 12, 2, SQLITE_NOW, SQLITE_NOW),
+    lifecycle = stored_state.LifecycleRecords(
+        stored_state.ProjectRecord("pinboard", 1, 12, 2, SQLITE_NOW, SQLITE_NOW),
         (
-            _stored_item(intake_item, StoredWorkItemState.INTAKE, sparse=True, queue_position=1),
-            _stored_item(item_a, StoredWorkItemState.ACTIVE, queue_position=2),
+            _stored_item(intake_item, stored_state.StoredWorkItemState.INTAKE, sparse=True, queue_position=1),
+            _stored_item(item_a, stored_state.StoredWorkItemState.ACTIVE, queue_position=2),
             _stored_item(
                 item_b,
-                StoredWorkItemState.SUPERSEDED,
+                stored_state.StoredWorkItemState.SUPERSEDED,
                 outcome_evidence="work-b superseded",
                 queue_position=None,
             ),
-            _stored_item(item_c, StoredWorkItemState.READY, queue_position=3),
+            _stored_item(item_c, stored_state.StoredWorkItemState.READY, queue_position=3),
             _stored_item(
                 proposal_item,
-                StoredWorkItemState.INTAKE,
+                stored_state.StoredWorkItemState.INTAKE,
                 sparse=True,
                 queue_position=4,
                 source="proposal:zz-proposal-a",
             ),
         ),
         tuple(
-            ItemScopeRevision(item, 1, SQLITE_DIGEST, 3, SQLITE_NOW)
+            stored_state.ItemScopeRevision(item, 1, SQLITE_DIGEST, 3, SQLITE_NOW)
             for item in (intake_item, item_a, item_b, item_c, proposal_item)
         ),
-        (ItemDependency(item_a, item_c, 0), ItemDependency(proposal_item, item_c, 0)),
-        (ItemArtifactLink(item_a, design.artifact_ref_id, work_models.ArtifactRole.DESIGN, 0),),
+        (stored_state.ItemDependency(item_a, item_c, 0), stored_state.ItemDependency(proposal_item, item_c, 0)),
+        (stored_state.ItemArtifactLink(item_a, design.artifact_ref_id, work_models.ArtifactRole.DESIGN, 0),),
         (
-            StoredAttempt(
+            stored_state.StoredAttempt(
                 attempt_id,
                 item_a,
                 work_models.AttemptState.ACTIVE,
@@ -167,9 +177,9 @@ def complete_sqlite_state() -> StoredWorkState:
         ),
     )
     proposal_id = ProposalId(proposal_item)
-    proposals = ProposalRecords(
+    proposals = stored_state.ProposalRecords(
         (
-            StoredProposal(
+            stored_state.StoredProposal(
                 proposal_id,
                 SQLITE_NOW,
                 SQLITE_NOW,
@@ -185,11 +195,11 @@ def complete_sqlite_state() -> StoredWorkState:
                 4,
             ),
         ),
-        (ProposalEvidence(proposal_id, 0, "evidence:observation"),),
-        (ProposalFreshness(proposal_id, 0, "Work C remains live."),),
+        (stored_state.ProposalEvidence(proposal_id, 0, "evidence:observation"),),
+        (stored_state.ProposalFreshness(proposal_id, 0, "Work C remains live."),),
     )
-    authority = AuthorityRecords(
-        StoredCoordinationLease(
+    authority = stored_state.AuthorityRecords(
+        stored_state.StoredCoordinationLease(
             LeaseId("coordination-a"),
             TaskId("coordinator"),
             HostId("host-a"),
@@ -198,19 +208,23 @@ def complete_sqlite_state() -> StoredWorkState:
             SQLITE_NOW + timedelta(minutes=5),
             work_models.CoordinationLeaseStatus.ACTIVE,
         ),
-        (AttemptLeaseCounter(attempt_id, 3),),
-        (AttemptLeaseGeneration(attempt_id, 3, attempt_lease_id, TaskId("worker"), HostId("host-a")),),
-        (StoredAttemptLease(attempt_id, 3, SQLITE_NOW, SQLITE_NOW + timedelta(minutes=5), AttemptLeaseStatus.ACTIVE),),
+        (stored_state.AttemptLeaseCounter(attempt_id, 3),),
+        (stored_state.AttemptLeaseGeneration(attempt_id, 3, attempt_lease_id, TaskId("worker"), HostId("host-a")),),
+        (
+            stored_state.StoredAttemptLease(
+                attempt_id, 3, SQLITE_NOW, SQLITE_NOW + timedelta(minutes=5), AttemptLeaseStatus.ACTIVE
+            ),
+        ),
     )
     transition_receipts = (
-        StoredTransitionReceipt(
+        stored_state.StoredTransitionReceipt(
             HistoryId(1),
             11,
             ActionId("continue:work-a-1"),
-            TransitionHistoryActionKind.CONTINUE,
+            stored_state.TransitionHistoryActionKind.CONTINUE,
             HistorySubjectId("work-a-1"),
             evidence.artifact_ref_id,
-            TransitionHistoryAuthorizationKind.ATTEMPT,
+            stored_state.TransitionHistoryAuthorizationKind.ATTEMPT,
             TaskId("worker"),
             HostId("host-a"),
             "empty/v1",
@@ -220,11 +234,11 @@ def complete_sqlite_state() -> StoredWorkState:
             SQLITE_NOW,
         ),
     )
-    return StoredWorkState(
+    return stored_state.StoredWorkState(
         lifecycle,
         proposals,
         (brief, design, evidence),
         authority,
         transition_receipts,
-        StoredFocus(item_a, attempt_id, "continue", 6),
+        stored_state.StoredFocus(item_a, attempt_id, "continue", 6),
     )

@@ -8,22 +8,21 @@ from pinboard.adapters.files.artifacts import verify_reference, write_revision
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
-from pinboard.application.artifacts import NewArtifact
+from pinboard.application import stored_state
+from pinboard.application.artifacts import CheckpointArtifacts, NewArtifact
+from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.errors import PortableCopyError, PortableCopyErrorCode
-from pinboard.application.service import change_attempt_authority
-from pinboard.application.stored_state import (
-    ArtifactKind,
-    ArtifactReference,
-    TransitionHistoryActionKind,
-)
+from pinboard.application.service import change_attempt_authority, change_coordination_authority, execute
 from pinboard.application.transfer import create_portable_copy
-from pinboard.domain import work_models
+from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_models import (
     AttemptLeaseStatus,
+    ReleaseCoordinationAuthority,
     RenewAttemptAuthority,
 )
+from pinboard.domain.decisions import available_actions, bind_transition
 from pinboard.domain.errors import DecisionFailure
-from pinboard.domain.identifiers import ArtifactRefId
+from pinboard.domain.identifiers import ArtifactRefId, CandidateId, CheckpointId
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 from tests.support import SQLITE_NOW, complete_sqlite_state
 from tests.work_brief_support import work_a_brief
@@ -37,7 +36,7 @@ class PortableCopyTest(unittest.TestCase):
         state = complete_sqlite_state()
         references = []
         for reference in state.artifact_references:
-            if reference.kind == ArtifactKind.BRIEF:
+            if reference.kind == stored_state.ArtifactKind.BRIEF:
                 value = work_a_brief(project)
                 content = canonical_work_brief_bytes(value)
                 suffix = ".json"
@@ -62,10 +61,12 @@ class PortableCopyTest(unittest.TestCase):
             )
         historical = write_revision(
             roots,
-            NewArtifact(ArtifactKind.BRIEF, "historical-v1-attempt", 1, ".md", b"opaque terminal v1 evidence\n"),
+            NewArtifact(
+                stored_state.ArtifactKind.BRIEF, "historical-v1-attempt", 1, ".md", b"opaque terminal v1 evidence\n"
+            ),
         )
         references.append(
-            ArtifactReference(
+            stored_state.ArtifactReference(
                 ArtifactRefId(1 + max(int(value.artifact_ref_id) for value in state.artifact_references)),
                 historical.key,
                 historical.revision,
@@ -128,7 +129,9 @@ class PortableCopyTest(unittest.TestCase):
         self.assertTrue(all(lease.state != AttemptLeaseStatus.ACTIVE for lease in copied.authority.attempt_leases))
         self.assertEqual(source_state.lifecycle.project.host_epoch + 1, copied.lifecycle.project.host_epoch)
         self.assertEqual(source_state.lifecycle.project.revision + 1, copied.lifecycle.project.revision)
-        self.assertEqual(TransitionHistoryActionKind.PORTABLE_COPY, copied.transition_receipts[-1].action_kind)
+        self.assertEqual(
+            stored_state.TransitionHistoryActionKind.PORTABLE_COPY, copied.transition_receipts[-1].action_kind
+        )
         self.assertEqual(source_state.lifecycle.project.revision, receipt.source_revision)
         self.assertEqual(copied.lifecycle.project.revision, receipt.destination_revision)
         self.assertEqual(len(source_state.artifact_references), receipt.artifacts_copied)
@@ -159,6 +162,98 @@ class PortableCopyTest(unittest.TestCase):
         )
         self.assertIsInstance(rejected, DecisionFailure)
         self.assertEqual(before_rejection, destination_store.snapshot().lifecycle.project.revision)
+
+    def test_portable_copy_includes_accepted_checkpoint_result_and_review_bytes(self) -> None:
+        source, store = self._source(live_authority=True)
+        snapshot = project_decision_snapshot(store.snapshot())
+        attempt_authority = snapshot.command_attempt_authorities[0]
+        worker = decision_models.ActorAuthority(
+            decision_models.Role.WORKER,
+            decision_models.AuthorizationKind.ATTEMPT,
+            attempt_authority.generation,
+            attempt_authority.lease_id,
+            (attempt_authority.attempt,),
+            False,
+        )
+        worker_actions = available_actions(snapshot, worker)
+        self.assertIsInstance(worker_actions, tuple)
+        assert isinstance(worker_actions, tuple)
+        submit_action = next(
+            value for value in worker_actions if value.kind == decision_models.ActionKind.SUBMIT_REVIEW
+        )
+        submit = bind_transition(submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a")))
+        assert not isinstance(submit, DecisionFailure)
+        self.assertNotIsInstance(execute(store, submit, SQLITE_NOW), DecisionFailure)
+        review_snapshot = project_decision_snapshot(store.snapshot())
+        coordination = review_snapshot.coordination_authority
+        assert coordination is not None
+        coordinator = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR,
+            decision_models.AuthorizationKind.COORDINATION,
+            coordination.generation,
+            coordination.lease_id,
+        )
+        coordinator_actions = available_actions(review_snapshot, coordinator)
+        self.assertIsInstance(coordinator_actions, tuple)
+        assert isinstance(coordinator_actions, tuple)
+        accept_action = next(
+            value for value in coordinator_actions if value.kind == decision_models.ActionKind.ACCEPT_CHECKPOINT
+        )
+        accept = bind_transition(
+            accept_action,
+            work_models.AcceptCheckpointInput(
+                CheckpointId("checkpoint-a"),
+                CandidateId("candidate-a"),
+                "Accepted for portable-copy proof.",
+            ),
+        )
+        assert not isinstance(accept, DecisionFailure)
+        result_bytes = b"portable checkpoint result\n"
+        review_bytes = b"portable checkpoint review\n"
+        roots = resolve_durable_roots(source.parent.parent)
+        artifacts = CheckpointArtifacts(
+            write_revision(
+                roots,
+                NewArtifact(stored_state.ArtifactKind.RESULT, "work-a-1-checkpoint-a-result", 1, ".md", result_bytes),
+            ),
+            write_revision(
+                roots,
+                NewArtifact(stored_state.ArtifactKind.EVIDENCE, "work-a-1-checkpoint-a-review", 1, ".md", review_bytes),
+            ),
+        )
+        self.assertNotIsInstance(
+            execute(store, accept, SQLITE_NOW, checkpoint_artifacts=artifacts),
+            DecisionFailure,
+        )
+        retained = project_decision_snapshot(store.snapshot()).coordination_authority
+        assert retained is not None
+        self.assertNotIsInstance(
+            change_coordination_authority(
+                store,
+                ReleaseCoordinationAuthority(retained, SQLITE_NOW),
+            ),
+            DecisionFailure,
+        )
+        destination = Path(tempfile.mkdtemp()).resolve() / "checkpoint-copy"
+
+        create_portable_copy(source, destination)
+
+        copied = SQLiteWorkStore(destination / "state.sqlite3").snapshot()
+        result_reference = next(
+            value for value in copied.artifact_references if value.key == "work-a-1-checkpoint-a-result"
+        )
+        review_reference = next(
+            value for value in copied.artifact_references if value.key == "work-a-1-checkpoint-a-review"
+        )
+        self.assertEqual(result_bytes, (destination / result_reference.selector).read_bytes())
+        self.assertEqual(review_bytes, (destination / review_reference.selector).read_bytes())
+        self.assertEqual(result_reference.artifact_ref_id, copied.lifecycle.attempts[0].result_artifact_ref_id)
+        acceptance_receipt = next(
+            value
+            for value in copied.transition_receipts
+            if value.action_kind == stored_state.TransitionHistoryActionKind.ACCEPT_CHECKPOINT
+        )
+        self.assertEqual(review_reference.artifact_ref_id, acceptance_receipt.artifact_ref_id)
 
     def test_portable_copy_rejects_live_authority_existing_destination_and_missing_artifact(self) -> None:
         source, _store = self._source(live_authority=True)

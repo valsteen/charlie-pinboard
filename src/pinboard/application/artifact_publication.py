@@ -3,9 +3,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
+from pinboard.application import stored_state
 from pinboard.application.artifacts import ArtifactRef, NewArtifact, WorkBriefIdentity
 from pinboard.application.ports import WorkStore
-from pinboard.application.stored_state import ArtifactKind, ArtifactReference, StoredWorkState
 from pinboard.domain import decision_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 
@@ -18,9 +18,9 @@ class ArtifactPublisher(Protocol):
 
 
 class ArtifactReader(Protocol):
-    def verify(self, reference: ArtifactReference) -> None: ...
+    def verify(self, reference: stored_state.ArtifactReference) -> None: ...
 
-    def path(self, reference: ArtifactReference) -> Path: ...
+    def path(self, reference: stored_state.ArtifactReference) -> Path: ...
 
 
 def publish_accepted_artifact(
@@ -28,7 +28,7 @@ def publish_accepted_artifact(
     publisher: ArtifactPublisher,
     artifact: NewArtifact,
     accepted_at: datetime,
-) -> ArtifactReference:
+) -> stored_state.ArtifactReference:
     """Publish immutable bytes, then accept their verified reference in SQLite."""
 
     published = publisher.publish(artifact)
@@ -36,7 +36,7 @@ def publish_accepted_artifact(
 
 
 def validate_transition_work_brief(
-    state: StoredWorkState,
+    state: stored_state.StoredWorkState,
     command: decision_models.TransitionCommand,
     artifacts: ArtifactReader,
     decode_identity: Callable[[bytes], WorkBriefIdentity],
@@ -70,7 +70,7 @@ def validate_transition_work_brief(
         (candidate for candidate in state.artifact_references if candidate.artifact_ref_id == artifact_ref_id),
         None,
     )
-    if reference is None or reference.kind != ArtifactKind.BRIEF:
+    if reference is None or reference.kind != stored_state.ArtifactKind.BRIEF:
         return None
     artifacts.verify(reference)
     try:

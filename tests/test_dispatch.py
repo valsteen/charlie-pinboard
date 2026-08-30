@@ -15,12 +15,12 @@ from pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
 from pinboard.adapters.files.file_io import DurableRoots, resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application import stored_state
 from pinboard.application.actions import discover_actions
 from pinboard.application.artifacts import NewArtifact
 from pinboard.application.dispatch import prepare_dispatch
 from pinboard.application.dispatch_models import DispatchEnvironment, DispatchPermission
 from pinboard.application.errors import DispatchError, DispatchErrorCode
-from pinboard.application.stored_state import ArtifactKind
 from pinboard.domain import decision_models
 from pinboard.interfaces.cli import main
 from pinboard.interfaces.dispatch_brief import prepare_dispatch_from_artifact, read_dispatch_environment
@@ -78,7 +78,7 @@ class DispatchTest(unittest.TestCase):
         published = write_revision(
             roots,
             NewArtifact(
-                ArtifactKind.BRIEF,
+                stored_state.ArtifactKind.BRIEF,
                 brief.attempt_id,
                 brief.artifact_revision,
                 ".json",
@@ -323,7 +323,7 @@ class DispatchTest(unittest.TestCase):
         ready = tuple(
             reference
             for reference in after_first.artifact_references
-            if reference.kind == ArtifactKind.EVIDENCE and "brief-review" in reference.key
+            if reference.kind == stored_state.ArtifactKind.EVIDENCE and "brief-review" in reference.key
         )
         self.assertEqual(1, len(ready))
         self.assertTrue(ready[0].selector.endswith(".json"))
@@ -362,7 +362,9 @@ class DispatchTest(unittest.TestCase):
         selected = action()
         store.accept_artifact_reference(
             roots.work_root,
-            write_revision(roots, NewArtifact(ArtifactKind.EVIDENCE, "revision-bump", 1, ".json", b"{}\n")),
+            write_revision(
+                roots, NewArtifact(stored_state.ArtifactKind.EVIDENCE, "revision-bump", 1, ".json", b"{}\n")
+            ),
             datetime.now(UTC),
         )
         with self.assertRaises(DispatchError) as stale:

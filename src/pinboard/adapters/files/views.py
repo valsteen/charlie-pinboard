@@ -4,21 +4,15 @@ from pathlib import Path
 from pinboard.adapters.files.errors import FileIOError
 from pinboard.adapters.files.file_io import atomic_replace, ensure_child_directory
 from pinboard.adapters.files.models import AffectedViews, ViewRefreshResult, ViewWarning
+from pinboard.application import stored_state
 from pinboard.application.ports import WorkStore
 from pinboard.application.queries import overview_from_state
-from pinboard.application.stored_state import (
-    ItemDependency,
-    StoredAttempt,
-    StoredTransitionReceipt,
-    StoredWorkItem,
-    StoredWorkState,
-)
 from pinboard.domain.identifiers import AttemptId
 
 NOTICE = "Generated projection; SQLite is authoritative."
 
 
-def _dependency_key(value: ItemDependency) -> tuple[str, int]:
+def _dependency_key(value: stored_state.ItemDependency) -> tuple[str, int]:
     return str(value.item_id), value.position
 
 
@@ -26,7 +20,7 @@ def _header(kind: str, revision: int) -> str:
     return f"---\nkind: {kind}\ndatabase_revision: {revision}\nauthority: sqlite-v1\n---\n\n> {NOTICE}\n\n"
 
 
-def _queue(state: StoredWorkState) -> bytes:
+def _queue(state: stored_state.StoredWorkState) -> bytes:
     overview = overview_from_state(state)
     lines = [
         _header("work-queue-view", state.lifecycle.project.revision),
@@ -46,7 +40,7 @@ def _queue(state: StoredWorkState) -> bytes:
     return "".join(lines).encode()
 
 
-def _current(state: StoredWorkState) -> bytes:
+def _current(state: stored_state.StoredWorkState) -> bytes:
     focus = state.focus
     return (
         _header("work-current-view", state.lifecycle.project.revision)
@@ -57,7 +51,7 @@ def _current(state: StoredWorkState) -> bytes:
     ).encode()
 
 
-def _item(state: StoredWorkState, item: StoredWorkItem) -> bytes:
+def _item(state: stored_state.StoredWorkState, item: stored_state.StoredWorkItem) -> bytes:
     dependencies = tuple(
         value.dependency_id
         for value in sorted(state.lifecycle.dependencies, key=_dependency_key)
@@ -96,8 +90,8 @@ def _item(state: StoredWorkState, item: StoredWorkItem) -> bytes:
 
 
 def _attempt(
-    state: StoredWorkState,
-    attempt: StoredAttempt,
+    state: stored_state.StoredWorkState,
+    attempt: stored_state.StoredAttempt,
     attempt_briefs: Mapping[AttemptId, bytes],
 ) -> bytes:
     if (brief := attempt_briefs.get(attempt.attempt_id)) is not None:
@@ -113,14 +107,14 @@ def _attempt(
     ).encode()
 
 
-def _history_row(receipt: StoredTransitionReceipt) -> str:
+def _history_row(receipt: stored_state.StoredTransitionReceipt) -> str:
     return (
         f"| {receipt.history_id} | {receipt.project_revision} | {receipt.action_kind.value} | "
         f"{receipt.subject_id} | {receipt.committed_at.isoformat()} |\n"
     )
 
 
-def _history(state: StoredWorkState) -> bytes:
+def _history(state: stored_state.StoredWorkState) -> bytes:
     return (
         _header("work-history-view", state.lifecycle.project.revision)
         + "# Transition History\n\n"
@@ -132,7 +126,7 @@ def _history(state: StoredWorkState) -> bytes:
 
 def _write_views(
     work_root: Path,
-    state: StoredWorkState,
+    state: stored_state.StoredWorkState,
     affected: AffectedViews,
     attempt_briefs: Mapping[AttemptId, bytes],
 ) -> None:
@@ -178,7 +172,7 @@ def refresh(
 
 
 def expected_view_bytes(
-    state: StoredWorkState,
+    state: stored_state.StoredWorkState,
     attempt_briefs: Mapping[AttemptId, bytes] | None = None,
 ) -> dict[str, bytes]:
     """Return every generated selector and its canonical bytes for one SQLite snapshot."""

@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+from pinboard.application import stored_state
 from pinboard.application.errors import QueryError, QueryErrorCode
 from pinboard.application.ports import WorkStore
 from pinboard.application.query_models import (
@@ -17,32 +18,24 @@ from pinboard.application.query_models import (
     ReviewFlag,
     WorkOverview,
 )
-from pinboard.application.stored_state import (
-    ItemDependency,
-    StoredAttempt,
-    StoredWorkItem,
-    StoredWorkItemState,
-    StoredWorkState,
-    live_work_state,
-)
 from pinboard.domain import work_models
 from pinboard.domain.authority_models import AttemptLeaseStatus
 from pinboard.domain.identifiers import ItemId
 
 
-def _dependency_key(value: ItemDependency) -> tuple[int, str]:
+def _dependency_key(value: stored_state.ItemDependency) -> tuple[int, str]:
     return value.position, str(value.dependency_id)
 
 
-def _dependency_position(value: ItemDependency) -> int:
+def _dependency_position(value: stored_state.ItemDependency) -> int:
     return value.position
 
 
-def _item_key(value: StoredWorkItem) -> tuple[int, str]:
+def _item_key(value: stored_state.StoredWorkItem) -> tuple[int, str]:
     return value.queue_position or 0, str(value.item_id)
 
 
-def _attempt_key(value: StoredAttempt) -> str:
+def _attempt_key(value: stored_state.StoredAttempt) -> str:
     return str(value.attempt_id)
 
 
@@ -51,20 +44,20 @@ def _parallel_item_key(value: ParallelItem) -> str:
 
 
 _TERMINAL_ITEM_STATES = {
-    StoredWorkItemState.DONE,
-    StoredWorkItemState.SUPERSEDED,
-    StoredWorkItemState.DROPPED,
+    stored_state.StoredWorkItemState.DONE,
+    stored_state.StoredWorkItemState.SUPERSEDED,
+    stored_state.StoredWorkItemState.DROPPED,
 }
 
 
-def _required_live_work_state(value: StoredWorkItemState) -> work_models.WorkState:
-    state = live_work_state(value)
+def _required_live_work_state(value: stored_state.StoredWorkItemState) -> work_models.WorkState:
+    state = stored_state.live_work_state(value)
     if state is None:
         raise QueryError(QueryErrorCode.WORK_STATE_INVALID, f"Item state {value.value!r} is not live.")
     return state
 
 
-def overview_from_state(state: StoredWorkState) -> WorkOverview:
+def overview_from_state(state: stored_state.StoredWorkState) -> WorkOverview:
     attempts = {
         attempt.item_id: attempt.attempt_id
         for attempt in state.lifecycle.attempts
@@ -83,7 +76,7 @@ def overview_from_state(state: StoredWorkState) -> WorkOverview:
     proposals = {ItemId(proposal.proposal_id): proposal for proposal in state.proposals.proposals}
     live_ids = frozenset(item.item_id for item in state.lifecycle.work_items if item.state not in _TERMINAL_ITEM_STATES)
 
-    def dependency_reason(item_id: ItemId, link: ItemDependency) -> DependencyReason:
+    def dependency_reason(item_id: ItemId, link: stored_state.ItemDependency) -> DependencyReason:
         proposal = proposals.get(item_id)
         if (
             proposal is not None
@@ -215,13 +208,13 @@ def _preview_time(value: datetime | None) -> datetime:
 
 
 def _parallel_reasons(
-    state: StoredWorkState,
+    state: stored_state.StoredWorkState,
     item_id: ItemId,
     live_items: frozenset[str],
     current: datetime,
 ) -> tuple[ParallelReason, ...]:
     item = next(value for value in state.lifecycle.work_items if value.item_id == item_id)
-    if item.state not in {StoredWorkItemState.READY, StoredWorkItemState.ACTIVE}:
+    if item.state not in {stored_state.StoredWorkItemState.READY, stored_state.StoredWorkItemState.ACTIVE}:
         return (
             ParallelReason(
                 ParallelReasonCode.STATE_NOT_LAUNCHABLE,
