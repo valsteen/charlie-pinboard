@@ -15,11 +15,11 @@ from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.errors import StorageError
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application import stored_state
 from pinboard.application.artifacts import NewArtifact
-from pinboard.application.stored_state import ArtifactKind
 from pinboard.domain import work_models
 from pinboard.domain.identifiers import ItemId
-from tests.support import SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_NOW, complete_sqlite_state, reject_table_deletes
 
 
 class ArtifactPersistenceTest(unittest.TestCase):
@@ -31,19 +31,22 @@ class ArtifactPersistenceTest(unittest.TestCase):
         store.initialize_state(complete_sqlite_state())
         published = write_revision(
             roots,
-            NewArtifact(ArtifactKind.EVIDENCE, "intake-work-review", 1, ".md", b"ready\n"),
+            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "intake-work-review", 1, ".md", b"ready\n"),
         )
+        before = store.snapshot()
 
-        accepted = store.accept_artifact_reference(
-            roots.work_root,
-            published,
-            SQLITE_NOW,
-            item_id=ItemId("intake-work"),
-            role=work_models.ArtifactRole.EVIDENCE,
-        )
+        with reject_table_deletes("work_items"):
+            accepted = store.accept_artifact_reference(
+                roots.work_root,
+                published,
+                SQLITE_NOW,
+                item_id=ItemId("intake-work"),
+                role=work_models.ArtifactRole.EVIDENCE,
+            )
 
         reloaded = SQLiteWorkStore(roots.database_path).snapshot()
         self.assertIn(accepted, reloaded.artifact_references)
+        self.assertEqual(before.transition_receipts, reloaded.transition_receipts)
         self.assertEqual(
             ["intake-work", "work-a"],
             [str(value.item_id) for value in reloaded.lifecycle.item_artifacts],
@@ -57,7 +60,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         store.initialize_state(complete_sqlite_state())
         published = write_revision(
             roots,
-            NewArtifact(ArtifactKind.EVIDENCE, "review-a", 1, ".md", b"ready\n"),
+            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "review-a", 1, ".md", b"ready\n"),
         )
 
         accepted = store.accept_artifact_reference(
@@ -78,7 +81,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
     def test_revision_is_published_immutably_and_identical_retry_is_reused(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
-        artifact = NewArtifact(ArtifactKind.BRIEF, "attempt-a", 1, ".json", b"{}\n")
+        artifact = NewArtifact(stored_state.ArtifactKind.BRIEF, "attempt-a", 1, ".json", b"{}\n")
 
         reference = write_revision(roots, artifact)
 
@@ -86,7 +89,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         self.assertEqual(reference, write_revision(roots, artifact))
         verify_reference(roots.work_root, reference)
         with self.assertRaises(ArtifactError) as collision:
-            write_revision(roots, NewArtifact(ArtifactKind.BRIEF, "attempt-a", 1, ".json", b"different\n"))
+            write_revision(roots, NewArtifact(stored_state.ArtifactKind.BRIEF, "attempt-a", 1, ".json", b"different\n"))
         self.assertEqual(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, collision.exception.code)
         self.assertEqual(b"{}\n", (roots.work_root / reference.selector).read_bytes())
 
@@ -95,7 +98,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         reference = write_revision(
             roots,
-            NewArtifact(ArtifactKind.EVIDENCE, "review-a", 1, ".json", b"{}\n"),
+            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "review-a", 1, ".json", b"{}\n"),
         )
 
         for changed in (
@@ -110,16 +113,16 @@ class ArtifactPersistenceTest(unittest.TestCase):
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         invalid = (
-            NewArtifact(ArtifactKind.BRIEF, "../escape", 1, ".json", b"x"),
-            NewArtifact(ArtifactKind.BRIEF, "brief", 0, ".json", b"x"),
-            NewArtifact(ArtifactKind.BRIEF, "brief", 1, "json", b"x"),
+            NewArtifact(stored_state.ArtifactKind.BRIEF, "../escape", 1, ".json", b"x"),
+            NewArtifact(stored_state.ArtifactKind.BRIEF, "brief", 0, ".json", b"x"),
+            NewArtifact(stored_state.ArtifactKind.BRIEF, "brief", 1, "json", b"x"),
         )
         for artifact in invalid:
             with self.subTest(artifact=artifact), self.assertRaises(ArtifactError) as raised:
                 write_revision(roots, artifact)
             self.assertEqual(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, raised.exception.code)
 
-        published = write_revision(roots, NewArtifact(ArtifactKind.BRIEF, "brief", 1, ".json", b"x"))
+        published = write_revision(roots, NewArtifact(stored_state.ArtifactKind.BRIEF, "brief", 1, ".json", b"x"))
         for selector in (
             "artifacts/briefs/other/1.json",
             "artifacts/briefs/brief/not-a-revision.json",
@@ -137,7 +140,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             ),
             self.assertRaises(ArtifactError) as io_error,
         ):
-            write_revision(failing_roots, NewArtifact(ArtifactKind.RESULT, "result", 1, ".md", b"x"))
+            write_revision(failing_roots, NewArtifact(stored_state.ArtifactKind.RESULT, "result", 1, ".md", b"x"))
         self.assertEqual(ArtifactErrorCode.STORAGE_IO_ERROR, io_error.exception.code)
 
     def test_artifact_acceptance_reuse_and_relationship_failures_do_not_mutate(self) -> None:
@@ -148,7 +151,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         store.initialize_state(complete_sqlite_state())
         published = write_revision(
             roots,
-            NewArtifact(ArtifactKind.EVIDENCE, "review-reuse", 1, ".md", b"ready\n"),
+            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "review-reuse", 1, ".md", b"ready\n"),
         )
         accepted = store.accept_artifact_reference(
             roots.work_root,
@@ -161,7 +164,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
 
         later_link = write_revision(
             roots,
-            NewArtifact(ArtifactKind.EVIDENCE, "review-linked-later", 1, ".md", b"ready\n"),
+            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "review-linked-later", 1, ".md", b"ready\n"),
         )
         initially_unlinked = store.accept_artifact_reference(roots.work_root, later_link, SQLITE_NOW)
         before_link = store.snapshot()
@@ -193,7 +196,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         ):
             candidate = write_revision(
                 roots,
-                NewArtifact(ArtifactKind.EVIDENCE, f"failure-{item_id}-{role}", 1, ".md", b"x"),
+                NewArtifact(stored_state.ArtifactKind.EVIDENCE, f"failure-{item_id}-{role}", 1, ".md", b"x"),
             )
             before = store.snapshot()
             with self.subTest(item_id=item_id, role=role), self.assertRaises(StorageError):

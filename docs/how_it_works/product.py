@@ -68,7 +68,7 @@ DIAGRAM = Diagram(
     sections=(
         Section("Work item · main route", "", 28, 38),
         Section("Optional branches", "", 962, 226),
-        Section("Attempt · legal branches from active", "", 28, 430),
+        Section("Attempt · legal branches from active", "continue is advisory and does not move state", 28, 430),
         Section("Related facts · not another status", "", 28, 750),
     ),
     guides=(
@@ -99,7 +99,7 @@ DIAGRAM = Diagram(
         Box("intake", "Intake", "Visible finding", (), ("WorkState.INTAKE",), 60, 80, 160, 90),
         Box("ready", "Ready", "Accepted work", (), ("WorkState.READY",), 260, 80, 150, 90),
         Box("active", "Active", "Attempt underway", (), ("WorkState.ACTIVE",), 480, 80, 170, 90),
-        Box("review", "Review", "Exact candidate held", (), ("return · continue",), 740, 80, 200, 90),
+        Box("review", "Review", "Exact candidate held", (), ("return · accept + continue",), 740, 80, 200, 90),
         Box(
             "terminal",
             "Terminal",
@@ -174,7 +174,7 @@ DIAGRAM = Diagram(
             "attempt-review",
             "Review",
             "Candidate protected",
-            ("correction / continue → active",),
+            ("accept + continue → active",),
             ("AttemptState.REVIEW",),
             650,
             470,

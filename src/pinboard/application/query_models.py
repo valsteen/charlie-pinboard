@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 import msgspec
 
-from pinboard.application.stored_state import StoredWorkItemState
+from pinboard.application import stored_state
 from pinboard.domain import work_models
 
 type ItemStatusSchema = Literal["pinboard-item-status/v1"]
@@ -23,7 +23,7 @@ class ItemStatus(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     revision: DecimalRevision
     item_id: str
     label: str
-    state: StoredWorkItemState
+    state: stored_state.StoredWorkItemState
     timing: work_models.Timing | None
     outcome_evidence: str | None
     next_action: str | None

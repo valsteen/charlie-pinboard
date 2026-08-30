@@ -64,14 +64,15 @@ Expected rejection over constructed domain values is returned as a typed `Decisi
 
 | Owner group | Responsibility |
 | --- | --- |
-| `stored_state.py`, `mutation_models.py`, `mutations.py`, `ports.py` | Complete persistence aggregate, closed mutation records, exhaustive relational-delta projection from domain lifecycle variants, and transactional store capabilities |
+| `stored_state.py` | Complete typed read and initialization aggregate plus explicit storage vocabulary |
+| `mutation_models.py`, `mutations.py`, `ports.py` | Closed focused mutation records, exhaustive decision-to-relational conversion, and storage-independent transactional capabilities |
 | `decision_projection.py`, `service.py` | Shared-index projection of complete stored collections into domain decision facts and locked mutation orchestration |
 | `actions.py`, `query_models.py`, `queries.py` | Legal-action discovery plus current overview, exact item-status, and parallel-preview records and queries |
 | `artifacts.py`, `artifact_publication.py`, `dispatch_models.py`, `dispatch.py` | Immutable artifact references and typed brief identity, application-owned artifact acceptance, activation and resume brief guards, dispatch contracts, accepted review publication, dispatch eligibility, and prompt preparation |
 | `errors.py` | Exact application exception families and their code enums |
 | `validation.py`, `transfer.py` | Whole-work-root validation and portable-copy workflow |
 
-SQLite rows are not active domain objects. `StoredWorkState` contains exact typed records without SQL handles or filesystem paths, and `LedgerSnapshot` remains the storage-independent decision input.
+SQLite rows are not active domain objects. `StoredWorkState` is the exact typed read and initialization aggregate without SQL handles or filesystem paths, while live mutations carry only the accepted decision, receipt, and affected auxiliary values. `LedgerSnapshot` remains the storage-independent decision input.
 
 ### Adapters
 
@@ -83,7 +84,7 @@ Adapters own concrete persistence and filesystem mechanics without deciding prod
 | `files/artifacts.py` | Immutable artifact naming, publication, digest verification, and reference resolution |
 | `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections; interface composition supplies complete live-v2 brief projections |
 | `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, schema verification, connection records, transactions, backup, synchronization, and exact storage failures |
-| `sqlite/store.py` | Complete `StoredWorkState` loading and exhaustive accepted-mutation persistence |
+| `sqlite/store.py` | Complete `StoredWorkState` loading, initialization-only aggregate insertion, and exhaustive focused persistence of accepted live mutations |
 | `sqlite/registration.py` | Fresh initialization, safe reopen of SQLite, and initial view generation |
 
 ### Interfaces
@@ -105,7 +106,7 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 
 ### Authoritative SQLite state
 
-`.codex/pinboard/state.sqlite3` owns project revision and host epoch; item, attempt, focus, dependency, requirement, and proposal state; coordination and attempt authority; accepted artifact references; and transition history. A mutation opens a write transaction, reselects current state and authority, applies one accepted closed mutation, and advances the revision with its history receipt. A rejected or failed transition leaves the previous valid ledger intact, and stale actions or fencing tokens are rejected.
+`.codex/pinboard/state.sqlite3` owns project revision and host epoch; item, attempt, focus, dependency, requirement, and proposal state; coordination and attempt authority; accepted artifact references; and transition history. A mutation opens a write transaction, reselects current state and authority, updates only the relations named by one accepted closed mutation, and advances the revision with its history receipt. Revision and affected-row guards reject stale actions or fencing tokens. A rejected or failed transition leaves the previous valid ledger intact. Complete aggregate insertion is reserved for initialization and portable-copy construction, not live mutation persistence.
 
 ### Immutable artifacts
 
@@ -135,7 +136,7 @@ The installed `pinboard brief-sources` command reads a strict source manifest wi
 
 ### Mutations and proposal intake
 
-Each argparse leaf selects its exact command record and parser before dispatch. The interface converts the raw namespace once, reports structural or coupled-option failures through that leaf parser, and dispatches a closed command union; handlers never receive a general argument namespace or reparse command and operation strings. The selected handler then reselects the advertised action. `application.service` rechecks authority and legality inside the store transaction, then commits one closed mutation. Proposal intake follows the same SQLite transaction boundary: the proposal file is decoded at the interface, duplicate identities and invalid positions are rejected, and one mutation stores both the immutable proposal facts and a same-identity `intake` work item. Queue positions are one-based and contiguous across live items. Intake appends by default or minimally shifts positions for an explicit insertion. Follow-up candidates depend on their related item; a prerequisite candidate becomes a dependency of its live related item. Intake never changes focus, creates an attempt, or activates work.
+Each argparse leaf selects its exact command record and parser before dispatch. The interface converts the raw namespace once, reports structural or coupled-option failures through that leaf parser, and dispatches a closed command union; handlers never receive a general argument namespace or reparse command and operation strings. The selected handler then reselects the advertised action. `application.service` rechecks authority and legality inside the store transaction, then commits one closed focused mutation. The SQLite adapter exhaustively matches that mutation and applies its guarded relational writes. Proposal intake follows the same SQLite transaction boundary: the proposal file is decoded at the interface, duplicate identities and invalid positions are rejected, and one mutation stores both the immutable proposal facts and a same-identity `intake` work item. Queue positions are one-based and contiguous across live items. Intake appends by default or minimally shifts positions for an explicit insertion. Follow-up candidates depend on their related item; a prerequisite candidate becomes a dependency of its live related item. Intake never changes focus, creates an attempt, or activates work.
 
 ### Worker dispatch and review publication
 

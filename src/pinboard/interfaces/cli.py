@@ -21,9 +21,10 @@ from pinboard.adapters.files.views import refresh as refresh_views
 from pinboard.adapters.sqlite.errors import StorageError
 from pinboard.adapters.sqlite.registration import initialize_work_state
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application import stored_state
 from pinboard.application.actions import discover_actions
 from pinboard.application.artifact_publication import publish_accepted_artifact, validate_transition_work_brief
-from pinboard.application.artifacts import NewArtifact
+from pinboard.application.artifacts import CheckpointArtifacts, NewArtifact
 from pinboard.application.decision_projection import (
     project_decision_snapshot,
     project_inactive_attempt_authority,
@@ -52,12 +53,6 @@ from pinboard.application.service import (
     change_coordination_authority,
     create_proposal,
     execute,
-)
-from pinboard.application.stored_state import (
-    ArtifactKind,
-    StoredAttempt,
-    StoredCoordinationLease,
-    StoredWorkState,
 )
 from pinboard.application.validation import Diagnostic, Severity, ValidationReport, validate_work_state
 from pinboard.domain import decision_models, work_models
@@ -151,9 +146,9 @@ from pinboard.interfaces.cli_commands import (
     ValidateCommand,
 )
 from pinboard.interfaces.cli_models import (
+    ActionSemanticsView,
     ActionsView,
     ActionView,
-    BlockerActionDescriptorView,
     BriefPublicationView,
     BriefSourceBatchView,
     BriefSourcePlanView,
@@ -235,28 +230,25 @@ def _overview_view(overview: WorkOverview) -> OverviewView:
     )
 
 
-def _blocker_descriptor_view(
-    descriptor: decision_models.BlockerActionDescriptor | None,
-) -> BlockerActionDescriptorView | None:
-    if descriptor is None:
-        return None
-    return BlockerActionDescriptorView(
-        descriptor.effect.value,
-        descriptor.required_role.value,
-        descriptor.subject_kind.value,
-        descriptor.lifecycle_precondition.value,
+def _action_semantics_view(semantics: decision_models.ActionSemantics) -> ActionSemanticsView:
+    return ActionSemanticsView(
+        semantics.use_case,
+        semantics.effect.value,
+        tuple(role.value for role in semantics.permitted_roles),
+        semantics.subject_kind.value,
+        semantics.lifecycle_precondition.value,
+        semantics.practical_result,
     )
 
 
 def _input_contract_view(kind: decision_models.ActionKind) -> InputContractView:
-    descriptor = decision_models.blocker_action_descriptor(kind)
-    try:
-        payload_schema = msgspec.Raw(encoded_transition_input_schema(kind))
-    except TransitionInputError as error:
-        if descriptor is None or error.code != DecisionFailureCode.ACTION_NOT_MUTATING:
-            raise
-        payload_schema = None
-    return InputContractView(kind.value, _blocker_descriptor_view(descriptor), payload_schema)
+    semantics = decision_models.action_semantics(kind)
+    payload_schema = (
+        None
+        if semantics.effect == decision_models.ActionEffect.ADVISORY
+        else msgspec.Raw(encoded_transition_input_schema(kind))
+    )
+    return InputContractView(kind.value, _action_semantics_view(semantics), payload_schema)
 
 
 def _brief_source_segment_view(segment: BriefSourceSegment) -> BriefSourceSegmentView:
@@ -323,7 +315,7 @@ def _action_view(action: decision_models.Action, *, include_input_contract: bool
         subject_revision=capability.subject_revision or "",
         authorization=capability.authorization.value,
         lease_id=capability.lease_id or "",
-        semantics=_blocker_descriptor_view(decision_models.blocker_action_descriptor(action.kind)),
+        semantics=_action_semantics_view(decision_models.action_semantics(action.kind)),
         input_contract=input_contract,
     )
 
@@ -1155,12 +1147,13 @@ def _input_contract(_roots: ResolvedRoots, command: InputContractCommand) -> int
         _write_json(value)
     else:
         print(f"OK INPUT_CONTRACT action_kind={value.action_kind}")
-        if value.semantics is not None:
-            print(
-                f"effect={value.semantics.effect} required_role={value.semantics.required_role} "
-                f"subject_kind={value.semantics.subject_kind} "
-                f"lifecycle_precondition={value.semantics.lifecycle_precondition}"
-            )
+        print(f"use_case={value.semantics.use_case}")
+        print(
+            f"effect={value.semantics.effect} permitted_roles={','.join(value.semantics.permitted_roles)} "
+            f"subject_kind={value.semantics.subject_kind} "
+            f"lifecycle_precondition={value.semantics.lifecycle_precondition}"
+        )
+        print(f"practical_result={value.semantics.practical_result}")
         if value.payload_schema is None:
             print("payload_schema=none")
         else:
@@ -1208,7 +1201,7 @@ def _brief_publish(roots: ResolvedRoots, command: BriefPublishCommand) -> int:
         store,
         ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work)),
         NewArtifact(
-            ArtifactKind.BRIEF,
+            stored_state.ArtifactKind.BRIEF,
             brief.attempt_id,
             brief.artifact_revision,
             ".json",
@@ -1350,6 +1343,7 @@ def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
         raise CommandError(command.code, command.message)
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     artifacts = ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work))
+    checkpoint_artifacts = _publish_checkpoint_artifacts(roots, command, artifacts)
     result = execute(
         store,
         command,
@@ -1360,6 +1354,7 @@ def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
             artifacts,
             decode_work_brief_identity,
         ),
+        checkpoint_artifacts=checkpoint_artifacts,
     )
     if isinstance(result, DecisionFailure):
         raise CommandError(result.code, result.message)
@@ -1381,6 +1376,48 @@ def _transition(roots: ResolvedRoots, cli_command: TransitionCommand) -> int:
     revision = str(state.lifecycle.project.revision)
     print(f"OK TRANSITION_APPLIED {decision_models.action_id(action)} revision={revision}")
     return 0
+
+
+def _publish_checkpoint_artifacts(
+    roots: ResolvedRoots,
+    command: decision_models.TransitionCommand,
+    artifacts: ArtifactRepository,
+) -> CheckpointArtifacts | None:
+    match command:
+        case decision_models.AcceptCheckpointCommand(action=action, value=value):
+            attempt_id = str(action.capability.subject)
+            checkpoint_id = str(value.checkpoint)
+        case _:
+            return None
+    attempt_root = roots.work / "attempts" / attempt_id
+    try:
+        result_bytes = (attempt_root / "result.md").read_bytes()
+        review_bytes = (attempt_root / "review.md").read_bytes()
+    except OSError as error:
+        raise CommandError(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
+            f"Cannot read current checkpoint result.md and review.md: {error}",
+        ) from error
+    return CheckpointArtifacts(
+        artifacts.publish(
+            NewArtifact(
+                stored_state.ArtifactKind.RESULT,
+                f"{attempt_id}-{checkpoint_id}-result",
+                1,
+                ".md",
+                result_bytes,
+            )
+        ),
+        artifacts.publish(
+            NewArtifact(
+                stored_state.ArtifactKind.EVIDENCE,
+                f"{attempt_id}-{checkpoint_id}-review",
+                1,
+                ".md",
+                review_bytes,
+            )
+        ),
+    )
 
 
 def _prepare_dispatch(roots: ResolvedRoots, command: DispatchCommand) -> int:
@@ -1461,7 +1498,7 @@ def _emit_coordination(roots: ResolvedRoots, *, json: bool) -> int:
     return 0
 
 
-def _retained_coordination(state: StoredWorkState) -> StoredCoordinationLease:
+def _retained_coordination(state: stored_state.StoredWorkState) -> stored_state.StoredCoordinationLease:
     current = state.authority.coordination
     if current is None:
         raise CommandError(DecisionFailureCode.COORDINATION_LEASE_REQUIRED, "Coordination authority does not exist.")
@@ -1469,8 +1506,8 @@ def _retained_coordination(state: StoredWorkState) -> StoredCoordinationLease:
 
 
 def _supplied_coordination_authority(
-    state: StoredWorkState,
-    current: StoredCoordinationLease,
+    state: stored_state.StoredWorkState,
+    current: stored_state.StoredCoordinationLease,
     lease_id: LeaseId,
     generation: int,
 ) -> work_models.CoordinationCommandAuthority:
@@ -1611,6 +1648,7 @@ def _execute_borrowed_coordination(
         command = bind_transition(action, parsed)
         if isinstance(command, DecisionFailure):
             raise CommandError(command.code, command.message)
+        checkpoint_artifacts = _publish_checkpoint_artifacts(roots, command, artifacts)
         result = execute(
             store,
             command,
@@ -1621,6 +1659,7 @@ def _execute_borrowed_coordination(
                 artifacts,
                 decode_work_brief_identity,
             ),
+            checkpoint_artifacts=checkpoint_artifacts,
         )
         if isinstance(result, DecisionFailure):
             raise CommandError(result.code, result.message)
@@ -1652,7 +1691,7 @@ def _execute_borrowed_coordination(
     return transition_revision
 
 
-def _emit_attempt_authority(state: StoredWorkState, attempt_id: AttemptId, *, json: bool) -> int:
+def _emit_attempt_authority(state: stored_state.StoredWorkState, attempt_id: AttemptId, *, json: bool) -> int:
     lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
     if lease is None:
         raise CommandError(
@@ -1690,7 +1729,7 @@ def _attempt_status(roots: ResolvedRoots, command: AttemptStatusCommand) -> int:
     return _emit_attempt_authority(state, command.attempt_id, json=command.json)
 
 
-def _current_attempt(state: StoredWorkState, attempt_id: AttemptId) -> StoredAttempt:
+def _current_attempt(state: stored_state.StoredWorkState, attempt_id: AttemptId) -> stored_state.StoredAttempt:
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
     if attempt is None:
         raise CommandError(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, f"Attempt '{attempt_id}' is not current.")
@@ -1698,8 +1737,8 @@ def _current_attempt(state: StoredWorkState, attempt_id: AttemptId) -> StoredAtt
 
 
 def _attempt_acquire_operation(
-    state: StoredWorkState,
-    attempt: StoredAttempt,
+    state: stored_state.StoredWorkState,
+    attempt: stored_state.StoredAttempt,
     command: AttemptAcquireCommand | CoordinatedAttemptAcquireCommand,
     now: datetime,
 ) -> AttemptAuthorityOperation:
@@ -1752,7 +1791,7 @@ def _attempt_acquire_operation(
 
 
 def _attempt_renew_operation(
-    state: StoredWorkState,
+    state: stored_state.StoredWorkState,
     command: AttemptRenewCommand,
     now: datetime,
 ) -> RenewAttemptAuthority:
@@ -1774,7 +1813,7 @@ def _attempt_renew_operation(
 
 
 def _attempt_release_operation(
-    state: StoredWorkState,
+    state: stored_state.StoredWorkState,
     command: AttemptReleaseCommand,
     now: datetime,
 ) -> ReleaseAttemptAuthority:
@@ -1795,7 +1834,7 @@ def _attempt_release_operation(
 
 
 def _attempt_revoke_operation(
-    state: StoredWorkState,
+    state: stored_state.StoredWorkState,
     command: AttemptRevokeCommand,
     now: datetime,
 ) -> RevokeAttemptAuthority:

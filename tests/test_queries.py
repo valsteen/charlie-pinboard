@@ -6,6 +6,7 @@ from pathlib import Path
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application import stored_state
 from pinboard.application.actions import discover_actions
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.errors import ActionQueryError, QueryError, QueryErrorCode
@@ -15,10 +16,6 @@ from pinboard.application.queries import (
     preview_parallel,
 )
 from pinboard.application.query_models import ItemStatus, ItemStatusAttempt
-from pinboard.application.stored_state import (
-    StoredWorkItemState,
-    StoredWorkState,
-)
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionFailureCode
 from pinboard.domain.history import item_scope_digest
@@ -31,7 +28,7 @@ from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
 class SQLiteQueriesTest(unittest.TestCase):
-    def _valid_scope_digests(self, state: StoredWorkState) -> StoredWorkState:
+    def _valid_scope_digests(self, state: stored_state.StoredWorkState) -> stored_state.StoredWorkState:
         digests: dict[ItemId, str] = {}
         for scope in project_decision_snapshot(state).scopes:
             digest = item_scope_digest(scope.scope)
@@ -55,7 +52,7 @@ class SQLiteQueriesTest(unittest.TestCase):
             lifecycle=replace(state.lifecycle, work_items=items, scope_revisions=anchors, attempts=attempts),
         )
 
-    def _store(self, state: StoredWorkState | None = None) -> SQLiteWorkStore:
+    def _store(self, state: stored_state.StoredWorkState | None = None) -> SQLiteWorkStore:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
@@ -127,7 +124,7 @@ class SQLiteQueriesTest(unittest.TestCase):
         active = state.lifecycle.attempts[0]
         done_item = replace(
             state.lifecycle.work_items[2],
-            state=StoredWorkItemState.DONE,
+            state=stored_state.StoredWorkItemState.DONE,
             timing=work_models.Timing.SAFE_TO_DEFER,
             outcome_evidence="accepted completion",
             next_action=None,
@@ -164,7 +161,7 @@ class SQLiteQueriesTest(unittest.TestCase):
                 "12",
                 "work-a",
                 "Work work-a",
-                StoredWorkItemState.ACTIVE,
+                stored_state.StoredWorkItemState.ACTIVE,
                 work_models.Timing.MUST_NOW,
                 None,
                 "continue",
@@ -180,7 +177,7 @@ class SQLiteQueriesTest(unittest.TestCase):
                 "12",
                 "work-b",
                 "Work work-b",
-                StoredWorkItemState.DONE,
+                stored_state.StoredWorkItemState.DONE,
                 work_models.Timing.SAFE_TO_DEFER,
                 "accepted completion",
                 None,
@@ -194,8 +191,8 @@ class SQLiteQueriesTest(unittest.TestCase):
     def test_item_status_returns_terminal_siblings_with_non_null_attempt_arrays(self) -> None:
         state = complete_sqlite_state()
         for terminal in (
-            StoredWorkItemState.SUPERSEDED,
-            StoredWorkItemState.DROPPED,
+            stored_state.StoredWorkItemState.SUPERSEDED,
+            stored_state.StoredWorkItemState.DROPPED,
         ):
             terminal_item = replace(
                 state.lifecycle.work_items[2],

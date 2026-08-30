@@ -81,7 +81,7 @@ def _input_model_or_none(kind: decision_models.ActionKind) -> InputModel | None:
 TRANSITION_ACTION_KINDS: Final = tuple(
     kind.value for kind in decision_models.ActionKind if _input_model_or_none(kind) is not None
 )
-INPUT_CONTRACT_ACTION_KINDS: Final = (*TRANSITION_ACTION_KINDS, decision_models.ActionKind.REPORT_BLOCKER.value)
+INPUT_CONTRACT_ACTION_KINDS: Final = tuple(kind.value for kind in decision_models.ActionKind)
 
 
 def _input_model(kind: decision_models.ActionKind) -> InputModel:

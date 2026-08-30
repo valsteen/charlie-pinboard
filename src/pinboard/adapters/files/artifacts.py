@@ -10,17 +10,17 @@ from pinboard.adapters.files.file_io import (
     ensure_child_directory,
     ensure_directory_chain,
 )
+from pinboard.application import stored_state
 from pinboard.application.artifacts import ArtifactRef, NewArtifact
-from pinboard.application.stored_state import ArtifactKind, ArtifactReference
 
-_DIRECTORIES: dict[ArtifactKind, str] = {
-    ArtifactKind.REQUIREMENTS: "requirements",
-    ArtifactKind.PLAN: "plans",
-    ArtifactKind.DESIGN: "designs",
-    ArtifactKind.BRIEF: "briefs",
-    ArtifactKind.RESULT: "results",
-    ArtifactKind.BLOCKER: "blockers",
-    ArtifactKind.EVIDENCE: "evidence",
+_DIRECTORIES: dict[stored_state.ArtifactKind, str] = {
+    stored_state.ArtifactKind.REQUIREMENTS: "requirements",
+    stored_state.ArtifactKind.PLAN: "plans",
+    stored_state.ArtifactKind.DESIGN: "designs",
+    stored_state.ArtifactKind.BRIEF: "briefs",
+    stored_state.ArtifactKind.RESULT: "results",
+    stored_state.ArtifactKind.BLOCKER: "blockers",
+    stored_state.ArtifactKind.EVIDENCE: "evidence",
 }
 
 
@@ -39,7 +39,7 @@ def _suffix(value: str) -> str:
     return value
 
 
-def _selector(kind: ArtifactKind, key: str, revision: int, suffix: str) -> str:
+def _selector(kind: stored_state.ArtifactKind, key: str, revision: int, suffix: str) -> str:
     if revision < 1:
         raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact revision must be positive.")
     return PurePosixPath(
@@ -47,7 +47,7 @@ def _selector(kind: ArtifactKind, key: str, revision: int, suffix: str) -> str:
     ).as_posix()
 
 
-def _canonical_reference(reference: ArtifactRef | ArtifactReference) -> Path:
+def _canonical_reference(reference: ArtifactRef | stored_state.ArtifactReference) -> Path:
     pure = PurePosixPath(reference.selector)
     parts = pure.parts
     if pure.is_absolute() or not parts or any(part in {"", ".", ".."} for part in parts):
@@ -71,7 +71,7 @@ def _canonical_reference(reference: ArtifactRef | ArtifactReference) -> Path:
     return Path(*parts)
 
 
-def verify_reference(work_root: Path, reference: ArtifactRef | ArtifactReference) -> None:
+def verify_reference(work_root: Path, reference: ArtifactRef | stored_state.ArtifactReference) -> None:
     relative = _canonical_reference(reference)
     try:
         data = (work_root / relative).read_bytes()
@@ -126,10 +126,10 @@ class ArtifactRepository:
     def work_root(self) -> Path:
         return self.roots.work_root
 
-    def verify(self, reference: ArtifactReference) -> None:
+    def verify(self, reference: stored_state.ArtifactReference) -> None:
         verify_reference(self.work_root, reference)
 
-    def path(self, reference: ArtifactReference) -> Path:
+    def path(self, reference: stored_state.ArtifactReference) -> Path:
         return self.work_root / _canonical_reference(reference)
 
     def publish(self, artifact: NewArtifact) -> ArtifactRef:

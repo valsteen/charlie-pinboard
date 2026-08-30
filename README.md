@@ -31,6 +31,8 @@ The scout gets a compact receipt:
 
 ![Pixel-art campfire checkpoint](assets/safe-camp.png) **Pause and resume without reconstructing the journey.** If stable ability IDs become a real prerequisite, the dragon attempt records where it stopped, why it cannot continue, and what would make it resumable. After the prerequisite is completed and accepted, the same attempt resumes from preserved evidence instead of asking a new conversation to infer the missing history.
 
+Resume restores paused or blocked work, returning a retained attempt to active or unstarted work to ready. Reopen is different: it returns deferred work to intake for reconsideration. Continue only confirms that an already-active attempt proceeds; it does not change lifecycle state.
+
 ![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **Deliver the work that was actually accepted.** Pinboard publishes one canonical brief for the dragon attempt. `$pinboard-deliver` claims that attempt, follows its exact scope and checks, and records the result for independent review. The coordinating task accepts the evidence or returns the same attempt for correction; the implementing task never reviews its own work.
 
 The code, branch, and conversation remain ordinary repository work. Pinboard keeps the decisions and execution around them durable. [How Pinboard works](HOW_IT_WORKS.md) follows these ideas through the product, package layers, and relational ledger.
@@ -56,7 +58,7 @@ Private working state stays in ignored local files:
   views/                      # generated human-readable projections
 ```
 
-SQLite is the current ledger authority. Immutable artifacts retain long-form contracts and review evidence; generated views are convenient projections, not fallback state. The [architecture map](ARCHITECTURE.md) explains package ownership, persistence boundaries, and failure semantics for contributors and agents.
+SQLite is the current ledger authority. Commands read its complete typed state, then commit only the relations named by one accepted mutation; stale or failed changes leave the prior ledger intact. Immutable artifacts retain long-form contracts and review evidence; generated views are convenient projections, not fallback state. The [architecture map](ARCHITECTURE.md) explains package ownership, persistence boundaries, and failure semantics for contributors and agents.
 
 ## Install from GitHub
 

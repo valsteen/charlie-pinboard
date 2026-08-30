@@ -1,9 +1,9 @@
 from datetime import UTC, datetime
 
+from pinboard.application import stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.errors import ActionQueryError
 from pinboard.application.ports import WorkStore
-from pinboard.application.stored_state import StoredWorkState
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_models import AttemptLeaseStatus
 from pinboard.domain.decisions import available_actions
@@ -12,7 +12,7 @@ from pinboard.domain.identifiers import AttemptId, LeaseId
 
 
 def _worker_attempts(
-    store_state: StoredWorkState,
+    store_state: stored_state.StoredWorkState,
     lease_id: LeaseId | None,
     generation: int,
     now: datetime,

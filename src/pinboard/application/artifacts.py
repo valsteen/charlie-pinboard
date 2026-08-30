@@ -1,11 +1,11 @@
 from dataclasses import dataclass
 
-from pinboard.application.stored_state import ArtifactKind
+from pinboard.application import stored_state
 
 
 @dataclass(frozen=True, slots=True)
 class NewArtifact:
-    kind: ArtifactKind
+    kind: stored_state.ArtifactKind
     key: str
     revision: int
     suffix: str
@@ -14,12 +14,18 @@ class NewArtifact:
 
 @dataclass(frozen=True, slots=True)
 class ArtifactRef:
-    kind: ArtifactKind
+    kind: stored_state.ArtifactKind
     key: str
     revision: int
     selector: str
     content_sha256: str
     size_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointArtifacts:
+    result: ArtifactRef
+    review: ArtifactRef
 
 
 @dataclass(frozen=True, slots=True)

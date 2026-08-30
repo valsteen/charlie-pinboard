@@ -13,9 +13,10 @@ from unittest.mock import patch
 from pinboard.adapters.files.artifacts import write_revision
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application import stored_state
 from pinboard.application.artifacts import NewArtifact
-from pinboard.application.stored_state import ArtifactKind, StoredWorkItemState, StoredWorkState
 from pinboard.domain import work_models
 from pinboard.domain.identifiers import AttemptId, ItemId
 from pinboard.interfaces.cli import build_parser, main
@@ -85,7 +86,9 @@ class CliTest(unittest.TestCase):
         arguments.extend(("--payload", str(payload)))
         return self.run_cli(*arguments)
 
-    def initialized_state(self, state: StoredWorkState | None = None) -> tuple[Path, Path, SQLiteWorkStore]:
+    def initialized_state(
+        self, state: stored_state.StoredWorkState | None = None
+    ) -> tuple[Path, Path, SQLiteWorkStore]:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
@@ -96,7 +99,9 @@ class CliTest(unittest.TestCase):
                 value = work_a_brief(project)
                 published = write_revision(
                     roots,
-                    NewArtifact(ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)),
+                    NewArtifact(
+                        stored_state.ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)
+                    ),
                 )
                 reference = replace(
                     reference,
@@ -377,6 +382,146 @@ class CliTest(unittest.TestCase):
             self.json_int(replacement["generation"]),
         )
 
+    def test_pause_transition_round_trips_through_the_installed_command(self) -> None:
+        project, work, _store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+        payload = project / "pause.json"
+        payload.write_text('{"reason":"Pause through the installed command."}\n', encoding="utf-8")
+
+        applied = self.run_json_cli(
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--action-id",
+            "pause:work-a-1",
+            "--payload",
+            str(payload),
+        )
+
+        self.assertEqual("pause:work-a-1", applied["action_id"])
+        reopened = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        self.assertEqual(stored_state.StoredWorkItemState.PAUSED, reopened.lifecycle.work_items[1].state)
+        self.assertEqual(work_models.AttemptState.PAUSED, reopened.lifecycle.attempts[0].state)
+        self.assertEqual(
+            1,
+            sum(
+                value.action_kind == stored_state.TransitionHistoryActionKind.PAUSE
+                for value in reopened.transition_receipts
+            ),
+        )
+
+    def test_checkpoint_acceptance_archives_exact_attempt_receipts_in_one_transition(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        assert state.authority.coordination is not None
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                work_items=tuple(
+                    replace(value, state=stored_state.StoredWorkItemState.REVIEW)
+                    if value.item_id == ItemId("work-a")
+                    else value
+                    for value in state.lifecycle.work_items
+                ),
+                attempts=tuple(
+                    replace(
+                        value,
+                        state=work_models.AttemptState.REVIEW,
+                        candidate_revision="candidate-a",
+                        candidate_recorded_at=now,
+                    )
+                    if value.attempt_id == AttemptId("work-a-1")
+                    else value
+                    for value in state.lifecycle.attempts
+                ),
+            ),
+            authority=replace(
+                state.authority,
+                coordination=replace(state.authority.coordination, expires_at=now + timedelta(minutes=5)),
+            ),
+            focus=replace(state.focus, next_action="review"),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        attempt_root = work / "attempts" / "work-a-1"
+        attempt_root.mkdir(parents=True)
+        result_bytes = b"candidate result\n"
+        review_bytes = b"independent review\n"
+        (attempt_root / "result.md").write_bytes(result_bytes)
+        payload = project / "accept-checkpoint.json"
+        payload.write_text(
+            '{"checkpoint":"checkpoint-a","candidate":"candidate-a","evidence":"Accepted."}\n',
+            encoding="utf-8",
+        )
+        action = next(
+            self.json_object(value)
+            for value in self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "coordinator",
+                    "--lease-id",
+                    "coordination-a",
+                    "--generation",
+                    "9",
+                )["actions"]
+            )
+            if self.json_object(value)["action_id"] == "accept-checkpoint:work-a-1"
+        )
+        before_missing = store.snapshot()
+
+        missing_result, _missing_stdout, missing_stderr = self.run_transition(common, action, payload)
+
+        self.assertNotEqual(0, missing_result)
+        self.assertIn("TRANSITION_INPUT_INVALID", missing_stderr)
+        self.assertEqual(before_missing, store.snapshot())
+        (attempt_root / "review.md").write_bytes(review_bytes)
+
+        with patch(
+            "pinboard.adapters.sqlite.store._StoredStateWriter._history",
+            side_effect=StorageError(StorageErrorCode.IO_ERROR, "injected checkpoint write failure"),
+        ):
+            failed_result, _failed_stdout, failed_stderr = self.run_transition(common, action, payload)
+
+        self.assertNotEqual(0, failed_result)
+        self.assertIn("STORAGE_IO_ERROR", failed_stderr)
+        self.assertEqual(before_missing, store.snapshot())
+        self.assertEqual(result_bytes, (work / "artifacts/results/work-a-1-checkpoint-a-result/1.md").read_bytes())
+        self.assertEqual(review_bytes, (work / "artifacts/evidence/work-a-1-checkpoint-a-review/1.md").read_bytes())
+
+        (attempt_root / "review.md").write_bytes(b"conflicting review\n")
+        collision_result, _collision_stdout, collision_stderr = self.run_transition(common, action, payload)
+
+        self.assertNotEqual(0, collision_result)
+        self.assertIn("STORAGE_INVARIANT_VIOLATION", collision_stderr)
+        self.assertEqual(before_missing, store.snapshot())
+        self.assertEqual(review_bytes, (work / "artifacts/evidence/work-a-1-checkpoint-a-review/1.md").read_bytes())
+        (attempt_root / "review.md").write_bytes(review_bytes)
+
+        accepted_result, _accepted_stdout, accepted_stderr = self.run_transition(common, action, payload)
+
+        self.assertEqual(0, accepted_result, accepted_stderr)
+        reloaded = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
+        result_reference = next(
+            value for value in reloaded.artifact_references if value.key == "work-a-1-checkpoint-a-result"
+        )
+        review_reference = next(
+            value for value in reloaded.artifact_references if value.key == "work-a-1-checkpoint-a-review"
+        )
+        self.assertEqual(result_reference.artifact_ref_id, attempt.result_artifact_ref_id)
+        self.assertEqual(review_reference.artifact_ref_id, reloaded.transition_receipts[-1].artifact_ref_id)
+        self.assertEqual(result_bytes, (work / result_reference.selector).read_bytes())
+        self.assertEqual(review_bytes, (work / review_reference.selector).read_bytes())
+        self.assertEqual(before_missing.lifecycle.project.revision + 1, reloaded.lifecycle.project.revision)
+        self.assertEqual(len(before_missing.transition_receipts) + 1, len(reloaded.transition_receipts))
+
     def test_current_read_surface_has_human_and_json_views(self) -> None:
         state = complete_sqlite_state()
         now = datetime.now(UTC)
@@ -561,30 +706,36 @@ Not launchable:
                 "report-blocker:work-a-1",
                 "Prepare blocker report for work-a",
                 {
+                    "use_case": "Preserve blocker evidence for coordination.",
                     "effect": "advisory",
-                    "required_role": "worker",
+                    "permitted_roles": ["worker"],
                     "subject_kind": "attempt",
                     "lifecycle_precondition": "active-attempt",
+                    "practical_result": "Prepare a blocker report without changing shared lifecycle state.",
                 },
             ),
             "block": (
                 "block:work-a-1",
                 "Block active attempt for work-a",
                 {
+                    "use_case": "Stop an active attempt on named dependencies.",
                     "effect": "mutating",
-                    "required_role": "coordinator",
+                    "permitted_roles": ["coordinator"],
                     "subject_kind": "attempt",
                     "lifecycle_precondition": "active-attempt",
+                    "practical_result": "Move the item and attempt to blocked and record their dependencies.",
                 },
             ),
             "block-item": (
                 "block-item:intake-work",
                 "Block unstarted work item intake-work",
                 {
+                    "use_case": "Stop unstarted intake work on named dependencies.",
                     "effect": "mutating",
-                    "required_role": "coordinator",
+                    "permitted_roles": ["coordinator"],
                     "subject_kind": "item",
                     "lifecycle_precondition": "intake-item",
+                    "practical_result": "Move the item to blocked and record its dependencies without creating an attempt.",
                 },
             ),
         }
@@ -606,6 +757,64 @@ Not launchable:
                     self.assertIsNone(contract["payload_schema"])
                 else:
                     self.assertIsInstance(contract["payload_schema"], dict)
+
+        continue_contract = self.run_json_cli(*common, "input-contract", "continue")
+        self.assertEqual(["coordinator", "worker"], self.json_object(continue_contract["semantics"])["permitted_roles"])
+        self.assertIsNone(continue_contract["payload_schema"])
+        continue_actions = tuple(action for action in all_actions if action["action_id"] == "continue:work-a-1")
+        self.assertEqual({"coordination", "attempt"}, {action["authorization"] for action in continue_actions})
+        for action in continue_actions:
+            self.assertEqual(continue_contract["semantics"], action["semantics"])
+
+    def test_resume_and_reopen_command_semantics_match_contextual_action_results(self) -> None:
+        state = complete_sqlite_state()
+        lifecycle = replace(
+            state.lifecycle,
+            work_items=tuple(
+                replace(value, state=stored_state.StoredWorkItemState.PAUSED, next_action="resume")
+                if value.item_id == ItemId("work-a")
+                else replace(value, state=stored_state.StoredWorkItemState.BLOCKED, next_action="resume")
+                if value.item_id == ItemId("work-c")
+                else replace(value, state=stored_state.StoredWorkItemState.DEFERRED, next_action="reopen")
+                if value.item_id == ItemId("intake-work")
+                else value
+                for value in state.lifecycle.work_items
+            ),
+            attempts=tuple(
+                replace(value, state=work_models.AttemptState.PAUSED)
+                if value.attempt_id == AttemptId("work-a-1")
+                else value
+                for value in state.lifecycle.attempts
+            ),
+            dependencies=tuple(value for value in state.lifecycle.dependencies if value.item_id != ItemId("work-a")),
+        )
+        state = replace(state, lifecycle=lifecycle, focus=replace(state.focus, next_action="resume"))
+        project, work, _store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        actions = {
+            action["action_id"]: action
+            for value in self.json_list(self.run_json_cli(*common, "actions", "--role", "coordinator")["actions"])
+            if (action := self.json_object(value))["action_id"]
+            in {"resume:work-a", "resume:work-c", "reopen:intake-work"}
+        }
+
+        self.assertEqual("Return work-a to active", actions["resume:work-a"]["label"])
+        self.assertEqual("Return work-c to ready", actions["resume:work-c"]["label"])
+        self.assertEqual("Reopen intake-work for intake", actions["reopen:intake-work"]["label"])
+        resume_contract = self.run_json_cli(*common, "input-contract", "resume")
+        reopen_contract = self.run_json_cli(*common, "input-contract", "reopen")
+        self.assertEqual(resume_contract["semantics"], actions["resume:work-a"]["semantics"])
+        self.assertEqual(resume_contract["semantics"], actions["resume:work-c"]["semantics"])
+        self.assertEqual(reopen_contract["semantics"], actions["reopen:intake-work"]["semantics"])
+        self.assertEqual(
+            "Return paused or blocked work to active when an attempt exists, otherwise ready.",
+            self.json_object(resume_contract["semantics"])["practical_result"],
+        )
+        self.assertEqual(
+            "Return deferred work to intake.",
+            self.json_object(reopen_contract["semantics"])["practical_result"],
+        )
 
     def test_active_attempt_blocker_flow_persists_dependencies_and_resumes_through_commands(self) -> None:
         state = complete_sqlite_state()
@@ -695,7 +904,7 @@ Not launchable:
         blocked_attempt = next(
             value for value in blocked.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
         )
-        self.assertEqual(StoredWorkItemState.BLOCKED, blocked_item.state)
+        self.assertEqual(stored_state.StoredWorkItemState.BLOCKED, blocked_item.state)
         self.assertEqual(work_models.AttemptState.BLOCKED, blocked_attempt.state)
         self.assertEqual(
             ("intake-work",),
@@ -752,7 +961,7 @@ Not launchable:
         resumed_attempt = next(
             value for value in resumed.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
         )
-        self.assertEqual(StoredWorkItemState.ACTIVE, resumed_item.state)
+        self.assertEqual(stored_state.StoredWorkItemState.ACTIVE, resumed_item.state)
         self.assertEqual(work_models.AttemptState.ACTIVE, resumed_attempt.state)
 
     def test_blocker_skill_guidance_names_advisory_and_mutating_responsibilities(self) -> None:
@@ -885,7 +1094,9 @@ Not launchable:
             lifecycle=replace(
                 state.lifecycle,
                 work_items=tuple(
-                    replace(value, state=StoredWorkItemState.REVIEW) if value.item_id == ItemId("work-a") else value
+                    replace(value, state=stored_state.StoredWorkItemState.REVIEW)
+                    if value.item_id == ItemId("work-a")
+                    else value
                     for value in state.lifecycle.work_items
                 ),
                 attempts=tuple(
@@ -1016,7 +1227,7 @@ Not launchable:
         after = store.snapshot()
         self.assertEqual(before_revision + 1, after.lifecycle.project.revision)
         visible = next(value for value in after.lifecycle.work_items if str(value.item_id) == "cli-sqlite-proposal")
-        self.assertEqual((StoredWorkItemState.INTAKE, 5), (visible.state, visible.queue_position))
+        self.assertEqual((stored_state.StoredWorkItemState.INTAKE, 5), (visible.state, visible.queue_position))
         self.assertEqual(("work-a", "work-a-1"), (str(after.focus.item_id), str(after.focus.attempt_id)))
         self.assertEqual(
             ("work-c",),
@@ -1074,7 +1285,7 @@ Not launchable:
         original_snapshot = SQLiteWorkStore.snapshot
         calls = 0
 
-        def counted(store: SQLiteWorkStore) -> StoredWorkState:
+        def counted(store: SQLiteWorkStore) -> stored_state.StoredWorkState:
             nonlocal calls
             calls += 1
             return original_snapshot(store)
@@ -1093,7 +1304,7 @@ Not launchable:
         active = state.lifecycle.attempts[0]
         done_item = replace(
             state.lifecycle.work_items[2],
-            state=StoredWorkItemState.DONE,
+            state=stored_state.StoredWorkItemState.DONE,
             timing=work_models.Timing.SAFE_TO_DEFER,
             outcome_evidence="accepted completion",
             next_action=None,
@@ -1120,7 +1331,7 @@ Not launchable:
         original_snapshot = SQLiteWorkStore.snapshot
         calls = 0
 
-        def counted(store: SQLiteWorkStore) -> StoredWorkState:
+        def counted(store: SQLiteWorkStore) -> stored_state.StoredWorkState:
             nonlocal calls
             calls += 1
             return original_snapshot(store)

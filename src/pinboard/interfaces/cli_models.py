@@ -100,16 +100,18 @@ class CloseView(msgspec.Struct, frozen=True):
     revision: str
 
 
-class BlockerActionDescriptorView(msgspec.Struct, frozen=True):
+class ActionSemanticsView(msgspec.Struct, frozen=True):
+    use_case: str
     effect: str
-    required_role: str
+    permitted_roles: tuple[str, ...]
     subject_kind: str
     lifecycle_precondition: str
+    practical_result: str
 
 
 class InputContractView(msgspec.Struct, frozen=True):
     action_kind: str
-    semantics: BlockerActionDescriptorView | None
+    semantics: ActionSemanticsView
     payload_schema: msgspec.Raw | None
 
 
@@ -160,7 +162,7 @@ class ActionView(msgspec.Struct, frozen=True, omit_defaults=True):
     subject_revision: str
     authorization: str
     lease_id: str
-    semantics: BlockerActionDescriptorView | None = None
+    semantics: ActionSemanticsView
     input_contract: InputContractView | None = None
 
 

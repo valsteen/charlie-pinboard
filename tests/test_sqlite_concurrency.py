@@ -6,10 +6,13 @@ import unittest
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
 
+from pinboard.adapters.files.artifacts import write_revision
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.errors import StorageError
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application import stored_state
+from pinboard.application.artifacts import CheckpointArtifacts, NewArtifact
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.mutations import project_transition_mutation
 from pinboard.domain import decision_models, work_models
@@ -18,6 +21,7 @@ from pinboard.domain.decisions import (
     bind_transition,
     decide,
 )
+from pinboard.domain.identifiers import AttemptId, CandidateId, CheckpointId
 from tests.domain_support import expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
@@ -38,6 +42,58 @@ def _commit_same_pause(
     command = expect_success(bind_transition(action, work_models.ReasonInput("Concurrent pause.")))
     decision = expect_success(decide(snapshot, command, SQLITE_NOW))
     mutation = project_transition_mutation(before, decision)
+    barrier.wait()
+    try:
+        with store.write() as transaction:
+            transaction.commit(mutation)
+    except StorageError as error:
+        results.put(error.code.value)
+    else:
+        results.put("committed")
+
+
+def _commit_same_checkpoint(
+    project_path: str,
+    database_path: str,
+    barrier: Barrier,
+    results: multiprocessing.queues.Queue[str],
+) -> None:
+    roots = resolve_durable_roots(Path(project_path))
+    store = SQLiteWorkStore(Path(database_path))
+    before = store.snapshot()
+    snapshot = project_decision_snapshot(before)
+    coordination = snapshot.coordination_authority
+    assert coordination is not None
+    actor = decision_models.ActorAuthority(
+        decision_models.Role.COORDINATOR,
+        decision_models.AuthorizationKind.COORDINATION,
+        coordination.generation,
+        coordination.lease_id,
+    )
+    actions = expect_success(available_actions(snapshot, actor))
+    action = next(value for value in actions if value.kind == decision_models.ActionKind.ACCEPT_CHECKPOINT)
+    command = expect_success(
+        bind_transition(
+            action,
+            work_models.AcceptCheckpointInput(
+                CheckpointId("checkpoint-a"),
+                CandidateId("candidate-a"),
+                "Accept concurrent checkpoint evidence.",
+            ),
+        )
+    )
+    decision = expect_success(decide(snapshot, command, SQLITE_NOW))
+    artifacts = CheckpointArtifacts(
+        write_revision(
+            roots,
+            NewArtifact(stored_state.ArtifactKind.RESULT, "work-a-1-checkpoint-a-result", 1, ".md", b"result\n"),
+        ),
+        write_revision(
+            roots,
+            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "work-a-1-checkpoint-a-review", 1, ".md", b"review\n"),
+        ),
+    )
+    mutation = project_transition_mutation(before, decision, artifacts)
     barrier.wait()
     try:
         with store.write() as transaction:
@@ -73,6 +129,63 @@ class SQLiteConcurrencyTest(unittest.TestCase):
 
         self.assertCountEqual(("committed", "ACTION_NOT_AVAILABLE"), (results.get(), results.get()))
         self.assertEqual(13, store.snapshot().lifecycle.project.revision)
+
+    def test_concurrent_checkpoint_acceptance_commits_both_references_once(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        store = SQLiteWorkStore(roots.database_path)
+        state = complete_sqlite_state()
+        store.initialize_state(state)
+        snapshot = project_decision_snapshot(store.snapshot())
+        authority = snapshot.command_attempt_authorities[0]
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.WORKER,
+            decision_models.AuthorizationKind.ATTEMPT,
+            authority.generation,
+            authority.lease_id,
+            (authority.attempt,),
+            False,
+        )
+        submit_action = next(
+            value
+            for value in expect_success(available_actions(snapshot, actor))
+            if value.kind == decision_models.ActionKind.SUBMIT_REVIEW
+        )
+        submit_command = expect_success(
+            bind_transition(submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a")))
+        )
+        submit_decision = expect_success(decide(snapshot, submit_command, SQLITE_NOW))
+        with store.write() as transaction:
+            transaction.commit(project_transition_mutation(transaction.snapshot(), submit_decision))
+        state = store.snapshot()
+
+        context = multiprocessing.get_context("spawn")
+        barrier = context.Barrier(2)
+        results = context.Queue()
+        workers = tuple(
+            context.Process(
+                target=_commit_same_checkpoint,
+                args=(str(project), str(roots.database_path), barrier, results),
+            )
+            for _ in range(2)
+        )
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=10)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(0, worker.exitcode)
+
+        self.assertCountEqual(("committed", "ACTION_NOT_AVAILABLE"), (results.get(), results.get()))
+        reloaded = store.snapshot()
+        self.assertEqual(state.lifecycle.project.revision + 1, reloaded.lifecycle.project.revision)
+        self.assertEqual(len(state.artifact_references) + 2, len(reloaded.artifact_references))
+        self.assertEqual(len(state.transition_receipts) + 1, len(reloaded.transition_receipts))
+        attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
+        self.assertEqual(work_models.AttemptState.PAUSED, attempt.state)
+        self.assertIsNotNone(attempt.result_artifact_ref_id)
+        self.assertIsNotNone(reloaded.transition_receipts[-1].artifact_ref_id)
 
 
 if __name__ == "__main__":

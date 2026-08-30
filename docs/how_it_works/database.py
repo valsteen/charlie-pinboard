@@ -91,7 +91,7 @@ DIAGRAM = Diagram(
         Section("Discovery", "findings before and after scheduling", 28, 42),
         Section("Current work", "identity that survives execution", 424, 42),
         Section("Scope + relationships", "accepted intent and dependency", 824, 42),
-        Section("Accepted files", "brief contracts and ready-review evidence", 28, 432),
+        Section("Accepted files", "briefs · ready reviews · checkpoint evidence", 28, 432),
         Section("Mutation ownership", "temporary shared authority · independent attempt owners", 424, 432),
         Section("Integrity + time", "current revision and committed receipts", 824, 432),
     ),
@@ -139,7 +139,7 @@ DIAGRAM = Diagram(
             "artifact-refs",
             "",
             "Accepted artifacts",
-            ("brief · ready-review evidence", "path · revision · digest"),
+            ("brief · ready review · result", "checkpoint review evidence"),
             ("artifact_refs",),
             50,
             500,
@@ -209,10 +209,11 @@ DIAGRAM = Diagram(
     notes=(
         Note("SELECTED RELATIONSHIPS SHOWN · EVERY FOREIGN KEY STILL CHECKED BY THE SEED", 28, 790, 11, meta=True),
         Note(
-            "Briefs are selected by attempts. Ready-review evidence links to the item. Shared authority is temporary, not a coordinator task.",
+            "Briefs and accepted results link to attempts. Ready-review evidence links to items. Accepted checkpoint review evidence links to history.",
             28,
             816,
             11,
         ),
+        Note("Shared authority is temporary, not a coordinator task.", 28, 834, 11),
     ),
 )
