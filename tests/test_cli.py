@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from msgspec.structs import replace as replace_struct
+
 from pinboard.adapters.files.artifacts import write_revision
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
@@ -22,7 +24,8 @@ from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId, ItemId
 from pinboard.interfaces.cli import build_parser, main
-from pinboard.interfaces.errors import CommandFailure
+from pinboard.interfaces.errors import CommandFailure, WorkBriefError, WorkBriefErrorCode
+from pinboard.interfaces.work_brief_models import AcceptedScope, AcceptedScopeAuthorization, CrossBoundaryCheckpoint
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 
 from .support import SQLITE_NOW, JsonObject, JsonValue, complete_sqlite_state
@@ -966,6 +969,404 @@ Not launchable:
         )
         self.assertEqual(stored_state.StoredWorkItemState.ACTIVE, resumed_item.state)
         self.assertEqual(work_models.AttemptState.ACTIVE, resumed_attempt.state)
+
+    def test_revised_brief_resume_keeps_scope_identity_atomic_through_supported_commands(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                dependencies=tuple(
+                    value for value in state.lifecycle.dependencies if value.item_id != ItemId("work-a")
+                ),
+                item_artifacts=(),
+            ),
+            authority=replace(
+                state.authority,
+                coordination=None,
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+            artifact_references=(state.artifact_references[0],),
+            transition_receipts=(replace(state.transition_receipts[0], artifact_ref_id=None),),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        pause_payload = project / "pause.json"
+        pause_payload.write_text('{"reason":"Pause before accepting revised scope."}\n', encoding="utf-8")
+
+        self.run_json_cli(
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--action-id",
+            "pause:work-a-1",
+            "--payload",
+            str(pause_payload),
+        )
+        proposal_path = project / "required-first.json"
+        proposal_path.write_text(
+            json.dumps(
+                {
+                    "schema": "pinboard-proposal/v1",
+                    "proposal_id": "required-first",
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "source_task_id": "discovering-task",
+                    "user_label": "Required first",
+                    "trigger": "Work A needs one newly discovered prerequisite.",
+                    "evidence": ["source:command-scenario"],
+                    "why_it_matters": "The revised accepted scope must remain aligned with its resumed brief.",
+                    "relation": {"kind": "prerequisite", "item": "work-a"},
+                    "effect": "Record the prerequisite candidate and relationship.",
+                    "unlock": "Resume Work A from one revised canonical brief.",
+                    "urgency_evidence": "This reproduces the supported release-blocking sequence.",
+                    "freshness_assumptions": ["Work A remains live."],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.run_cli(*common, "proposal", "--file", str(proposal_path))
+        self.run_json_cli(
+            *common,
+            "close",
+            "required-first",
+            "--outcome",
+            "done",
+            "--reason",
+            "The prerequisite is satisfied.",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+        )
+        revised_item = next(
+            value for value in store.snapshot().lifecycle.work_items if value.item_id == ItemId("work-a")
+        )
+        brief = work_a_brief(project)
+        checkpoint = brief.checkpoint
+        self.assertIsInstance(checkpoint, CrossBoundaryCheckpoint)
+        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
+        authorization = AcceptedScopeAuthorization("work-a", revised_item.scope_revision)
+        checkpoint = replace_struct(
+            checkpoint,
+            contracts=(replace_struct(checkpoint.contracts[0], authorization_basis=authorization),),
+            verification=(replace_struct(checkpoint.verification[0], authorization_basis=authorization),),
+        )
+        brief = replace_struct(
+            brief,
+            artifact_revision=2,
+            accepted_scope=AcceptedScope(revised_item.scope_revision, revised_item.scope_digest),
+            checkpoint=checkpoint,
+        )
+        brief_path = project / "work-a-brief-2.json"
+        brief_path.write_bytes(canonical_work_brief_bytes(brief))
+        publication = self.run_json_cli(*common, "brief", "publish", "--file", str(brief_path))
+        resume_payload = project / "resume-revised.json"
+        resume_payload.write_text(
+            json.dumps({"brief_artifact_ref_id": publication["artifact_ref_id"]}), encoding="utf-8"
+        )
+
+        resumed = self.run_json_cli(
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--action-id",
+            "resume:work-a",
+            "--payload",
+            str(resume_payload),
+        )
+
+        reloaded = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        reloaded_item = next(value for value in reloaded.lifecycle.work_items if value.item_id == ItemId("work-a"))
+        reloaded_attempt = next(
+            value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
+        )
+        self.assertEqual(
+            (
+                stored_state.StoredWorkItemState.ACTIVE,
+                work_models.AttemptState.ACTIVE,
+                publication["artifact_ref_id"],
+                reloaded_item.scope_revision,
+                reloaded_item.scope_digest,
+            ),
+            (
+                reloaded_item.state,
+                reloaded_attempt.state,
+                reloaded_attempt.brief_artifact_ref_id,
+                reloaded_attempt.accepted_scope_revision,
+                reloaded_attempt.accepted_scope_digest,
+            ),
+        )
+        self.assertEqual(str(reloaded.lifecycle.project.revision - 1), resumed["revision"])
+        validation_result, validation_stdout, validation_stderr = self.run_cli(*common, "validate")
+        self.assertEqual(0, validation_result, f"{validation_stdout}\n{validation_stderr}")
+        self.assertIn("OK WORK_STATE_VALID", validation_stdout)
+        coordinator_actions = self.json_list(self.run_json_cli(*common, "actions", "--role", "coordinator")["actions"])
+        self.assertIn(
+            "dispatch:work-a-1",
+            tuple(str(self.json_object(value)["action_id"]) for value in coordinator_actions),
+        )
+
+    def test_revised_brief_identity_mismatches_reject_at_command_boundary_without_effects(self) -> None:
+        base_brief = replace_struct(work_a_brief(Path(tempfile.mkdtemp()).resolve()), artifact_revision=2)
+        checkpoint = base_brief.checkpoint
+        self.assertIsInstance(checkpoint, CrossBoundaryCheckpoint)
+        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
+
+        def with_scope_identity(item_id: str, revision: int) -> CrossBoundaryCheckpoint:
+            authorization = AcceptedScopeAuthorization(item_id, revision)
+            return replace_struct(
+                checkpoint,
+                contracts=(replace_struct(checkpoint.contracts[0], authorization_basis=authorization),),
+                verification=(replace_struct(checkpoint.verification[0], authorization_basis=authorization),),
+            )
+
+        mismatches = (
+            ("attempt", replace_struct(base_brief, attempt_id="different-1")),
+            (
+                "item",
+                replace_struct(
+                    base_brief,
+                    item_id="different",
+                    checkpoint=with_scope_identity("different", base_brief.accepted_scope.revision),
+                ),
+            ),
+            ("branch", replace_struct(base_brief, branch="codex/different")),
+            ("base", replace_struct(base_brief, base_revision="different-base")),
+            (
+                "scope-revision",
+                replace_struct(
+                    base_brief,
+                    accepted_scope=AcceptedScope(2, base_brief.accepted_scope.digest),
+                    checkpoint=with_scope_identity(base_brief.item_id, 2),
+                ),
+            ),
+            (
+                "scope-digest",
+                replace_struct(base_brief, accepted_scope=AcceptedScope(1, "f" * 64)),
+            ),
+        )
+
+        for name, mismatched_brief in mismatches:
+            with self.subTest(identity=name):
+                state = complete_sqlite_state()
+                now = datetime.now(UTC)
+                assert state.authority.coordination is not None
+                state = replace(
+                    state,
+                    lifecycle=replace(
+                        state.lifecycle,
+                        work_items=tuple(
+                            replace(value, state=stored_state.StoredWorkItemState.PAUSED)
+                            if value.item_id == ItemId("work-a")
+                            else value
+                            for value in state.lifecycle.work_items
+                        ),
+                        attempts=(replace(state.lifecycle.attempts[0], state=work_models.AttemptState.PAUSED),),
+                        dependencies=tuple(
+                            value for value in state.lifecycle.dependencies if value.item_id != ItemId("work-a")
+                        ),
+                    ),
+                    authority=replace(
+                        state.authority,
+                        coordination=replace(state.authority.coordination, expires_at=now + timedelta(minutes=5)),
+                    ),
+                )
+                project, work, _store = self.initialized_state(state)
+                common = ("--project-root", str(project), "--work-root", str(work))
+                brief_path = project / f"mismatched-{name}.json"
+                brief_path.write_bytes(canonical_work_brief_bytes(mismatched_brief))
+                publication = self.run_json_cli(*common, "brief", "publish", "--file", str(brief_path))
+                rebuild_result, rebuild_stdout, rebuild_stderr = self.run_cli(*common, "views", "rebuild")
+                self.assertEqual(0, rebuild_result, f"{rebuild_stdout}\n{rebuild_stderr}")
+                action = self.json_object(
+                    self.json_list(
+                        self.run_json_cli(
+                            *common,
+                            "actions",
+                            "--role",
+                            "coordinator",
+                            "--lease-id",
+                            "coordination-a",
+                            "--generation",
+                            "9",
+                            "--action-id",
+                            "resume:work-a",
+                        )["actions"]
+                    )[0]
+                )
+                payload = project / f"resume-{name}.json"
+                payload.write_text(
+                    json.dumps({"brief_artifact_ref_id": publication["artifact_ref_id"]}), encoding="utf-8"
+                )
+                database_path = work / "state.sqlite3"
+                before = SQLiteWorkStore(database_path).snapshot()
+                views_root = work / "views"
+                before_views = tuple(
+                    (path.relative_to(views_root), path.read_bytes())
+                    for path in sorted(views_root.rglob("*"))
+                    if path.is_file()
+                )
+
+                result, stdout, stderr = self.run_transition(common, action, payload)
+
+                self.assertNotEqual(0, result)
+                self.assertEqual("", stdout)
+                self.assertIn("TRANSITION_INPUT_INVALID", stderr)
+                self.assertEqual(before, SQLiteWorkStore(database_path).snapshot())
+                self.assertEqual(
+                    before_views,
+                    tuple(
+                        (path.relative_to(views_root), path.read_bytes())
+                        for path in sorted(views_root.rglob("*"))
+                        if path.is_file()
+                    ),
+                )
+
+    def test_post_commit_brief_projection_failure_keeps_borrowed_transition_receipt(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, authority=replace(state.authority, coordination=None))
+        project, work, store = self.initialized_state(state)
+
+        with patch(
+            "pinboard.interfaces.work_views.attempt_brief_views",
+            side_effect=WorkBriefError(WorkBriefErrorCode.BRIEF_INVALID, "injected projection failure"),
+        ):
+            result, stdout, stderr = self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "close",
+                "work-c",
+                "--outcome",
+                "done",
+                "--reason",
+                "The prerequisite outcome is complete.",
+                "--task-id",
+                "coordinator-task",
+                "--host-id",
+                "studio",
+            )
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK WORK_ITEM_CLOSED item=work-c outcome=done revision=14", stdout)
+        self.assertIn("Generated views could not be rebuilt", stderr)
+        self.assertIn("injected projection failure", stderr)
+        self.assertIn("pinboard views rebuild", stderr)
+        reloaded = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        closed = next(value for value in reloaded.lifecycle.work_items if value.item_id == ItemId("work-c"))
+        self.assertEqual(stored_state.StoredWorkItemState.DONE, closed.state)
+        self.assertEqual(14, reloaded.transition_receipts[-2].project_revision)
+        self.assertEqual(15, store.snapshot().lifecycle.project.revision)
+        rebuild_result, rebuild_stdout, rebuild_stderr = self.run_cli(
+            "--project-root", str(project), "--work-root", str(work), "views", "rebuild"
+        )
+        self.assertEqual(0, rebuild_result, f"{rebuild_stdout}\n{rebuild_stderr}")
+
+    def test_post_commit_brief_projection_failure_keeps_direct_transition_receipt(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        action = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "worker",
+                    "--lease-id",
+                    "attempt-lease-a",
+                    "--generation",
+                    "3",
+                    "--action-id",
+                    "submit-review:work-a-1",
+                )["actions"]
+            )[0]
+        )
+        payload = project / "submit-review.json"
+        payload.write_text('{"candidate":"projection-failure-candidate"}\n', encoding="utf-8")
+
+        with patch(
+            "pinboard.interfaces.work_views.attempt_brief_views",
+            side_effect=WorkBriefError(WorkBriefErrorCode.BRIEF_INVALID, "injected projection failure"),
+        ):
+            result, stdout, stderr = self.run_transition(common, action, payload)
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK TRANSITION_APPLIED submit-review:work-a-1 revision=13", stdout)
+        self.assertIn("SQLite transition succeeded, but generated views need repair", stderr)
+        self.assertIn("pinboard views rebuild", stderr)
+        reloaded = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
+        self.assertEqual(work_models.AttemptState.REVIEW, attempt.state)
+        self.assertEqual(13, store.snapshot().transition_receipts[-1].project_revision)
+        rebuild_result, rebuild_stdout, rebuild_stderr = self.run_cli(*common, "views", "rebuild")
+        self.assertEqual(0, rebuild_result, f"{rebuild_stdout}\n{rebuild_stderr}")
+
+    def test_unexpected_post_commit_projection_exception_remains_exceptional(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        action = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "worker",
+                    "--lease-id",
+                    "attempt-lease-a",
+                    "--generation",
+                    "3",
+                    "--action-id",
+                    "submit-review:work-a-1",
+                )["actions"]
+            )[0]
+        )
+        payload = project / "submit-review.json"
+        payload.write_text('{"candidate":"unexpected-projection-candidate"}\n', encoding="utf-8")
+
+        with (
+            patch("pinboard.interfaces.work_views.attempt_brief_views", side_effect=RuntimeError("unexpected")),
+            self.assertRaisesRegex(RuntimeError, "unexpected"),
+        ):
+            self.run_transition(common, action, payload)
+
+        reloaded = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
+        self.assertEqual(work_models.AttemptState.REVIEW, attempt.state)
+        self.assertEqual(13, store.snapshot().transition_receipts[-1].project_revision)
 
     def test_blocker_skill_guidance_names_advisory_and_mutating_responsibilities(self) -> None:
         repository = Path(__file__).resolve().parents[1]

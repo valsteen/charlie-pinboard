@@ -11,7 +11,13 @@ from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
-from pinboard.application.artifacts import CheckpointArtifacts, EvidenceArtifactRef, NewArtifact, ResultArtifactRef
+from pinboard.application.artifacts import (
+    CheckpointArtifacts,
+    EvidenceArtifactRef,
+    NewArtifact,
+    ResultArtifactRef,
+    WorkBriefIdentity,
+)
 from pinboard.application.decision_projection import (
     project_decision_snapshot,
     project_inactive_attempt_authority,
@@ -140,6 +146,60 @@ class ServiceTest(unittest.TestCase):
         after = store.snapshot()
         self.assertEqual(before.lifecycle.project.revision + 1, after.lifecycle.project.revision)
         self.assertEqual(len(before.transition_receipts) + 1, len(after.transition_receipts))
+
+    def test_revised_brief_identity_mismatches_reject_before_commit(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                work_items=tuple(
+                    replace(value, state=stored_state.StoredWorkItemState.PAUSED)
+                    if value.item_id == ItemId("work-a")
+                    else value
+                    for value in state.lifecycle.work_items
+                ),
+                dependencies=tuple(
+                    value for value in state.lifecycle.dependencies if value.item_id != ItemId("work-a")
+                ),
+                attempts=(replace(state.lifecycle.attempts[0], state=work_models.AttemptState.PAUSED),),
+            ),
+        )
+        store, _database = self._store_with_state(state)
+        action = self._coordinator_action(store, decision_models.ActionKind.RESUME)
+        command = non_checkpoint_command(
+            bind_transition(action, work_models.ResumeInput(state.artifact_references[0].artifact_ref_id))
+        )
+        identity = WorkBriefIdentity(
+            "work-a-1",
+            "work-a",
+            "codex/work-a",
+            "base-revision",
+            1,
+            state.lifecycle.work_items[1].scope_digest,
+        )
+        mismatches = (
+            replace(identity, attempt_id="different-1"),
+            replace(identity, item_id="different"),
+            replace(identity, branch="codex/different"),
+            replace(identity, base_revision="different-base"),
+            replace(identity, accepted_scope_revision=2),
+            replace(identity, accepted_scope_digest="f" * 64),
+        )
+        before = store.snapshot()
+
+        for mismatch in mismatches:
+            with self.subTest(mismatch=mismatch):
+                result = execute(
+                    store,
+                    command,
+                    SQLITE_NOW + timedelta(seconds=1),
+                    transition_brief_identity=mismatch,
+                )
+                self.assertIsInstance(result, DecisionFailure)
+                assert isinstance(result, DecisionFailure)
+                self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, result.code)
+                self.assertEqual(before, store.snapshot())
 
     def test_execute_accepts_exact_live_worker_authority_for_review_submission(self) -> None:
         store = self._store()
