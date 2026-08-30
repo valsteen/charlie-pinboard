@@ -29,42 +29,39 @@ CREATE TABLE artifact_refs (
 
 CREATE TABLE work_items (
     item_id TEXT PRIMARY KEY,
-    user_label TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN (
         'intake', 'ready', 'active', 'paused', 'blocked', 'deferred', 'review',
         'done', 'superseded', 'dropped'
     )),
     timing TEXT CHECK (timing IN ('must-now', 'cheaper-now', 'safe-to-defer')),
     source TEXT,
-    trigger TEXT,
-    why_it_matters TEXT,
-    effect TEXT,
-    unlock TEXT,
     outcome_evidence TEXT,
     next_action TEXT,
     notes TEXT,
-    scope_revision INTEGER NOT NULL CHECK (scope_revision >= 1),
-    scope_digest TEXT NOT NULL CHECK (length(scope_digest) = 64),
     subject_revision INTEGER NOT NULL CHECK (subject_revision >= 0),
     recorded_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     queue_position INTEGER UNIQUE CHECK (queue_position IS NULL OR queue_position >= 1),
     UNIQUE (item_id, state, outcome_evidence),
     CHECK ((state IN ('done', 'superseded', 'dropped')) = (outcome_evidence IS NOT NULL)),
-    CHECK ((state IN ('done', 'superseded', 'dropped')) = (queue_position IS NULL)),
-    FOREIGN KEY (item_id, scope_revision, scope_digest)
-        REFERENCES item_scope_revisions(item_id, scope_revision, scope_digest)
-        DEFERRABLE INITIALLY DEFERRED
+    CHECK ((state IN ('done', 'superseded', 'dropped')) = (queue_position IS NULL))
 ) STRICT;
 
-CREATE TABLE item_scope_revisions (
+CREATE TABLE work_item_definition_revisions (
     item_id TEXT NOT NULL REFERENCES work_items(item_id) ON DELETE CASCADE,
-    scope_revision INTEGER NOT NULL CHECK (scope_revision >= 1),
-    scope_digest TEXT NOT NULL CHECK (length(scope_digest) = 64),
+    definition_revision INTEGER NOT NULL CHECK (definition_revision >= 1),
+    definition_digest TEXT NOT NULL CHECK (length(definition_digest) = 64),
+    definition_json BLOB NOT NULL,
+    reason TEXT NOT NULL CHECK (length(reason) >= 1),
+    source_task_id TEXT NOT NULL CHECK (length(source_task_id) >= 1),
+    before_digest TEXT CHECK (before_digest IS NULL OR length(before_digest) = 64),
+    after_digest TEXT NOT NULL CHECK (length(after_digest) = 64),
     accepted_project_revision INTEGER NOT NULL CHECK (accepted_project_revision >= 0),
     accepted_at TEXT NOT NULL,
-    PRIMARY KEY (item_id, scope_revision),
-    UNIQUE (item_id, scope_revision, scope_digest)
+    PRIMARY KEY (item_id, definition_revision),
+    UNIQUE (item_id, definition_revision, definition_digest),
+    CHECK (definition_digest = after_digest),
+    CHECK ((definition_revision = 1) = (before_digest IS NULL))
 ) STRICT;
 
 CREATE TABLE item_dependencies (
@@ -110,8 +107,6 @@ CREATE TABLE attempts (
         REFERENCES artifact_refs(artifact_ref_id, kind),
     FOREIGN KEY (result_artifact_ref_id, result_artifact_kind)
         REFERENCES artifact_refs(artifact_ref_id, kind),
-    FOREIGN KEY (item_id, accepted_scope_revision, accepted_scope_digest)
-        REFERENCES item_scope_revisions(item_id, scope_revision, scope_digest),
     CHECK ((result_artifact_ref_id IS NULL) = (result_artifact_kind IS NULL)),
     CHECK ((candidate_revision IS NULL) = (candidate_recorded_at IS NULL)),
     CHECK (

@@ -7,7 +7,7 @@ TABLE_GROUPS: dict[str, str] = {
     "work_items": "current work",
     "attempts": "current work",
     "current_focus": "current work",
-    "item_scope_revisions": "scope and relationships",
+    "work_item_definition_revisions": "definitions and relationships",
     "item_dependencies": "scope and relationships",
     "proposals": "discovery",
     "proposal_evidence": "discovery",
@@ -28,19 +28,17 @@ RELATION_ROLES: dict[tuple[str, str], str] = {
     ("attempt_leases", "attempt_lease_counters"): "one current lease per attempt",
     ("attempt_leases", "attempt_lease_generations"): "lease identity is fenced by generation",
     ("attempts", "artifact_refs"): "brief and result evidence",
-    ("attempts", "item_scope_revisions"): "attempt uses one accepted scope",
     ("attempts", "work_items"): "attempt executes one item",
     ("current_focus", "attempts"): "focus may name the live attempt",
     ("current_focus", "work_items"): "focus names the work",
     ("item_artifacts", "artifact_refs"): "item knowledge resolves to immutable bytes",
     ("item_artifacts", "work_items"): "knowledge belongs to an item",
     ("item_dependencies", "work_items"): "items form a dependency graph",
-    ("item_scope_revisions", "work_items"): "scope history belongs to an item",
+    ("work_item_definition_revisions", "work_items"): "definition history belongs to an item",
     ("proposal_evidence", "proposals"): "discovery retains its evidence",
     ("proposal_freshness", "proposals"): "discovery retains assumptions",
     ("proposals", "work_items"): "proposal may relate to or resolve as work",
     ("transition_history", "artifact_refs"): "history may retain accepted evidence",
-    ("work_items", "item_scope_revisions"): "item points to its current scope",
 }
 
 
@@ -82,7 +80,7 @@ DIAGRAM = Diagram(
     slug="database",
     title="Six kinds of memory in one relational ledger",
     description=(
-        "Sixteen SQLite tables preserve work identity, scope, proposals, artifacts, mutation ownership, and history. "
+        "Sixteen SQLite tables preserve work identity, definitions, proposals, artifacts, mutation ownership, and history. "
         "Relationship families are grouped for readability while the source seed accounts for every foreign key."
     ),
     width=1200,
@@ -90,7 +88,7 @@ DIAGRAM = Diagram(
     sections=(
         Section("Discovery", "findings before and after scheduling", 28, 42),
         Section("Current work", "identity that survives execution", 424, 42),
-        Section("Scope + relationships", "accepted intent and dependency", 824, 42),
+        Section("Definitions + relationships", "accepted intent and dependency", 824, 42),
         Section("Accepted files", "briefs · ready reviews · checkpoint evidence", 28, 432),
         Section("Mutation ownership", "temporary shared authority · independent attempt owners", 424, 432),
         Section("Integrity + time", "current revision and committed receipts", 824, 432),
@@ -103,7 +101,7 @@ DIAGRAM = Diagram(
     connectors=(
         Connector(((270, 155), (430, 155)), "proposals", "work-items", "may become work", (350, 143)),
         Connector(((640, 155), (570, 155)), "attempts", "work-items", "executes", (605, 143)),
-        Connector(((780, 155), (830, 155)), "attempts", "scopes", "scope", (805, 143)),
+        Connector(((780, 155), (830, 155)), "attempts", "definitions", "definition", (805, 143)),
         Connector(((500, 110), (500, 80), (1100, 80), (1100, 110)), "work-items", "dependencies"),
         Connector(
             ((105, 260), (105, 230), (140, 230), (140, 200)), "proposal-evidence", "proposals", "supports", (72, 226)
@@ -133,7 +131,7 @@ DIAGRAM = Diagram(
         Box("work-items", "", "Work items", ("durable identity",), ("work_items",), 430, 110, 140, 90),
         Box("attempts", "", "Attempts", ("one execution",), ("attempts",), 640, 110, 140, 90),
         Box("focus", "", "Current focus", ("advisory pointer",), ("item + optional attempt",), 500, 270, 180, 80),
-        Box("scopes", "", "Accepted versions", ("current scope",), ("plus its history",), 830, 110, 175, 90),
+        Box("definitions", "", "Accepted versions", ("current definition",), ("plus its history",), 830, 110, 175, 90),
         Box("dependencies", "", "Dependencies", ("item → prerequisite",), ("item_dependencies",), 1020, 110, 160, 90),
         Box(
             "artifact-refs",

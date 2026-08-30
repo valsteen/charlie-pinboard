@@ -61,7 +61,7 @@ from pinboard.domain.proposal_models import (
     CreateProposalOperation,
     ProposalIntake,
 )
-from tests.support import SQLITE_NOW, complete_sqlite_state, reject_table_deletes
+from tests.support import SQLITE_NOW, complete_sqlite_state, reject_table_deletes, with_definition_dependencies
 
 
 def non_checkpoint_command(
@@ -165,6 +165,7 @@ class ServiceTest(unittest.TestCase):
                 attempts=(replace(state.lifecycle.attempts[0], state=work_models.AttemptState.PAUSED),),
             ),
         )
+        state = with_definition_dependencies(state, ItemId("work-a"), ())
         store, _database = self._store_with_state(state)
         action = self._coordinator_action(store, decision_models.ActionKind.RESUME)
         command = non_checkpoint_command(
@@ -176,7 +177,11 @@ class ServiceTest(unittest.TestCase):
             "codex/work-a",
             "base-revision",
             1,
-            state.lifecycle.work_items[1].scope_digest,
+            next(
+                value.digest
+                for value in state.lifecycle.definition_revisions
+                if value.item_id == ItemId("work-a") and value.revision == 1
+            ),
         )
         mismatches = (
             replace(identity, attempt_id="different-1"),
@@ -777,7 +782,6 @@ class ServiceTest(unittest.TestCase):
         state = replace(state, proposals=replace(state.proposals, proposals=(), evidence=(), freshness=()))
         store, _database_path = self._store_with_state(state)
         before = store.snapshot()
-        target_before = next(value for value in before.lifecycle.work_items if value.item_id == ItemId("work-c"))
         intake = ProposalIntake(
             ProposalId("required-first"),
             SQLITE_NOW,
@@ -813,8 +817,11 @@ class ServiceTest(unittest.TestCase):
             },
             positions,
         )
-        target_after = next(value for value in after.lifecycle.work_items if value.item_id == ItemId("work-c"))
-        self.assertEqual(target_before.scope_revision + 1, target_after.scope_revision)
+        target_definitions = tuple(
+            value for value in after.lifecycle.definition_revisions if value.item_id == ItemId("work-c")
+        )
+        self.assertEqual(2, len(target_definitions))
+        self.assertEqual(target_definitions[0].revision + 1, target_definitions[1].revision)
         self.assertIn(
             ItemId("required-first"),
             tuple(value.dependency_id for value in after.lifecycle.dependencies if value.item_id == ItemId("work-c")),

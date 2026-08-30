@@ -3,6 +3,7 @@ from pathlib import Path
 
 from msgspec.structs import replace
 
+from pinboard.domain.identifiers import ItemId
 from pinboard.interfaces.work_brief_models import (
     AcceptanceCriterion,
     AcceptedScope,
@@ -27,7 +28,7 @@ from pinboard.interfaces.work_briefs import (
     canonical_reviewed_authority_set_bytes,
     canonical_work_brief_review_bytes,
 )
-from tests.support import SQLITE_DIGEST
+from tests.support import SQLITE_DIGEST, test_definition
 
 CHECKPOINT_ID = "typed-json-cutover"
 
@@ -177,7 +178,7 @@ def work_c_brief() -> WorkBrief:
         item_id="work-c",
         branch="codex/work-c",
         base_revision="candidate-base",
-        accepted_scope=replace(candidate.accepted_scope, digest=SQLITE_DIGEST),
+        accepted_scope=replace(candidate.accepted_scope, digest=test_definition(ItemId("work-c"))[1]),
         checkpoint=local,
     )
 

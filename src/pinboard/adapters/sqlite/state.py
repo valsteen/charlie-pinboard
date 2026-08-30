@@ -8,6 +8,7 @@ persisted-invariant failures remain exceptional; the transaction owner stays in
 
 import sqlite3
 from datetime import datetime
+from itertools import pairwise
 
 import msgspec
 
@@ -19,12 +20,14 @@ from pinboard.adapters.sqlite.lifecycle import insert_focus, insert_lifecycle, r
 from pinboard.adapters.sqlite.proposals import insert_proposals, read_proposals
 from pinboard.application import stored_state
 from pinboard.domain import work_models
+from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
     HistoryId,
     HistorySubjectId,
     HostId,
+    ItemId,
     TaskId,
 )
 
@@ -103,11 +106,75 @@ def _read_history(connection: sqlite3.Connection) -> tuple[stored_state.StoredTr
     )
 
 
+def _definition_revision_number(value: stored_state.ItemDefinitionRevision) -> int:
+    return value.revision
+
+
+def _dependency_identity_position(value: stored_state.ItemDependency) -> tuple[str, int]:
+    return str(value.item_id), value.position
+
+
+def _current_definitions(
+    state: stored_state.StoredWorkState,
+    item_ids: set[ItemId],
+    error_code: StorageErrorCode,
+) -> dict[ItemId, stored_state.ItemDefinitionRevision]:
+    definitions_by_item: dict[ItemId, list[stored_state.ItemDefinitionRevision]] = {item_id: [] for item_id in item_ids}
+    for value in state.lifecycle.definition_revisions:
+        if value.item_id not in definitions_by_item:
+            raise StorageError(error_code, "Definition history names an unknown work item.")
+        definitions_by_item[value.item_id].append(value)
+        digest = work_item_definition_digest(value.definition)
+        if not isinstance(digest, str) or digest != value.digest or value.after_digest != value.digest:
+            raise StorageError(error_code, "Definition history digest does not match its canonical definition.")
+    current_definitions: dict[ItemId, stored_state.ItemDefinitionRevision] = {}
+    for item_id, revisions in definitions_by_item.items():
+        ordered = sorted(revisions, key=_definition_revision_number)
+        if [value.revision for value in ordered] != list(range(1, len(ordered) + 1)) or not ordered:
+            raise StorageError(error_code, "Every work item must have contiguous definition history from revision 1.")
+        if ordered[0].before_digest is not None or any(
+            value.before_digest != previous.digest for previous, value in pairwise(ordered)
+        ):
+            raise StorageError(error_code, "Definition history digest links are not contiguous.")
+        current_definitions[item_id] = ordered[-1]
+    return current_definitions
+
+
+def _validate_dependencies(
+    state: stored_state.StoredWorkState,
+    item_ids: set[ItemId],
+    current_definitions: dict[ItemId, stored_state.ItemDefinitionRevision],
+    error_code: StorageErrorCode,
+) -> None:
+    dependency_groups: dict[ItemId, list[ItemId]] = {item_id: [] for item_id in item_ids}
+    for value in sorted(state.lifecycle.dependencies, key=_dependency_identity_position):
+        if value.item_id not in item_ids or value.dependency_id not in item_ids:
+            raise StorageError(error_code, "A dependency names an unknown work item.")
+        dependency_groups[value.item_id].append(value.dependency_id)
+    if any(
+        tuple(dependency_groups[item_id]) != current.definition.dependencies
+        for item_id, current in current_definitions.items()
+    ):
+        raise StorageError(error_code, "Current definition dependencies do not match relational dependencies.")
+    for item_id in item_ids:
+        pending = list(dependency_groups[item_id])
+        visited: set[ItemId] = set()
+        while pending:
+            dependency = pending.pop()
+            if dependency == item_id:
+                raise StorageError(error_code, "Current definition dependencies contain a cycle.")
+            if dependency not in visited:
+                visited.add(dependency)
+                pending.extend(dependency_groups[dependency])
+
+
 def _validate_current_state(state: stored_state.StoredWorkState, error_code: StorageErrorCode) -> None:
     validate_attempt_authority(state, error_code)
     positions = sorted(value.queue_position for value in state.lifecycle.work_items if value.queue_position is not None)
     if positions != list(range(1, len(positions) + 1)):
         raise StorageError(error_code, "Live work-item queue positions must be contiguous and one-based.")
+    item_ids = {value.item_id for value in state.lifecycle.work_items}
+    _validate_dependencies(state, item_ids, _current_definitions(state, item_ids, error_code), error_code)
 
 
 def read_state(connection: sqlite3.Connection) -> stored_state.StoredWorkState:
@@ -175,7 +242,6 @@ def insert_initial_state(connection: sqlite3.Connection, state: stored_state.Sto
         for table in (
             "artifact_refs",
             "work_items",
-            "item_scope_revisions",
             "item_dependencies",
             "item_artifacts",
             "attempts",

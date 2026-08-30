@@ -23,6 +23,7 @@ from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_models import AcquireCoordinationAuthority, ReleaseCoordinationAuthority
 from pinboard.domain.decisions import bind_transition
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import ActionId, HostId, LeaseId, TaskId
 from pinboard.interfaces import action_selection, cli_commands, coordination_authority, work_views
 from pinboard.interfaces.cli_output import write_json
@@ -32,7 +33,7 @@ from pinboard.interfaces.errors import (
     TransitionInputFailure,
 )
 from pinboard.interfaces.transition_input import parse_transition_input
-from pinboard.interfaces.transition_models import CloseView, CoordinatedTransitionView
+from pinboard.interfaces.transition_models import CloseView, CoordinatedTransitionView, ItemRevisionView
 from pinboard.interfaces.work_briefs import read_transition_work_brief_identity
 
 
@@ -53,6 +54,43 @@ def close(roots: cli_commands.ResolvedRoots, command: cli_commands.CloseCommand)
         write_json(value)
     else:
         print(f"OK WORK_ITEM_CLOSED item={value.item_id} outcome={value.outcome} revision={value.revision}")
+    return 0
+
+
+def revise_item(roots: cli_commands.ResolvedRoots, command: cli_commands.ItemReviseCommand) -> CommandResult[int]:
+    try:
+        payload = command.file.read_bytes()
+    except OSError as error:
+        return CommandFailure(DecisionFailureCode.TRANSITION_INPUT_INVALID, f"Cannot read item revision: {error}")
+    parsed = parse_transition_input(decision_models.ActionKind.REVISE_ITEM, payload)
+    if isinstance(parsed, TransitionInputFailure):
+        return CommandFailure(parsed.code, parsed.message)
+    if not isinstance(parsed, work_models.ReviseItemDefinitionInput):
+        return CommandFailure(
+            DecisionFailureCode.TRANSITION_INPUT_INVALID,
+            "The revision file did not decode as an item revision.",
+        )
+    digest = work_item_definition_digest(parsed.definition)
+    if not isinstance(digest, str):
+        return CommandFailure(digest.code, digest.message)
+    project_revision = execute_borrowed_coordination(
+        roots,
+        command.task_id,
+        command.host_id,
+        command.ttl_seconds,
+        ActionId(f"revise-item:{parsed.item_id}"),
+        payload,
+    )
+    if isinstance(project_revision, CommandFailure):
+        return project_revision
+    value = ItemRevisionView(str(parsed.item_id), parsed.expected_revision + 1, digest, project_revision)
+    if command.json:
+        write_json(value)
+    else:
+        print(
+            f"OK ITEM_REVISED item={value.item_id} definition_revision={value.definition_revision} "
+            f"definition_digest={value.definition_digest} project_revision={value.project_revision}"
+        )
     return 0
 
 
@@ -113,6 +151,7 @@ def transition(roots: cli_commands.ResolvedRoots, cli_command: cli_commands.Tran
             | decision_models.MergeProposalCommand()
             | decision_models.ReturnProposalCommand()
             | decision_models.RejectProposalCommand()
+            | decision_models.ReviseItemCommand()
             | decision_models.TransferCoordinatorCommand()
         ):
             result = execute(
@@ -371,6 +410,7 @@ def apply_borrowed_transition(
             | decision_models.MergeProposalCommand()
             | decision_models.ReturnProposalCommand()
             | decision_models.RejectProposalCommand()
+            | decision_models.ReviseItemCommand()
             | decision_models.TransferCoordinatorCommand()
         ):
             result = execute(

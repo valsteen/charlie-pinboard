@@ -29,6 +29,7 @@ def _parallel_item_key(value: query_models.ParallelItem) -> str:
 
 
 def overview_from_state(state: stored_state.StoredWorkState) -> query_models.WorkOverview:
+    definitions = {value.item_id: value.definition for value in state.lifecycle.definition_revisions}
     attempts = {
         attempt.item_id: attempt.attempt_id
         for attempt in state.lifecycle.attempts
@@ -109,7 +110,7 @@ def overview_from_state(state: stored_state.StoredWorkState) -> query_models.Wor
     items = tuple(
         query_models.OverviewItem(
             str(item.item_id),
-            item.user_label,
+            definitions[item.item_id].title,
             live_state,
             item.queue_position or 0,
             not any(link.dependency_id in live_ids for link in dependency_links[item.item_id]),
@@ -153,6 +154,12 @@ def item_status(store: WorkStore, item_id: ItemId) -> DecisionResult[query_model
     item = next((candidate for candidate in state.lifecycle.work_items if candidate.item_id == item_id), None)
     if item is None:
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' was not found.")
+    definition = next(
+        (value.definition for value in reversed(state.lifecycle.definition_revisions) if value.item_id == item_id),
+        None,
+    )
+    if definition is None:
+        return DecisionFailure(DecisionFailureCode.ITEM_DEFINITION_INVALID, f"Item '{item_id}' has no definition.")
     attempts = tuple(
         query_models.ItemStatusAttempt(str(attempt.attempt_id), attempt.state, attempt.candidate_revision)
         for attempt in sorted(
@@ -165,13 +172,98 @@ def item_status(store: WorkStore, item_id: ItemId) -> DecisionResult[query_model
         "sqlite-v1",
         str(state.lifecycle.project.revision),
         str(item.item_id),
-        item.user_label,
+        definition.title,
         item.state,
         item.timing,
         item.outcome_evidence,
         item.next_action,
         item.notes or "",
         attempts,
+    )
+
+
+def _definition_view(definition: work_models.WorkItemDefinition) -> query_models.WorkItemDefinitionView:
+    return query_models.WorkItemDefinitionView(
+        "pinboard-work-item-definition/v1",
+        definition.title,
+        definition.objective,
+        definition.hypothesis,
+        definition.evidence,
+        definition.scope,
+        definition.non_scope,
+        definition.acceptance_criteria,
+        tuple(definition.dependencies),
+        definition.effect,
+        definition.unlock,
+    )
+
+
+def item_definition(store: WorkStore, item_id: ItemId) -> DecisionResult[query_models.ItemDefinition]:
+    state = store.snapshot()
+    if not any(item.item_id == item_id for item in state.lifecycle.work_items):
+        return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
+    current = next(
+        (value for value in reversed(state.lifecycle.definition_revisions) if value.item_id == item_id),
+        None,
+    )
+    if current is None:
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_DEFINITION_INVALID,
+            f"Item '{item_id}' has no accepted definition.",
+        )
+    return query_models.ItemDefinition(
+        "pinboard-item-definition/v1",
+        "sqlite-v1",
+        state.lifecycle.project.revision,
+        item_id,
+        current.revision,
+        current.digest,
+        _definition_view(current.definition),
+    )
+
+
+def item_definition_history(
+    store: WorkStore,
+    item_id: ItemId,
+    *,
+    limit: int = 20,
+    before_revision: int | None = None,
+) -> DecisionResult[query_models.ItemDefinitionHistory]:
+    if limit < 1 or limit > 100 or (before_revision is not None and before_revision < 1):
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_DEFINITION_HISTORY_INVALID,
+            "Definition history limit must be 1 through 100 and before_revision must be positive.",
+        )
+    state = store.snapshot()
+    if not any(item.item_id == item_id for item in state.lifecycle.work_items):
+        return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
+    available = tuple(
+        value
+        for value in reversed(state.lifecycle.definition_revisions)
+        if value.item_id == item_id and (before_revision is None or value.revision < before_revision)
+    )
+    selected = available[:limit]
+    rows = tuple(
+        query_models.ItemDefinitionHistoryRow(
+            value.revision,
+            value.digest,
+            _definition_view(value.definition),
+            value.reason,
+            value.source_task_id,
+            value.accepted_at.isoformat(),
+            value.before_digest,
+            value.after_digest,
+            value.accepted_project_revision,
+        )
+        for value in selected
+    )
+    return query_models.ItemDefinitionHistory(
+        "pinboard-item-definition-history/v1",
+        "sqlite-v1",
+        state.lifecycle.project.revision,
+        item_id,
+        rows,
+        rows[-1].revision if len(available) > limit else None,
     )
 
 
@@ -256,13 +348,14 @@ def preview_parallel(
             "Selected item identities must be unique current items.",
         )
     candidates = tuple(by_id[item_id] for item_id in selected) if selected else live
+    definitions = {value.item_id: value.definition for value in state.lifecycle.definition_revisions}
     live_ids = frozenset(by_id)
     items: list[query_models.ParallelItem] = []
     for item, live_state in candidates:
         reasons = _parallel_reasons(state, item.item_id, live_ids, current)
         common = (
             str(item.item_id),
-            item.user_label,
+            definitions[item.item_id].title,
             live_state,
             str(
                 next(

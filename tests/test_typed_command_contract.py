@@ -19,7 +19,7 @@ from pinboard.domain.identifiers import (
 from pinboard.domain.ledger import LedgerSnapshot
 from pinboard.interfaces.errors import TransitionInputFailure
 from pinboard.interfaces.transition_input import parse_transition_input
-from tests.domain_support import action, expect_success, item_scope, scope_anchor
+from tests.domain_support import action, expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
@@ -188,12 +188,14 @@ class TypedTransitionContractTest(unittest.TestCase):
                 work_models.ArtifactRecord(ArtifactRefId(2), "brief"),
                 work_models.ArtifactRecord(ArtifactRefId(3), "design"),
             ),
-            scopes=(
-                scope_anchor(
-                    "ready-item",
+            definitions=(
+                work_models.DefinitionAnchor(
+                    ItemId("ready-item"),
                     2,
                     "d" * 64,
-                    item_scope("ready-item", "Ready item", "trigger", "why", "effect", "unlock"),
+                    work_models.WorkItemDefinition(
+                        "Ready item", "effect", "why", (), ("effect",), (), ("unlock",), (), "effect", "unlock"
+                    ),
                 ),
             ),
         )

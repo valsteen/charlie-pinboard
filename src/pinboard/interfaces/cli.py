@@ -52,6 +52,12 @@ def _dispatch(  # noqa: C901, PLR0912 - one visible exhaustive command-family ro
             return work_inspection.overview(roots, command)
         case cli_commands.ItemStatusCommand() as command:
             return work_inspection.item_status(roots, command)
+        case cli_commands.ItemReviseCommand() as command:
+            return transitions.revise_item(roots, command)
+        case cli_commands.ItemDefinitionCommand() as command:
+            return work_inspection.item_definition(roots, command)
+        case cli_commands.ItemDefinitionHistoryCommand() as command:
+            return work_inspection.item_definition_history(roots, command)
         case cli_commands.CloseCommand() as command:
             return transitions.close(roots, command)
         case cli_commands.ActionsCommand() | cli_commands.LeasedActionsCommand() as command:

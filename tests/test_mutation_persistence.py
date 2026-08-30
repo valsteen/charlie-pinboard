@@ -29,6 +29,7 @@ from pinboard.domain.decisions import available_actions as available_actions_out
 from pinboard.domain.decisions import bind_transition as bind_transition_outcome
 from pinboard.domain.decisions import decide as decision_outcome
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -36,6 +37,7 @@ from pinboard.domain.identifiers import (
     HistoryId,
     HistorySubjectId,
     ItemId,
+    TaskId,
 )
 from pinboard.domain.ledger import LedgerSnapshot
 from tests.domain_support import expect_success
@@ -233,9 +235,118 @@ class MutationPersistenceTest(unittest.TestCase):
         self.assertEqual(2, len(reopened.transition_receipts))
         self.assertEqual("transition-receipt/v1", reopened.transition_receipts[-1].outcome_schema)
 
+    def test_definition_revision_persists_atomically_and_reloads_every_audit_fact(self) -> None:
+        state = complete_sqlite_state()
+        current = work_models.WorkItemDefinition(
+            "Work work-a",
+            "Make the state explicit.",
+            "The workflow needs this fact.",
+            ("artifacts/design.md",),
+            ("The state becomes explicit.",),
+            (),
+            ("The next decision can run.",),
+            (ItemId("work-c"),),
+            "The state becomes explicit.",
+            "The next decision can run.",
+        )
+        current_digest = expect_success(work_item_definition_digest(current))
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                definition_revisions=(
+                    *(value for value in state.lifecycle.definition_revisions if value.item_id != ItemId("work-a")),
+                    stored_state.ItemDefinitionRevision(
+                        ItemId("work-a"),
+                        1,
+                        current_digest,
+                        current,
+                        "Accepted proposal definition.",
+                        TaskId("proposal-source"),
+                        None,
+                        current_digest,
+                        3,
+                        SQLITE_NOW,
+                    ),
+                ),
+                attempts=(replace(state.lifecycle.attempts[0], accepted_scope_digest=current_digest),),
+            ),
+        )
+        store = self._store_with_state(state)
+        before = store.snapshot()
+        snapshot = project_decision_snapshot(before)
+        revised = replace(
+            current,
+            objective="Make the state explicit and observable.",
+            dependencies=(ItemId("intake-work"),),
+        )
+        decided_at = SQLITE_NOW + timedelta(seconds=1)
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.COORDINATOR,
+            decision_models.AuthorizationKind.COORDINATOR,
+            snapshot.generation,
+        )
+        action = next(
+            value
+            for value in available_actions(snapshot, actor)
+            if value.kind == decision_models.ActionKind.REVISE_ITEM and value.capability.subject == ItemId("work-a")
+        )
+        decision = decide(
+            snapshot,
+            bind_transition(
+                action,
+                work_models.ReviseItemDefinitionInput(
+                    ItemId("work-a"),
+                    1,
+                    current_digest,
+                    TaskId("revision-owner"),
+                    "Clarify observability and replace the prerequisite.",
+                    revised,
+                ),
+            ),
+            decided_at,
+        )
+
+        with store.write() as transaction:
+            committed = transaction.commit(project_transition_mutation(transaction.snapshot(), decision))
+
+        self.assertNotIsInstance(committed, DecisionFailure)
+        assert not isinstance(committed, DecisionFailure)
+        self.assertEqual(ActionId("revise-item:work-a"), committed.action_id)
+        reopened = store.snapshot()
+        reopened_item = project_decision_snapshot(reopened).item(ItemId("work-a"))
+        assert reopened_item is not None
+        self.assertEqual(work_models.WorkState.ACTIVE, reopened_item.state)
+        self.assertEqual(
+            2,
+            sum(value.item_id == ItemId("work-a") for value in reopened.lifecycle.definition_revisions),
+        )
+        persisted = next(
+            value for value in reversed(reopened.lifecycle.definition_revisions) if value.item_id == ItemId("work-a")
+        )
+        self.assertEqual(revised, persisted.definition)
+        self.assertEqual(current_digest, persisted.before_digest)
+        self.assertEqual(expect_success(work_item_definition_digest(revised)), persisted.after_digest)
+        self.assertEqual(TaskId("revision-owner"), persisted.source_task_id)
+        self.assertEqual("Clarify observability and replace the prerequisite.", persisted.reason)
+        self.assertEqual(13, persisted.accepted_project_revision)
+        self.assertEqual(decided_at, persisted.accepted_at)
+        self.assertEqual(
+            (ItemId("intake-work"),),
+            tuple(
+                value.dependency_id for value in reopened.lifecycle.dependencies if value.item_id == ItemId("work-a")
+            ),
+        )
+
     def test_resume_replaces_the_attempt_brief_and_reloads_it_from_sqlite(self) -> None:
         state = complete_sqlite_state()
-        revised_scope_digest = "c" * 64
+        current_definition = next(
+            value
+            for value in state.lifecycle.definition_revisions
+            if value.item_id == state.lifecycle.attempts[0].item_id
+        )
+        revised_definition = replace(current_definition.definition, dependencies=())
+        revised_scope_digest = expect_success(work_item_definition_digest(revised_definition))
         current = state.artifact_references[0]
         replacement = replace(
             current,
@@ -250,8 +361,6 @@ class MutationPersistenceTest(unittest.TestCase):
             replace(
                 item,
                 state=stored_state.StoredWorkItemState.PAUSED,
-                scope_revision=2,
-                scope_digest=revised_scope_digest,
             )
             if item.item_id == attempt.item_id
             else item
@@ -262,11 +371,16 @@ class MutationPersistenceTest(unittest.TestCase):
             lifecycle=replace(
                 state.lifecycle,
                 work_items=items,
-                scope_revisions=(
-                    *state.lifecycle.scope_revisions,
-                    stored_state.ItemScopeRevision(
+                definition_revisions=(
+                    *state.lifecycle.definition_revisions,
+                    stored_state.ItemDefinitionRevision(
                         attempt.item_id,
                         2,
+                        revised_scope_digest,
+                        revised_definition,
+                        "Revised test definition.",
+                        TaskId("test-source"),
+                        current_definition.digest,
                         revised_scope_digest,
                         state.lifecycle.project.revision,
                         SQLITE_NOW,
@@ -333,9 +447,14 @@ class MutationPersistenceTest(unittest.TestCase):
         reopened = store.snapshot()
         item = next(value for value in reopened.lifecycle.work_items if value.item_id == ItemId("zz-proposal-a"))
         proposal = reopened.proposals.proposals[0]
+        accepted_definition = next(
+            value.definition
+            for value in reversed(reopened.lifecycle.definition_revisions)
+            if value.item_id == item.item_id
+        )
         self.assertEqual(
             ("Proposal A", "A related observation", "Record the follow-up."),
-            (item.user_label, item.trigger, item.effect),
+            (accepted_definition.title, proposal.trigger, accepted_definition.effect),
         )
         self.assertEqual(stored_state.StoredWorkItemState.READY, item.state)
         self.assertEqual(4, item.queue_position)
@@ -344,6 +463,11 @@ class MutationPersistenceTest(unittest.TestCase):
             (ItemId("work-c"), ItemId("intake-work")),
             tuple(value.dependency_id for value in reopened.lifecycle.dependencies if value.item_id == item.item_id),
         )
+        definitions = tuple(value for value in reopened.lifecycle.definition_revisions if value.item_id == item.item_id)
+        self.assertEqual((1, 2), tuple(value.revision for value in definitions))
+        self.assertEqual((ItemId("work-c"), ItemId("intake-work")), definitions[-1].definition.dependencies)
+        self.assertEqual("Accepted explicit proposal dependencies.", definitions[-1].reason)
+        self.assertEqual(TaskId("source-task"), definitions[-1].source_task_id)
         self.assertEqual(
             work_models.AcceptedProposalDisposition(
                 ItemId("zz-proposal-a"),

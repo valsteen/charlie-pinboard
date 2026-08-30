@@ -37,7 +37,7 @@ Create a bounded JSON proposal containing:
 - freshness-sensitive assumptions in `freshness_assumptions`;
 - optional one-based `position`; omit it to place the candidate at the back of live work.
 
-Use `follow-up` when the new candidate depends on the related item. Use `prerequisite` when the live related item depends on the new candidate. Use `duplicate`, `contradiction`, or `clarification` to expose a review flag rather than inventing a dependency. `independent` and `clarification` omit the related item; the other relations require it.
+Use `follow-up` when the new candidate depends on the related item. Use `prerequisite` when the live related item depends on the new candidate; persistence advances that target item's immutable definition history as well as its relational dependency projection. Use `duplicate`, `contradiction`, or `clarification` to expose a review flag rather than inventing a dependency. `independent` and `clarification` omit the related item; the other relations require it. Every new proposal also creates definition revision 1 from its immutable facts, so do not add parallel semantic prose after intake.
 
 Do not create work merely because a question was asked. Require an explicit request to preserve or submit the finding.
 

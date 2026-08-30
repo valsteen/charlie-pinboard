@@ -39,6 +39,7 @@ ACTION_GROUPS: dict[decision_models.ActionKind, str] = {
     decision_models.ActionKind.REJECT_PROPOSAL: "proposal",
     decision_models.ActionKind.REOPEN: "lifecycle",
     decision_models.ActionKind.REPORT_BLOCKER: "advisory",
+    decision_models.ActionKind.REVISE_ITEM: "definition",
     decision_models.ActionKind.RESUME: "lifecycle",
     decision_models.ActionKind.RETURN_FOR_CORRECTION: "review",
     decision_models.ActionKind.RETURN_PROPOSAL: "proposal",
@@ -60,7 +61,7 @@ DIAGRAM = Diagram(
     slug="product",
     title="Work items, attempts, and related facts",
     description=(
-        "A work item moves through a visible lifecycle while its execution attempt, accepted scope, mutation "
+        "A work item moves through a visible lifecycle while its execution attempt, accepted definition, mutation "
         "ownership, and evidence remain separate related facts."
     ),
     width=1200,

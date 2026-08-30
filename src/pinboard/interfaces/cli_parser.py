@@ -255,6 +255,12 @@ def _decode_command(route: cli_commands.CliRoute, values: RawCliValues) -> cli_c
             return msgspec.convert(values, type=cli_commands.OverviewCommand, strict=True)
         case cli_commands.CliRoute.ITEM_STATUS:
             return msgspec.convert(values, type=cli_commands.ItemStatusCommand, strict=True)
+        case cli_commands.CliRoute.ITEM_REVISE:
+            return msgspec.convert(values, type=cli_commands.ItemReviseCommand, strict=True)
+        case cli_commands.CliRoute.ITEM_DEFINITION:
+            return msgspec.convert(values, type=cli_commands.ItemDefinitionCommand, strict=True)
+        case cli_commands.CliRoute.ITEM_DEFINITION_HISTORY:
+            return msgspec.convert(values, type=cli_commands.ItemDefinitionHistoryCommand, strict=True)
         case cli_commands.CliRoute.CLOSE:
             return msgspec.convert(values, type=cli_commands.CloseCommand, strict=True)
         case cli_commands.CliRoute.ACTIONS:
@@ -389,6 +395,23 @@ def _add_item_parser(commands: argparse._SubParsersAction[argparse.ArgumentParse
     status.add_argument("--item-id", required=True)
     status.add_argument("--json", action="store_true")
     _select(status, cli_commands.CliRoute.ITEM_STATUS)
+    revise = operations.add_parser("revise", help="Replace one nonterminal item's complete accepted definition.")
+    revise.add_argument("--file", required=True, type=Path)
+    revise.add_argument("--task-id", required=True)
+    revise.add_argument("--host-id", required=True)
+    revise.add_argument("--ttl-seconds", type=int, default=60)
+    revise.add_argument("--json", action="store_true")
+    _select(revise, cli_commands.CliRoute.ITEM_REVISE)
+    definition = operations.add_parser("definition", help="Show one item's complete current accepted definition.")
+    definition.add_argument("--item-id", required=True)
+    definition.add_argument("--json", action="store_true")
+    _select(definition, cli_commands.CliRoute.ITEM_DEFINITION)
+    history = operations.add_parser("definition-history", help="Show newest-first immutable definition revisions.")
+    history.add_argument("--item-id", required=True)
+    history.add_argument("--limit", type=int, default=20)
+    history.add_argument("--before-revision", type=int)
+    history.add_argument("--json", action="store_true")
+    _select(history, cli_commands.CliRoute.ITEM_DEFINITION_HISTORY)
 
 
 def _add_parallel_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

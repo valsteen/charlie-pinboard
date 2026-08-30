@@ -60,10 +60,6 @@ def _dependency_order(value: stored_state.ItemDependency) -> tuple[str, int]:
     return str(value.item_id), value.position
 
 
-def _artifact_order(value: stored_state.ItemArtifactLink) -> tuple[str, str, int]:
-    return str(value.item_id), value.role.value, value.position
-
-
 def _proposal_evidence_order(value: stored_state.ProposalEvidence) -> tuple[str, int]:
     return str(value.proposal_id), value.position
 
@@ -103,56 +99,23 @@ def project_decision_snapshot(state: stored_state.StoredWorkState) -> LedgerSnap
         if (live_state := stored_state.live_work_state(item.state)) is not None
     )
     stored_items_by_id = {item.item_id: item for item in state.lifecycle.work_items}
-    dependency_groups: dict[ItemId, list[work_models.ScopeDependency]] = {item_id: [] for item_id in stored_items_by_id}
+    dependency_groups: dict[ItemId, list[ItemId]] = {item_id: [] for item_id in stored_items_by_id}
     for link in sorted(state.lifecycle.dependencies, key=_dependency_order):
-        dependency_groups[link.item_id].append(work_models.ScopeDependency(link.position, link.dependency_id))
+        dependency_groups[link.item_id].append(link.dependency_id)
     dependencies_by_item = {item_id: tuple(values) for item_id, values in dependency_groups.items()}
-    artifact_by_id = {artifact.artifact_ref_id: artifact for artifact in state.artifact_references}
-    artifact_groups: dict[ItemId, list[work_models.ScopeArtifact]] = {item_id: [] for item_id in stored_items_by_id}
-    for link in sorted(state.lifecycle.item_artifacts, key=_artifact_order):
-        artifact = artifact_by_id[link.artifact_ref_id]
-        artifact_groups[link.item_id].append(
-            work_models.ScopeArtifact(
-                link.role,
-                link.position,
-                artifact.kind.value,
-                artifact.key,
-                artifact.revision,
-                artifact.selector,
-                artifact.content_sha256,
-            )
-        )
-    artifacts_by_item = {item_id: tuple(values) for item_id, values in artifact_groups.items()}
-    scope_revisions_by_identity = {
-        (anchor.item_id, anchor.revision, anchor.digest): anchor for anchor in state.lifecycle.scope_revisions
-    }
-    scopes = tuple(
-        work_models.ScopeAnchor(
-            item.item_id,
-            anchor.revision,
-            anchor.digest,
-            work_models.ItemScope(
-                item.item_id,
-                item.user_label,
-                item.trigger,
-                item.why_it_matters,
-                item.effect,
-                item.unlock,
-                dependencies_by_item[item.item_id],
-                artifacts_by_item[item.item_id],
-            ),
-        )
-        for item in state.lifecycle.work_items
-        if stored_state.live_work_state(item.state) is not None
-        for anchor in (scope_revisions_by_identity.get((item.item_id, item.scope_revision, item.scope_digest)),)
-        if anchor is not None
+    latest_definitions: dict[ItemId, stored_state.ItemDefinitionRevision] = {}
+    for revision in state.lifecycle.definition_revisions:
+        latest_definitions[revision.item_id] = revision
+    definitions = tuple(
+        work_models.DefinitionAnchor(value.item_id, value.revision, value.digest, value.definition)
+        for value in latest_definitions.values()
     )
     work_items = tuple(
         work_models.WorkItem(
             item.item,
             item.state,
             item.timing,
-            tuple(link.dependency_id for link in dependencies_by_item[item.item]),
+            dependencies_by_item[item.item],
             item.attempt,
             item.source,
             item.next_action,
@@ -272,7 +235,7 @@ def project_decision_snapshot(state: stored_state.StoredWorkState) -> LedgerSnap
         history_items=tuple(
             item.item_id for item in state.lifecycle.work_items if stored_state.live_work_state(item.state) is None
         ),
-        scopes=scopes,
+        definitions=definitions,
         host_epoch=state.lifecycle.project.host_epoch,
         focus_item=state.focus.item_id,
         focus_attempt=state.focus.attempt_id,

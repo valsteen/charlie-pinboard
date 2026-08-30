@@ -73,13 +73,22 @@ def validate_transition_work_brief(
     item = next((candidate for candidate in state.lifecycle.work_items if str(candidate.item_id) == item_id), None)
     if item is None:
         return None
+    definition = next(
+        (value for value in reversed(state.lifecycle.definition_revisions) if value.item_id == item.item_id),
+        None,
+    )
+    if definition is None:
+        return DecisionFailure(
+            DecisionFailureCode.ITEM_DEFINITION_INVALID,
+            "The selected work item has no current definition.",
+        )
     expected = WorkBriefIdentity(
         attempt_id,
         item_id,
         branch,
         base_revision,
-        item.scope_revision,
-        item.scope_digest,
+        definition.revision,
+        definition.digest,
     )
     if identity != expected:
         return DecisionFailure(

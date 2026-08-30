@@ -248,6 +248,51 @@ def item_status(
     return 0
 
 
+def item_definition(
+    roots: cli_commands.ResolvedRoots,
+    command: cli_commands.ItemDefinitionCommand,
+) -> errors.CommandResult[int]:
+    value = queries.item_definition(SQLiteWorkStore(roots.work / "state.sqlite3"), command.item_id)
+    if isinstance(value, domain_errors.DecisionFailure):
+        return errors.CommandFailure(value.code, value.message)
+    if command.json:
+        write_json(value)
+    else:
+        print(
+            f"OK ITEM_DEFINITION item={value.item_id} definition_revision={value.definition_revision} "
+            f"definition_digest={value.definition_digest} project_revision={value.project_revision}"
+        )
+        print(f"title={value.definition.title}")
+    return 0
+
+
+def item_definition_history(
+    roots: cli_commands.ResolvedRoots,
+    command: cli_commands.ItemDefinitionHistoryCommand,
+) -> errors.CommandResult[int]:
+    value = queries.item_definition_history(
+        SQLiteWorkStore(roots.work / "state.sqlite3"),
+        command.item_id,
+        limit=command.limit,
+        before_revision=command.before_revision,
+    )
+    if isinstance(value, domain_errors.DecisionFailure):
+        return errors.CommandFailure(value.code, value.message)
+    if command.json:
+        write_json(value)
+    else:
+        print(
+            f"OK ITEM_DEFINITION_HISTORY item={value.item_id} revisions={len(value.revisions)} "
+            f"project_revision={value.project_revision}"
+        )
+        for revision in value.revisions:
+            print(
+                f"revision={revision.revision} digest={revision.digest} "
+                f"source_task={revision.source_task} timestamp={revision.timestamp}"
+            )
+    return 0
+
+
 def actions(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ActionsCommand | cli_commands.LeasedActionsCommand,

@@ -34,32 +34,6 @@ def action[SubjectT: SubjectId, ActionT](
     return constructor(decision_models.MutationActionCapability(subject, "test action", "rev", 1))
 
 
-def item_scope(
-    item_id: str,
-    user_label: str,
-    trigger: str | None,
-    why_it_matters: str | None,
-    effect: str | None,
-    unlock: str | None,
-    dependencies: tuple[work_models.ScopeDependency, ...] = (),
-    artifacts: tuple[work_models.ScopeArtifact, ...] = (),
-) -> work_models.ItemScope:
-    return work_models.ItemScope(
-        ItemId(item_id),
-        user_label,
-        trigger,
-        why_it_matters,
-        effect,
-        unlock,
-        dependencies,
-        artifacts,
-    )
-
-
-def scope_dependency(position: int, dependency_id: str) -> work_models.ScopeDependency:
-    return work_models.ScopeDependency(position, ItemId(dependency_id))
-
-
 def attempt_record(
     attempt: str,
     item: str,
@@ -76,10 +50,6 @@ def attempt_record(
         accepted_scope_digest,
         CandidateId(protected_candidate_revision) if protected_candidate_revision is not None else None,
     )
-
-
-def scope_anchor(item: str, revision: int, digest: str, scope: work_models.ItemScope) -> work_models.ScopeAnchor:
-    return work_models.ScopeAnchor(ItemId(item), revision, digest, scope)
 
 
 def proposal_record(proposal: str, revision: str) -> work_models.ProposalRecord:

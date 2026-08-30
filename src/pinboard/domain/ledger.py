@@ -17,7 +17,7 @@ class LedgerSnapshot:
     command_attempt_authorities: tuple[work_models.CommandAttemptAuthority, ...] = ()
     coordination_authority: work_models.CoordinationCommandAuthority | None = None
     history_items: tuple[ItemId, ...] = ()
-    scopes: tuple[work_models.ScopeAnchor, ...] = ()
+    definitions: tuple[work_models.DefinitionAnchor, ...] = ()
     host_epoch: int = 0
     focus_item: ItemId | None = None
     focus_attempt: AttemptId | None = None
@@ -32,6 +32,9 @@ class LedgerSnapshot:
 
     def item_for_attempt(self, attempt_id: AttemptId) -> work_models.WorkItem | None:
         return next((item for item in self.items if item.attempt == attempt_id), None)
+
+    def definition(self, item_id: ItemId) -> work_models.DefinitionAnchor | None:
+        return next((definition for definition in self.definitions if definition.item == item_id), None)
 
     def attempts_by_id(self) -> dict[AttemptId, work_models.AttemptRecord]:
         return {attempt.attempt: attempt for attempt in self.attempts}

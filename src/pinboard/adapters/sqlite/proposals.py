@@ -11,9 +11,9 @@ from typing import assert_never
 
 import msgspec
 
-from pinboard.adapters.sqlite.database import decode_row, require_one_changed_row, stale_write
+from pinboard.adapters.sqlite.database import decode_row, require_one_changed_row
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
-from pinboard.adapters.sqlite.lifecycle import item, make_queue_space, replace_dependencies
+from pinboard.adapters.sqlite.lifecycle import append_definition_revision, item, make_queue_space, replace_dependencies
 from pinboard.application import stored_state
 from pinboard.application.mutation_models import ProposalCreationMutation
 from pinboard.domain import decision_models, work_models
@@ -284,40 +284,36 @@ def accept_proposal(
 ) -> DecisionFailure | None:
     accepted = change.accepted_item
     current = item(state, accepted.item)
-    scope_revision = current.scope_revision
-    if current.scope_digest != accepted.scope_digest:
-        scope_revision += 1
-        connection.execute(
-            """
-            INSERT INTO item_scope_revisions (
-                item_id, scope_revision, scope_digest, accepted_project_revision, accepted_at
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
-            (accepted.item, scope_revision, accepted.scope_digest, revision, now.isoformat()),
+    if accepted.definition_digest_after != accepted.definition_digest_before:
+        append_definition_revision(
+            connection,
+            stored_state.ItemDefinitionRevision(
+                accepted.item,
+                accepted.definition_revision,
+                accepted.definition_digest_after,
+                accepted.definition,
+                "Accepted explicit proposal dependencies.",
+                accepted.definition_source_task,
+                accepted.definition_digest_before,
+                accepted.definition_digest_after,
+                revision,
+                now,
+            ),
         )
     if (
         failure := require_one_changed_row(
             connection.execute(
                 """
                 UPDATE work_items
-                SET user_label = ?, state = ?, timing = ?, source = ?, trigger = ?, why_it_matters = ?,
-                    effect = ?, unlock = ?, next_action = ?, notes = ?, scope_revision = ?, scope_digest = ?,
-                    subject_revision = ?, updated_at = ?
+                SET state = ?, timing = ?, source = ?, next_action = ?, notes = ?, subject_revision = ?, updated_at = ?
                 WHERE item_id = ? AND state = 'intake' AND subject_revision = ?
                 """,
                 (
-                    accepted.user_label,
                     accepted.state.value,
                     None if accepted.timing is None else accepted.timing.value,
                     accepted.source,
-                    accepted.trigger,
-                    accepted.why_it_matters,
-                    accepted.effect,
-                    accepted.unlock,
                     accepted.next_action,
                     accepted.notes,
-                    scope_revision,
-                    accepted.scope_digest,
                     revision,
                     now.isoformat(),
                     accepted.item,
@@ -385,74 +381,53 @@ def create_proposal(
     connection.execute(
         """
         INSERT INTO work_items (
-            item_id, user_label, state, timing, source, trigger, why_it_matters, effect, unlock,
-            outcome_evidence, next_action, notes, scope_revision, scope_digest, subject_revision,
+            item_id, state, timing, source, outcome_evidence, next_action, notes, subject_revision,
             recorded_at, updated_at, queue_position
-        ) VALUES (?, ?, 'intake', NULL, ?, ?, ?, ?, ?, NULL, ?, ?, 1, ?, ?, ?, ?, ?)
+        ) VALUES (?, 'intake', NULL, ?, NULL, ?, ?, ?, ?, ?, ?)
         """,
         (
             visible.item_id,
-            intake.user_label,
             f"proposal:{intake.proposal_id}",
-            intake.trigger,
-            intake.why_it_matters,
-            intake.effect,
-            intake.unlock,
             intake.unlock,
             intake.urgency_evidence,
-            visible.scope_digest,
             revision,
             now.isoformat(),
             now.isoformat(),
             visible.position,
         ),
     )
-    connection.execute(
-        """
-        INSERT INTO item_scope_revisions (
-            item_id, scope_revision, scope_digest, accepted_project_revision, accepted_at
-        ) VALUES (?, 1, ?, ?, ?)
-        """,
-        (visible.item_id, visible.scope_digest, revision, now.isoformat()),
+    append_definition_revision(
+        connection,
+        stored_state.ItemDefinitionRevision(
+            visible.item_id,
+            1,
+            visible.definition_digest,
+            visible.definition,
+            "Accepted proposal definition.",
+            intake.source_task_id,
+            None,
+            visible.definition_digest,
+            revision,
+            now,
+        ),
     )
     replace_dependencies(connection, visible.item_id, visible.dependencies)
     prerequisite = decision.prerequisite_change
     if prerequisite is None:
         return None
     target = item(state, prerequisite.item_id)
-    if target.scope_revision != prerequisite.scope_revision or target.scope_digest != prerequisite.scope_digest_before:
-        return stale_write("The prerequisite target scope is stale.")
-    next_scope_revision = target.scope_revision + 1
-    connection.execute(
-        """
-        INSERT INTO item_scope_revisions (
-            item_id, scope_revision, scope_digest, accepted_project_revision, accepted_at
-        ) VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            prerequisite.item_id,
-            next_scope_revision,
-            prerequisite.scope_digest_after,
-            revision,
-            now.isoformat(),
-        ),
-    )
     if (
         failure := require_one_changed_row(
             connection.execute(
                 """
                 UPDATE work_items
-                SET scope_revision = ?, scope_digest = ?, subject_revision = ?, updated_at = ?
-                WHERE item_id = ? AND scope_revision = ? AND scope_digest = ? AND subject_revision = ?
+                SET subject_revision = ?, updated_at = ?
+                WHERE item_id = ? AND subject_revision = ?
                 """,
                 (
-                    next_scope_revision,
-                    prerequisite.scope_digest_after,
                     revision,
                     now.isoformat(),
                     prerequisite.item_id,
-                    target.scope_revision,
-                    target.scope_digest,
                     target.subject_revision,
                 ),
             ),
@@ -463,5 +438,20 @@ def create_proposal(
     connection.execute(
         "INSERT INTO item_dependencies (item_id, dependency_id, position) VALUES (?, ?, ?)",
         (prerequisite.item_id, prerequisite.dependency_id, prerequisite.position),
+    )
+    append_definition_revision(
+        connection,
+        stored_state.ItemDefinitionRevision(
+            prerequisite.item_id,
+            prerequisite.definition_revision + 1,
+            prerequisite.definition_digest_after,
+            prerequisite.definition_after,
+            "Accepted prerequisite proposal dependency.",
+            intake.source_task_id,
+            prerequisite.definition_digest_before,
+            prerequisite.definition_digest_after,
+            revision,
+            now,
+        ),
     )
     return None

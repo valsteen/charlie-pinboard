@@ -1,6 +1,6 @@
 ---
 name: pinboard-deliver
-description: Deliver exactly one active pinboard attempt from its accepted brief and renewable lease. Use when the item, checkout, scope, acceptance criteria, and verification are already recorded. Do not use for intake, portfolio selection, broad audits, design exploration, or acceptance review.
+description: Deliver exactly one active pinboard attempt from its accepted brief, current definition identity, and renewable lease. Use when the item, checkout, definition, acceptance criteria, and verification are already recorded. Do not use for intake, portfolio selection, broad audits, design exploration, or acceptance review.
 ---
 
 # Deliver from the pinboard
@@ -12,10 +12,10 @@ Implement one accepted attempt, verify it, leave a durable result, and return it
 1. Resolve the pinboard executable relative to the installed plugin as `../../scripts/pinboard`.
 2. Run `pinboard status --json` and require authority `sqlite-v1`. Stop if validation fails or another authority is reported; never infer current state from generated views or archived files. Acquire or validate the user-supplied attempt lease, then run `pinboard actions --role worker` with its lease identity and fencing generation.
 3. Require the user-supplied attempt to be present and active. Other disjoint attempts may also be active. Stop if state is invalid, the supplied attempt is absent, its item and attempt records disagree, or another unexpired owner holds it. Report that owner and expiry instead of guessing or silently revoking it.
-4. Read the attempt's accepted canonical `.json` brief fully. Its generated Markdown view is inspection convenience, not an editable or parseable contract. Then read only the project guidance, item context, accepted knowledge, and source authorities the JSON record names. Before loading several or potentially large named authorities, create a temporary `pinboard-brief-sources/v1` manifest and run `pinboard brief-sources --file <manifest> --json` to measure the complete set. Read each emitted batch once in order. Preserve exact selectors and selected digests; reuse unchanged receipts and reread only changed owners. If output truncates, continue at the first unread batch or line without replaying returned content.
+4. Read the attempt's accepted canonical `.json` brief fully and read `pinboard item definition --item-id <item> --json`. Require the brief's accepted revision and digest to match that current definition before continuing. Its generated Markdown view is inspection convenience, not an editable or parseable contract. Then read only the project guidance, accepted definition, accepted knowledge, and source authorities the JSON record names. Before loading several or potentially large named authorities, create a temporary `pinboard-brief-sources/v1` manifest and run `pinboard brief-sources --file <manifest> --json` to measure the complete set. Read each emitted batch once in order. Preserve exact selectors and selected digests; reuse unchanged receipts and reread only changed owners. If output truncates, continue at the first unread batch or line without replaying returned content.
 5. Inspect the checkout, branch/worktree, base revision, and unrelated user changes before editing.
 
-Confirm the attempt identity, stable checkpoint ID, and execution environment without rewriting its semantics. The canonical JSON brief remains the sole source for scope, ordering, deferrals, and verification. Ask only when missing information would change product behavior, architecture, scope, compatibility, or verification expectations.
+Confirm the attempt identity, current definition revision and digest, stable checkpoint ID, and execution environment without rewriting its semantics. The canonical JSON brief remains the sole source for execution ordering, deferrals, and verification, while the matching immutable definition owns accepted item semantics. Ask only when missing information would change product behavior, architecture, scope, compatibility, or verification expectations.
 
 When reacquiring an attempt returned from review, read the durable correction reason and `review.md` before editing. Keep the same accepted brief, branch, evidence, and attempt identity. Treat the earlier `result.md` as preserved history, not a current readiness claim; refresh it only after the corrected candidate is stable and all required checks pass.
 
@@ -51,7 +51,7 @@ If a discovered problem blocks the attempt:
 3. write `blocker.md` in the active attempt directory with the observation, affected criterion, completed work, and safest next action;
 4. use `$pinboard-intake` to propose a prerequisite when explicitly requested;
 5. use the worker-visible `report-blocker:<attempt>` affordance to report that preserved evidence; it is advisory and has no mutation payload;
-6. leave shared lifecycle mutation to coordination, which must select the exact `block:<attempt>` action for an active attempt with named dependencies or `pause:<attempt>` when no dependency condition is recorded; `block-item:<item>` is only for unstarted intake work.
+6. leave shared lifecycle mutation to coordination, which must select the exact `block:<attempt>` action only for dependencies already accepted in the current definition or `pause:<attempt>` when no accepted dependency condition applies; a newly accepted dependency requires a complete item revision and revised-brief recovery, and `block-item:<item>` is only for unstarted intake work.
 
 ## Implement and verify
 

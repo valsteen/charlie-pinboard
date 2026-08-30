@@ -23,6 +23,9 @@ class CliRoute(Enum):
     STATUS = "status"
     OVERVIEW = "overview"
     ITEM_STATUS = "item-status"
+    ITEM_DEFINITION = "item-definition"
+    ITEM_DEFINITION_HISTORY = "item-definition-history"
+    ITEM_REVISE = "item-revise"
     CLOSE = "close"
     ACTIONS = "actions"
     INPUT_CONTRACT = "input-contract"
@@ -78,6 +81,26 @@ class OverviewCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
 
 class ItemStatusCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     item_id: StableItemId
+    json: bool = False
+
+
+class ItemReviseCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    file: Path
+    task_id: StableTaskId
+    host_id: StableHostId
+    ttl_seconds: int = 60
+    json: bool = False
+
+
+class ItemDefinitionCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    item_id: StableItemId
+    json: bool = False
+
+
+class ItemDefinitionHistoryCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    item_id: StableItemId
+    limit: int = 20
+    before_revision: int | None = None
     json: bool = False
 
 
@@ -335,6 +358,9 @@ type CliCommand = (
     | StatusCommand
     | OverviewCommand
     | ItemStatusCommand
+    | ItemReviseCommand
+    | ItemDefinitionCommand
+    | ItemDefinitionHistoryCommand
     | CloseCommand
     | ActionQueryCommand
     | InputContractCommand

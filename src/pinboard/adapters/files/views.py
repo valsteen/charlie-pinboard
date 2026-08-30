@@ -74,9 +74,16 @@ def _item(state: stored_state.StoredWorkState, item: stored_state.StoredWorkItem
         if overview_item is not None
         else ()
     )
+    definition = next(
+        (value for value in reversed(state.lifecycle.definition_revisions) if value.item_id == item.item_id),
+        None,
+    )
+    if definition is None:
+        raise ValueError(f"Work item '{item.item_id}' has no current definition.")
+    accepted = definition.definition
     return (
         _header("work-item-view", state.lifecycle.project.revision)
-        + f"# {item.user_label}\n\n"
+        + f"# {accepted.title}\n\n"
         + f"- Item: {item.item_id}\n"
         + f"- State: {item.state.value}\n"
         + f"- Queue position: {item.queue_position or 'none'}\n"
@@ -86,6 +93,17 @@ def _item(state: stored_state.StoredWorkState, item: stored_state.StoredWorkItem
         + f"- Dependency reasons: {'; '.join(dependency_reasons) if dependency_reasons else 'none'}\n"
         + f"- Review flags: {'; '.join(review_flags) if review_flags else 'none'}\n"
         + f"- Outcome evidence: {item.outcome_evidence or 'none'}\n"
+        + "\n## Accepted definition\n\n"
+        + f"- Revision: {definition.revision}\n"
+        + f"- Digest: {definition.digest}\n"
+        + f"- Objective: {accepted.objective}\n"
+        + f"- Hypothesis: {accepted.hypothesis}\n"
+        + f"- Evidence: {'; '.join(accepted.evidence) if accepted.evidence else 'none'}\n"
+        + f"- Scope: {'; '.join(accepted.scope)}\n"
+        + f"- Non-scope: {'; '.join(accepted.non_scope) if accepted.non_scope else 'none'}\n"
+        + f"- Acceptance criteria: {'; '.join(accepted.acceptance_criteria)}\n"
+        + f"- Effect: {accepted.effect}\n"
+        + f"- Unlock: {accepted.unlock}\n"
     ).encode()
 
 
@@ -121,6 +139,14 @@ def _history(state: stored_state.StoredWorkState) -> bytes:
         + "| History | Revision | Action | Subject | Committed |\n"
         + "| --- | --- | --- | --- | --- |\n"
         + "".join(_history_row(receipt) for receipt in state.transition_receipts)
+        + "\n## Definition History\n\n"
+        + "| Item | Revision | Digest | Reason | Source task | Accepted revision | Accepted at |\n"
+        + "| --- | --- | --- | --- | --- | --- | --- |\n"
+        + "".join(
+            f"| {value.item_id} | {value.revision} | {value.digest} | {value.reason} | "
+            f"{value.source_task_id} | {value.accepted_project_revision} | {value.accepted_at.isoformat()} |\n"
+            for value in state.lifecycle.definition_revisions
+        )
     ).encode()
 
 

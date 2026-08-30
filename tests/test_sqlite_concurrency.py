@@ -3,6 +3,7 @@ from __future__ import annotations
 import multiprocessing
 import tempfile
 import unittest
+from dataclasses import replace
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
 
@@ -21,7 +22,8 @@ from pinboard.domain.decisions import (
     decide,
 )
 from pinboard.domain.errors import DecisionFailure
-from pinboard.domain.identifiers import AttemptId, CandidateId, CheckpointId
+from pinboard.domain.history import work_item_definition_digest
+from pinboard.domain.identifiers import AttemptId, CandidateId, CheckpointId, ItemId, TaskId
 from tests.domain_support import expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
@@ -94,6 +96,51 @@ def _commit_same_checkpoint(
         EvidenceArtifactRef(review.key, review.revision, review.selector, review.content_sha256, review.size_bytes),
     )
     mutation = project_checkpoint_acceptance_mutation(before, decision, artifacts)
+    barrier.wait()
+    with store.write() as transaction:
+        result = transaction.commit(mutation)
+    results.put(result.code.value if isinstance(result, DecisionFailure) else "committed")
+
+
+def _commit_same_definition_revision(
+    database_path: str,
+    barrier: Barrier,
+    results: multiprocessing.queues.Queue[str],
+) -> None:
+    store = SQLiteWorkStore(Path(database_path))
+    before = store.snapshot()
+    snapshot = project_decision_snapshot(before)
+    actor = decision_models.ActorAuthority(
+        decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
+    )
+    actions = expect_success(available_actions(snapshot, actor))
+    action = next(
+        value
+        for value in actions
+        if value.kind == decision_models.ActionKind.REVISE_ITEM and value.capability.subject == ItemId("work-a")
+    )
+    current = next(value for value in before.lifecycle.definition_revisions if value.item_id == ItemId("work-a"))
+    revised = replace(
+        current.definition,
+        objective="Commit exactly one concurrent definition revision.",
+        dependencies=(ItemId("intake-work"),),
+    )
+    command = expect_success(
+        bind_transition(
+            action,
+            work_models.ReviseItemDefinitionInput(
+                ItemId("work-a"),
+                current.revision,
+                current.digest,
+                TaskId("concurrent-owner"),
+                "Exercise concurrent revision fencing.",
+                revised,
+            ),
+        )
+    )
+    decision = expect_success(decide(snapshot, command, SQLITE_NOW))
+    assert isinstance(decision, decision_models.TransitionDecision)
+    mutation = project_transition_mutation(before, decision)
     barrier.wait()
     with store.write() as transaction:
         result = transaction.commit(mutation)
@@ -183,6 +230,46 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         self.assertEqual(work_models.AttemptState.PAUSED, attempt.state)
         self.assertIsNotNone(attempt.result_artifact_ref_id)
         self.assertIsNotNone(reloaded.transition_receipts[-1].artifact_ref_id)
+
+    def test_concurrent_definition_revision_commits_one_history_and_dependency_replacement(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        store = SQLiteWorkStore(roots.database_path)
+        before = complete_sqlite_state()
+        store.initialize_state(before)
+
+        context = multiprocessing.get_context("spawn")
+        barrier = context.Barrier(2)
+        results = context.Queue()
+        workers = tuple(
+            context.Process(
+                target=_commit_same_definition_revision,
+                args=(str(roots.database_path), barrier, results),
+            )
+            for _ in range(2)
+        )
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=10)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(0, worker.exitcode)
+
+        self.assertCountEqual(("committed", "ACTION_NOT_AVAILABLE"), (results.get(), results.get()))
+        reloaded = store.snapshot()
+        revisions = tuple(
+            value for value in reloaded.lifecycle.definition_revisions if value.item_id == ItemId("work-a")
+        )
+        self.assertEqual((1, 2), tuple(value.revision for value in revisions))
+        self.assertEqual((ItemId("intake-work"),), revisions[-1].definition.dependencies)
+        self.assertEqual(work_item_definition_digest(revisions[-1].definition), revisions[-1].digest)
+        self.assertEqual(before.lifecycle.project.revision + 1, reloaded.lifecycle.project.revision)
+        self.assertEqual(len(before.transition_receipts) + 1, len(reloaded.transition_receipts))
+        self.assertEqual(
+            stored_state.TransitionHistoryActionKind.REVISE_ITEM,
+            reloaded.transition_receipts[-1].action_kind,
+        )
 
 
 if __name__ == "__main__":

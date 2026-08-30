@@ -2,7 +2,7 @@ import re
 
 from pinboard.domain import work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
-from pinboard.domain.history import item_scope_digest
+from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import ItemId
 from pinboard.domain.ledger import LedgerSnapshot
 from pinboard.domain.proposal_models import (
@@ -70,35 +70,40 @@ def decide_proposal_creation(  # noqa: C901
             f"Proposal position must be between 1 and {live_count + 1}.",
         )
     dependencies = (intake.relation.item,) if isinstance(intake.relation, work_models.FollowUpProposalRelation) else ()
-    scope = work_models.ItemScope(
-        item_id,
+    definition = work_models.WorkItemDefinition(
         intake.user_label,
-        intake.trigger,
+        intake.effect,
         intake.why_it_matters,
+        intake.evidence,
+        (intake.effect,),
+        (),
+        (intake.unlock,),
+        dependencies,
         intake.effect,
         intake.unlock,
-        tuple(work_models.ScopeDependency(index, dependency) for index, dependency in enumerate(dependencies)),
     )
-    digest = item_scope_digest(scope)
+    digest = work_item_definition_digest(definition)
     if isinstance(digest, DecisionFailure):
         return digest
     prerequisite_change: PrerequisiteDependencyChange | None = None
     if isinstance(intake.relation, work_models.PrerequisiteProposalRelation):
         target = snapshot.item(intake.relation.item)
-        anchor = next((value for value in snapshot.scopes if value.item == intake.relation.item), None)
+        anchor = snapshot.definition(intake.relation.item)
         if target is not None and anchor is not None:
-            dependency_position = len(anchor.scope.dependencies)
-            changed_scope = work_models.ItemScope(
-                anchor.scope.item_id,
-                anchor.scope.user_label,
-                anchor.scope.trigger,
-                anchor.scope.why_it_matters,
-                anchor.scope.effect,
-                anchor.scope.unlock,
-                (*anchor.scope.dependencies, work_models.ScopeDependency(dependency_position, item_id)),
-                anchor.scope.artifacts,
+            dependency_position = len(anchor.definition.dependencies)
+            changed_definition = work_models.WorkItemDefinition(
+                anchor.definition.title,
+                anchor.definition.objective,
+                anchor.definition.hypothesis,
+                anchor.definition.evidence,
+                anchor.definition.scope,
+                anchor.definition.non_scope,
+                anchor.definition.acceptance_criteria,
+                (*anchor.definition.dependencies, item_id),
+                anchor.definition.effect,
+                anchor.definition.unlock,
             )
-            changed_digest = item_scope_digest(changed_scope)
+            changed_digest = work_item_definition_digest(changed_definition)
             if isinstance(changed_digest, DecisionFailure):
                 return changed_digest
             prerequisite_change = PrerequisiteDependencyChange(
@@ -108,10 +113,11 @@ def decide_proposal_creation(  # noqa: C901
                 anchor.revision,
                 anchor.digest,
                 changed_digest,
+                changed_definition,
             )
     return ProposalCreationDecision(
         intake,
-        VisibleProposalItem(item_id, position, dependencies, digest),
+        VisibleProposalItem(item_id, position, dependencies, digest, definition),
         prerequisite_change,
         intake.evidence,
         intake.freshness_assumptions,
