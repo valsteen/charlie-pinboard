@@ -7,10 +7,10 @@ from pinboard.domain.identifiers import ItemId
 from pinboard.domain.ledger import LedgerSnapshot
 from pinboard.domain.proposal_models import (
     CreateProposalOperation,
+    IntakeWorkItem,
     LocalIntakeAuthority,
     PrerequisiteDependencyChange,
     ProposalCreationDecision,
-    VisibleProposalItem,
 )
 
 _PROPOSAL_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -117,7 +117,7 @@ def decide_proposal_creation(  # noqa: C901
             )
     return ProposalCreationDecision(
         intake,
-        VisibleProposalItem(item_id, position, dependencies, digest, definition),
+        IntakeWorkItem(item_id, position, dependencies, digest, definition),
         prerequisite_change,
         intake.evidence,
         intake.freshness_assumptions,

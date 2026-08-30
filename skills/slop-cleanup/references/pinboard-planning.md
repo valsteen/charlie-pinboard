@@ -5,7 +5,7 @@ Read this reference only when the user chooses Pinboard for cleanup planning or 
 ## Anchor in current Pinboard state
 
 1. Use `$pinboard` to inspect the live work overview and the exact related items or requirements. Treat current Pinboard state as authoritative over branches, old plans, transcript memory, or topic notes.
-2. Reuse an existing exact cleanup item when it already owns the finding. Otherwise create one cleanup objective through the normal Pinboard workflow and preserve the accepted user dispositions there.
+2. Reuse an existing exact cleanup item when it already owns the cleanup candidate. Otherwise create one cleanup objective through the normal Pinboard workflow and preserve the accepted user dispositions there.
 3. Do not widen an active attempt with cleanup unless its canonical brief already covers that cleanup. Record a discovered prerequisite or materially different product decision through the normal intake and coordination path.
 4. Never edit generated Pinboard views or lifecycle state directly. Let `$pinboard` select and apply the legal coordination action.
 
@@ -24,9 +24,9 @@ Make the canonical brief name:
 - provenance evidence and unresolved user choices;
 - the first candidate families without treating that inventory as exhaustive;
 - the rule that direct dependents exposed by approved deletion remain in scope;
-- the condition that a materially different feature becomes a separate finding;
+- the condition that a materially different feature becomes a separate concern;
 - persistence, compatibility, packaging, migration, and recoverability boundaries;
-- exact checks for surviving behavior and the fresh no-new-findings pass.
+- exact checks for surviving behavior and the fresh no-new-candidates pass.
 
 Use checkpoints in this semantic order when they are independently reviewable:
 
@@ -40,7 +40,7 @@ The sequence is a planning aid, not a fixed number of implementation checkpoints
 
 ## Coordinate discoveries and delivery
 
-Keep direct orphan chains inside the accepted cleanup item. When recursion reaches an ambiguous feature, supported persisted data, an external compatibility promise, or a distinct product decision, preserve that exact finding and stop that branch until the user decides.
+Keep direct orphan chains inside the accepted cleanup item. When recursion reaches an ambiguous feature, supported persisted data, an external compatibility promise, or a distinct product decision, preserve that exact concern and stop that branch until the user decides.
 
 Once a checkpoint has an accepted brief, use `$pinboard-deliver` for its bounded implementation rather than restating the cleanup semantics in a launch prompt. Review the frozen candidate against the brief, including every retained exception and the fixed-point evidence, before accepting it.
 

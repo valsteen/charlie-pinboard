@@ -55,7 +55,7 @@ Only distribution version lookup and command composition live at the package roo
 | `work_models.py`, `ledger.py`, `identifiers.py`, `errors.py` | Work-ledger values, read-only snapshot behavior, opaque identifiers, and expected decision failures |
 | `decision_models.py`, `decisions.py` | Closed item and attempt commands, explicit lifecycle-change variants, and lifecycle, focus, dependency, requirement, and review legality |
 | `authority_models.py`, `authority_decisions.py` | Closed authority operations plus coordination and attempt authority lifecycle and fencing |
-| `proposal_models.py`, `proposal_decisions.py` | Closed proposal intake values, visible queue placement, and relation-derived dependency decisions |
+| `proposal_models.py`, `proposal_decisions.py` | Closed proposal intake values, intake queue placement, and relation-derived dependency decisions |
 | `history.py`, `definition_decisions.py` | Canonical work-item definition records and digests, immutable revision legality, dependency replacement and cycle decisions, and receipt relationships |
 
 Expected rejections return typed failure values. Domain and stale-persistence paths use `DecisionFailure`; application-owned queries and dispatch selection use their own closed failures where the installed interface must preserve a more specific public error. The interface returns closed command, proposal, and dispatch failures through one CLI presenter. Low-level decoders may raise while values are still external representations, but an installed use case converts its exact advertised invalid-input outcomes into its typed result. Infrastructure failures, malformed persisted relationships, and programming-contract failures remain typed exceptions.

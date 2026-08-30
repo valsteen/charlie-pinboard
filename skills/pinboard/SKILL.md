@@ -52,7 +52,7 @@ This proportional behavior applies to mutation as well as status. After a succes
 - Let `state.sqlite3` own lifecycle, focus, dependencies, attempts, leases, proposals, history, and accepted artifact references.
 - Let `views/` remain generated human-readable output. Never edit it as authority.
 - Let accepted brief and evidence artifacts own execution semantics and review receipts; resolve them through their SQLite artifact references.
-- Let immutable proposal rows preserve discovery facts while their same-identity work items own visible intake state and queue position.
+- Let immutable proposal rows preserve proposal facts while their same-identity intake items own queue state and position.
 - Let public project documentation own stable architecture and domain truth.
 
 One current coordination lease may authorize graph-wide transitions. Disjoint attempt leases may authorize item-local work concurrently. Expiry, release, revocation, and higher fencing generations invalidate retained actions.
@@ -151,7 +151,7 @@ For an explicit terminal human decision about non-active live work, use one `pin
 
 Process newly delivered intake only after the current review, transition, commit, or other atomic repository action ends. Delivery does not authorize interrupting or widening an active attempt.
 
-Intake persists immutable proposal facts and a same-identity visible work item. It appends at the back by default or uses an explicitly requested one-based position, and relation semantics may add a dependency or review flag. It does not mark the candidate ready, create or activate an attempt, pause current work, change focus, or complete anything. When intake is embedded in ongoing coordination, keep a compact continuation anchor in the current task context before invoking it:
+Intake persists immutable proposal facts and a same-identity intake item. It appends at the back by default or uses an explicitly requested one-based position, and relation semantics may add a dependency or review flag. It does not mark the item ready, create or activate an attempt, pause current work, change focus, or complete anything. When intake is embedded in ongoing coordination, keep a compact continuation anchor in the current task context before invoking it:
 
 - the pre-intake objective;
 - the next action already promised;
@@ -161,9 +161,9 @@ After persistence and optional notification handling, return to that anchor in t
 
 Deliberate steering is distinct from intake. Insert a genuine prerequisite only at a safe boundary, pause or block the displaced objective through its legal transition, and name the ordinary `resume:<item>` action that restores it. Recovery is for interrupted or inconsistent state, not the normal route back to preserved work.
 
-### Reconcile material findings before reporting them
+### Reconcile material concerns before reporting them
 
-Before presenting a discovered out-of-scope finding as planned, preserved, covered, queued, deferred, or future work, determine the disposition of that exact finding. A broader item with a compatible theme is not exact coverage.
+Before presenting a discovered out-of-scope concern as planned, preserved, covered, queued, deferred, or future work, determine the disposition of that exact concern. A broader item with a compatible theme is not exact coverage.
 
 Use one of these durable dispositions:
 
@@ -171,18 +171,18 @@ Use one of these durable dispositions:
 - `recorded now`: the exact observation was absent and this turn added it to its authoritative item context or created an intake proposal;
 - `not recorded`: no exact durable owner exists, persistence was not authorized, or persistence failed.
 
-When the finding belongs to an existing admitted item but its accepted semantics are incomplete, read the current definition and use `pinboard item revise` with one complete replacement, exact expected identity, source task, and reason. A retained attempt then remains pinned and stale; use its legal pause or review-correction path, publish a matching revised canonical brief, and resume before continuation. When no admitted item owns the finding, use `$pinboard-intake` if the user has explicitly authorized preservation.
+When the concern belongs to an existing admitted item but its accepted semantics are incomplete, read the current definition and use `pinboard item revise` with one complete replacement, exact expected identity, source task, and reason. A retained attempt then remains pinned and stale; use its legal pause or review-correction path, publish a matching revised canonical brief, and resume before continuation. When no admitted item owns the concern, use `$pinboard-intake` if the user has explicitly authorized preservation.
 
 Keep current work as the main topic and lead the receipt with its practical outcome, not the internal disposition name:
 
-- For `already recorded`, say `Saved for later — <finding> is already in <exact owner and state>; current work <continues | is blocked by it>.` For `recorded now`, say `Saved for later — <finding> is now in <exact owner and state>; current work <continues | is blocked by it>.`
-- For an explicit dismissal, say `Finding dismissed — <finding> was not saved at your request; no follow-up remains.`
-- For completed work, say `Completed — <result>; no follow-up needed.` Do not introduce completed or dismissed work as a durable finding or saved follow-up.
+- For `already recorded`, say `Saved for later — <concern> is already in <exact owner and state>; current work <continues | is blocked by it>.` For `recorded now`, say `Saved for later — <concern> is now in <exact owner and state>; current work <continues | is blocked by it>.`
+- For an explicit dismissal, say `Not saved — <concern> was dismissed at your request; no follow-up remains.`
+- For completed work, say `Completed — <result>; no follow-up needed.` Do not introduce completed or dismissed work as a durable concern or saved follow-up.
 
-A material `not recorded` disposition is unresolved and must not end as a bare receipt. State the finding, exact cause, durable state, current-work impact, and next action owner. Then produce exactly one resolution:
+A material `not recorded` disposition is unresolved and must not end as a bare receipt. State the concern, exact cause, durable state, current-work impact, and next action owner. Then produce exactly one resolution:
 
-- If preservation lacks authorization, ask one concrete preserve-or-dismiss question: `Finding needs a decision — <finding> is not saved because <cause>. Current work <impact>. Should I preserve it for later or dismiss it?`
-- If a safe retry needs no new authority, announce it as expected concurrency and retry before the terminal response: `Persistence delayed — <finding> is not yet saved because <cause>. Current work <impact>. I am retrying now; no action needed.`
+- If preservation lacks authorization, ask one concrete preserve-or-dismiss question: `This needs a decision — <concern> is not saved because <cause>. Current work <impact>. Should I preserve it for later or dismiss it?`
+- If a safe retry needs no new authority, announce it as expected concurrency and retry before the terminal response: `Persistence delayed — <concern> is not yet saved because <cause>. Current work <impact>. I am retrying now; no action needed.`
 - If retry needs new authority, changes scope, or overrides another owner, ask one concrete approval question that names the action and consequence.
 - If persistence still fails after the permitted retry, report the same four facts and ask the one decision that can actually resolve it. Never leave `not recorded` as a terminal aside.
 
@@ -202,7 +202,7 @@ Never absorb the prerequisite silently into the current attempt.
 
 ## Review and completion
 
-Treat worker completion as a review request, not acceptance. Compare the attempt brief, diff or commit, result receipt, and fresh proportionate verification. Check the architecture declaration against the final owner and dependency-direction diff: `none` must be truthful, `read-only` must conform to its named authority, and `update-required` must include a coherent same-candidate authority change. For a reviewed cross-boundary brief, reuse its compiled authority map and account for every acceptance criterion, Contract row and authorization basis, coverage row, and lifecycle sibling row. Every blocking finding must cite an accepted Contract row, criterion, reviewed authority, or applicable repository rule. Classify it as an implementation defect, brief omission, authority contradiction, product decision, or new capability. A correction review may reuse exact unchanged selector digests and owners, but it must re-read changed owners and sweep every changed or neighboring row before returning one complete correction package. Complete the item only when every acceptance criterion is satisfied and current knowledge owners are reconciled.
+Treat worker completion as a review request, not acceptance. Compare the attempt brief, diff or commit, result receipt, and fresh proportionate verification. Check the architecture declaration against the final owner and dependency-direction diff: `none` must be truthful, `read-only` must conform to its named authority, and `update-required` must include a coherent same-candidate authority change. For a reviewed cross-boundary brief, reuse its compiled authority map and account for every acceptance criterion, Contract row and authorization basis, coverage row, and lifecycle sibling row. Every piece of blocking review feedback must cite an accepted Contract row, criterion, reviewed authority, or applicable repository rule. Classify it as an implementation defect, brief omission, authority contradiction, product decision, or new capability. A correction review may reuse exact unchanged selector digests and owners, but it must re-read changed owners and sweep every changed or neighboring row before returning one complete correction package. Complete the item only when every acceptance criterion is satisfied and current knowledge owners are reconciled.
 
 After a repository candidate is accepted, keep its code acceptance, Pinboard state, commit state, branch integration, remote publication, and deliberate deferral distinct. Before asking the human to wrap up, refresh only the decision-relevant facts: review outcome; dirty or committed state; current branch and checkout or worktree; intended target; known filename overlap or conflict risk; and remote delivery status when it affects the choice. State observations, uncertainty, and limitations. A separate worktree avoids competing writes in one checkout but does not make later integration conflict-free.
 
@@ -212,7 +212,7 @@ After the selected administrative action, refresh the same bounded repository fa
 
 For an accepted intermediate checkpoint, use the checkpoint acceptance path above. Its paused item and attempt remain nonterminal, checkpoint evidence remains immutable under the same attempt, and terminal item history remains absent until a later full-outcome completion. For an accepted intermediate review inside an unfinished checkpoint, use `accept-review-and-continue:<attempt>` instead; it records the passing review without accepting the checkpoint and leaves the fenced attempt ready to continue after a worker reacquires it.
 
-Use `return-for-correction:<attempt>` only for an implementation defect against an accepted owner. For a brief omission, authority contradiction, unresolved product decision, or new capability, preserve the review evidence and stop before any lifecycle transition until the existing upstream owner resolves it; do not turn the finding into implementation scope or invent a state, transition, or alternate acceptance path. For an implementation defect, record the exact correction reason instead of completing the item, manufacturing a new attempt, or editing lifecycle files. Report the outcome compactly: `Returned for correction — <reason>; the same attempt and review evidence are preserved and ready for a named worker to reacquire. No acceptance occurred.` If the executable does not offer that action for an implementation defect in review, preserve the review evidence and report the workflow blocker; do not bypass the missing transition.
+Use `return-for-correction:<attempt>` only for an implementation defect against an accepted owner. For a brief omission, authority contradiction, unresolved product decision, or new capability, preserve the review evidence and stop before any lifecycle transition until the existing upstream owner resolves it; do not turn the review feedback into implementation scope or invent a state, transition, or alternate acceptance path. For an implementation defect, record the exact correction reason instead of completing the item, manufacturing a new attempt, or editing lifecycle files. Report the outcome compactly: `Returned for correction — <reason>; the same attempt and review evidence are preserved and ready for a named worker to reacquire. No acceptance occurred.` If the executable does not offer that action for an implementation defect in review, preserve the review evidence and report the workflow blocker; do not bypass the missing transition.
 
 Move terminal scheduling state out of the live queue in the same transition that preserves its history receipt. Do not manufacture follow-up work when the honest result is no follow-up.
 

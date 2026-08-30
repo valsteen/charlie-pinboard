@@ -78,7 +78,7 @@ def _guide(source_revision: str) -> str:
 
 Pinboard keeps repository work coherent across tasks and interruptions. It preserves what the project decided, which execution is acting on it, who may change it now, and what evidence another task can trust later.
 
-The four views move from the visible workflow to package responsibilities, then follow one change and show the durable relationships underneath.
+The four views move from the work-item lifecycle to package responsibilities, then follow one change and show the durable relationships underneath.
 
 ## What moves
 

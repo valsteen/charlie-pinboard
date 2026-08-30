@@ -727,7 +727,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(prior_attempt.generation + 1, current_attempt.generation)
         self.assertEqual(AttemptLeaseStatus.REVOKED, current_attempt.state)
 
-    def test_sqlite_proposal_intake_is_visible_at_the_back_without_changing_current_work(self) -> None:
+    def test_sqlite_proposal_intake_is_placed_at_the_back_without_changing_current_work(self) -> None:
         state = complete_sqlite_state()
         state = replace(
             state,
@@ -744,7 +744,7 @@ class ServiceTest(unittest.TestCase):
             TaskId("discovering-task"),
             "SQLite proposal",
             "A local observation needs coordination.",
-            "The finding should be preserved immutably.",
+            "The proposal should be preserved immutably.",
             "A proposal row becomes available for disposition.",
             "The coordinator can inspect it later.",
             work_models.IndependentProposalRelation(),
@@ -766,10 +766,10 @@ class ServiceTest(unittest.TestCase):
         )
         self.assertEqual(("source:local",), tuple(value.selector for value in after.proposals.evidence))
         proposal = after.proposals.proposals[0]
-        visible = next(value for value in after.lifecycle.work_items if value.item_id == ItemId("sqlite-proposal"))
-        self.assertEqual(stored_state.StoredWorkItemState.INTAKE, visible.state)
-        self.assertEqual(5, visible.queue_position)
-        self.assertEqual("proposal:sqlite-proposal", visible.source)
+        intake_item = next(value for value in after.lifecycle.work_items if value.item_id == ItemId("sqlite-proposal"))
+        self.assertEqual(stored_state.StoredWorkItemState.INTAKE, intake_item.state)
+        self.assertEqual(5, intake_item.queue_position)
+        self.assertEqual("proposal:sqlite-proposal", intake_item.source)
         self.assertEqual(before.focus, after.focus)
         self.assertEqual(before.lifecycle.attempts, after.lifecycle.attempts)
         self.assertEqual(created_at, proposal.created_at)
@@ -788,7 +788,7 @@ class ServiceTest(unittest.TestCase):
             TaskId("discovering-task"),
             "Required first",
             "Work C needs one newly discovered prerequisite.",
-            "The dependency must be visible before scheduling.",
+            "The dependency must be in intake before scheduling.",
             "Record the prerequisite candidate and relationship.",
             "A coordinator can evaluate it in queue order.",
             work_models.PrerequisiteProposalRelation(ItemId("work-c")),

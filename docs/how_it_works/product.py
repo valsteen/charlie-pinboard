@@ -3,7 +3,7 @@ from pinboard.domain import decision_models, work_models
 from .model import Box, Connector, Diagram, Guide, Section
 
 WORK_STATE_ROLES: dict[work_models.WorkState, str] = {
-    work_models.WorkState.INTAKE: "visible discovery",
+    work_models.WorkState.INTAKE: "unstarted work awaiting a decision",
     work_models.WorkState.READY: "accepted and schedulable",
     work_models.WorkState.ACTIVE: "currently being attempted",
     work_models.WorkState.PAUSED: "preserved interruption",
@@ -61,7 +61,7 @@ DIAGRAM = Diagram(
     slug="product",
     title="Work items, attempts, and related facts",
     description=(
-        "A work item moves through a visible lifecycle while its execution attempt, accepted definition, mutation "
+        "A work item moves through its work-item lifecycle while its execution attempt, accepted definition, mutation "
         "ownership, and evidence remain separate related facts."
     ),
     width=1200,
@@ -78,8 +78,8 @@ DIAGRAM = Diagram(
         Guide((300, 746), (1172, 746)),
     ),
     connectors=(
-        Connector(((220, 125), (260, 125)), "intake", "ready"),
-        Connector(((410, 125), (480, 125)), "ready", "active"),
+        Connector(((250, 125), (270, 125)), "intake", "ready"),
+        Connector(((420, 125), (480, 125)), "ready", "active"),
         Connector(((650, 125), (740, 125)), "active", "review"),
         Connector(((940, 125), (980, 125)), "review", "terminal"),
         Connector(((130, 170), (130, 250)), "intake", "deferred", "defer", (158, 216)),
@@ -97,8 +97,8 @@ DIAGRAM = Diagram(
         Connector(((860, 515), (970, 515)), "attempt-review", "attempt-done", "complete", (915, 503)),
     ),
     boxes=(
-        Box("intake", "Intake", "Visible finding", (), ("WorkState.INTAKE",), 60, 80, 160, 90),
-        Box("ready", "Ready", "Accepted work", (), ("WorkState.READY",), 260, 80, 150, 90),
+        Box("intake", "Intake", "Awaiting a decision", (), ("WorkState.INTAKE",), 60, 80, 190, 90),
+        Box("ready", "Ready", "Accepted work", (), ("WorkState.READY",), 270, 80, 150, 90),
         Box("active", "Active", "Attempt underway", (), ("WorkState.ACTIVE",), 480, 80, 170, 90),
         Box("review", "Review", "Exact candidate held", (), ("return · accept + continue",), 740, 80, 200, 90),
         Box(

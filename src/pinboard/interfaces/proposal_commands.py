@@ -89,8 +89,11 @@ def create_proposal(
     view_result = work_views.refresh(roots, store, file_models.AffectedViews(queue=True, history=True))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
-    visible = next(
+    intake_item = next(
         value for value in store.snapshot().lifecycle.work_items if str(value.item_id) == proposal.proposal_id
     )
-    print(f"OK PROPOSAL_CREATED {proposal.proposal_id} position={visible.queue_position} state={visible.state.value}")
+    print(
+        f"OK PROPOSAL_CREATED {proposal.proposal_id} "
+        f"position={intake_item.queue_position} state={intake_item.state.value}"
+    )
     return 0

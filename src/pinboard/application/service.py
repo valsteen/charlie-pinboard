@@ -239,7 +239,7 @@ def create_proposal(
     operation: CreateProposalOperation,
     now: datetime,
 ) -> DecisionResult[decision_models.TransitionReceipt]:
-    """Persist immutable proposal facts and their visible intake item from one locked snapshot."""
+    """Persist immutable proposal facts and their intake item from one locked snapshot."""
 
     with store.write() as transaction:
         before = transaction.snapshot()

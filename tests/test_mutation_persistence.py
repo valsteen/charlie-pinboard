@@ -535,9 +535,9 @@ class MutationPersistenceTest(unittest.TestCase):
             ),
             (
                 decision_models.ActionKind.REJECT_PROPOSAL,
-                work_models.ReasonInput("The finding is obsolete."),
+                work_models.ReasonInput("The proposal is obsolete."),
                 work_models.RejectedProposalDisposition(
-                    "The finding is obsolete.",
+                    "The proposal is obsolete.",
                     SQLITE_NOW + timedelta(seconds=1),
                 ),
             ),
@@ -675,12 +675,12 @@ class MutationPersistenceTest(unittest.TestCase):
             ),
             (
                 decision_models.ActionKind.REJECT_PROPOSAL,
-                work_models.ReasonInput("The finding is obsolete."),
+                work_models.ReasonInput("The proposal is obsolete."),
                 ignore_item_update,
             ),
             (
                 decision_models.ActionKind.REJECT_PROPOSAL,
-                work_models.ReasonInput("The finding is obsolete."),
+                work_models.ReasonInput("The proposal is obsolete."),
                 stale_proposal_after_item,
             ),
         )

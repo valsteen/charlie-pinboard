@@ -493,7 +493,7 @@ def build_parser() -> argparse.ArgumentParser:
     initialize = commands.add_parser("init", help="Create an empty current SQLite work state.")
     _select(initialize, cli_commands.CliRoute.INITIALIZE)
     _add_brief_parser(commands)
-    proposal = commands.add_parser("proposal", help="Create one visible intake candidate without activating it.")
+    proposal = commands.add_parser("proposal", help="Create one intake item without activating it.")
     proposal.add_argument("--file", type=Path, required=True)
     _select(proposal, cli_commands.CliRoute.PROPOSAL)
     transition = commands.add_parser("transition", help="Apply one action returned by the actions command.")

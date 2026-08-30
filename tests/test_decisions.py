@@ -310,6 +310,13 @@ class LifecycleDecisionTest(unittest.TestCase):
                     ),
                 )
 
+        proposal_semantics = decision_models.action_semantics(decision_models.ActionKind.ACCEPT_PROPOSAL)
+        self.assertEqual(
+            decision_models.ActionLifecyclePrecondition.INTAKE_PROPOSAL,
+            proposal_semantics.lifecycle_precondition,
+        )
+        self.assertEqual("intake-proposal", proposal_semantics.lifecycle_precondition.value)
+
         rejected = bind_transition_outcome(
             selected[decision_models.ActionKind.REPORT_BLOCKER], work_models.EmptyInput()
         )
@@ -705,6 +712,59 @@ class LifecycleDecisionTest(unittest.TestCase):
                     rejected = decision_outcome(snapshot, bound, NOW)
                     self.assertIsInstance(rejected, DecisionFailure)
                 self.assertEqual(DecisionFailureCode(code), rejected.code)
+
+    def test_proposal_rejections_use_intake_vocabulary(self) -> None:
+        proposal = ProposalRecord("proposal", "p1")
+        missing_item = LedgerSnapshot("r", 1, (), proposals=(proposal,))
+        cases: tuple[tuple[decision_models.Action, work_models.TransitionInput, str], ...] = (
+            (
+                action(decision_models.AcceptProposalAction, ProposalId("proposal")),
+                AcceptProposalInput(
+                    item="proposal",
+                    state=work_models.AcceptedProposalState.READY,
+                    next_action="start",
+                ),
+                "Only a current intake proposal can be accepted.",
+            ),
+            (
+                action(decision_models.MergeProposalAction, ProposalId("proposal")),
+                work_models.MergeProposalInput(ItemId("target")),
+                "Only a current intake proposal can be merged.",
+            ),
+            (
+                action(decision_models.RejectProposalAction, ProposalId("proposal")),
+                work_models.ReasonInput("obsolete"),
+                "Only a current intake proposal can be returned or rejected.",
+            ),
+        )
+        for selected_action, value, message in cases:
+            with self.subTest(kind=selected_action.kind.value):
+                rejected = decision_outcome(missing_item, bind_transition(selected_action, value), NOW)
+                self.assertIsInstance(rejected, DecisionFailure)
+                assert isinstance(rejected, DecisionFailure)
+                self.assertEqual(message, rejected.message)
+
+        mismatched_identity = LedgerSnapshot(
+            "r",
+            1,
+            (item("proposal", work_models.WorkState.INTAKE),),
+            proposals=(proposal,),
+        )
+        rejected = decision_outcome(
+            mismatched_identity,
+            bind_transition(
+                action(decision_models.AcceptProposalAction, ProposalId("proposal")),
+                AcceptProposalInput(
+                    item="other-item",
+                    state=work_models.AcceptedProposalState.READY,
+                    next_action="start",
+                ),
+            ),
+            NOW,
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+        assert isinstance(rejected, DecisionFailure)
+        self.assertEqual("An intake proposal must be accepted with its same work-item identity.", rejected.message)
 
 
 if __name__ == "__main__":

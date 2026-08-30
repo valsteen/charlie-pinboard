@@ -287,6 +287,7 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         )
 
         product_boxes = {value.key: value for value in product.DIAGRAM.boxes}
+        self.assertEqual("Awaiting a decision", product_boxes["intake"].title)
         self.assertEqual(("return · accept + continue",), product_boxes["review"].meta)
         self.assertEqual(("accept + continue → active",), product_boxes["attempt-review"].details)
 

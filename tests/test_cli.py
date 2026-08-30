@@ -961,6 +961,10 @@ class CliTest(unittest.TestCase):
 
         status = self.run_json_cli(*common, "status")
         self.assertEqual("sqlite-v1", status["authority"])
+        self.assertEqual(2, status["intake_item_count"])
+        status_result, status_stdout, status_stderr = self.run_cli(*common, "status")
+        self.assertEqual(0, status_result, status_stderr)
+        self.assertIn("intake_items=2", status_stdout)
         overview = self.run_json_cli(*common, "overview")
         self.assertEqual("12", overview["revision"])
         actions = self.json_list(
@@ -2348,7 +2352,7 @@ Not launchable:
                     "evidence": ["source:cli"],
                     "why_it_matters": "A filesystem writer cannot persist to SQLite authority.",
                     "relation": {"kind": "follow-up", "item": "work-c"},
-                    "effect": "The proposal appears once as visible intake.",
+                    "effect": "The proposal appears once as an intake item.",
                     "unlock": "Use the application proposal service.",
                     "urgency_evidence": "The installed command must remain current.",
                     "freshness_assumptions": ["SQLite remains authoritative."],
@@ -2366,13 +2370,18 @@ Not launchable:
         self.assertIn("OK PROPOSAL_CREATED cli-sqlite-proposal", stdout)
         after = store.snapshot()
         self.assertEqual(before_revision + 1, after.lifecycle.project.revision)
-        visible = next(value for value in after.lifecycle.work_items if str(value.item_id) == "cli-sqlite-proposal")
-        self.assertEqual((stored_state.StoredWorkItemState.INTAKE, 5), (visible.state, visible.queue_position))
+        intake_item = next(value for value in after.lifecycle.work_items if str(value.item_id) == "cli-sqlite-proposal")
+        self.assertEqual(
+            (stored_state.StoredWorkItemState.INTAKE, 5),
+            (intake_item.state, intake_item.queue_position),
+        )
         self.assertEqual(("work-a", "work-a-1"), (str(after.focus.item_id), str(after.focus.attempt_id)))
         self.assertEqual(
             ("work-c",),
             tuple(
-                str(value.dependency_id) for value in after.lifecycle.dependencies if value.item_id == visible.item_id
+                str(value.dependency_id)
+                for value in after.lifecycle.dependencies
+                if value.item_id == intake_item.item_id
             ),
         )
         self.assertEqual(13, duplicate_result)
