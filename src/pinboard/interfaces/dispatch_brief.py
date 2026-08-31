@@ -142,7 +142,7 @@ def _canonical_prompt(
 ) -> str:
     permissions = ", ".join(sorted(permission.value for permission in environment.permissions)) or "none"
     return (
-        "Use $deliver for this repository attempt.\n\n"
+        "Use $pinboard-deliver for this repository attempt.\n\n"
         f"Attempt: {attempt_id}\n"
         f"Checkpoint: {checkpoint_id}\n"
         f"Canonical brief: {attempt_path}\n\n"

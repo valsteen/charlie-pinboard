@@ -164,6 +164,8 @@ class DispatchTest(unittest.TestCase):
             )
         )
 
+        self.assertTrue(prompt.startswith("Use $pinboard-deliver for this repository attempt.\n"))
+        self.assertNotIn("$deliver", prompt)
         self.assertIn(f"Checkpoint: {CHECKPOINT_ID}", prompt)
         self.assertIn(f"Canonical brief: {path}", prompt)
         altered_prompt = expect_dispatch_failure(
