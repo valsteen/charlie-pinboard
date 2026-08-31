@@ -2,9 +2,15 @@
 
 Use this procedure only for a typed `cross-boundary` checkpoint. It projects named architecture, plans, and accepted evidence into a reviewable execution contract before implementation. A `local` checkpoint does not add contracts, reviewed-authority coverage, lifecycle declarations, or an independent brief review.
 
-## Plan authority loading
+## Close the authority set
 
-Resolve and measure the complete authority set before loading source bodies. Create a temporary strict `pinboard-brief-sources/v1` JSON manifest with one row per exact selector:
+Before writing contracts or coverage rows, derive the authority set from the accepted effects rather than guessing files. For each behavior, rejection, or live-state change, identify its canonical decision owner, every operation capable of mutating the protected state, lifecycle siblings, storage and migration path, direct production callers, installed consumers, generated projections and their generators, and the evidence that can falsify agreement. Include the observation-time boundary when expiry or staleness matters. Include schema identity, initialization, backup, validation, and reopen owners when persistent data changes.
+
+Trace each named production value and operation from its declaration through callers, conversions, persistence, validation, and presentation until one complete pass finds no new production owner. Reconcile that closure with the ownership named by `ARCHITECTURE.md`, the producers of generated artifacts, and every accepted live ledger or external consumer. When accepted scope replaces a schema, wire, storage, or installed-workflow identity, sweep maintained shipped consumers for the superseded marker and account for every retained match. Tests may prove a contract but do not replace its production owner. `pinboard brief-sources` proves the bytes selected by a manifest; it does not prove that the selection is complete.
+
+Challenge the draft authority set before canonical publication. By default, commission one bounded read-only source-closure review using the accepted definition, architecture, draft effect map, draft source manifest, and repository search and source inspection needed to trace the production graph. Discovery reads may inspect definitions, callers, persistence, validation, and generators before the final manifest exists; they do not create reviewed-source receipts. The reviewer returns one consolidated list of missing owners, callers, lifecycle siblings, and generators after tracing each affected path to a fixed point; it does not review finished coverage prose or publish evidence. When delegation is available and independently traceable lifecycle or persistence paths and installed or generated consumer paths make one traversal materially unreliable, split those non-overlapping closure checks and run them concurrently rather than serializing full-brief reviews. Resolve their combined findings and rerun the closure pass once before compiling the brief. These draft checks do not replace the required independent review of the canonical checkpoint.
+
+Encode and measure the closed authority set in a temporary strict `pinboard-brief-sources/v1` JSON manifest with one row per exact selector:
 
 ```json
 {
@@ -75,17 +81,18 @@ Lifecycle partition is tagged by `kind`. Use `not-applicable` with a reason when
 
 ## Review the compiled contract
 
-Commission one read-only reviewer in fresh context after compiling the checkpoint and before implementation. The reviewer task identity must differ from the attempt owner. Give the reviewer the canonical checkpoint and the same source plan. It must:
+Commission one read-only reviewer in fresh context after compiling the checkpoint and before implementation. The reviewer task identity must differ from the attempt owner and every draft source-closure reviewer. Give the reviewer the canonical checkpoint and the same source plan. It must:
 
+- confirm source closure first; when an owner is missing, trace that path and its siblings to a fixed point, return the complete source-set correction package, and stop before spending time on row-by-row semantic review;
 - inspect every selected source exactly once;
 - verify every contract, criterion, mandatory verification basis, architecture declaration, and semantic source role;
 - trace every reviewed family to exactly one coverage owner;
 - test each cheapest counterexample and every lifecycle sibling;
 - reject unsupported, absent, ambiguous, or contradictory coverage rather than asking the implementer to infer it.
 
-Correct the JSON candidate when coverage is incomplete, then produce a new digest-bound review. Reuse unchanged source receipts across corrections, but reread changed owners and sweep neighboring records.
+Correct the JSON candidate when coverage is incomplete, increment its artifact revision, and republish it before producing new digest-bound review evidence against the corrected accepted artifact. Use the same independent reviewer to verify bounded corrections by default; changed artifact bytes alone do not justify another fresh full review. Reuse unchanged source receipts, reread changed owners, and sweep every changed or neighboring record. When a correction adds an ordinary caller, projection, or generator, rerun its source-closure pass and include all newly exposed siblings before republishing rather than adding one file per round. Commission another fresh reviewer when the correction changes accepted scope, architecture direction, lifecycle semantics, or persistence and migration behavior, or whenever concrete evidence identifies a material blind spot that the prior reviewer's retained context cannot independently challenge.
 
-## Publish review evidence
+## Prepare and publish review evidence
 
 Canonical encoding uses the application JSON codec with sorted object keys. The brief artifact adds one final LF. Digest inputs do not add presentation bytes:
 
