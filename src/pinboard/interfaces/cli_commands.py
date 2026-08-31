@@ -118,6 +118,14 @@ class BriefPublishCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=Tru
     json: bool = False
 
 
+class HandoverCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    json: bool
+
+    def __post_init__(self) -> None:
+        if not self.json:
+            raise ValueError("handover output must be JSON")
+
+
 class InitializeCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     pass
 
@@ -410,6 +418,7 @@ type CliCommand = (
     | BriefSourcesPlanCommand
     | BriefSourcesEmitCommand
     | BriefPublishCommand
+    | HandoverCommand
     | InitializeCommand
     | ProposalCommand
     | TransitionCommand

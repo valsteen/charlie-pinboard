@@ -20,6 +20,7 @@ from pinboard.interfaces import (
     coordination_authority,
     dispatch_brief,
     preparation_authority,
+    project_handover,
     proposal_commands,
     transitions,
     work_brief_publication,
@@ -69,6 +70,8 @@ def _dispatch(  # noqa: C901, PLR0912 - one visible exhaustive command-family ro
             return brief_source_commands.run_brief_sources(roots, command)
         case cli_commands.BriefPublishCommand() as command:
             return work_brief_publication.publish_brief(roots, command)
+        case cli_commands.HandoverCommand() as command:
+            return project_handover.export(roots, command)
         case cli_commands.InitializeCommand() as command:
             return work_state_commands.initialize(roots, command)
         case cli_commands.ProposalCommand() as command:

@@ -4,6 +4,8 @@ Database initialization owns its staging connection and transaction because it
 must publish an unverified schema atomically. ``write_transaction`` scopes that
 supplied staging or diagnostic connection: it begins, commits, or rolls back,
 but never opens or closes the connection and never classifies typed results.
+``read_operation`` similarly owns one deferred read transaction so every query
+observes one SQLite snapshot, then rolls it back without permitting writes.
 Runtime store writes instead own their complete connection and transaction
 lifecycle in ``store.py``. This module never obtains time or invokes callbacks.
 """
@@ -377,7 +379,13 @@ def open_database(path: Path, mode: OpenMode) -> sqlite3.Connection:
 @contextmanager
 def read_operation(connection: sqlite3.Connection) -> Generator[sqlite3.Connection]:
     try:
-        yield connection
+        connection.execute("BEGIN")
+        try:
+            yield connection
+        finally:
+            connection.rollback()
+    except StorageError:
+        raise
     except sqlite3.Error as error:
         raise translate_database_error(error, opening=True) from error
 
