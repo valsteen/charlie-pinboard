@@ -1,0 +1,60 @@
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+from typing import Annotated, Literal, Protocol
+
+import msgspec
+
+from pinboard.application import stored_state
+from pinboard.application.artifacts import ArtifactRef, NewArtifact
+from pinboard.domain.errors import DecisionFailureCode
+
+type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
+
+type DispatchSchema = Literal["pinboard-dispatch/v1"]
+
+
+class DispatchRejectionCode(Enum):
+    ACTION_INVALID = "action-invalid"
+    ACTION_UNAVAILABLE = "action-unavailable"
+    ATTEMPT_NOT_ACTIVE = "attempt-not-active"
+    BRIEF_MISSING = "brief-missing"
+    REVIEW_COLLISION = "review-collision"
+    REVIEW_MISSING = "review-missing"
+    STALE_ACTION = "stale-action"
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchFailure:
+    code: DispatchRejectionCode | DecisionFailureCode
+    message: str
+
+
+type DispatchResult[T] = T | DispatchFailure
+
+
+class DispatchPermission(Enum):
+    REPOSITORY_READ = "repository-read"
+    REPOSITORY_WRITE = "repository-write"
+    NETWORK = "network"
+    EXTERNAL_WRITE = "external-write"
+    LIVE_APPLICATION = "live-application"
+
+
+class DispatchEnvironment(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    schema: DispatchSchema
+    checkout: NonEmptyLine
+    branch: NonEmptyLine
+    starting_revision: NonEmptyLine
+    permissions: tuple[DispatchPermission, ...]
+
+
+class DispatchArtifactPort(Protocol):
+    @property
+    def work_root(self) -> Path: ...
+
+    def verify(self, reference: stored_state.ArtifactReference) -> None: ...
+
+    def path(self, reference: stored_state.ArtifactReference) -> Path: ...
+
+    def publish(self, artifact: NewArtifact) -> ArtifactRef: ...

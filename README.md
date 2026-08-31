@@ -1,70 +1,75 @@
-# Charlie's pinboard
+# Pinboard
 
-[![CI](https://github.com/valsteen/charlie-pinboard/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/charlie-pinboard/actions/workflows/ci.yml)
+[![CI](https://github.com/valsteen/pinboard/actions/workflows/ci.yml/badge.svg)](https://github.com/valsteen/pinboard/actions/workflows/ci.yml)
 [![Python 3.14](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![uv](https://img.shields.io/badge/managed%20with-uv-DE5FE9?logo=uv)](https://docs.astral.sh/uv/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 <img align="right" width="430" src="assets/pinboard-investigation-board.png" alt="Pixel-art bard explaining a fantasy investigation board covered with maps, clues, and red thread">
 
-Keep one trustworthy quest log—and one trustworthy execution brief—while several Codex tasks explore and build in the same repository.
+Long-running coding-agent work rarely stays in one conversation. A feature uncovers a prerequisite, a review sends implementation back for correction, an interruption leaves work unfinished, and the next task has to recover what the project actually decided.
 
-Charlie's pinboard helps when a feature stops being a straight line. Side tasks can bring back useful discoveries without turning every chat transcript, topic folder, or feature branch into another backlog. When a piece of work is ready, the pinboard keeps its scope and checks intact from planning through implementation and review.
+Pinboard gives one repository a durable work ledger. Proposed work, priorities, dependencies, accepted briefs, current ownership, pauses, and review outcomes stay consistent across Codex tasks. A concern can survive the conversation that uncovered it, and an implementation can reach another task without its brief being retold.
 
-The pinboard preserves what the party learns, keeps the available paths visible, and carries each chosen piece of work into one trustworthy execution brief without deciding the product for you.
+Pinboard does not decide the product, choose priorities, or create Codex tasks. It records project decisions, rejects changes that no longer fit the current state, and keeps current ownership explicit. A short isolated change probably does not need it. Work that spans tasks, interruptions, dependencies, or independent review often does.
 
-## An indie RPG feature becomes a campaign
+## A campaign that survives the conversation
 
-Imagine you are building *Ashfall Keep*, a small action RPG. One Codex task is working on the dragon boss's second phase. While tracing the combat code, you open two other tasks: one finds that save games capture temporary animation state, while the other discovers that controller mappings identify abilities by their inventory position.
+Imagine you are building *Ashfall Keep*, a small action RPG. One Codex task is working on the dragon boss's second phase. Two scouts return with useful but distracting discoveries: save games capture temporary animation state, and controller mappings identify abilities by inventory position.
 
-All of that is worth keeping, but not all of it should derail the boss feature. Without one shared place for the work, the original task becomes an accidental backlog, useful conclusions disappear into old conversations, and a feature branch slowly turns into a migration branch.
+Without shared project state, the original conversation becomes an accidental backlog. Useful conclusions disappear into old tasks, and a focused feature quietly turns into several unrelated changes. Pinboard gives each concern an explicit place while keeping the current work honest.
 
-![Pixel-art quest scroll](assets/quest-scroll.png) **A quest is discovered.** A side task comes back with a warning: “Before we can save the second phase safely, combat abilities need IDs that won’t change underneath us.” The proposal stays in the shared inbox until any chat briefly borrows coordination authority and reviews it; the work list does not change behind your back.
+![Pixel-art quest scroll](assets/quest-scroll.png) **Preserve proposed work without changing the plan.** The scout invokes `$pinboard-intake` to record the save-game problem with its trigger, evidence, and likely consequence. It enters intake, the state for unstarted work awaiting a decision. It does not become ready, replace the current focus, or interrupt the dragon attempt. A coordinating task can later decide whether it belongs in the plan.
 
-![Pixel-art folded adventure map](assets/map-fills-in.png) **The map fills in as the party travels.** Deep work rarely reveals the whole campaign upfront. While the dragon fight remains the main quest, an experiment may reveal that save games are capturing temporary animation state, a flaw worth returning to later. The pinboard lets the plan grow from that evidence without turning every discovery into an interruption: preserve the exact finding, keep the current objective moving when it is not blocked, and leave one compact receipt.
+The scout gets a compact receipt:
 
-> **Saved for later — the animation-state finding is now in `save-game-animation-state` (`intake`); dragon work continues.**
+> **Saved for later — the animation-state concern is now in `save-game-animation-state` (`intake`); dragon work continues.**
 
-That line is small on purpose. It removes the anxiety that a valuable observation vanished into conversation while keeping the discussion centered on the work in front of you. Over a long investigation, those receipts let the project adapt its plan as reality becomes clearer without reconstructing the journey from old chats.
+<img align="right" width="390" src="assets/party-crossroads.png" alt="Pixel-art bard and adventurers considering routes toward a river village, a dragon keep, and a crystal cave">
 
-Another scout may return with a concern that nobody authorized as a new quest. The chat does not wave it away with “not recorded” and leave you wondering whether to react:
+![Pixel-art open quest ledger](assets/quick-quest-log.png) **See the current work before deciding what moves.** Ask `$pinboard` where things stand and it reads one revision-stamped live overview: the dragon phase is active, controller mapping is ready, and the save-game work remains in intake. The coordinating task can mark work ready, defer it, close it, connect a dependency, or preview which independent items could move together. Reading the map does not change it.
 
-> **Finding needs a decision — controller profiles may also depend on inventory position, but that concern is not saved because this task was not authorized to add it. The dragon work can continue. Should I preserve it for later or dismiss it?**
+![Pixel-art campfire checkpoint](assets/safe-camp.png) **Pause and resume without reconstructing the journey.** If stable ability IDs become a real prerequisite, the dragon attempt records where it stopped, why it cannot continue, and what would make it resumable. After the prerequisite is completed and accepted, the same attempt resumes from preserved evidence instead of asking a new conversation to infer the missing history.
 
-If the ledger changes while the finding is being saved, the task retries that expected coordination conflict itself. If the proposal reaches the inbox but the coordinating chat cannot be notified, the receipt still says it was saved and that no action is needed. Completed work gets a different ending—`Completed; no follow-up needed`—so a solved quest never masquerades as a newly discovered one.
+Resume restores paused or blocked work, returning a retained attempt to active or unstarted work to ready. Reopen is different: it returns deferred work to intake for reconsideration. Continue only confirms that an already-active attempt proceeds; it does not change lifecycle state.
 
-![Pixel-art open quest ledger](assets/quick-quest-log.png) **A glance at the quest log stays a glance.** You ask, “Where do we stand?” and the chat reads the live map once: the dragon phase is active, controller mapping is ready, and the save-game finding is still in intake. It answers with that compact picture, then asks naturally whether you want to know why one quest should come next, which decisions are already finished, whether a branch shipped, or how the full campaign unfolded. You can answer with a normal sentence, a short phrase, or the number beside an offered continuation. These are conversational doors with optional shortcuts, not magic global commands. Until you choose one, the chat does not rummage through old chronicles or ride to GitHub just in case.
+![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **Deliver the work that was actually accepted.** Before reading implementation sources, coordination gives one task a renewable preparation claim pinned to the ready item's exact definition. The item stays ready while that task publishes and reviews the canonical brief. Activation consumes the claim and creates the attempt atomically; `$pinboard-deliver` then claims that active attempt, follows the exact definition and checks, and records the result for review by a separate Codex reviewer. If the definition changes after preparation stops, coordination transfers a fresh claim and republishes the matching brief before activation.
 
-![Pixel-art sealed retired quest scroll](assets/retired-quest.png) **An old quest leaves the live map cleanly.** When you decide an old research quest is conclusively unnecessary, the chat records that terminal decision in one move. It does not pretend the quest returned to intake, became ready, started an expedition, and completed an invented attempt. The revision-stamped receipt is enough to know the quest left the live map and its reason remains in history.
+The code, branch, and conversation remain ordinary repository work. Pinboard keeps the decisions and execution around them durable. [How Pinboard works](HOW_IT_WORKS.md) follows these ideas through the product, package layers, and relational ledger.
 
-<img align="right" width="360" src="assets/party-crossroads.png" alt="Pixel-art adventurers taking routes toward a river village, the dragon keep, and a crystal cave">
+## What it covers
 
-![Pixel-art forked trail with two adventurers](assets/split-party.png) **The party can split up without walking into the same trap.** Before launching anything, you ask which quests can move together. The preview puts save-game animation research and controller-remapping research in the safe group, explains that a dragon-arena integration still depends on the boss work, and keeps two experiments that need the same capture rig in a “choose one” group. Merely looking at that map creates no new tasks.
+- **Intake:** preserve a discovery without silently changing priority or starting work.
+- **Planning:** make readiness, deferral, closure, dependencies, and current focus explicit.
+- **Revisioned definitions:** replace a complete accepted definition with compare-and-swap safety, retain every prior revision, and inspect current or paginated history as typed JSON.
+- **Execution:** give each accepted attempt an exact brief and independent renewable ownership.
+- **Interruption and recovery:** block, pause, resume, or recover work without rebuilding its context from chat history.
+- **Parallel work:** preview independent items and recheck the group as each attempt starts, without creating tasks on the user's behalf.
+- **Review:** keep the submitted candidate and its evidence exact, then require a separate task to accept it or return it for correction.
+- **Recursive cleanup:** use `$slop-cleanup` to trace residue from revised or abandoned features, remove an approved family, and repeat until a fresh pass finds nothing new.
 
-You can select a few quests or say, “Launch all safe work.” The animation question still needs design choices, so it opens as a visible task where you can inspect the work and answer questions. The controller investigation already has a complete autonomous brief, so a subagent can scout it quietly and return evidence. Before each launch, the remaining group is checked again; if another task claims the capture rig or changes a dependency, the rest stop with a precise partial result instead of pretending the whole party departed.
+The `$pinboard`, `$pinboard-intake`, and `$pinboard-deliver` skills provide the conversational workflows. The `pinboard` command validates and updates the repository-local ledger, rejects stale actions, and keeps unrelated attempts from invalidating one another.
 
-![Pixel-art campfire checkpoint](assets/safe-camp.png) **The party makes camp.** The chat making the scheduling change briefly acquires coordination, records that stable ability IDs come first, then releases it. The dragon task notes exactly where it stopped and what needs to happen before it can pick the feature back up.
+Private working state stays in ignored local files:
 
-![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **The feature moves again.** Another task fixes the ability IDs, then the dragon task continues from its notes. If an older task tries to update a work list that has since changed, `pinboard` asks it to catch up first.
+```text
+.codex/pinboard/
+  state.sqlite3               # authoritative lifecycle, dependencies, leases, and history
+  artifacts/                  # immutable briefs, evidence, proposals, and reviews
+  views/                      # generated human-readable projections
+```
 
-Everything stays ordinary repository work: code, branches, worktrees, Markdown, and conversation. The plugin keeps the work list coherent and gives each implementation one canonical brief, so the task a worker receives is still the task the coordinating chat meant to send.
+SQLite is the current ledger authority. Commands read its complete typed state, then commit only the relations named by one accepted mutation; stale or failed changes leave the prior ledger intact. Immutable artifacts retain long-form contracts and review evidence; generated views are convenient projections, not fallback state. The [architecture map](ARCHITECTURE.md) explains package ownership, persistence boundaries, and failure semantics for contributors and agents.
 
-## Where it saves rework
+The installed definition commands are:
 
-You plan a change carefully, hand it to another AI, and get back something that is almost right. One half of a protocol was postponed even though both halves had to move together. The exact test commands became “run the relevant checks.” A request to read one section became a tour of half the repository. After seeing the same mistakes recur, they stop looking random: they happen when the task is retold on its way to the worker.
+```sh
+pinboard item definition --item-id <item> --json
+pinboard item definition-history --item-id <item> --limit 20 --json
+pinboard item revise --file <pinboard-item-revision-v1.json> --task-id <task> --host-id <host> --json
+```
 
-The pinboard keeps that retelling out of the workflow. The worker goes back to the accepted attempt brief, while the launch message says only where to work and which checkpoint to pick up. For work that crosses components, a small contract table records who owns what, which parts must move together, and how to prove the result works. Review still gets the final say, but it should not have to reconstruct the task first.
-
-## What it gives you
-
-- one shared work list for features, bugs, cleanup, and foundation work;
-- an inbox where any Codex task can leave something it discovered;
-- a canonical attempt brief that survives the trip from planning to implementation;
-- enough recorded context and evidence to pause work, resume it, and review it without reconstruction;
-- early warnings for stale state, contradictory launch instructions, and incomplete cross-component checkpoints;
-- reviewable local project state instead of another hosted service.
-
-It is most useful when repository work lasts for days, several Codex tasks are involved, or one piece of work keeps uncovering prerequisites. A short isolated change probably does not need it.
+Revision files replace the whole `pinboard-work-item-definition/v1`; partial patches are rejected. Blocking can only name dependencies already present in that definition and never changes accepted dependencies itself.
 
 ## Install from GitHub
 
@@ -73,8 +78,8 @@ The plugin currently supports macOS and Linux. It uses [uv](https://docs.astral.
 Add this repository as a Codex marketplace, then install the plugin:
 
 ```sh
-codex plugin marketplace add valsteen/charlie-pinboard
-codex plugin add charlie-pinboard@charlie-pinboard
+codex plugin marketplace add valsteen/pinboard
+codex plugin add pinboard@pinboard
 ```
 
 Start a Codex task in the repository and ask:
@@ -83,61 +88,15 @@ Start a Codex task in the repository and ask:
 
 When another task uncovers something worth keeping, ask it:
 
-> Add this to the repository work inbox: saving a boss fight currently captures temporary animation state. Include what you found and why it could block phase-two save support.
+> Add this to the repository work queue as intake: saving a boss fight currently captures temporary animation state. Include what you found and why it could block phase-two save support.
 
-In any chat, you can ask what came in, how it relates to work already underway, and what is ready to start. That chat borrows the short coordination lease only for the shared change, then releases it. For example:
+For a quick current picture, ask:
 
 > Give me the quick live-work overview. Then offer the deeper views I can ask for.
 
-The first answer deliberately stays on live work. Ask for the recommendation and item context, completed decisions, delivery and CI, or the full history only when that layer is useful. A terminal decision such as “this deferred experiment is complete and we will not return to it” is recorded directly instead of being walked through artificial intermediate states.
-
-## One chat or several
-
-There is no master chat to keep alive. The single-chat workflow remains the simplest option: one chat can inspect the ledger, briefly borrow coordination for scheduling changes, claim its attempt, and finish the work.
-
-For concurrent work, open one chat per distinct outcome. Each chat claims only its own attempt, so unrelated item changes do not invalidate its local actions. A chat that needs to admit work, change dependencies, activate an attempt, or accept a result briefly acquires the exclusive coordination lease and releases it after that atomic change. If another chat already holds coordination, the command identifies that chat and the lease expiry so the current chat can wait or ask you about revocation.
-
-Projects may declare host-local exclusive resources such as `capture-rig`. A chat that owns an attempt must also claim each resource named by that item before live use. A conflict identifies the holding attempt, chat, host, and expiry. Offline work with no declared scarce resource remains available concurrently.
-
-## Core model
-
-Three ideas keep responsibilities clear:
-
-- the shared work list answers what the project may work on next;
-- topic folders hold research, designs, plans, and reports;
-- branches and worktrees belong to the concrete attempt to implement something.
-
-The project stores its private working state in ignored local files:
-
-```text
-.codex/work/
-  authority.json
-  v2/
-    current.md
-    queue.md                  # generated overview
-    inbox/
-    items/                    # authoritative lifecycle and context Markdown
-    attempts/                 # briefs and renewable ownership leases
-    resources/                # project-declared scarce resources
-    leases/
-      coordination.md         # present after first coordination lease
-      resources/
-    history/
-.codex/topics/
-```
-
-The Markdown stays readable and easy to inspect in Finder. Each item file is authoritative; `queue.md` is regenerated as a convenient overview. `pinboard` checks that these files agree before changing them, fences expired or revoked owners, refuses updates made from an older relevant view, and prepares worker launches without copying the task semantics into another prompt.
-
-The plugin contains:
-
-- `pinboard`, the primary command that checks and updates the shared state;
-- `$pinboard`, which helps any chat explain the current picture, borrow coordination when needed, and choose what happens next;
-- `$pinboard-intake`, which lets any task leave a finding for later review;
-- `$pinboard-deliver`, which follows one accepted brief and returns evidence for independent review.
-
 ## Runtime and development
 
-The package targets Python 3.14 only. msgspec provides the immutable records and strict JSON decoding used at repository boundaries. `.python-version` pins the current stable 3.14 patch release. uv manages Python installation, the project environment, dependencies, the checked-in lockfile, and command execution.
+The package targets Python 3.14 only. msgspec provides immutable records and strict JSON decoding at repository boundaries. uv manages Python installation, the project environment, dependencies, the checked-in lockfile, and command execution.
 
 ```sh
 uv sync --locked
@@ -148,24 +107,9 @@ uv run --locked pyrefly coverage check src --strict --fail-under 100
 uv run --locked coverage run -m unittest discover -v
 uv run --locked coverage report
 uv run --locked python scripts/validate-metadata.py
+uv run --locked python -m docs.how_it_works.render --check
 uv build --no-sources
 scripts/pinboard --help
 ```
 
-Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. Its development group includes the YAML parser used for platform-compatible skill validation; the installed `charlie-pinboard` package does not depend on it.
-
-CI validates the plugin and its skills before the repository is published.
-
-<details>
-<summary>Legacy schema-v1 migration</summary>
-
-Existing schema-v1 ledgers need one explicit `pinboard migrate --to v2` cutover before lease or resource commands become available. Until then, those commands return `MIGRATION_REQUIRED` rather than pretending legacy permanent ownership has lease semantics.
-
-</details>
-
-<details>
-<summary>Temporary command compatibility</summary>
-
-`repo-work` currently invokes the same installed engine as `pinboard` so existing local tasks can move over without a flag day. It is a temporary tested alias, not a second product or protocol. The Python module remains `repo_work`, and existing `.codex/work` paths plus `repo-work/*` serialized identifiers remain stable.
-
-</details>
+Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. CI validates the plugin and its skills before the repository is published.

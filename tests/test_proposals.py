@@ -1,114 +1,61 @@
 import json
-import tempfile
 import unittest
-from pathlib import Path
 
-from repo_work.actions import actions_for
-from repo_work.markdown import parse_queue
-from repo_work.model import WorkState
-from repo_work.proposals import ProposalError
-from repo_work.validate import validate_work_state
-
-from .support import JsonObject, apply_action, create_proposal, create_state
+from pinboard.interfaces.errors import ProposalFailure
+from pinboard.interfaces.proposal_models import Proposal
+from pinboard.interfaces.proposals import parse_proposal
+from tests.support import JsonObject
 
 
-def proposal(proposal_id: str = "finding-1") -> JsonObject:
+def proposal() -> JsonObject:
     return {
-        "schema": "repo-work/v1",
-        "proposal_id": proposal_id,
-        "created_at": "2026-08-16T12:30:00Z",
-        "source_task_id": "investigation-task",
-        "user_label": "make Reveal independent of mappings",
-        "trigger": "The mapping command owns a generic device selection operation.",
-        "evidence": ["client/src/mappings.ts#reveal"],
-        "why_it_matters": "The current owner widens changes and hides reuse.",
+        "schema": "pinboard-proposal/v1",
+        "proposal_id": "proposal-1",
+        "created_at": "2026-08-25T00:00:00Z",
+        "source_task_id": "task",
+        "user_label": "Proposal",
+        "trigger": "A current boundary exposed a missing behavior.",
+        "evidence": ["source:test"],
+        "why_it_matters": "The behavior must persist through SQLite.",
         "relation": {"kind": "independent", "item": None},
-        "effect": "One provider owns Reveal semantics.",
-        "unlock": "Mappings and the project tree can use one capability.",
-        "urgency_evidence": "Required by the current product objective.",
-        "freshness_assumptions": ["The mapping command still owns Reveal."],
+        "effect": "The proposal appears as an intake item.",
+        "unlock": "Current proposal intake remains usable.",
+        "urgency_evidence": "The installed command exercises this boundary.",
+        "freshness_assumptions": ["SQLite remains authoritative."],
     }
 
 
-class ProposalTest(unittest.TestCase):
-    def test_requires_registered_coordinator_before_persisting(self) -> None:
-        project, work = create_state([])
-        (work / "coordinator.json").unlink()
+class ProposalInputTest(unittest.TestCase):
+    def test_current_proposal_decodes_exact_model(self) -> None:
+        value = proposal()
+        decoded = parse_proposal(json.dumps(value))
+        positioned = parse_proposal(json.dumps({**value, "position": 2}))
+        unexpected = parse_proposal(json.dumps({**value, "unexpected": True}))
+        self.assertIsInstance(decoded, Proposal)
+        self.assertIsInstance(positioned, Proposal)
+        self.assertIsInstance(unexpected, ProposalFailure)
+        self.assertEqual("proposal-1", decoded.proposal_id)
+        self.assertEqual(2, positioned.position)
 
-        with self.assertRaisesRegex(ProposalError, "COORDINATOR_NOT_REGISTERED"):
-            create_proposal(work, project, proposal())
-
-        self.assertEqual([], list((work / "inbox").glob("*.json")))
-
-    def test_creates_immutable_unique_proposal(self) -> None:
-        project, work = create_state([])
-
-        path = create_proposal(work, project, proposal())
-        original = path.read_bytes()
-
-        with self.assertRaisesRegex(ProposalError, "PROPOSAL_ALREADY_EXISTS"):
-            create_proposal(work, project, proposal())
-        self.assertEqual(original, path.read_bytes())
-
-    def test_proposal_writer_rejects_an_outside_inbox_symlink(self) -> None:
-        project, work = create_state([])
-        outside = Path(tempfile.mkdtemp()) / "outside-inbox"
-        (work / "inbox").replace(outside)
-        (work / "inbox").symlink_to(outside, target_is_directory=True)
-
-        with self.assertRaisesRegex(ProposalError, "PROPOSAL_IDENTITY_INVALID"):
-            create_proposal(work, project, proposal())
-
-        self.assertEqual([], list(outside.iterdir()))
-
-    def test_idle_coordinator_sees_closed_proposal_choices(self) -> None:
-        project, work = create_state([])
-        create_proposal(work, project, proposal())
-
-        action_ids = {action.action_id for action in actions_for(work, project, role="coordinator")}
-
-        self.assertTrue(
-            {
-                "accept-proposal:finding-1",
-                "merge-proposal:finding-1",
-                "return-proposal:finding-1",
-                "reject-proposal:finding-1",
-            }.issubset(action_ids)
+    def test_decoder_rejects_invalid_shapes_and_reports_paths(self) -> None:
+        valid = proposal()
+        cases = (
+            ({**valid, "schema": "repo" + "-work/v1"}, "schema"),
+            ({**valid, "schema": "pinboard" + "-proposal/v2"}, "schema"),
+            ({**valid, "proposal_id": "Not Valid"}, "proposal_id"),
+            ({**valid, "trigger": ""}, "trigger"),
+            ({**valid, "position": 0}, "position"),
+            ({**valid, "evidence": [""]}, "evidence[0]"),
+            ({**valid, "relation": {"kind": "invented", "item": None}}, "relation.kind"),
+            ({**valid, "relation": {"kind": "independent", "item": "work-a"}}, "relation.item"),
+            ({**valid, "relation": {"kind": "prerequisite", "item": None}}, "relation.item"),
         )
-
-    def test_accept_moves_proposal_into_canonical_intake(self) -> None:
-        project, work = create_state([])
-        submitted = proposal()
-        create_proposal(work, project, submitted)
-        action = next(
-            action
-            for action in actions_for(work, project, role="coordinator")
-            if action.action_id == "accept-proposal:finding-1"
-        )
-
-        apply_action(
-            work,
-            project,
-            action,
-            {
-                "item": "universal-reveal-core",
-                "state": "intake",
-                "timing": None,
-                "depends_on": [],
-                "next_action": "review-intake",
-            },
-        )
-
-        queue = parse_queue(work / "queue.md")
-        self.assertEqual("universal-reveal-core", queue.items[0].item)
-        self.assertEqual(WorkState.INTAKE, queue.items[0].state)
-        self.assertFalse((work / "inbox" / "finding-1.json").exists())
-        history = json.loads((work / "history" / "proposals" / "finding-1.json").read_text(encoding="utf-8"))
-        self.assertEqual("accepted", history["disposition"])
-        self.assertEqual("universal-reveal-core", history["target"])
-        self.assertEqual(submitted, history["proposal"])
-        self.assertNotIn("coordinator_reason", history)
-        self.assertTrue(validate_work_state(work, project).valid)
+        for value, field in cases:
+            with self.subTest(field=field):
+                failure = parse_proposal(json.dumps(value))
+            self.assertIsInstance(failure, ProposalFailure)
+            self.assertEqual("PROPOSAL_INVALID", failure.code.value)
+            self.assertIn(field, failure.message)
 
 
 if __name__ == "__main__":
