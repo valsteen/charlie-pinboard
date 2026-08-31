@@ -16,7 +16,7 @@ Turn accumulated implementation residue into deliberate cleanup whose deletions,
 
 ## Establish the production truth
 
-Define the supported production roots for this repository before classifying anything. Include installed executables, public APIs and package exports, runtime registrations, plugin or framework entry points, configuration-driven routes, build/package contents, external protocols, and readers required by supported persisted data. Account explicitly for reflection, generated code, dependency injection, or other dynamic reachability.
+Define the supported production roots for this repository before classifying anything. Include installed executables, documented public APIs and package exports, runtime registrations, plugin or framework entry points, configuration-driven routes, build/package contents, external protocols, and readers required by supported persisted data. Account explicitly for reflection, generated code, dependency injection, or other dynamic reachability. Treat an explicit product-authority statement that an interface is unsupported as decisive; do not keep hypothetical undisclosed consumers alive after the project owner has ruled them out. Ask only when current authority is silent or contradictory.
 
 Trace both directions:
 
@@ -35,6 +35,14 @@ For every candidate, record:
 - the proposed disposition and evidence that could falsify it.
 
 Use runtime observations and real stores when they cheaply distinguish a required compatibility reader from empty scaffolding. Zero rows strengthen a case but do not by themselves prove that a product capability is unwanted.
+
+## Keep the inventory bounded and resumable
+
+For a repository-wide pass, read [references/reachability-inventory.md](references/reachability-inventory.md). Use the repository's existing analyzers plus a small language-aware inventory when useful; the inventory generates candidates and proves accounting coverage, not semantic reachability by itself.
+
+Keep one compact private ledger outside tracked product files unless the user requests a durable audit artifact. Record production roots, dynamic mechanisms, completed inventory passes, candidate selectors, dispositions, retained exceptions, and the next unresolved batch. Store selectors and short evidence summaries instead of full source listings or raw analyzer output. Inspect candidate bodies in coherent batches and update the ledger after each batch.
+
+If context is compacted or work resumes later, re-ground from current product authority, production roots, and this ledger. Do not replay completed scans unless the code or relevant authority changed. After a coherent removal, rerun the affected inventories; reserve one complete inventory for the final fixed-point pass.
 
 ## Answer provenance challenges honestly
 
@@ -81,7 +89,7 @@ Order checkpoints around semantic dependencies, not file count:
 2. Isolate valuable not-yet-production evidence so it cannot keep production machinery alive.
 3. Remove unwanted entry points and complete producerless or consumerless feature families.
 4. Recurse through newly orphaned models, variants, persistence, serializers, tests, documentation, dependencies, lockfile entries, build and release configuration, and CI tooling.
-5. Collapse and regroup the surviving structure, then run a fresh repository-wide inventory.
+5. Collapse and regroup the surviving structure, then rerun the complete compact inventory and inspect only new or changed candidates.
 
 Do not freeze the initial candidate list as the whole scope: recursive discovery is part of the accepted outcome. Keep newly exposed work inside the cleanup objective only when it is a direct dependent of an approved removal. Preserve materially different product decisions as separate concerns.
 
@@ -144,9 +152,9 @@ Abort the bridge burn if live data, active authority, an unknown consumer, or a 
 
 ## Converge to a fixed point
 
-After the last change, start the complete inventory again from the production roots. Finish only when one fresh full pass produces no new candidates and all of these are true:
+After the last change, rerun the complete inventory from the production roots. Finish only when one fresh full pass produces no new candidates and all of these are true:
 
-- every production symbol is reachable, required for supported persisted data or protocol compatibility, or recorded as one exact retained exception;
+- every production definition is accounted for by a supported root, a verified dynamic mechanism, supported persisted data or protocol compatibility, or one exact retained exception;
 - every closed variant and branch has a real producer and consumer or an explicit boundary reason;
 - one representative command or variant can be traced and extended without rediscovering same-meaning routing facts in owners that add no boundary, decision, presentation, or effect;
 - no production API exists only for tests, and no advertised entry point can only reject;
