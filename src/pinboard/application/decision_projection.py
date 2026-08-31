@@ -5,6 +5,7 @@ from pinboard.domain import work_models
 from pinboard.domain.authority_models import (
     AttemptLeaseStatus,
     InactiveAttemptAuthority,
+    PreparationLeaseStatus,
 )
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId, CandidateId, ItemId, ProposalId
@@ -85,7 +86,7 @@ def _work_item(
     )
 
 
-def project_decision_snapshot(state: stored_state.StoredWorkState) -> LedgerSnapshot:
+def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime) -> LedgerSnapshot:
     """Project complete persisted state into the narrower facts consumed by pure decisions."""
 
     attempts_by_item = {
@@ -153,8 +154,39 @@ def project_decision_snapshot(state: stored_state.StoredWorkState) -> LedgerSnap
             lease.expires_at,
         )
         for lease in state.authority.attempt_leases
-        if lease.state == AttemptLeaseStatus.ACTIVE
+        if lease.state == AttemptLeaseStatus.ACTIVE and lease.expires_at > now
         for anchor in (attempt_anchors[(lease.attempt_id, lease.generation)],)
+    )
+    preparation_anchors = {
+        (anchor.item_id, anchor.generation): anchor for anchor in state.authority.preparation_generations
+    }
+    preparation_authorities = tuple(
+        work_models.PreparationAuthority(
+            lease.item_id,
+            lease.definition_revision,
+            lease.definition_digest,
+            preparation_anchors[(lease.item_id, lease.generation)].lease_id
+            if lease.state == PreparationLeaseStatus.ACTIVE and lease.expires_at > now
+            else None,
+            lease.generation,
+        )
+        for lease in state.authority.preparation_leases
+    )
+    command_preparation_authorities = tuple(
+        work_models.PreparationCommandAuthority(
+            state.lifecycle.project.host_epoch,
+            lease.item_id,
+            lease.definition_revision,
+            lease.definition_digest,
+            anchor.task_id,
+            anchor.host_id,
+            anchor.lease_id,
+            lease.generation,
+            lease.expires_at,
+        )
+        for lease in state.authority.preparation_leases
+        if lease.state == PreparationLeaseStatus.ACTIVE and lease.expires_at > now
+        for anchor in (preparation_anchors[(lease.item_id, lease.generation)],)
     )
     coordination_authority = (
         work_models.CoordinationCommandAuthority(
@@ -231,6 +263,8 @@ def project_decision_snapshot(state: stored_state.StoredWorkState) -> LedgerSnap
         ),
         attempt_authorities=attempt_authorities,
         command_attempt_authorities=command_attempt_authorities,
+        preparation_authorities=preparation_authorities,
+        command_preparation_authorities=command_preparation_authorities,
         coordination_authority=coordination_authority,
         history_items=tuple(
             item.item_id for item in state.lifecycle.work_items if stored_state.live_work_state(item.state) is None

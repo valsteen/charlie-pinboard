@@ -168,7 +168,7 @@ class PortableCopyTest(unittest.TestCase):
 
     def test_portable_copy_includes_accepted_checkpoint_result_and_review_bytes(self) -> None:
         source, store = self._source(live_authority=True)
-        snapshot = project_decision_snapshot(store.snapshot())
+        snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
         attempt_authority = snapshot.command_attempt_authorities[0]
         worker = decision_models.ActorAuthority(
             decision_models.Role.WORKER,
@@ -187,7 +187,7 @@ class PortableCopyTest(unittest.TestCase):
         assert isinstance(submit_action, decision_models.SubmitReviewAction)
         submit = command(submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a")))
         self.assertNotIsInstance(execute(store, submit, SQLITE_NOW), DecisionFailure)
-        review_snapshot = project_decision_snapshot(store.snapshot())
+        review_snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
         coordination = review_snapshot.coordination_authority
         assert coordination is not None
         coordinator = decision_models.ActorAuthority(
@@ -230,7 +230,7 @@ class PortableCopyTest(unittest.TestCase):
             execute_checkpoint_acceptance(store, accept, SQLITE_NOW, artifacts),
             DecisionFailure,
         )
-        retained = project_decision_snapshot(store.snapshot()).coordination_authority
+        retained = project_decision_snapshot(store.snapshot(), SQLITE_NOW).coordination_authority
         assert retained is not None
         self.assertNotIsInstance(
             change_coordination_authority(

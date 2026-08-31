@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import assert_never
 
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
@@ -28,6 +29,8 @@ def action_from_command(  # noqa: C901, PLR0912, PLR0915
             authorization = decision_models.AuthorizationKind.COORDINATION
         case cli_commands.AttemptTransitionCommand(lease_id=lease_id, subject_revision=subject_revision):
             authorization = decision_models.AuthorizationKind.ATTEMPT
+        case cli_commands.PreparationTransitionCommand(lease_id=lease_id, subject_revision=subject_revision):
+            authorization = decision_models.AuthorizationKind.PREPARATION
         case cli_commands.CoordinatorDispatchCommand() | cli_commands.CoordinatorReviewedDispatchCommand():
             authorization = decision_models.AuthorizationKind.COORDINATOR
             lease_id = None
@@ -118,6 +121,7 @@ def reselect_action(
         role,
         lease_id=supplied_capability.lease_id,
         generation=supplied_capability.coordinator_generation,
+        now=datetime.now(UTC),
     )
     if isinstance(available, DecisionFailure):
         return CommandFailure(available.code, available.message)

@@ -102,7 +102,7 @@ class ServiceTest(unittest.TestCase):
     def _coordinator_action[ActionT: decision_models.Action](
         self, store: SQLiteWorkStore, action_type: type[ActionT], subject: str | None = None
     ) -> ActionT:
-        snapshot = project_decision_snapshot(store.snapshot())
+        snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
         authority = snapshot.coordination_authority
         assert authority is not None
         actor = decision_models.ActorAuthority(
@@ -124,7 +124,7 @@ class ServiceTest(unittest.TestCase):
     def _worker_action[ActionT: decision_models.Action](
         self, store: SQLiteWorkStore, action_type: type[ActionT]
     ) -> ActionT:
-        snapshot = project_decision_snapshot(store.snapshot())
+        snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
         authority = snapshot.command_attempt_authorities[0]
         actor = decision_models.ActorAuthority(
             decision_models.Role.WORKER,
@@ -528,7 +528,7 @@ class ServiceTest(unittest.TestCase):
                 ),
             )
         self.assertNotIsInstance(acquired, DecisionFailure)
-        current = project_decision_snapshot(store.snapshot()).coordination_authority
+        current = project_decision_snapshot(store.snapshot(), SQLITE_NOW).coordination_authority
         assert current is not None
 
         renewed = change_coordination_authority(
@@ -546,7 +546,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(acquired_at + timedelta(minutes=3), after.authority.coordination.expires_at)
         self.assertEqual(state.lifecycle.project.revision + 2, after.lifecycle.project.revision)
         self.assertEqual(len(state.transition_receipts) + 2, len(after.transition_receipts))
-        renewed_authority = project_decision_snapshot(after).coordination_authority
+        renewed_authority = project_decision_snapshot(after, SQLITE_NOW).coordination_authority
         assert renewed_authority is not None
         released = change_coordination_authority(
             store,
@@ -570,7 +570,7 @@ class ServiceTest(unittest.TestCase):
             ),
         )
         self.assertNotIsInstance(acquired, DecisionFailure)
-        revoke_authority = project_decision_snapshot(revoke_store.snapshot()).coordination_authority
+        revoke_authority = project_decision_snapshot(revoke_store.snapshot(), SQLITE_NOW).coordination_authority
         assert revoke_authority is not None
         revoked = change_coordination_authority(
             revoke_store,
@@ -588,7 +588,7 @@ class ServiceTest(unittest.TestCase):
     def test_attempt_authority_renewal_and_release_persist_exact_generation(self) -> None:
         state = complete_sqlite_state()
         store, _database_path = self._store_with_state(state)
-        current = project_decision_snapshot(store.snapshot()).command_attempt_authorities[0]
+        current = project_decision_snapshot(store.snapshot(), SQLITE_NOW).command_attempt_authorities[0]
         renewed = change_attempt_authority(
             store,
             RenewAttemptAuthority(
@@ -598,7 +598,7 @@ class ServiceTest(unittest.TestCase):
             ),
         )
         self.assertNotIsInstance(renewed, DecisionFailure)
-        current = project_decision_snapshot(store.snapshot()).command_attempt_authorities[0]
+        current = project_decision_snapshot(store.snapshot(), SQLITE_NOW).command_attempt_authorities[0]
 
         with reject_table_deletes("work_items"):
             released = change_attempt_authority(
@@ -641,7 +641,7 @@ class ServiceTest(unittest.TestCase):
 
         normal_state = complete_sqlite_state()
         normal_store, _normal_database_path = self._store_with_state(normal_state)
-        snapshot = project_decision_snapshot(normal_store.snapshot())
+        snapshot = project_decision_snapshot(normal_store.snapshot(), SQLITE_NOW)
         current = snapshot.command_attempt_authorities[0]
         coordination = snapshot.coordination_authority
         assert coordination is not None
@@ -670,7 +670,7 @@ class ServiceTest(unittest.TestCase):
             ),
         )
         self.assertNotIsInstance(transferred, DecisionFailure)
-        next_authority = project_decision_snapshot(normal_store.snapshot()).command_attempt_authorities[0]
+        next_authority = project_decision_snapshot(normal_store.snapshot(), SQLITE_NOW).command_attempt_authorities[0]
         revoked = change_attempt_authority(
             normal_store,
             RevokeAttemptAuthority(
@@ -937,7 +937,7 @@ class ServiceTest(unittest.TestCase):
         completed = execute(store, complete_command, SQLITE_NOW + timedelta(seconds=1))
         self.assertNotIsInstance(completed, DecisionFailure)
         terminal = store.snapshot()
-        snapshot = project_decision_snapshot(terminal)
+        snapshot = project_decision_snapshot(terminal, SQLITE_NOW)
         proof = project_inactive_attempt_authority(
             terminal,
             AttemptId("work-a-1"),

@@ -39,6 +39,17 @@ class ReviewFlagView(msgspec.Struct, frozen=True):
     reason: str
 
 
+class PreparationView(msgspec.Struct, frozen=True):
+    definition_revision: int
+    definition_digest: str
+    task_id: str
+    host_id: str
+    lease_id: str
+    generation: int
+    expires_at: str
+    status: str
+
+
 class OverviewItemView(msgspec.Struct, frozen=True):
     item_id: str
     label: str
@@ -52,6 +63,7 @@ class OverviewItemView(msgspec.Struct, frozen=True):
     attempt_id: str | None
     next_action: str | None
     notes: str
+    preparation: PreparationView | None
 
 
 class OverviewView(msgspec.Struct, frozen=True):

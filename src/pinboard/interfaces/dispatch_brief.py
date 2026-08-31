@@ -366,7 +366,7 @@ def prepare_dispatch(
     supplied_prompt: bytes | None = None,
     supplied_review: SuppliedDispatchReview | None = None,
 ) -> DispatchResult[str]:
-    selected = select_dispatch(store, action)
+    selected = select_dispatch(store, action, datetime.now(UTC))
     if isinstance(selected, ApplicationDispatchFailure):
         return _dispatch_failure(selected)
     assert isinstance(action, decision_models.DispatchAction)
@@ -433,7 +433,7 @@ def prepare_dispatch(
     )
     if isinstance(prompt, DispatchFailure):
         return prompt
-    if (failure := confirm_dispatch_authority(store, action, publication_revision)) is not None:
+    if (failure := confirm_dispatch_authority(store, action, publication_revision, datetime.now(UTC))) is not None:
         return _dispatch_failure(failure)
     return prompt
 

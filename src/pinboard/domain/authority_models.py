@@ -57,6 +57,109 @@ class AttemptLeaseStatus(Enum):
     EXPIRED = "expired"
 
 
+class PreparationLeaseStatus(Enum):
+    ACTIVE = "active"
+    RELEASED = "released"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationLeaseAuthority:
+    host_epoch: int
+    item: ItemId
+    definition_revision: int
+    definition_digest: str
+    task_id: TaskId
+    host_id: HostId
+    lease_id: LeaseId
+    generation: int
+    acquired_at: datetime
+    expires_at: datetime
+    state: PreparationLeaseStatus
+
+
+@dataclass(frozen=True, slots=True)
+class InactivePreparationAuthority:
+    host_epoch: int
+    item: ItemId
+    definition_revision: int
+    definition_digest: str
+    task_id: TaskId
+    host_id: HostId
+    lease_id: LeaseId
+    generation: int
+    expires_at: datetime
+    state: PreparationLeaseStatus
+
+
+@dataclass(frozen=True, slots=True)
+class AcquireInitialPreparationAuthority:
+    host_epoch: int
+    item: ItemId
+    expected_project_revision: str
+    expected_item_subject_revision: str
+    expected_definition_revision: int
+    expected_definition_digest: str
+    coordination: work_models.CoordinationCommandAuthority
+    task_id: TaskId
+    host_id: HostId
+    lease_id: LeaseId
+    acquired_at: datetime
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class TransferPreparationAuthority:
+    current: InactivePreparationAuthority
+    coordination: work_models.CoordinationCommandAuthority
+    task_id: TaskId
+    host_id: HostId
+    lease_id: LeaseId
+    acquired_at: datetime
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RenewPreparationAuthority:
+    current: work_models.PreparationCommandAuthority
+    renewed_at: datetime
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ReleasePreparationAuthority:
+    current: work_models.PreparationCommandAuthority
+    released_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RevokePreparationAuthority:
+    item: ItemId
+    lease_id: LeaseId
+    generation: int
+    coordination: work_models.CoordinationCommandAuthority
+    revoked_at: datetime
+
+
+type PreparationAuthorityOperation = (
+    AcquireInitialPreparationAuthority
+    | TransferPreparationAuthority
+    | RenewPreparationAuthority
+    | ReleasePreparationAuthority
+    | RevokePreparationAuthority
+)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationAuthorityDecision:
+    item: ItemId
+    counter_before: int
+    counter_after: int
+    current_before: PreparationLeaseAuthority | None
+    current_after: PreparationLeaseAuthority
+
+
 @dataclass(frozen=True, slots=True)
 class AttemptLeaseAuthority:
     host_epoch: int

@@ -80,7 +80,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         )
         self.assertNotIsInstance(acquired, DecisionFailure)
         assert not isinstance(acquired, DecisionFailure)
-        current = project_decision_snapshot(complete_sqlite_state()).coordination_authority
+        current = project_decision_snapshot(complete_sqlite_state(), SQLITE_NOW).coordination_authority
         assert current is not None
         token = replace(
             current,
@@ -119,7 +119,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         self.assertIsInstance(stale, DecisionFailure)
 
     def test_coordination_authority_rejects_busy_missing_expired_and_invalid_operations(self) -> None:
-        snapshot = project_decision_snapshot(complete_sqlite_state())
+        snapshot = project_decision_snapshot(complete_sqlite_state(), SQLITE_NOW)
         retained = snapshot.coordination_lease
         token = snapshot.coordination_authority
         assert retained is not None
@@ -181,7 +181,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         )
 
     def test_attempt_authority_lifecycle_covers_transfer_release_and_revocation(self) -> None:
-        snapshot = project_decision_snapshot(complete_sqlite_state())
+        snapshot = project_decision_snapshot(complete_sqlite_state(), SQLITE_NOW)
         command = snapshot.command_attempt_authorities[0]
         coordination = snapshot.coordination_authority
         assert coordination is not None
@@ -276,7 +276,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         self.assertNotIsInstance(revoked, DecisionFailure)
 
     def test_attempt_authority_rejects_stale_cross_wired_and_unresolved_changes(self) -> None:
-        snapshot = project_decision_snapshot(complete_sqlite_state())
+        snapshot = project_decision_snapshot(complete_sqlite_state(), SQLITE_NOW)
         command = snapshot.command_attempt_authorities[0]
         coordination = snapshot.coordination_authority
         retained_coordination = snapshot.coordination_lease

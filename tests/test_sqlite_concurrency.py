@@ -4,6 +4,7 @@ import multiprocessing
 import tempfile
 import unittest
 from dataclasses import replace
+from datetime import timedelta
 from multiprocessing.synchronize import Barrier
 from pathlib import Path
 
@@ -12,17 +13,35 @@ from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
-from pinboard.application.artifacts import CheckpointArtifacts, EvidenceArtifactRef, NewArtifact, ResultArtifactRef
+from pinboard.application.artifacts import (
+    CheckpointArtifacts,
+    EvidenceArtifactRef,
+    NewArtifact,
+    ResultArtifactRef,
+    WorkBriefIdentity,
+)
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.mutations import project_checkpoint_acceptance_mutation, project_transition_mutation
+from pinboard.application.service import change_preparation_authority, create_proposal, execute
 from pinboard.domain import decision_models, work_models
+from pinboard.domain.authority_models import AcquireInitialPreparationAuthority, PreparationLeaseStatus
 from pinboard.domain.decisions import (
     available_actions,
     decide,
 )
 from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.history import work_item_definition_digest
-from pinboard.domain.identifiers import AttemptId, CandidateId, CheckpointId, ItemId, TaskId
+from pinboard.domain.identifiers import (
+    AttemptId,
+    CandidateId,
+    CheckpointId,
+    HostId,
+    ItemId,
+    LeaseId,
+    ProposalId,
+    TaskId,
+)
+from pinboard.domain.proposal_models import CreateProposalOperation, ProposalIntake
 from tests.domain_support import command, expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state
 
@@ -34,7 +53,7 @@ def _commit_same_pause(
 ) -> None:
     store = SQLiteWorkStore(Path(database_path))
     before = store.snapshot()
-    snapshot = project_decision_snapshot(before)
+    snapshot = project_decision_snapshot(before, SQLITE_NOW)
     actor = decision_models.ActorAuthority(
         decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
     )
@@ -60,7 +79,7 @@ def _commit_same_checkpoint(
     roots = resolve_durable_roots(Path(project_path))
     store = SQLiteWorkStore(Path(database_path))
     before = store.snapshot()
-    snapshot = project_decision_snapshot(before)
+    snapshot = project_decision_snapshot(before, SQLITE_NOW)
     coordination = snapshot.coordination_authority
     assert coordination is not None
     actor = decision_models.ActorAuthority(
@@ -108,7 +127,7 @@ def _commit_same_definition_revision(
 ) -> None:
     store = SQLiteWorkStore(Path(database_path))
     before = store.snapshot()
-    snapshot = project_decision_snapshot(before)
+    snapshot = project_decision_snapshot(before, SQLITE_NOW)
     actor = decision_models.ActorAuthority(
         decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
     )
@@ -145,7 +164,260 @@ def _commit_same_definition_revision(
     results.put(result.code.value if isinstance(result, DecisionFailure) else "committed")
 
 
+def _acquire_same_preparation(
+    database_path: str,
+    lease_id: str,
+    barrier: Barrier,
+    results: multiprocessing.queues.Queue[str],
+) -> None:
+    store = SQLiteWorkStore(Path(database_path))
+    snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
+    item = snapshot.item(ItemId("work-c"))
+    definition = snapshot.definition(ItemId("work-c"))
+    coordination = snapshot.coordination_authority
+    assert item is not None
+    assert definition is not None
+    assert coordination is not None
+    operation = AcquireInitialPreparationAuthority(
+        snapshot.host_epoch,
+        item.item,
+        snapshot.revision,
+        snapshot.subject_revision(item.item) or "",
+        definition.revision,
+        definition.digest,
+        coordination,
+        TaskId(f"preparer-{lease_id}"),
+        HostId("host-a"),
+        LeaseId(lease_id),
+        SQLITE_NOW,
+        SQLITE_NOW + timedelta(minutes=1),
+    )
+    barrier.wait()
+    result = change_preparation_authority(store, operation)
+    results.put(result.code.value if isinstance(result, DecisionFailure) else "committed")
+
+
+def _race_preparation_and_prerequisite_proposal(
+    database_path: str,
+    operation_kind: str,
+    barrier: Barrier,
+    results: multiprocessing.queues.Queue[str],
+) -> None:
+    store = SQLiteWorkStore(Path(database_path))
+    if operation_kind == "preparation":
+        snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
+        item = snapshot.item(ItemId("work-c"))
+        definition = snapshot.definition(ItemId("work-c"))
+        coordination = snapshot.coordination_authority
+        assert item is not None
+        assert definition is not None
+        assert coordination is not None
+        operation = AcquireInitialPreparationAuthority(
+            snapshot.host_epoch,
+            item.item,
+            snapshot.revision,
+            snapshot.subject_revision(item.item) or "",
+            definition.revision,
+            definition.digest,
+            coordination,
+            TaskId("preparer"),
+            HostId("host-a"),
+            LeaseId("preparation-a"),
+            SQLITE_NOW,
+            SQLITE_NOW + timedelta(minutes=1),
+        )
+        barrier.wait()
+        result = change_preparation_authority(store, operation)
+    else:
+        intake = ProposalIntake(
+            ProposalId("required-before-work-c"),
+            SQLITE_NOW,
+            TaskId("discovering-task"),
+            "Required before Work C",
+            "Work C needs one newly discovered prerequisite.",
+            "The dependency must be preserved before activation.",
+            "Record the prerequisite and relationship.",
+            "A coordinator can evaluate it.",
+            work_models.PrerequisiteProposalRelation(ItemId("work-c")),
+            "The relationship is current.",
+            ("source:local",),
+            ("Work C remains ready.",),
+        )
+        barrier.wait()
+        result = create_proposal(store, CreateProposalOperation(intake), SQLITE_NOW)
+    results.put(result.code.value if isinstance(result, DecisionFailure) else "committed")
+
+
+def _activate_same_prepared_item(
+    database_path: str,
+    barrier: Barrier,
+    results: multiprocessing.queues.Queue[str],
+) -> None:
+    store = SQLiteWorkStore(Path(database_path))
+    snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
+    authority = snapshot.command_preparation_authorities[0]
+    actor = decision_models.ActorAuthority(
+        decision_models.Role.PREPARER,
+        decision_models.AuthorizationKind.PREPARATION,
+        authority.generation,
+        authority.lease_id,
+        preparations=(authority.item,),
+    )
+    actions = expect_success(available_actions(snapshot, actor))
+    action = next(value for value in actions if value.kind == decision_models.ActionKind.ACTIVATE)
+    assert isinstance(action, decision_models.ActivateAction)
+    state_artifact_ref_id = store.snapshot().artifact_references[0].artifact_ref_id
+    selected_command = command(
+        action,
+        work_models.ActivateInput(
+            AttemptId("work-c-1"),
+            "codex/work-c",
+            "candidate-base",
+            "worker-task",
+            state_artifact_ref_id,
+        ),
+    )
+    identity = WorkBriefIdentity(
+        "work-c-1",
+        "work-c",
+        "codex/work-c",
+        "candidate-base",
+        authority.definition_revision,
+        authority.definition_digest,
+    )
+    barrier.wait()
+    result = execute(
+        store,
+        selected_command,
+        SQLITE_NOW + timedelta(seconds=1),
+        transition_brief_identity=identity,
+    )
+    results.put(result.code.value if isinstance(result, DecisionFailure) else f"committed:{state_artifact_ref_id}")
+
+
 class SQLiteConcurrencyTest(unittest.TestCase):
+    def test_concurrent_activation_consumes_preparation_and_creates_one_attempt(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        store = SQLiteWorkStore(roots.database_path)
+        state = complete_sqlite_state()
+        definition = next(value for value in state.lifecycle.definition_revisions if value.item_id == ItemId("work-c"))
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                preparation_counters=(stored_state.PreparationLeaseCounter(ItemId("work-c"), 1),),
+                preparation_generations=(
+                    stored_state.PreparationLeaseGeneration(
+                        ItemId("work-c"),
+                        1,
+                        LeaseId("preparation-c"),
+                        TaskId("preparer"),
+                        HostId("host-a"),
+                    ),
+                ),
+                preparation_leases=(
+                    stored_state.StoredPreparationLease(
+                        ItemId("work-c"),
+                        1,
+                        definition.revision,
+                        definition.digest,
+                        SQLITE_NOW,
+                        SQLITE_NOW + timedelta(minutes=1),
+                        PreparationLeaseStatus.ACTIVE,
+                    ),
+                ),
+            ),
+        )
+        store.initialize_state(state)
+
+        context = multiprocessing.get_context("spawn")
+        barrier = context.Barrier(2)
+        results = context.Queue()
+        workers = tuple(
+            context.Process(target=_activate_same_prepared_item, args=(str(roots.database_path), barrier, results))
+            for _ in range(2)
+        )
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=10)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(0, worker.exitcode)
+
+        observed = (results.get(), results.get())
+        self.assertEqual(1, sum(value.startswith("committed:") for value in observed))
+        self.assertIn("ACTION_NOT_AVAILABLE", observed)
+        after = SQLiteWorkStore(roots.database_path).snapshot()
+        self.assertEqual(PreparationLeaseStatus.REVOKED, after.authority.preparation_leases[0].state)
+        self.assertEqual(1, sum(value.attempt_id == AttemptId("work-c-1") for value in after.lifecycle.attempts))
+
+    def test_preparation_acquisition_and_prerequisite_proposal_serialize_to_one_winner(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        store = SQLiteWorkStore(roots.database_path)
+        store.initialize_state(complete_sqlite_state())
+        before = store.snapshot()
+
+        context = multiprocessing.get_context("spawn")
+        barrier = context.Barrier(2)
+        results = context.Queue()
+        workers = tuple(
+            context.Process(
+                target=_race_preparation_and_prerequisite_proposal,
+                args=(str(roots.database_path), operation_kind, barrier, results),
+            )
+            for operation_kind in ("preparation", "proposal")
+        )
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=10)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(0, worker.exitcode)
+
+        self.assertCountEqual(("committed", "ACTION_NOT_AVAILABLE"), (results.get(), results.get()))
+        after = SQLiteWorkStore(roots.database_path).snapshot()
+        self.assertEqual(before.lifecycle.project.revision + 1, after.lifecycle.project.revision)
+        preparation_won = bool(after.authority.preparation_leases)
+        proposal_won = any(
+            value.proposal_id == ProposalId("required-before-work-c") for value in after.proposals.proposals
+        )
+        self.assertNotEqual(preparation_won, proposal_won)
+
+    def test_concurrent_initial_preparation_acquisition_has_one_winner(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        store = SQLiteWorkStore(roots.database_path)
+        store.initialize_state(complete_sqlite_state())
+        before = store.snapshot()
+
+        context = multiprocessing.get_context("spawn")
+        barrier = context.Barrier(2)
+        results = context.Queue()
+        workers = tuple(
+            context.Process(
+                target=_acquire_same_preparation,
+                args=(str(roots.database_path), f"preparation-{index}", barrier, results),
+            )
+            for index in range(2)
+        )
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=10)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(0, worker.exitcode)
+
+        self.assertCountEqual(("committed", "ACTION_NOT_AVAILABLE"), (results.get(), results.get()))
+        after = SQLiteWorkStore(roots.database_path).snapshot()
+        self.assertEqual(before.lifecycle.project.revision + 1, after.lifecycle.project.revision)
+        self.assertEqual(1, len(after.authority.preparation_leases))
+        self.assertEqual(1, after.authority.preparation_counters[0].generation_high_water)
+
     def test_concurrent_same_action_commits_once_and_rejects_stale_writer(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
@@ -178,7 +450,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         store = SQLiteWorkStore(roots.database_path)
         state = complete_sqlite_state()
         store.initialize_state(state)
-        snapshot = project_decision_snapshot(store.snapshot())
+        snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
         authority = snapshot.command_attempt_authorities[0]
         actor = decision_models.ActorAuthority(
             decision_models.Role.WORKER,

@@ -26,8 +26,8 @@ from pinboard.adapters.sqlite.models import OpenMode
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 
 APPLICATION = "pinboard"
-SCHEMA_VERSION = 1
-SCHEMA_ID = "sqlite-v1"
+SCHEMA_VERSION = 2
+SCHEMA_ID = "sqlite-v2"
 BUSY_TIMEOUT_MS = 2_000
 
 

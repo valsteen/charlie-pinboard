@@ -19,6 +19,7 @@ from pinboard.interfaces import (
     cli_parser,
     coordination_authority,
     dispatch_brief,
+    preparation_authority,
     proposal_commands,
     transitions,
     work_brief_publication,
@@ -76,6 +77,7 @@ def _dispatch(  # noqa: C901, PLR0912 - one visible exhaustive command-family ro
             cli_commands.CoordinatorTransitionCommand()
             | cli_commands.CoordinationTransitionCommand()
             | cli_commands.AttemptTransitionCommand()
+            | cli_commands.PreparationTransitionCommand()
         ) as command:
             return transitions.transition(roots, command)
         case (
@@ -105,6 +107,16 @@ def _dispatch(  # noqa: C901, PLR0912 - one visible exhaustive command-family ro
             | cli_commands.AttemptRevokeCommand()
         ) as command:
             return attempt_authority.change_attempt_authority(roots, command)
+        case cli_commands.PreparationStatusCommand() as command:
+            return preparation_authority.preparation_status(roots, command)
+        case (
+            cli_commands.CoordinatorPreparationAcquireCommand()
+            | cli_commands.CoordinatedPreparationTransferCommand()
+            | cli_commands.PreparationRenewCommand()
+            | cli_commands.PreparationReleaseCommand()
+            | cli_commands.PreparationRevokeCommand()
+        ) as command:
+            return preparation_authority.change_preparation_authority(roots, command)
         case cli_commands.ParallelPreviewCommand() as command:
             return work_inspection.parallel(roots, command)
         case cli_commands.RebuildViewsCommand() as command:

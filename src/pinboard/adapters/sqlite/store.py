@@ -22,9 +22,11 @@ from pinboard.adapters.sqlite.artifacts import (
     accept_checkpoint_artifact,
 )
 from pinboard.adapters.sqlite.authority import (
+    consume_preparation_authority,
     fence_attempt_authority,
     write_attempt_authority,
     write_coordination_authority,
+    write_preparation_authority,
 )
 from pinboard.adapters.sqlite.database import (
     open_database,
@@ -48,6 +50,7 @@ from pinboard.application.mutation_models import (
     AttemptAuthorityMutation,
     CheckpointAcceptanceMutation,
     CoordinationAuthorityMutation,
+    PreparationAuthorityMutation,
     ProposalCreationMutation,
     StoredStateMutation,
     TransitionMutation,
@@ -105,6 +108,14 @@ def _persist_transition(  # noqa: C901, PLR0912, PLR0915
                     connection, state, item, before, stored_state.StoredWorkItemState.ACTIVE, revision, now
                 )
             ) is not None:
+                return failure
+            preparation = mutation.decision.action.capability.preparation_authority
+            if preparation is None:
+                return DecisionFailure(
+                    DecisionFailureCode.ACTION_NOT_AVAILABLE,
+                    "Activation requires exact preparation authority.",
+                )
+            if (failure := consume_preparation_authority(connection, preparation, now)) is not None:
                 return failure
             if (failure := insert_attempt(connection, state, change, revision, now)) is not None:
                 return failure
@@ -519,6 +530,8 @@ def _persist_state_change(
             )
         case AttemptAuthorityMutation(decision=decision):
             return write_attempt_authority(connection, decision)
+        case PreparationAuthorityMutation(decision=decision):
+            return write_preparation_authority(connection, decision)
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -638,6 +651,7 @@ class _SQLiteWorkTransaction:
                 | ProposalCreationMutation()
                 | CoordinationAuthorityMutation()
                 | AttemptAuthorityMutation()
+                | PreparationAuthorityMutation()
             ):
                 return self._select(mutation.receipt.transition)
             case _ as unreachable:

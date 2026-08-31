@@ -1,9 +1,10 @@
-from datetime import UTC, datetime
+from datetime import datetime
+from typing import assert_never
 
 from pinboard.application import query_models, stored_state
 from pinboard.application.ports import WorkStore
 from pinboard.domain import work_models
-from pinboard.domain.authority_models import AttemptLeaseStatus
+from pinboard.domain.authority_models import AttemptLeaseStatus, PreparationLeaseStatus
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import ItemId
 
@@ -28,7 +29,46 @@ def _parallel_item_key(value: query_models.ParallelItem) -> str:
     return value.item_id
 
 
-def overview_from_state(state: stored_state.StoredWorkState) -> query_models.WorkOverview:
+def _preparation_status(
+    state: stored_state.StoredWorkState, item_id: ItemId, now: datetime
+) -> query_models.PreparationStatusView | None:
+    lease = next((value for value in state.authority.preparation_leases if value.item_id == item_id), None)
+    if lease is None:
+        return None
+    anchor = next(
+        (
+            value
+            for value in state.authority.preparation_generations
+            if value.item_id == item_id and value.generation == lease.generation
+        ),
+        None,
+    )
+    if anchor is None:
+        return None
+    match lease.state:
+        case PreparationLeaseStatus.ACTIVE:
+            status: query_models.PreparationStatus = "expired" if lease.expires_at <= now else "active"
+        case PreparationLeaseStatus.EXPIRED:
+            status = "expired"
+        case PreparationLeaseStatus.RELEASED:
+            status = "released"
+        case PreparationLeaseStatus.REVOKED:
+            status = "revoked"
+        case _ as unreachable:
+            assert_never(unreachable)
+    return query_models.PreparationStatusView(
+        lease.definition_revision,
+        lease.definition_digest,
+        str(anchor.task_id),
+        str(anchor.host_id),
+        str(anchor.lease_id),
+        lease.generation,
+        lease.expires_at.isoformat(),
+        status,
+    )
+
+
+def overview_from_state(state: stored_state.StoredWorkState, now: datetime) -> query_models.WorkOverview:
     definitions = {value.item_id: value.definition for value in state.lifecycle.definition_revisions}
     attempts = {
         attempt.item_id: attempt.attempt_id
@@ -121,6 +161,7 @@ def overview_from_state(state: stored_state.StoredWorkState) -> query_models.Wor
             str(attempts[item.item_id]) if item.item_id in attempts else None,
             item.next_action,
             item.notes or "",
+            _preparation_status(state, item.item_id, now),
         )
         for item, live_state in live_items
     )
@@ -128,6 +169,7 @@ def overview_from_state(state: stored_state.StoredWorkState) -> query_models.Wor
         item.item_id
         for item in items
         if item.eligible
+        and (item.preparation is None or item.preparation.status != "active")
         and (
             item.state in {work_models.WorkState.INTAKE, work_models.WorkState.READY, work_models.WorkState.DEFERRED}
             or item.state in {work_models.WorkState.PAUSED, work_models.WorkState.BLOCKED}
@@ -135,7 +177,7 @@ def overview_from_state(state: stored_state.StoredWorkState) -> query_models.Wor
     )
     return query_models.WorkOverview(
         "pinboard-overview/v2",
-        "sqlite-v1",
+        "sqlite-v2",
         str(state.lifecycle.project.revision),
         str(state.focus.item_id) if state.focus.item_id is not None else None,
         str(state.focus.attempt_id) if state.focus.attempt_id is not None else None,
@@ -149,7 +191,7 @@ def overview_from_state(state: stored_state.StoredWorkState) -> query_models.Wor
     )
 
 
-def item_status(store: WorkStore, item_id: ItemId) -> DecisionResult[query_models.ItemStatus]:
+def item_status(store: WorkStore, item_id: ItemId, now: datetime) -> DecisionResult[query_models.ItemStatus]:
     state = store.snapshot()
     item = next((candidate for candidate in state.lifecycle.work_items if candidate.item_id == item_id), None)
     if item is None:
@@ -169,7 +211,7 @@ def item_status(store: WorkStore, item_id: ItemId) -> DecisionResult[query_model
     )
     return query_models.ItemStatus(
         "pinboard-item-status/v1",
-        "sqlite-v1",
+        "sqlite-v2",
         str(state.lifecycle.project.revision),
         str(item.item_id),
         definition.title,
@@ -179,6 +221,7 @@ def item_status(store: WorkStore, item_id: ItemId) -> DecisionResult[query_model
         item.next_action,
         item.notes or "",
         attempts,
+        _preparation_status(state, item_id, now),
     )
 
 
@@ -213,7 +256,7 @@ def item_definition(store: WorkStore, item_id: ItemId) -> DecisionResult[query_m
         )
     return query_models.ItemDefinition(
         "pinboard-item-definition/v1",
-        "sqlite-v1",
+        "sqlite-v2",
         state.lifecycle.project.revision,
         item_id,
         current.revision,
@@ -259,7 +302,7 @@ def item_definition_history(
     )
     return query_models.ItemDefinitionHistory(
         "pinboard-item-definition-history/v1",
-        "sqlite-v1",
+        "sqlite-v2",
         state.lifecycle.project.revision,
         item_id,
         rows,
@@ -267,14 +310,13 @@ def item_definition_history(
     )
 
 
-def _preview_time(value: datetime | None) -> query_models.QueryResult[datetime]:
-    current = value or datetime.now(UTC)
-    if current.tzinfo is None:
+def _preview_time(value: datetime) -> query_models.QueryResult[datetime]:
+    if value.tzinfo is None:
         return query_models.QueryFailure(
             query_models.QueryRejectionCode.PARALLEL_TIME_INVALID,
             "Preview time must be timezone-aware.",
         )
-    return current.astimezone(UTC)
+    return value
 
 
 def _parallel_reasons(
@@ -289,6 +331,21 @@ def _parallel_reasons(
             query_models.ParallelReason(
                 query_models.ParallelReasonCode.STATE_NOT_LAUNCHABLE,
                 f"Item '{item_id}' is {item.state.value}; only ready items and unowned active attempts can launch.",
+            ),
+        )
+    preparation = next(
+        (candidate for candidate in state.authority.preparation_leases if candidate.item_id == item_id),
+        None,
+    )
+    if (
+        preparation is not None
+        and preparation.state == PreparationLeaseStatus.ACTIVE
+        and preparation.expires_at > current
+    ):
+        return (
+            query_models.ParallelReason(
+                query_models.ParallelReasonCode.PREPARATION_OWNED,
+                f"Item '{item_id}' is being prepared until {preparation.expires_at.isoformat()}.",
             ),
         )
     live_dependencies = tuple(
@@ -330,7 +387,7 @@ def preview_parallel(
     store: WorkStore,
     *,
     selected: tuple[str, ...] = (),
-    now: datetime | None = None,
+    now: datetime,
 ) -> query_models.QueryResult[query_models.ParallelPreview]:
     state = store.snapshot()
     current = _preview_time(now)

@@ -146,6 +146,34 @@ def reject_table_deletes(table_name: str) -> Generator[None]:
         yield
 
 
+@contextmanager
+def reject_table_inserts(table_name: str) -> Generator[None]:
+    """Inject a SQLite failure when one focused relation is inserted."""
+
+    original_open = sqlite_store.open_database
+
+    def guarded_open(path: Path, mode: OpenMode) -> sqlite3.Connection:
+        connection = original_open(path, mode)
+        if mode == OpenMode.READ_WRITE:
+
+            def authorize(
+                action: int,
+                argument: str | None,
+                _secondary_argument: str | None,
+                _database: str | None,
+                _trigger: str | None,
+            ) -> int:
+                if action == sqlite3.SQLITE_INSERT and argument == table_name:
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            connection.set_authorizer(authorize)
+        return connection
+
+    with patch.object(sqlite_store, "open_database", guarded_open):
+        yield
+
+
 def _stored_item(
     item_id: ItemId,
     state: stored_state.StoredWorkItemState,
@@ -212,7 +240,7 @@ def complete_sqlite_state() -> stored_state.StoredWorkState:
         SQLITE_NOW,
     )
     lifecycle = stored_state.LifecycleRecords(
-        stored_state.ProjectRecord("pinboard", 1, 12, 2, SQLITE_NOW, SQLITE_NOW),
+        stored_state.ProjectRecord("pinboard", 2, 12, 2, SQLITE_NOW, SQLITE_NOW),
         (
             _stored_item(intake_item, stored_state.StoredWorkItemState.INTAKE, sparse=True, queue_position=1),
             _stored_item(item_a, stored_state.StoredWorkItemState.ACTIVE, queue_position=2),

@@ -1,6 +1,6 @@
 import unittest
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.domain import decision_models, work_models
@@ -12,13 +12,15 @@ from pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
     CandidateId,
+    HostId,
     ItemId,
     LeaseId,
+    TaskId,
 )
 from pinboard.domain.ledger import LedgerSnapshot
 from pinboard.interfaces.transition_input import parse_transition_command
 from tests.domain_support import action, command, expect_success
-from tests.support import SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_NOW, complete_sqlite_state, test_definition
 
 
 def _worker_actor() -> decision_models.ActorAuthority:
@@ -62,7 +64,7 @@ def _stored_action(snapshot: LedgerSnapshot) -> decision_models.SubmitReviewActi
 
 class TypedTransitionContractTest(unittest.TestCase):
     def test_submit_review_candidate_is_required_typed_and_preserved(self) -> None:
-        snapshot = project_decision_snapshot(complete_sqlite_state())
+        snapshot = project_decision_snapshot(complete_sqlite_state(), SQLITE_NOW)
         submit = _stored_action(snapshot)
 
         candidate = CandidateId("candidate-that-is-not-a-subject-revision")
@@ -91,8 +93,42 @@ class TypedTransitionContractTest(unittest.TestCase):
                 work_models.ArtifactRecord(ArtifactRefId(1), "brief"),
                 work_models.ArtifactRecord(ArtifactRefId(2), "design"),
             ),
+            definitions=(
+                work_models.DefinitionAnchor(
+                    ItemId("ready-item"), 1, "d" * 64, test_definition(ItemId("ready-item"))[0]
+                ),
+            ),
         )
-        activation = action(decision_models.ActivateAction, ItemId("ready-item"))
+        preparation = work_models.PreparationCommandAuthority(
+            1,
+            ItemId("ready-item"),
+            1,
+            "d" * 64,
+            TaskId("preparer"),
+            HostId("host"),
+            LeaseId("preparation"),
+            1,
+            SQLITE_NOW + timedelta(minutes=5),
+        )
+        snapshot = replace(
+            snapshot,
+            definitions=(
+                replace(
+                    snapshot.definitions[0], definition=replace(snapshot.definitions[0].definition, dependencies=())
+                ),
+            ),
+        )
+        activation = decision_models.ActivateAction(
+            decision_models.MutationActionCapability(
+                ItemId("ready-item"),
+                "activate",
+                "project-revision",
+                1,
+                authorization=decision_models.AuthorizationKind.PREPARATION,
+                lease_id=preparation.lease_id,
+                preparation_authority=preparation,
+            )
+        )
 
         variants = (
             work_models.ActivateInput(AttemptId("ready-item-1"), "branch", "base", "task", ArtifactRefId(99)),
@@ -211,7 +247,7 @@ class TypedTransitionContractTest(unittest.TestCase):
 
 class ExactMutationAuthorityTest(unittest.TestCase):
     def test_action_preserves_every_attempt_authority_fact(self) -> None:
-        snapshot = project_decision_snapshot(complete_sqlite_state())
+        snapshot = project_decision_snapshot(complete_sqlite_state(), SQLITE_NOW)
         selected = _stored_action(snapshot)
         authority = selected.capability.command_authority
         self.assertIsNotNone(authority)
@@ -233,7 +269,7 @@ class ExactMutationAuthorityTest(unittest.TestCase):
 
     def test_exact_rediscovery_rejects_single_fact_substitutions_not_global_revision(self) -> None:
         state = complete_sqlite_state()
-        snapshot = project_decision_snapshot(state)
+        snapshot = project_decision_snapshot(state, SQLITE_NOW)
         selected = _stored_action(snapshot)
         authority = selected.capability.command_authority
         assert authority is not None
@@ -259,7 +295,9 @@ class ExactMutationAuthorityTest(unittest.TestCase):
                 project=replace(state.lifecycle.project, revision=state.lifecycle.project.revision + 1),
             ),
         )
-        rediscovered = rediscover_action(project_decision_snapshot(advanced_state), _worker_actor(), selected)
+        rediscovered = rediscover_action(
+            project_decision_snapshot(advanced_state, SQLITE_NOW), _worker_actor(), selected
+        )
         self.assertEqual(decision_models.action_id(selected), decision_models.action_id(rediscovered))
 
 

@@ -20,7 +20,7 @@ The project-local work root contains one SQLite authority and generated or immut
 
 Resolve the project through Git's shared common directory. A linked worktree therefore uses the primary checkout's `.codex/pinboard`, not a competing ignored root. Default initialization adds only the anchored `/.codex/pinboard/` entry to that shared repository's local Git exclude file; it does not edit committed ignore files or hide unrelated `.codex` content. An explicit `--work-root` remains at the exact selected path.
 
-Require `authority: sqlite-v1` from the executable. `state.sqlite3` owns lifecycle, focus, dependencies, attempts, leases, proposals, history, and accepted artifact references. `views/` is replaceable output and never a fallback authority. Do not reconstruct state from other files.
+Require `authority: sqlite-v2` from the executable. `state.sqlite3` owns lifecycle, focus, dependencies, attempts, leases, proposals, history, and accepted artifact references. `views/` is replaceable output and never a fallback authority. Do not reconstruct state from other files.
 
 Use these nonterminal states:
 

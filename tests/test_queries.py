@@ -36,12 +36,12 @@ class SQLiteQueriesTest(unittest.TestCase):
     def test_overview_and_parallel_preview_read_only_sqlite_state(self) -> None:
         store = self._store()
 
-        overview = overview_from_state(store.snapshot())
+        overview = overview_from_state(store.snapshot(), SQLITE_NOW)
         preview = preview_parallel(store, now=SQLITE_NOW)
         self.assertIsInstance(preview, query_models.ParallelPreview)
         assert isinstance(preview, query_models.ParallelPreview)
 
-        self.assertEqual("sqlite-v1", overview.authority)
+        self.assertEqual("sqlite-v2", overview.authority)
         self.assertEqual("12", overview.revision)
         self.assertEqual(("work-a-1",), overview.active_attempts)
         self.assertEqual(
@@ -78,7 +78,7 @@ class SQLiteQueriesTest(unittest.TestCase):
             )
 
             with self.subTest(relation=relation.kind.value):
-                item = overview_from_state(store.snapshot()).items[-1]
+                item = overview_from_state(store.snapshot(), SQLITE_NOW).items[-1]
                 self.assertEqual((), item.depends_on)
                 self.assertTrue(item.eligible)
                 self.assertEqual(relation.kind, item.review_flags[0].kind)
@@ -130,13 +130,13 @@ class SQLiteQueriesTest(unittest.TestCase):
             )
         )
 
-        live = expect_success(item_status(store, ItemId("work-a")))
-        done = expect_success(item_status(store, done_item.item_id))
+        live = expect_success(item_status(store, ItemId("work-a"), SQLITE_NOW))
+        done = expect_success(item_status(store, done_item.item_id, SQLITE_NOW))
 
         self.assertEqual(
             query_models.ItemStatus(
                 "pinboard-item-status/v1",
-                "sqlite-v1",
+                "sqlite-v2",
                 "12",
                 "work-a",
                 "Work work-a",
@@ -152,7 +152,7 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertEqual(
             query_models.ItemStatus(
                 "pinboard-item-status/v1",
-                "sqlite-v1",
+                "sqlite-v2",
                 "12",
                 "work-b",
                 "Work work-b",
@@ -165,7 +165,9 @@ class SQLiteQueriesTest(unittest.TestCase):
             ),
             done,
         )
-        self.assertNotIn("work-b", tuple(item.item_id for item in overview_from_state(store.snapshot()).items))
+        self.assertNotIn(
+            "work-b", tuple(item.item_id for item in overview_from_state(store.snapshot(), SQLITE_NOW).items)
+        )
 
     def test_item_status_returns_terminal_siblings_with_non_null_attempt_arrays(self) -> None:
         state = complete_sqlite_state()
@@ -190,7 +192,7 @@ class SQLiteQueriesTest(unittest.TestCase):
             )
 
             with self.subTest(terminal=terminal.value):
-                status = expect_success(item_status(store, terminal_item.item_id))
+                status = expect_success(item_status(store, terminal_item.item_id, SQLITE_NOW))
                 self.assertEqual(terminal.value, status.state.value)
                 self.assertEqual((), status.attempts)
                 self.assertEqual("", status.notes)
@@ -198,7 +200,7 @@ class SQLiteQueriesTest(unittest.TestCase):
     def test_item_status_rejects_an_unknown_canonical_identity(self) -> None:
         store = self._store()
 
-        missing = item_status(store, ItemId("missing-item"))
+        missing = item_status(store, ItemId("missing-item"), SQLITE_NOW)
 
         self.assertIsInstance(missing, DecisionFailure)
         assert isinstance(missing, DecisionFailure)
@@ -232,6 +234,7 @@ class SQLiteQueriesTest(unittest.TestCase):
 
         self.assertEqual((decision_models.ActionKind.INSPECT,), tuple(action.kind for action in observer))
         self.assertTrue(any(action.kind == decision_models.ActionKind.DISPATCH for action in coordinator))
+        self.assertFalse(any(action.kind == decision_models.ActionKind.ACTIVATE for action in coordinator))
         self.assertTrue(any(action.kind == decision_models.ActionKind.CONTINUE for action in worker))
         stale_coordination = discover_actions(
             store,

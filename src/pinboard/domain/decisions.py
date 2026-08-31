@@ -21,6 +21,7 @@ class ActionCapabilityFactory:
         label: str,
         subject_revision: str | None = None,
         command_authority: work_models.CommandAttemptAuthority | None = None,
+        preparation_authority: work_models.PreparationCommandAuthority | None = None,
     ) -> decision_models.MutationActionCapability[SubjectT]:
         return decision_models.MutationActionCapability(
             subject=subject,
@@ -31,6 +32,7 @@ class ActionCapabilityFactory:
             authorization=self.actor.authorization,
             lease_id=self.actor.lease_id,
             command_authority=command_authority,
+            preparation_authority=preparation_authority,
         )
 
 
@@ -81,6 +83,30 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionCapabilityFactory) 
                     ),
                 )
             )
+    return tuple(result)
+
+
+def _preparer_actions(snapshot: LedgerSnapshot, factory: ActionCapabilityFactory) -> tuple[decision_models.Action, ...]:
+    result: list[decision_models.Action] = []
+    for item_id in factory.actor.preparations:
+        item = snapshot.item(item_id)
+        authority = snapshot.preparation_for(item_id, factory.actor.lease_id, factory.actor.generation)
+        command = next(
+            (value for value in snapshot.command_preparation_authorities if value.item == item_id),
+            None,
+        )
+        if item is None or authority is None or command is None or item.state != work_models.WorkState.READY:
+            continue
+        result.append(
+            decision_models.ActivateAction(
+                factory.make(
+                    item.item,
+                    f"Activate {item.item}",
+                    snapshot.subject_revision(item.item),
+                    preparation_authority=command,
+                )
+            )
+        )
     return tuple(result)
 
 
@@ -151,7 +177,6 @@ def _item_actions(
         ]
     if item.state == work_models.WorkState.READY:
         return [
-            decision_models.ActivateAction(factory.make(item.item, f"Activate {item.item}")),
             decision_models.DeferAction(factory.make(item.item, f"Defer {item.item} with a reopen condition")),
             close,
         ]
@@ -173,7 +198,7 @@ def _item_actions(
     return []
 
 
-def available_actions(
+def available_actions(  # noqa: PLR0912
     snapshot: LedgerSnapshot, actor: decision_models.ActionActorAuthority
 ) -> DecisionResult[tuple[decision_models.Action, ...]]:
     revision = snapshot.revision if actor.revision_scoped else ""
@@ -201,9 +226,19 @@ def available_actions(
                             "The supplied attempt lease is not current for an active item.",
                         )
                     return result
+                case decision_models.Role.PREPARER:
+                    result = _preparer_actions(snapshot, factory)
+                    if not result:
+                        return DecisionFailure(
+                            DecisionFailureCode.ACTION_NOT_AVAILABLE,
+                            "The supplied preparation lease is not current for a ready item.",
+                        )
+                    return result
                 case decision_models.Role.COORDINATOR:
                     result = _active_coordinator_actions(snapshot, factory)
                     for item in snapshot.items:
+                        if any(authority.item == item.item for authority in snapshot.command_preparation_authorities):
+                            continue
                         result.append(
                             decision_models.ReviseItemAction(
                                 factory.make(item.item, f"Revise the accepted definition for {item.item}")
@@ -279,7 +314,10 @@ def rediscover_action(
         )
     supplied_capability = supplied.capability
     current_capability = current.capability
-    if supplied_capability.authorization == decision_models.AuthorizationKind.ATTEMPT:
+    if supplied_capability.authorization in {
+        decision_models.AuthorizationKind.ATTEMPT,
+        decision_models.AuthorizationKind.PREPARATION,
+    }:
         capability_matches = (
             supplied_capability.label == current_capability.label
             and supplied_capability.coordinator_generation == current_capability.coordinator_generation
@@ -287,6 +325,7 @@ def rediscover_action(
             and supplied_capability.authorization == current_capability.authorization
             and supplied_capability.lease_id == current_capability.lease_id
             and supplied_capability.command_authority == current_capability.command_authority
+            and supplied_capability.preparation_authority == current_capability.preparation_authority
         )
     else:
         capability_matches = supplied_capability == current_capability
@@ -351,6 +390,22 @@ def _activate(
     if item.state != work_models.WorkState.READY:
         return DecisionFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' is not ready for activation."
+        )
+    preparation = action.capability.preparation_authority
+    definition = snapshot.definition(item.item)
+    if (
+        preparation is None
+        or definition is None
+        or (
+            preparation.item,
+            preparation.definition_revision,
+            preparation.definition_digest,
+        )
+        != (item.item, definition.revision, definition.digest)
+    ):
+        return DecisionFailure(
+            DecisionFailureCode.ACTION_NOT_AVAILABLE,
+            "Activation requires the exact live preparation authority and definition pin.",
         )
     artifact = next(
         (candidate for candidate in snapshot.artifacts if candidate.artifact_ref_id == value.brief_artifact_ref_id),

@@ -1,11 +1,11 @@
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 
 from pinboard.adapters.files.errors import FileIOError
 from pinboard.adapters.files.file_io import atomic_replace, ensure_child_directory
 from pinboard.adapters.files.models import AffectedViews, ViewRefreshResult, ViewWarning
 from pinboard.application import stored_state
-from pinboard.application.ports import WorkStore
 from pinboard.application.queries import overview_from_state
 from pinboard.domain.identifiers import AttemptId
 
@@ -17,20 +17,21 @@ def _dependency_key(value: stored_state.ItemDependency) -> tuple[str, int]:
 
 
 def _header(kind: str, revision: int) -> str:
-    return f"---\nkind: {kind}\ndatabase_revision: {revision}\nauthority: sqlite-v1\n---\n\n> {NOTICE}\n\n"
+    return f"---\nkind: {kind}\ndatabase_revision: {revision}\nauthority: sqlite-v2\n---\n\n> {NOTICE}\n\n"
 
 
-def _queue(state: stored_state.StoredWorkState) -> bytes:
-    overview = overview_from_state(state)
+def _queue(state: stored_state.StoredWorkState, now: datetime) -> bytes:
+    overview = overview_from_state(state, now)
     lines = [
         _header("work-queue-view", state.lifecycle.project.revision),
         "# Work Queue\n\n",
-        "| Position | Item | State | Eligible | Review | Attempt | Next action |\n",
-        "| --- | --- | --- | --- | --- | --- | --- |\n",
+        "| Position | Item | State | Preparation | Eligible | Review | Attempt | Next action |\n",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |\n",
     ]
     lines.extend(
         (
             f"| {item.position} | {item.item_id} | {item.state.value} | "
+            f"{item.preparation.status if item.preparation is not None else '—'} | "
             f"{'yes' if item.eligible else 'no'} | "
             f"{', '.join(flag.kind.value for flag in item.review_flags) or '—'} | "
             f"{item.attempt_id or '—'} | {item.next_action or '—'} |\n"
@@ -51,14 +52,14 @@ def _current(state: stored_state.StoredWorkState) -> bytes:
     ).encode()
 
 
-def _item(state: stored_state.StoredWorkState, item: stored_state.StoredWorkItem) -> bytes:
+def _item(state: stored_state.StoredWorkState, item: stored_state.StoredWorkItem, now: datetime) -> bytes:
     dependencies = tuple(
         value.dependency_id
         for value in sorted(state.lifecycle.dependencies, key=_dependency_key)
         if value.item_id == item.item_id
     )
     overview_item = next(
-        (value for value in overview_from_state(state).items if value.item_id == str(item.item_id)),
+        (value for value in overview_from_state(state, now).items if value.item_id == str(item.item_id)),
         None,
     )
     dependency_reasons = (
@@ -89,6 +90,7 @@ def _item(state: stored_state.StoredWorkState, item: stored_state.StoredWorkItem
         + f"- Queue position: {item.queue_position or 'none'}\n"
         + f"- Eligible: {'yes' if overview_item is not None and overview_item.eligible else 'no'}\n"
         + f"- Subject revision: {item.subject_revision}\n"
+        + f"- Preparation: {overview_item.preparation.status if overview_item is not None and overview_item.preparation is not None else 'none'}\n"
         + f"- Dependencies: {', '.join(dependencies) if dependencies else 'none'}\n"
         + f"- Dependency reasons: {'; '.join(dependency_reasons) if dependency_reasons else 'none'}\n"
         + f"- Review flags: {'; '.join(review_flags) if review_flags else 'none'}\n"
@@ -155,12 +157,13 @@ def _write_views(
     state: stored_state.StoredWorkState,
     affected: AffectedViews,
     attempt_briefs: Mapping[AttemptId, bytes],
+    now: datetime,
 ) -> None:
     view_root = ensure_child_directory(work_root, "views")
     item_root = ensure_child_directory(view_root, "items")
     attempt_root = ensure_child_directory(view_root, "attempts")
     if affected.queue:
-        atomic_replace(view_root / "queue.md", _queue(state))
+        atomic_replace(view_root / "queue.md", _queue(state, now))
     if affected.current_focus:
         atomic_replace(view_root / "current.md", _current(state))
     if affected.history:
@@ -169,7 +172,7 @@ def _write_views(
     for item_id in affected.items:
         item = items.get(item_id)
         if item is not None:
-            atomic_replace(item_root / f"{item_id}.md", _item(state, item))
+            atomic_replace(item_root / f"{item_id}.md", _item(state, item, now))
     attempts = {attempt.attempt_id: attempt for attempt in state.lifecycle.attempts}
     for attempt_id in affected.attempts:
         attempt = attempts.get(attempt_id)
@@ -177,15 +180,16 @@ def _write_views(
             atomic_replace(attempt_root / f"{attempt_id}.md", _attempt(state, attempt, attempt_briefs))
 
 
-def refresh(
-    store: WorkStore,
+def refresh_state(
+    state: stored_state.StoredWorkState,
     work_root: Path,
     affected: AffectedViews,
     attempt_briefs: Mapping[AttemptId, bytes] | None = None,
+    *,
+    now: datetime,
 ) -> ViewRefreshResult:
-    state = store.snapshot()
     try:
-        _write_views(work_root, state, affected, attempt_briefs or {})
+        _write_views(work_root, state, affected, attempt_briefs or {}, now)
     except FileIOError as error:
         return ViewRefreshResult(
             state.lifecycle.project.revision,
@@ -200,15 +204,17 @@ def refresh(
 def expected_view_bytes(
     state: stored_state.StoredWorkState,
     attempt_briefs: Mapping[AttemptId, bytes] | None = None,
+    *,
+    now: datetime,
 ) -> dict[str, bytes]:
     """Return every generated selector and its canonical bytes for one SQLite snapshot."""
 
     result = {
-        "queue.md": _queue(state),
+        "queue.md": _queue(state, now),
         "current.md": _current(state),
         "history.md": _history(state),
     }
-    result.update((f"items/{item.item_id}.md", _item(state, item)) for item in state.lifecycle.work_items)
+    result.update((f"items/{item.item_id}.md", _item(state, item, now)) for item in state.lifecycle.work_items)
     result.update(
         (f"attempts/{attempt.attempt_id}.md", _attempt(state, attempt, attempt_briefs or {}))
         for attempt in state.lifecycle.attempts
@@ -216,12 +222,13 @@ def expected_view_bytes(
     return result
 
 
-def rebuild(
-    store: WorkStore,
+def rebuild_state(
+    state: stored_state.StoredWorkState,
     work_root: Path,
     attempt_briefs: Mapping[AttemptId, bytes] | None = None,
+    *,
+    now: datetime,
 ) -> ViewRefreshResult:
-    state = store.snapshot()
     try:
         _write_views(
             work_root,
@@ -234,6 +241,7 @@ def rebuild(
                 attempts=tuple(attempt.attempt_id for attempt in state.lifecycle.attempts),
             ),
             attempt_briefs or {},
+            now,
         )
     except FileIOError as error:
         return ViewRefreshResult(

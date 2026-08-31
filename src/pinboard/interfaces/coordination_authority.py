@@ -130,6 +130,7 @@ def change_coordination_authority(
         roots,
         store,
         AffectedViews(queue=True, current_focus=True, history=True),
+        datetime.now(UTC),
     )
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)

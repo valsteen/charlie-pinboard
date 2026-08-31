@@ -48,6 +48,7 @@ WATCHED_AUTHORITIES = (
     Path("src/pinboard/interfaces/dispatch_brief.py"),
     Path("src/pinboard/interfaces/work_state.py"),
     Path("src/pinboard/interfaces/attempt_authority.py"),
+    Path("src/pinboard/interfaces/preparation_authority.py"),
 )
 
 
@@ -90,7 +91,7 @@ The primary path is intentionally familiar: intake becomes ready, active work en
 
 Resume restores paused or blocked work: a retained attempt becomes active, while an item without one becomes ready. Reopen returns deferred work to intake with new evidence. Continue is advisory: it confirms that an already-active attempt proceeds without changing lifecycle state or accepting mutation input.
 
-Proposals and dependencies are not extra states. Accepted scope is the exact authorized revision an attempt uses. Mutation ownership records who may act now: either one graph-wide coordination holder or one attempt lease. A review candidate identifies the exact result under review, and evidence supports its acceptance.
+Proposals and dependencies are not extra states. Accepted scope is the exact authorized revision an attempt uses. Mutation ownership records who may act now: one graph-wide coordination holder, one ready-item preparation claim, or one active-attempt lease. A review candidate identifies the exact result under review, and evidence supports its acceptance.
 
 ## What each transition preserves
 
@@ -121,7 +122,7 @@ The layers do not repeat the same decision. Each contributes a different guarant
 
 ## The durable memory underneath
 
-The relational ledger groups sixteen tables into six kinds of memory: current work, accepted scope and dependencies, discoveries, immutable knowledge, changing mutation ownership, and the history that connects them.
+The relational ledger groups nineteen tables into six kinds of memory: current work, accepted scope and dependencies, discoveries, immutable knowledge, changing mutation ownership, and the history that connects them.
 
 {_picture("database", "Six groups of SQLite tables showing current work, scope, discovery, durable knowledge, mutation ownership, and history")}
 
@@ -131,7 +132,7 @@ Pinboard publishes immutable artifacts along three current paths. A canonical wo
 
 Checkpoint acceptance publishes the exact result and independent review as immutable artifacts. It then atomically records the result on the attempt, the review on the accepted history receipt, the lifecycle change, and the single receipt. Publication alone does not change lifecycle state; a rejected or rolled-back acceptance leaves the prior ledger relationships intact.
 
-Mutation ownership has two scopes. Shared-change authority is temporary: any task may borrow the single coordination lease for one shared scheduling or graph-wide change, then release it. It is not a coordinator task and does not create or message other tasks. Its exclusivity prevents a conflicting shared decision during that operation and authorizes replacement or revocation of an attempt owner. An attempt lease records which task session—identified by task, host, and lease id—owns one implementation attempt. Its generation fences an older owner after transfer or revocation, while leases for unrelated attempts remain independent. Project state holds the current revision, and committed history records each accepted input, outcome, and actor.
+Mutation ownership has three scopes. Shared-change authority is temporary: any task may borrow the single coordination lease for one shared scheduling or graph-wide change, then release it. A preparation claim keeps an item ready while one task compiles and reviews its exact definition-bound brief; activation consumes that claim atomically when it creates the attempt. An attempt lease records which task session—identified by task, host, and lease id—owns one implementation attempt. Generations fence older preparation and attempt owners after transfer or revocation, while unrelated item-scoped leases remain independent. Project state holds the current revision, and committed history records each accepted input, outcome, and actor.
 
 For installation and the product story, return to the [README](README.md). For contributor-facing ownership, storage boundaries, and representative command flows, continue to the [architecture map](ARCHITECTURE.md). The [design principles](DESIGN_PRINCIPLES.md) explain the method used to keep those boundaries explicit.
 

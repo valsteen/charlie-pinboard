@@ -26,15 +26,17 @@ class AuthorizationKind(Enum):
     COORDINATOR = "coordinator"
     COORDINATION = "coordination"
     ATTEMPT = "attempt"
+    PREPARATION = "preparation"
 
 
 class Role(Enum):
     COORDINATOR = "coordinator"
     WORKER = "worker"
     OBSERVER = "observer"
+    PREPARER = "preparer"
 
 
-type MutationRole = Literal[Role.COORDINATOR, Role.WORKER]
+type MutationRole = Literal[Role.COORDINATOR, Role.WORKER, Role.PREPARER]
 
 
 class ActionEffect(Enum):
@@ -136,7 +138,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
             return ActionSemantics(
                 "Start one ready item from an accepted brief.",
                 ActionEffect.MUTATING,
-                (Role.COORDINATOR,),
+                (Role.PREPARER,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.READY_ITEM,
                 "Create and activate the item's attempt.",
@@ -335,6 +337,7 @@ class ActionCapability[SubjectT: SubjectId]:
     authorization: AuthorizationKind | None = AuthorizationKind.COORDINATOR
     lease_id: LeaseId | None = None
     command_authority: work_models.CommandAttemptAuthority | None = None
+    preparation_authority: work_models.PreparationCommandAuthority | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +350,7 @@ class MutationActionCapability[SubjectT: SubjectId]:
     authorization: AuthorizationKind = AuthorizationKind.COORDINATOR
     lease_id: LeaseId | None = None
     command_authority: work_models.CommandAttemptAuthority | None = None
+    preparation_authority: work_models.PreparationCommandAuthority | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -777,6 +781,7 @@ class ActorAuthority:
     lease_id: LeaseId | None = None
     attempts: tuple[AttemptId, ...] = ()
     revision_scoped: bool = True
+    preparations: tuple[ItemId, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -787,6 +792,7 @@ class ObserverActorAuthority:
     lease_id: None = None
     attempts: tuple[AttemptId, ...] = ()
     revision_scoped: bool = True
+    preparations: tuple[ItemId, ...] = ()
 
 
 type ActionActorAuthority = ActorAuthority | ObserverActorAuthority
