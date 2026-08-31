@@ -116,14 +116,16 @@ def reselect_action(
     role: decision_models.Role,
 ) -> CommandResult[decision_models.Action]:
     supplied_capability = supplied.capability
-    available = discover_actions(
-        SQLiteWorkStore(roots.work / "state.sqlite3"),
-        role,
-        lease_id=supplied_capability.lease_id,
-        generation=supplied_capability.coordinator_generation,
-        now=datetime.now(UTC),
-    )
-    if isinstance(available, DecisionFailure):
+    if isinstance(
+        available := discover_actions(
+            SQLiteWorkStore(roots.work / "state.sqlite3"),
+            role,
+            lease_id=supplied_capability.lease_id,
+            generation=supplied_capability.coordinator_generation,
+            now=datetime.now(UTC),
+        ),
+        DecisionFailure,
+    ):
         return CommandFailure(available.code, available.message)
     current = next(
         (value for value in available if decision_models.action_id(value) == decision_models.action_id(supplied)), None

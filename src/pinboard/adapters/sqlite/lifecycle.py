@@ -34,8 +34,7 @@ class _DefinitionRevisionRow:
 
 def _definition_revision(row: sqlite3.Row) -> stored_state.ItemDefinitionRevision:
     value = decode_row(row, _DefinitionRevisionRow)
-    definition = decode_work_item_definition(value.definition_json)
-    if isinstance(definition, DecisionFailure):
+    if isinstance(definition := decode_work_item_definition(value.definition_json), DecisionFailure):
         raise StorageError(StorageErrorCode.INVALID_STATE, definition.message)
     return stored_state.ItemDefinitionRevision(
         value.item_id,
@@ -52,8 +51,7 @@ def _definition_revision(row: sqlite3.Row) -> stored_state.ItemDefinitionRevisio
 
 
 def _definition_revision_values(value: stored_state.ItemDefinitionRevision) -> tuple[str | int | bytes | None, ...]:
-    payload = work_item_definition_bytes(value.definition)
-    if isinstance(payload, DecisionFailure):
+    if isinstance(payload := work_item_definition_bytes(value.definition), DecisionFailure):
         raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, payload.message)
     return (
         value.item_id,

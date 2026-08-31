@@ -38,15 +38,17 @@ from pinboard.interfaces.work_briefs import read_transition_work_brief_identity
 
 def close(roots: cli_commands.ResolvedRoots, command: cli_commands.CloseCommand) -> CommandResult[int]:
     payload = msgspec.json.encode({"outcome": command.outcome.value, "reason": command.reason}, order="sorted")
-    revision = execute_borrowed_coordination(
-        roots,
-        command.task_id,
-        command.host_id,
-        command.ttl_seconds,
-        ActionId(f"close:{command.item_id}"),
-        payload,
-    )
-    if isinstance(revision, CommandFailure):
+    if isinstance(
+        revision := execute_borrowed_coordination(
+            roots,
+            command.task_id,
+            command.host_id,
+            command.ttl_seconds,
+            ActionId(f"close:{command.item_id}"),
+            payload,
+        ),
+        CommandFailure,
+    ):
         return revision
     value = CloseView(command.item_id, command.outcome.value, command.reason, revision)
     if command.json:
@@ -61,21 +63,22 @@ def revise_item(roots: cli_commands.ResolvedRoots, command: cli_commands.ItemRev
         payload = command.file.read_bytes()
     except OSError as error:
         return CommandFailure(DecisionFailureCode.TRANSITION_INPUT_INVALID, f"Cannot read item revision: {error}")
-    parsed = parse_item_revision_input(payload)
-    if isinstance(parsed, TransitionInputFailure):
+    if isinstance(parsed := parse_item_revision_input(payload), TransitionInputFailure):
         return CommandFailure(parsed.code, parsed.message)
     digest = work_item_definition_digest(parsed.definition)
     if not isinstance(digest, str):
         return CommandFailure(digest.code, digest.message)
-    project_revision = execute_borrowed_coordination(
-        roots,
-        command.task_id,
-        command.host_id,
-        command.ttl_seconds,
-        ActionId(f"revise-item:{parsed.item_id}"),
-        payload,
-    )
-    if isinstance(project_revision, CommandFailure):
+    if isinstance(
+        project_revision := execute_borrowed_coordination(
+            roots,
+            command.task_id,
+            command.host_id,
+            command.ttl_seconds,
+            ActionId(f"revise-item:{parsed.item_id}"),
+            payload,
+        ),
+        CommandFailure,
+    ):
         return project_revision
     value = ItemRevisionView(str(parsed.item_id), parsed.expected_revision + 1, digest, project_revision)
     if command.json:
@@ -89,8 +92,7 @@ def revise_item(roots: cli_commands.ResolvedRoots, command: cli_commands.ItemRev
 
 
 def transition(roots: cli_commands.ResolvedRoots, cli_command: cli_commands.TransitionCommand) -> CommandResult[int]:
-    action = action_selection.action_from_command(cli_command)
-    if isinstance(action, CommandFailure):
+    if isinstance(action := action_selection.action_from_command(cli_command), CommandFailure):
         return action
     try:
         payload = cli_command.payload.read_bytes()
@@ -103,21 +105,17 @@ def transition(roots: cli_commands.ResolvedRoots, cli_command: cli_commands.Tran
         if action.capability.authorization == decision_models.AuthorizationKind.PREPARATION
         else decision_models.Role.COORDINATOR
     )
-    action = action_selection.reselect_action(roots, action, role)
-    if isinstance(action, CommandFailure):
+    if isinstance(action := action_selection.reselect_action(roots, action, role), CommandFailure):
         return action
-    command = parse_transition_command(action, payload)
-    if isinstance(command, TransitionInputFailure):
+    if isinstance(command := parse_transition_command(action, payload), TransitionInputFailure):
         return CommandFailure(command.code, command.message)
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     artifacts = ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work))
-    transition_brief_identity = read_brief_identity(store, command, artifacts)
-    if isinstance(transition_brief_identity, CommandFailure):
+    if isinstance(transition_brief_identity := read_brief_identity(store, command, artifacts), CommandFailure):
         return transition_brief_identity
     match command:
         case decision_models.AcceptCheckpointCommand():
-            checkpoint_artifacts = publish_checkpoint_artifacts(roots, command, artifacts)
-            if isinstance(checkpoint_artifacts, CommandFailure):
+            if isinstance(checkpoint_artifacts := publish_checkpoint_artifacts(roots, command, artifacts), CommandFailure):
                 return checkpoint_artifacts
             result = execute_checkpoint_acceptance(
                 store,
@@ -182,8 +180,7 @@ def read_brief_identity(
     command: decision_models.TransitionCommand,
     artifacts: ArtifactRepository,
 ) -> CommandResult[WorkBriefIdentity | None]:
-    identity = read_transition_work_brief_identity(store.snapshot(), command, artifacts)
-    if isinstance(identity, DecisionFailure):
+    if isinstance(identity := read_transition_work_brief_identity(store.snapshot(), command, artifacts), DecisionFailure):
         return CommandFailure(identity.code, identity.message)
     return identity
 
@@ -232,15 +229,17 @@ def coordinated_transition(
         payload = command.payload.read_bytes()
     except OSError as error:
         return CommandFailure(DecisionFailureCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}")
-    transition_revision = execute_borrowed_coordination(
-        roots,
-        command.task_id,
-        command.host_id,
-        command.ttl_seconds,
-        command.action_id,
-        payload,
-    )
-    if isinstance(transition_revision, CommandFailure):
+    if isinstance(
+        transition_revision := execute_borrowed_coordination(
+            roots,
+            command.task_id,
+            command.host_id,
+            command.ttl_seconds,
+            command.action_id,
+            payload,
+        ),
+        CommandFailure,
+    ):
         return transition_revision
     value = CoordinatedTransitionView(command.action_id, transition_revision)
     if command.json:
@@ -270,8 +269,7 @@ def execute_borrowed_coordination(
         now,
         now + timedelta(seconds=ttl_seconds),
     )
-    acquired = change_coordination_authority(store, acquire)
-    if isinstance(acquired, DecisionFailure):
+    if isinstance(acquired := change_coordination_authority(store, acquire), DecisionFailure):
         return CommandFailure(acquired.code, acquired.message)
     retained = state.authority.coordination
     borrowed = work_models.CoordinationCommandAuthority(
@@ -339,17 +337,18 @@ def apply_borrowed_transition(
     selected_action_id: ActionId,
     payload: bytes,
 ) -> CommandResult[str]:
-    coordination = coordination_authority.retained_coordination(store.snapshot())
-    if isinstance(coordination, CommandFailure):
+    if isinstance(coordination := coordination_authority.retained_coordination(store.snapshot()), CommandFailure):
         return coordination
-    available = discover_actions(
-        store,
-        decision_models.Role.COORDINATOR,
-        lease_id=coordination.lease_id,
-        generation=coordination.generation,
-        now=datetime.now(UTC),
-    )
-    if isinstance(available, DecisionFailure):
+    if isinstance(
+        available := discover_actions(
+            store,
+            decision_models.Role.COORDINATOR,
+            lease_id=coordination.lease_id,
+            generation=coordination.generation,
+            now=datetime.now(UTC),
+        ),
+        DecisionFailure,
+    ):
         return CommandFailure(available.code, available.message)
     action = next(
         (candidate for candidate in available if decision_models.action_id(candidate) == selected_action_id),
@@ -365,16 +364,13 @@ def apply_borrowed_transition(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             "Borrowed coordination cannot transfer retained authority.",
         )
-    command = parse_transition_command(action, payload)
-    if isinstance(command, TransitionInputFailure):
+    if isinstance(command := parse_transition_command(action, payload), TransitionInputFailure):
         return CommandFailure(command.code, command.message)
-    transition_brief_identity = read_brief_identity(store, command, artifacts)
-    if isinstance(transition_brief_identity, CommandFailure):
+    if isinstance(transition_brief_identity := read_brief_identity(store, command, artifacts), CommandFailure):
         return transition_brief_identity
     match command:
         case decision_models.AcceptCheckpointCommand():
-            checkpoint_artifacts = publish_checkpoint_artifacts(roots, command, artifacts)
-            if isinstance(checkpoint_artifacts, CommandFailure):
+            if isinstance(checkpoint_artifacts := publish_checkpoint_artifacts(roots, command, artifacts), CommandFailure):
                 return checkpoint_artifacts
             result = execute_checkpoint_acceptance(
                 store,

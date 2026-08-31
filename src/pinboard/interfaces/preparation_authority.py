@@ -55,8 +55,7 @@ def _emit(
     *,
     json: bool,
 ) -> CommandResult[int]:
-    retained = _retained(state, item_id, now)
-    if isinstance(retained, CommandFailure):
+    if isinstance(retained := _retained(state, item_id, now), CommandFailure):
         return retained
     lease, anchor = retained
     values: dict[str, str | int] = {
@@ -137,8 +136,10 @@ def _operation(  # noqa: C901, PLR0912
 ) -> CommandResult[PreparationAuthorityOperation]:
     match command:
         case cli_commands.CoordinatorPreparationAcquireCommand():
-            coordination = _coordination(state, command.coordination_lease_id, command.coordination_generation)
-            if isinstance(coordination, CommandFailure):
+            if isinstance(
+                coordination := _coordination(state, command.coordination_lease_id, command.coordination_generation),
+                CommandFailure,
+            ):
                 return coordination
             return AcquireInitialPreparationAuthority(
                 state.lifecycle.project.host_epoch,
@@ -155,14 +156,15 @@ def _operation(  # noqa: C901, PLR0912
                 now + timedelta(seconds=command.ttl_seconds),
             )
         case cli_commands.CoordinatedPreparationTransferCommand():
-            retained = _retained(state, command.item_id, now)
-            if isinstance(retained, CommandFailure):
+            if isinstance(retained := _retained(state, command.item_id, now), CommandFailure):
                 return retained
             lease, anchor = retained
             if lease.state == PreparationLeaseStatus.ACTIVE:
                 return CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation authority remains live.")
-            coordination = _coordination(state, command.coordination_lease_id, command.coordination_generation)
-            if isinstance(coordination, CommandFailure):
+            if isinstance(
+                coordination := _coordination(state, command.coordination_lease_id, command.coordination_generation),
+                CommandFailure,
+            ):
                 return coordination
             return TransferPreparationAuthority(
                 InactivePreparationAuthority(
@@ -185,18 +187,24 @@ def _operation(  # noqa: C901, PLR0912
                 now + timedelta(seconds=command.ttl_seconds),
             )
         case cli_commands.PreparationRenewCommand():
-            current = _current_token(state, command.item_id, command.lease_id, command.generation, now)
-            if isinstance(current, CommandFailure):
+            if isinstance(
+                current := _current_token(state, command.item_id, command.lease_id, command.generation, now),
+                CommandFailure,
+            ):
                 return current
             return RenewPreparationAuthority(current, now, now + timedelta(seconds=command.ttl_seconds))
         case cli_commands.PreparationReleaseCommand():
-            current = _current_token(state, command.item_id, command.lease_id, command.generation, now)
-            if isinstance(current, CommandFailure):
+            if isinstance(
+                current := _current_token(state, command.item_id, command.lease_id, command.generation, now),
+                CommandFailure,
+            ):
                 return current
             return ReleasePreparationAuthority(current, now)
         case cli_commands.PreparationRevokeCommand():
-            coordination = _coordination(state, command.coordination_lease_id, command.coordination_generation)
-            if isinstance(coordination, CommandFailure):
+            if isinstance(
+                coordination := _coordination(state, command.coordination_lease_id, command.coordination_generation),
+                CommandFailure,
+            ):
                 return coordination
             return RevokePreparationAuthority(
                 command.item_id,
@@ -222,11 +230,9 @@ def change_preparation_authority(
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     state = store.snapshot()
     operation_time = datetime.now(UTC)
-    operation = _operation(state, command, operation_time)
-    if isinstance(operation, CommandFailure):
+    if isinstance(operation := _operation(state, command, operation_time), CommandFailure):
         return operation
-    result = apply_preparation_authority_change(store, operation)
-    if isinstance(result, DecisionFailure):
+    if isinstance(result := apply_preparation_authority_change(store, operation), DecisionFailure):
         return CommandFailure(result.code, result.message)
     refresh_result = work_views.refresh(
         roots,

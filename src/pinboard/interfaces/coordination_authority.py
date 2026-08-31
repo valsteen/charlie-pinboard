@@ -101,8 +101,7 @@ def change_coordination_authority(
                 now + timedelta(seconds=ttl_seconds),
             )
         case cli_commands.CoordinationRenewCommand(lease_id=lease_id, generation=generation, ttl_seconds=ttl_seconds):
-            current = retained_coordination(state)
-            if isinstance(current, CommandFailure):
+            if isinstance(current := retained_coordination(state), CommandFailure):
                 return current
             authority_operation = RenewCoordinationAuthority(
                 _supplied_coordination_authority(state, current, lease_id, generation),
@@ -110,21 +109,18 @@ def change_coordination_authority(
                 now + timedelta(seconds=ttl_seconds),
             )
         case cli_commands.CoordinationReleaseCommand(lease_id=lease_id, generation=generation):
-            current = retained_coordination(state)
-            if isinstance(current, CommandFailure):
+            if isinstance(current := retained_coordination(state), CommandFailure):
                 return current
             authority_operation = ReleaseCoordinationAuthority(
                 _supplied_coordination_authority(state, current, lease_id, generation), now
             )
         case cli_commands.CoordinationRevokeCommand():
-            current = retained_coordination(state)
-            if isinstance(current, CommandFailure):
+            if isinstance(current := retained_coordination(state), CommandFailure):
                 return current
             authority_operation = RevokeCoordinationAuthority(current.lease_id, current.generation, now)
         case _ as unreachable:
             assert_never(unreachable)
-    result = apply_coordination_authority_change(store, authority_operation)
-    if isinstance(result, DecisionFailure):
+    if isinstance(result := apply_coordination_authority_change(store, authority_operation), DecisionFailure):
         return CommandFailure(result.code, result.message)
     view_result = work_views.refresh(
         roots,

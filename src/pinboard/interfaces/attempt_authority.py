@@ -97,8 +97,7 @@ def _attempt_acquire_operation(
             now,
             now + timedelta(seconds=command.ttl_seconds),
         )
-    inactive = project_inactive_attempt_authority(state, attempt_id, now)
-    if isinstance(inactive, DecisionFailure):
+    if isinstance(inactive := project_inactive_attempt_authority(state, attempt_id, now), DecisionFailure):
         return CommandFailure(inactive.code, inactive.message)
     coordination = state.authority.coordination
     if coordination is None:
@@ -207,8 +206,7 @@ def change_attempt_authority(
 ) -> CommandResult[int]:
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     state = store.snapshot()
-    attempt = _current_attempt(state, command.attempt_id)
-    if isinstance(attempt, CommandFailure):
+    if isinstance(attempt := _current_attempt(state, command.attempt_id), CommandFailure):
         return attempt
     now = datetime.now(UTC)
     match command:
@@ -224,8 +222,7 @@ def change_attempt_authority(
             assert_never(unreachable)
     if isinstance(authority_operation, CommandFailure):
         return authority_operation
-    result = apply_attempt_authority_change(store, authority_operation)
-    if isinstance(result, DecisionFailure):
+    if isinstance(result := apply_attempt_authority_change(store, authority_operation), DecisionFailure):
         return CommandFailure(result.code, result.message)
     refresh_result = work_views.refresh(
         roots,

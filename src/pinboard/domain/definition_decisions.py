@@ -70,8 +70,7 @@ def decide_definition_revision(
             DecisionFailureCode.ITEM_DEFINITION_INVALID,
             "source_task and reason must be nonempty.",
         )
-    digest = work_item_definition_digest(value.definition)
-    if isinstance(digest, DecisionFailure):
+    if isinstance(digest := work_item_definition_digest(value.definition), DecisionFailure):
         return digest
     known_items = {*snapshot.items_by_id(), *snapshot.history_items}
     if any(dependency not in known_items for dependency in value.definition.dependencies):

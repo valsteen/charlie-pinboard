@@ -251,7 +251,6 @@ def parse_transition_command(  # noqa: C901, PLR0912
 
 
 def encoded_transition_input_schema(kind: decision_models.ActionKind) -> TransitionInputResult[bytes]:
-    model = _input_model(kind)
-    if isinstance(model, TransitionInputFailure):
+    if isinstance(model := _input_model(kind), TransitionInputFailure):
         return model
     return msgspec.json.encode(msgspec.json.schema(model), order="sorted")

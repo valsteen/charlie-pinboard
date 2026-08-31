@@ -82,8 +82,7 @@ def decide_proposal_creation(  # noqa: C901, PLR0912
         intake.effect,
         intake.unlock,
     )
-    digest = work_item_definition_digest(definition)
-    if isinstance(digest, DecisionFailure):
+    if isinstance(digest := work_item_definition_digest(definition), DecisionFailure):
         return digest
     prerequisite_change: PrerequisiteDependencyChange | None = None
     if isinstance(intake.relation, work_models.PrerequisiteProposalRelation):
@@ -108,8 +107,7 @@ def decide_proposal_creation(  # noqa: C901, PLR0912
                 anchor.definition.effect,
                 anchor.definition.unlock,
             )
-            changed_digest = work_item_definition_digest(changed_definition)
-            if isinstance(changed_digest, DecisionFailure):
+            if isinstance(changed_digest := work_item_definition_digest(changed_definition), DecisionFailure):
                 return changed_digest
             prerequisite_change = PrerequisiteDependencyChange(
                 intake.relation.item,

@@ -22,14 +22,16 @@ def _current_dispatch_action(
     now: datetime,
 ) -> DispatchResult[decision_models.DispatchAction]:
     capability = supplied.capability
-    actions = discover_actions(
-        store,
-        decision_models.Role.COORDINATOR,
-        lease_id=capability.lease_id,
-        generation=capability.coordinator_generation,
-        now=now,
-    )
-    if isinstance(actions, DecisionFailure):
+    if isinstance(
+        actions := discover_actions(
+            store,
+            decision_models.Role.COORDINATOR,
+            lease_id=capability.lease_id,
+            generation=capability.coordinator_generation,
+            now=now,
+        ),
+        DecisionFailure,
+    ):
         return DispatchFailure(actions.code, actions.message)
     current = next(
         (value for value in actions if decision_models.action_id(value) == decision_models.action_id(supplied)), None
@@ -62,8 +64,7 @@ def select_dispatch(
             DispatchRejectionCode.ACTION_UNAVAILABLE,
             f"Action '{decision_models.action_id(action)}' is not a dispatch action.",
         )
-    current = _current_dispatch_action(store, action, now)
-    if isinstance(current, DispatchFailure):
+    if isinstance(current := _current_dispatch_action(store, action, now), DispatchFailure):
         return current
     state = store.snapshot()
     attempt_id = current.capability.subject
@@ -135,26 +136,30 @@ def publish_dispatch_review(
                 candidate,
             )
         )
-        rejected_acceptance = store.accept_artifact_reference(
-            artifacts.work_root,
-            rejected,
-            accepted_at,
-            relationship=ArtifactRelationship(item_id, work_models.ArtifactRole.EVIDENCE),
-        )
-        if isinstance(rejected_acceptance, DecisionFailure):
+        if isinstance(
+            rejected_acceptance := store.accept_artifact_reference(
+                artifacts.work_root,
+                rejected,
+                accepted_at,
+                relationship=ArtifactRelationship(item_id, work_models.ArtifactRole.EVIDENCE),
+            ),
+            DecisionFailure,
+        ):
             return DispatchFailure(DispatchRejectionCode.STALE_ACTION, rejected_acceptance.message)
         return DispatchFailure(
             DispatchRejectionCode.REVIEW_COLLISION,
             f"Ready review already differs; later evidence is preserved at '{rejected.selector}'.",
         )
     published = artifacts.publish(NewArtifact(stored_state.ArtifactKind.EVIDENCE, key, 1, ".json", candidate))
-    accepted = store.accept_artifact_reference(
-        artifacts.work_root,
-        published,
-        accepted_at,
-        relationship=ArtifactRelationship(item_id, work_models.ArtifactRole.EVIDENCE),
-    )
-    if isinstance(accepted, DecisionFailure):
+    if isinstance(
+        accepted := store.accept_artifact_reference(
+            artifacts.work_root,
+            published,
+            accepted_at,
+            relationship=ArtifactRelationship(item_id, work_models.ArtifactRole.EVIDENCE),
+        ),
+        DecisionFailure,
+    ):
         return DispatchFailure(DispatchRejectionCode.STALE_ACTION, accepted.message)
     return accepted, accepted.accepted_revision
 
@@ -166,14 +171,16 @@ def confirm_dispatch_authority(
     now: datetime,
 ) -> DispatchFailure | None:
     capability = supplied.capability
-    actions = discover_actions(
-        store,
-        decision_models.Role.COORDINATOR,
-        lease_id=capability.lease_id,
-        generation=capability.coordinator_generation,
-        now=now,
-    )
-    if isinstance(actions, DecisionFailure):
+    if isinstance(
+        actions := discover_actions(
+            store,
+            decision_models.Role.COORDINATOR,
+            lease_id=capability.lease_id,
+            generation=capability.coordinator_generation,
+            now=now,
+        ),
+        DecisionFailure,
+    ):
         return DispatchFailure(actions.code, actions.message)
     rediscovered = next(
         (value for value in actions if decision_models.action_id(value) == decision_models.action_id(supplied)), None

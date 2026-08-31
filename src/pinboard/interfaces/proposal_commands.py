@@ -48,8 +48,7 @@ def create_proposal(
         data = path.read_bytes()
     except OSError as error:
         return ProposalFailure(DecisionFailureCode.PROPOSAL_INVALID, f"Cannot read proposal at '{path}': {error}")
-    proposal = proposals.parse_proposal(data)
-    if isinstance(proposal, ProposalFailure):
+    if isinstance(proposal := proposals.parse_proposal(data), ProposalFailure):
         return proposal
     try:
         created_at = datetime.fromisoformat(proposal.created_at.replace("Z", "+00:00"))
@@ -79,12 +78,14 @@ def create_proposal(
         proposal.position,
     )
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
-    result = service.create_proposal(
-        store,
-        domain_proposal_models.CreateProposalOperation(intake),
-        datetime.now(UTC),
-    )
-    if isinstance(result, DecisionFailure):
+    if isinstance(
+        result := service.create_proposal(
+            store,
+            domain_proposal_models.CreateProposalOperation(intake),
+            datetime.now(UTC),
+        ),
+        DecisionFailure,
+    ):
         return ProposalFailure(result.code, result.message)
     view_result = work_views.refresh(
         roots, store, file_models.AffectedViews(queue=True, history=True), datetime.now(UTC)

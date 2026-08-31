@@ -390,8 +390,7 @@ def preview_parallel(
     now: datetime,
 ) -> query_models.QueryResult[query_models.ParallelPreview]:
     state = store.snapshot()
-    current = _preview_time(now)
-    if isinstance(current, query_models.QueryFailure):
+    if isinstance(current := _preview_time(now), query_models.QueryFailure):
         return current
     live = tuple(
         (item, live_state)

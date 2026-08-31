@@ -340,18 +340,20 @@ def prepare_dispatch_from_artifact(
 ) -> DispatchResult[str]:
     """Validate boundary-owned dispatch bytes without performing publication."""
 
-    brief = _read_dispatch_brief(
-        attempt_path,
-        attempt_id,
-        attempt_branch,
-        source_checkout_root,
-        checkpoint,
-        environment,
-        accepted_item_id,
-        accepted_scope_revision,
-        accepted_scope_digest,
-    )
-    if isinstance(brief, DispatchFailure):
+    if isinstance(
+        brief := _read_dispatch_brief(
+            attempt_path,
+            attempt_id,
+            attempt_branch,
+            source_checkout_root,
+            checkpoint,
+            environment,
+            accepted_item_id,
+            accepted_scope_revision,
+            accepted_scope_digest,
+        ),
+        DispatchFailure,
+    ):
         return brief
     return _render_dispatch_prompt(brief, attempt_path, checkpoint, environment, accepted_review, supplied_prompt)
 
@@ -366,28 +368,28 @@ def prepare_dispatch(
     supplied_prompt: bytes | None = None,
     supplied_review: SuppliedDispatchReview | None = None,
 ) -> DispatchResult[str]:
-    selected = select_dispatch(store, action, datetime.now(UTC))
-    if isinstance(selected, ApplicationDispatchFailure):
+    if isinstance(selected := select_dispatch(store, action, datetime.now(UTC)), ApplicationDispatchFailure):
         return _dispatch_failure(selected)
     assert isinstance(action, decision_models.DispatchAction)
     attempt, reference = selected
     artifacts.verify(reference)
     attempt_path = artifacts.path(reference)
-    brief = _read_dispatch_brief(
-        attempt_path,
-        str(attempt.attempt_id),
-        attempt.branch,
-        source_checkout_root,
-        checkpoint,
-        environment,
-        str(attempt.item_id),
-        attempt.accepted_scope_revision,
-        attempt.accepted_scope_digest,
-    )
-    if isinstance(brief, DispatchFailure):
+    if isinstance(
+        brief := _read_dispatch_brief(
+            attempt_path,
+            str(attempt.attempt_id),
+            attempt.branch,
+            source_checkout_root,
+            checkpoint,
+            environment,
+            str(attempt.item_id),
+            attempt.accepted_scope_revision,
+            attempt.accepted_scope_digest,
+        ),
+        DispatchFailure,
+    ):
         return brief
-    request = _review_candidate(brief, supplied_review)
-    if isinstance(request, DispatchFailure):
+    if isinstance(request := _review_candidate(brief, supplied_review), DispatchFailure):
         return request
     accepted_review: bytes | None = None
     publication_revision: int | None = None
@@ -395,8 +397,10 @@ def prepare_dispatch(
         case None:
             pass
         case ExistingDispatchReview(checkpoint_sha256=checkpoint_sha256):
-            accepted = find_dispatch_review(store, attempt.attempt_id, checkpoint_sha256)
-            if isinstance(accepted, ApplicationDispatchFailure):
+            if isinstance(
+                accepted := find_dispatch_review(store, attempt.attempt_id, checkpoint_sha256),
+                ApplicationDispatchFailure,
+            ):
                 return _dispatch_failure(accepted)
             accepted_reference = accepted
             artifacts.verify(accepted_reference)
@@ -406,32 +410,36 @@ def prepare_dispatch(
             candidate=candidate,
             review_id=review_id,
         ):
-            publication = publish_dispatch_review(
-                store,
-                artifacts,
-                attempt.attempt_id,
-                attempt.item_id,
-                checkpoint_sha256,
-                candidate,
-                review_id,
-                datetime.now(UTC),
-            )
-            if isinstance(publication, ApplicationDispatchFailure):
+            if isinstance(
+                publication := publish_dispatch_review(
+                    store,
+                    artifacts,
+                    attempt.attempt_id,
+                    attempt.item_id,
+                    checkpoint_sha256,
+                    candidate,
+                    review_id,
+                    datetime.now(UTC),
+                ),
+                ApplicationDispatchFailure,
+            ):
                 return _dispatch_failure(publication)
             accepted_reference, publication_revision = publication
             artifacts.verify(accepted_reference)
             accepted_review = artifacts.path(accepted_reference).read_bytes()
         case _ as unreachable:
             assert_never(unreachable)
-    prompt = _render_dispatch_prompt(
-        brief,
-        attempt_path,
-        checkpoint,
-        environment,
-        accepted_review,
-        supplied_prompt,
-    )
-    if isinstance(prompt, DispatchFailure):
+    if isinstance(
+        prompt := _render_dispatch_prompt(
+            brief,
+            attempt_path,
+            checkpoint,
+            environment,
+            accepted_review,
+            supplied_prompt,
+        ),
+        DispatchFailure,
+    ):
         return prompt
     if (failure := confirm_dispatch_authority(store, action, publication_revision, datetime.now(UTC))) is not None:
         return _dispatch_failure(failure)
@@ -444,8 +452,7 @@ def prepare_dispatch_command(
 ) -> CliResult[int]:
     """Prepare one installed dispatch request and return every advertised rejection."""
 
-    environment = read_dispatch_environment(command.environment)
-    if isinstance(environment, DispatchFailure):
+    if isinstance(environment := read_dispatch_environment(command.environment), DispatchFailure):
         return environment
     supplied_prompt: bytes | None = None
     if command.prompt is not None:
@@ -471,23 +478,26 @@ def prepare_dispatch_command(
             supplied_review = None
         case _ as unreachable:
             assert_never(unreachable)
-    action = action_selection.action_from_command(command)
-    if isinstance(action, CommandFailure):
+    if isinstance(action := action_selection.action_from_command(command), CommandFailure):
         return action
-    action = action_selection.reselect_action(roots, action, decision_models.Role.COORDINATOR)
-    if isinstance(action, CommandFailure):
+    if isinstance(
+        action := action_selection.reselect_action(roots, action, decision_models.Role.COORDINATOR),
+        CommandFailure,
+    ):
         return action
-    prompt = prepare_dispatch(
-        SQLiteWorkStore(roots.work / "state.sqlite3"),
-        ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work)),
-        roots.source_checkout,
-        action,
-        command.checkpoint,
-        environment,
-        supplied_prompt,
-        supplied_review,
-    )
-    if isinstance(prompt, DispatchFailure):
+    if isinstance(
+        prompt := prepare_dispatch(
+            SQLiteWorkStore(roots.work / "state.sqlite3"),
+            ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work)),
+            roots.source_checkout,
+            action,
+            command.checkpoint,
+            environment,
+            supplied_prompt,
+            supplied_review,
+        ),
+        DispatchFailure,
+    ):
         return prompt
     if supplied_prompt is None:
         print(prompt, end="")

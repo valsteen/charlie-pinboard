@@ -687,15 +687,17 @@ class SQLiteWorkStore:
     ) -> DecisionResult[stored_state.ArtifactReference]:
         with _SQLiteWorkTransaction(self._path) as transaction:
             connection = transaction.connection
-            result = write_artifact_reference(
-                connection,
-                sqlite_state.read_state(connection),
-                work_root,
-                published,
-                accepted_at,
-                relationship=relationship,
-            )
-            if isinstance(result, DecisionFailure):
+            if isinstance(
+                result := write_artifact_reference(
+                    connection,
+                    sqlite_state.read_state(connection),
+                    work_root,
+                    published,
+                    accepted_at,
+                    relationship=relationship,
+                ),
+                DecisionFailure,
+            ):
                 return transaction._select(result)
             sqlite_state.read_state(connection)
             return transaction._select(result)

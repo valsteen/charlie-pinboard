@@ -115,15 +115,13 @@ def work_item_definition_record(
 
 
 def work_item_definition_bytes(definition: work_models.WorkItemDefinition) -> DecisionResult[bytes]:
-    record = work_item_definition_record(definition)
-    if isinstance(record, DecisionFailure):
+    if isinstance(record := work_item_definition_record(definition), DecisionFailure):
         return record
     return _encoded_record(record)
 
 
 def work_item_definition_digest(definition: work_models.WorkItemDefinition) -> DecisionResult[str]:
-    payload = work_item_definition_bytes(definition)
-    if isinstance(payload, DecisionFailure):
+    if isinstance(payload := work_item_definition_bytes(definition), DecisionFailure):
         return payload
     return hashlib.sha256(payload).hexdigest()
 
@@ -150,7 +148,6 @@ def decode_work_item_definition(payload: bytes) -> DecisionResult[work_models.Wo
         record.effect,
         record.unlock,
     )
-    validated = work_item_definition_record(definition)
-    if isinstance(validated, DecisionFailure):
+    if isinstance(validated := work_item_definition_record(definition), DecisionFailure):
         return validated
     return definition

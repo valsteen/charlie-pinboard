@@ -93,8 +93,10 @@ def input_contract_view(
     if semantics.effect == decision_models.ActionEffect.ADVISORY:
         payload_schema = None
     else:
-        encoded_schema = transition_input.encoded_transition_input_schema(kind)
-        if isinstance(encoded_schema, errors.TransitionInputFailure):
+        if isinstance(
+            encoded_schema := transition_input.encoded_transition_input_schema(kind),
+            errors.TransitionInputFailure,
+        ):
             return encoded_schema
         payload_schema = msgspec.Raw(encoded_schema)
     return work_inspection_models.InputContractView(kind.value, action_semantics_view(semantics), payload_schema)
@@ -108,8 +110,7 @@ def action_view(
     capability = action.capability
     input_contract: work_inspection_models.InputContractView | None = None
     if include_input_contract:
-        contract = input_contract_view(action.kind)
-        if isinstance(contract, errors.TransitionInputFailure):
+        if isinstance(contract := input_contract_view(action.kind), errors.TransitionInputFailure):
             return contract
         input_contract = contract
     return work_inspection_models.ActionView(
@@ -253,8 +254,10 @@ def item_status(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ItemStatusCommand,
 ) -> errors.CommandResult[int]:
-    value = queries.item_status(SQLiteWorkStore(roots.work / "state.sqlite3"), command.item_id, datetime.now(UTC))
-    if isinstance(value, domain_errors.DecisionFailure):
+    if isinstance(
+        value := queries.item_status(SQLiteWorkStore(roots.work / "state.sqlite3"), command.item_id, datetime.now(UTC)),
+        domain_errors.DecisionFailure,
+    ):
         return errors.CommandFailure(value.code, value.message)
     if command.json:
         write_json(value)
@@ -290,8 +293,10 @@ def item_definition(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ItemDefinitionCommand,
 ) -> errors.CommandResult[int]:
-    value = queries.item_definition(SQLiteWorkStore(roots.work / "state.sqlite3"), command.item_id)
-    if isinstance(value, domain_errors.DecisionFailure):
+    if isinstance(
+        value := queries.item_definition(SQLiteWorkStore(roots.work / "state.sqlite3"), command.item_id),
+        domain_errors.DecisionFailure,
+    ):
         return errors.CommandFailure(value.code, value.message)
     if command.json:
         write_json(value)
@@ -308,13 +313,15 @@ def item_definition_history(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ItemDefinitionHistoryCommand,
 ) -> errors.CommandResult[int]:
-    value = queries.item_definition_history(
-        SQLiteWorkStore(roots.work / "state.sqlite3"),
-        command.item_id,
-        limit=command.limit,
-        before_revision=command.before_revision,
-    )
-    if isinstance(value, domain_errors.DecisionFailure):
+    if isinstance(
+        value := queries.item_definition_history(
+            SQLiteWorkStore(roots.work / "state.sqlite3"),
+            command.item_id,
+            limit=command.limit,
+            before_revision=command.before_revision,
+        ),
+        domain_errors.DecisionFailure,
+    ):
         return errors.CommandFailure(value.code, value.message)
     if command.json:
         write_json(value)
@@ -343,14 +350,16 @@ def actions(
             pass
         case _ as unreachable:
             assert_never(unreachable)
-    available = action_queries.discover_actions(
-        SQLiteWorkStore(roots.work / "state.sqlite3"),
-        command.role,
-        lease_id=lease_id,
-        generation=generation,
-        now=datetime.now(UTC),
-    )
-    if isinstance(available, domain_errors.DecisionFailure):
+    if isinstance(
+        available := action_queries.discover_actions(
+            SQLiteWorkStore(roots.work / "state.sqlite3"),
+            command.role,
+            lease_id=lease_id,
+            generation=generation,
+            now=datetime.now(UTC),
+        ),
+        domain_errors.DecisionFailure,
+    ):
         return errors.CommandFailure(available.code, available.message)
     exact_action_id = command.action_id
     if exact_action_id is not None:
@@ -363,8 +372,10 @@ def actions(
     if command.json:
         action_views: list[work_inspection_models.ActionView] = []
         for action in available:
-            view = action_view(action, include_input_contract=exact_action_id is not None)
-            if isinstance(view, errors.TransitionInputFailure):
+            if isinstance(
+                view := action_view(action, include_input_contract=exact_action_id is not None),
+                errors.TransitionInputFailure,
+            ):
                 return errors.CommandFailure(view.code, view.message)
             action_views.append(view)
         write_json(work_inspection_models.ActionsView(tuple(action_views)))
@@ -380,8 +391,7 @@ def input_contract(
     _roots: cli_commands.ResolvedRoots,
     command: cli_commands.InputContractCommand,
 ) -> errors.CommandResult[int]:
-    value = input_contract_view(command.action_kind)
-    if isinstance(value, errors.TransitionInputFailure):
+    if isinstance(value := input_contract_view(command.action_kind), errors.TransitionInputFailure):
         return errors.CommandFailure(value.code, value.message)
     if command.json:
         write_json(value)
@@ -417,12 +427,14 @@ def parallel(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ParallelPreviewCommand,
 ) -> errors.CommandResult[int]:
-    preview = queries.preview_parallel(
-        SQLiteWorkStore(roots.work / "state.sqlite3"),
-        selected=tuple(command.item),
-        now=datetime.now(UTC),
-    )
-    if isinstance(preview, query_models.QueryFailure):
+    if isinstance(
+        preview := queries.preview_parallel(
+            SQLiteWorkStore(roots.work / "state.sqlite3"),
+            selected=tuple(command.item),
+            now=datetime.now(UTC),
+        ),
+        query_models.QueryFailure,
+    ):
         match preview.code:
             case query_models.QueryRejectionCode.PARALLEL_SELECTION_INVALID:
                 code = errors.CommandErrorCode.PARALLEL_SELECTION_INVALID

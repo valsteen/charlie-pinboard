@@ -296,8 +296,7 @@ def rediscover_action(
 ) -> DecisionResult[decision_models.Action]:
     """Reselect one action and compare its complete subject-scoped mutation authority."""
 
-    available = available_actions(snapshot, actor)
-    if isinstance(available, DecisionFailure):
+    if isinstance(available := available_actions(snapshot, actor), DecisionFailure):
         return available
     current = next(
         (
@@ -478,8 +477,7 @@ def _pause_or_block(
                 work_models.AttemptState.PAUSED,
             )
         case decision_models.BlockCommand(value=value):
-            dependencies = _block_dependencies(snapshot, item, value)
-            if isinstance(dependencies, DecisionFailure):
+            if isinstance(dependencies := _block_dependencies(snapshot, item, value), DecisionFailure):
                 return dependencies
             change = decision_models.BlockAttemptChange(
                 item.item,
@@ -846,8 +844,7 @@ def _block_item(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             f"Item '{item.item}' cannot perform '{action.kind.value}' now.",
         )
-    dependencies = _block_dependencies(snapshot, item, command.value)
-    if isinstance(dependencies, DecisionFailure):
+    if isinstance(dependencies := _block_dependencies(snapshot, item, command.value), DecisionFailure):
         return dependencies
     return _result(
         action,
@@ -958,8 +955,7 @@ def _accept_proposal(
             "The accepted proposal item has no current definition.",
         )
     accepted_definition = replace(current_definition.definition, dependencies=dependencies)
-    definition_digest = work_item_definition_digest(accepted_definition)
-    if isinstance(definition_digest, DecisionFailure):
+    if isinstance(definition_digest := work_item_definition_digest(accepted_definition), DecisionFailure):
         return definition_digest
     accepted_item = decision_models.AcceptedProposalItem(
         value.item,
@@ -1076,8 +1072,10 @@ def _revise_item(
     command: decision_models.ReviseItemCommand,
     now: datetime,
 ) -> DecisionResult[decision_models.TransitionDecision]:
-    revision = decide_definition_revision(snapshot, command.action.capability.subject, command.value, now)
-    if isinstance(revision, DecisionFailure):
+    if isinstance(
+        revision := decide_definition_revision(snapshot, command.action.capability.subject, command.value, now),
+        DecisionFailure,
+    ):
         return revision
     return _result(
         command.action,

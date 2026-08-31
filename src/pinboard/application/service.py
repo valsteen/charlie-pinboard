@@ -86,8 +86,10 @@ def change_coordination_authority(
     with store.write() as transaction:
         before = transaction.snapshot()
         snapshot = project_decision_snapshot(before, operation_time)
-        decision = decide_coordination_authority(snapshot.coordination_lease, operation)
-        if isinstance(decision, DecisionFailure):
+        if isinstance(
+            decision := decide_coordination_authority(snapshot.coordination_lease, operation),
+            DecisionFailure,
+        ):
             return decision
         after_authority = decision.after
         match operation:
@@ -207,26 +209,28 @@ def change_attempt_authority(
             0,
         )
         retained = _retained_attempt_authority(before, attempt_id)
-        decision = decide_attempt_authority(
-            retained,
-            counter,
-            operation,
-            snapshot.coordination_lease,
-            live_attempt=(
-                (attempt_id, attempt.item)
-                if (attempt := snapshot.attempt(attempt_id)) is not None
-                and attempt.state == work_models.AttemptState.ACTIVE
-                else None
+        if isinstance(
+            decision := decide_attempt_authority(
+                retained,
+                counter,
+                operation,
+                snapshot.coordination_lease,
+                live_attempt=(
+                    (attempt_id, attempt.item)
+                    if (attempt := snapshot.attempt(attempt_id)) is not None
+                    and attempt.state == work_models.AttemptState.ACTIVE
+                    else None
+                ),
+                transferable_attempt=(
+                    (attempt_id, attempt.item)
+                    if (attempt := snapshot.attempt(attempt_id)) is not None
+                    and attempt.state != work_models.AttemptState.DONE
+                    else None
+                ),
+                project_host_epoch=snapshot.host_epoch,
             ),
-            transferable_attempt=(
-                (attempt_id, attempt.item)
-                if (attempt := snapshot.attempt(attempt_id)) is not None
-                and attempt.state != work_models.AttemptState.DONE
-                else None
-            ),
-            project_host_epoch=snapshot.host_epoch,
-        )
-        if isinstance(decision, DecisionFailure):
+            DecisionFailure,
+        ):
             return decision
         after = decision.current_after
         transition = decision_models.TransitionReceipt(
@@ -325,14 +329,16 @@ def change_preparation_authority(
             ),
             0,
         )
-        decision = decide_preparation_authority(
-            _retained_preparation_authority(before, item_id),
-            counter,
-            operation,
-            snapshot,
-            decided_at,
-        )
-        if isinstance(decision, DecisionFailure):
+        if isinstance(
+            decision := decide_preparation_authority(
+                _retained_preparation_authority(before, item_id),
+                counter,
+                operation,
+                snapshot,
+                decided_at,
+            ),
+            DecisionFailure,
+        ):
             return decision
         after = decision.current_after
         transition = decision_models.TransitionReceipt(
@@ -369,14 +375,16 @@ def create_proposal(
         before = transaction.snapshot()
         project = before.lifecycle.project
         authority = LocalIntakeAuthority(project.revision, project.host_epoch)
-        decision = decide_proposal_creation(
-            authority,
-            project.revision,
-            project.host_epoch,
-            project_decision_snapshot(before, now),
-            operation,
-        )
-        if isinstance(decision, DecisionFailure):
+        if isinstance(
+            decision := decide_proposal_creation(
+                authority,
+                project.revision,
+                project.host_epoch,
+                project_decision_snapshot(before, now),
+                operation,
+            ),
+            DecisionFailure,
+        ):
             return decision
         intake = decision.proposal
         transition = decision_models.TransitionReceipt(
@@ -489,16 +497,13 @@ def execute(
     with store.write() as transaction:
         before = transaction.snapshot()
         snapshot = project_decision_snapshot(before, now)
-        actor = _actor_for(snapshot, supplied, now)
-        if isinstance(actor, DecisionFailure):
+        if isinstance(actor := _actor_for(snapshot, supplied, now), DecisionFailure):
             return actor
-        rediscovered = rediscover_action(snapshot, actor, supplied)
-        if isinstance(rediscovered, DecisionFailure):
+        if isinstance(rediscovered := rediscover_action(snapshot, actor, supplied), DecisionFailure):
             return rediscovered
         if (failure := validate_transition_work_brief(before, command, transition_brief_identity)) is not None:
             return failure
-        decision = decide(snapshot, command, now)
-        if isinstance(decision, DecisionFailure):
+        if isinstance(decision := decide(snapshot, command, now), DecisionFailure):
             return decision
         return transaction.commit(project_transition_mutation(before, decision))
 
@@ -517,15 +522,12 @@ def execute_checkpoint_acceptance(
     with store.write() as transaction:
         before = transaction.snapshot()
         snapshot = project_decision_snapshot(before, now)
-        actor = _actor_for(snapshot, supplied, now)
-        if isinstance(actor, DecisionFailure):
+        if isinstance(actor := _actor_for(snapshot, supplied, now), DecisionFailure):
             return actor
-        rediscovered = rediscover_action(snapshot, actor, supplied)
-        if isinstance(rediscovered, DecisionFailure):
+        if isinstance(rediscovered := rediscover_action(snapshot, actor, supplied), DecisionFailure):
             return rediscovered
         if (failure := validate_transition_work_brief(before, command, transition_brief_identity)) is not None:
             return failure
-        decision = decide(snapshot, command, now)
-        if isinstance(decision, DecisionFailure):
+        if isinstance(decision := decide(snapshot, command, now), DecisionFailure):
             return decision
         return transaction.commit(project_checkpoint_acceptance_mutation(before, decision, checkpoint_artifacts))

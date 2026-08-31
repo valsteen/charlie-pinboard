@@ -45,19 +45,21 @@ def publish_brief(
         ) from error
     brief = work_briefs.decode_work_brief(candidate)
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
-    accepted = artifact_publication.publish_accepted_artifact(
-        store,
-        artifact_files.ArtifactRepository(file_io.resolve_durable_roots(roots.shared_repository, roots.work)),
-        artifacts.NewArtifact(
-            stored_state.ArtifactKind.BRIEF,
-            brief.attempt_id,
-            brief.artifact_revision,
-            ".json",
-            work_briefs.canonical_work_brief_bytes(brief),
+    if isinstance(
+        accepted := artifact_publication.publish_accepted_artifact(
+            store,
+            artifact_files.ArtifactRepository(file_io.resolve_durable_roots(roots.shared_repository, roots.work)),
+            artifacts.NewArtifact(
+                stored_state.ArtifactKind.BRIEF,
+                brief.attempt_id,
+                brief.artifact_revision,
+                ".json",
+                work_briefs.canonical_work_brief_bytes(brief),
+            ),
+            datetime.now(UTC),
         ),
-        datetime.now(UTC),
-    )
-    if isinstance(accepted, DecisionFailure):
+        DecisionFailure,
+    ):
         return CommandFailure(accepted.code, accepted.message)
     view_result = work_views.rebuild(roots, store, datetime.now(UTC))
     if view_result.warning is not None:
