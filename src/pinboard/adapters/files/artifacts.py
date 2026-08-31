@@ -68,7 +68,7 @@ def _canonical_reference(reference: ArtifactRef | stored_state.ArtifactReference
     return Path(*parts)
 
 
-def verify_reference(work_root: Path, reference: ArtifactRef | stored_state.ArtifactReference) -> None:
+def read_reference(work_root: Path, reference: ArtifactRef | stored_state.ArtifactReference) -> bytes:
     relative = _canonical_reference(reference)
     try:
         data = (work_root / relative).read_bytes()
@@ -82,6 +82,11 @@ def verify_reference(work_root: Path, reference: ArtifactRef | stored_state.Arti
             ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
             "Artifact size or digest does not match its reference.",
         )
+    return data
+
+
+def verify_reference(work_root: Path, reference: ArtifactRef | stored_state.ArtifactReference) -> None:
+    read_reference(work_root, reference)
 
 
 def write_revision(roots: DurableRoots, artifact: NewArtifact) -> ArtifactRef:
@@ -125,6 +130,9 @@ class ArtifactRepository:
 
     def verify(self, reference: stored_state.ArtifactReference) -> None:
         verify_reference(self.work_root, reference)
+
+    def read(self, reference: stored_state.ArtifactReference) -> bytes:
+        return read_reference(self.work_root, reference)
 
     def path(self, reference: stored_state.ArtifactReference) -> Path:
         return self.work_root / _canonical_reference(reference)

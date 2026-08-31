@@ -69,7 +69,7 @@ Expected rejections return typed failure values. Domain and stale-persistence pa
 | `stored_state.py` | Complete typed read aggregate plus explicit storage vocabulary |
 | `mutation_models.py`, `mutations.py`, `ports.py` | Closed focused mutation records, exhaustive decision-to-relational conversion, and storage-independent transactional capabilities |
 | `decision_projection.py`, `service.py` | Shared-index projection of complete stored collections into domain decision facts and locked mutation orchestration |
-| `actions.py`, `query_models.py`, `queries.py` | Legal-action discovery plus current overview, exact item-status, current-definition, bounded definition-history, parallel-preview records, and result-shaped queries with closed query rejection codes |
+| `actions.py`, `query_models.py`, `queries.py`, `handover.py` | Legal-action discovery plus current overview, exact item-status, current-definition, bounded definition-history, parallel-preview records, and the strict versioned portable handover projection from one complete stored snapshot |
 | `artifacts.py`, `artifact_publication.py`, `dispatch_models.py`, `dispatch.py` | Immutable artifact references and typed brief identity, artifact-acceptance capabilities, activation and resume brief guards, and result-shaped dispatch selection, review publication, and final authority confirmation |
 
 SQLite rows are not active domain objects. `StoredWorkState` is the exact typed read aggregate without SQL handles or filesystem paths, while live mutations carry only the accepted decision, receipt, and affected auxiliary values. `LedgerSnapshot` remains the storage-independent decision input.
@@ -83,8 +83,8 @@ Adapters own concrete persistence and filesystem mechanics without deciding prod
 | `files/root.py`, `files/file_io.py`, `files/models.py`, `files/errors.py` | Distinct Git-backed source-checkout and shared-repository discovery, repository-local exclusion of the default durable root, durable-root resolution, file-operation records, exact failure families, directory creation, and atomic file publication |
 | `files/artifacts.py` | Immutable artifact naming, publication, digest verification, and reference resolution |
 | `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections; interface composition supplies complete live-v2 brief projections |
-| `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, typed row conversion, compare-and-set result helpers, schema verification, initialization and diagnostic transaction scopes, synchronization, and exact storage failures |
-| `sqlite/store.py` | Complete runtime connection and transaction lifetime, public store capabilities, exhaustive accepted-mutation routing, project revision advancement, expected-result rollback selection, and post-write readback |
+| `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, typed row conversion, compare-and-set result helpers, schema verification, initialization, diagnostic and runtime read transaction scopes, synchronization, and exact storage failures |
+| `sqlite/store.py` | Complete runtime connection and write-transaction lifetime, public store capabilities, exhaustive accepted-mutation routing, project revision advancement, expected-result rollback selection, and post-write readback |
 | `sqlite/state.py` | Complete `StoredWorkState` assembly, cross-record validation, project metadata, and transition history |
 | `sqlite/lifecycle.py`, `sqlite/proposals.py`, `sqlite/artifacts.py`, `sqlite/authority.py` | Thematic row conversion, reads, and focused effects over an explicitly supplied connection |
 
@@ -98,6 +98,7 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 | `cli.py`, `cli_output.py` | Sole exhaustive command-family route, final typed-result-to-exit policy, and canonical JSON output effect |
 | `work_inspection_models.py`, `work_inspection.py` | Read-only status, overview, item, action, input-contract, and parallel-preview composition and presentation |
 | `action_selection.py`, `transition_models.py`, `transition_input.py`, `transitions.py` | Current-action selection from an opaque CLI capability receipt, strict payload decoding directly into the exact command owned by that action variant, complete definition-replacement conversion, checkpoint identity checks, coordination lifetime, and transition presentation |
+| `project_handover.py` | Read-only composition of one SQLite snapshot with verified immutable artifact bytes before canonical JSON presentation |
 | `coordination_authority.py`, `preparation_authority.py`, `attempt_authority.py` | Thematic coordination-, ready-item preparation-, and attempt-authority command composition |
 | `brief_source_models.py`, `brief_sources.py`, `brief_source_commands.py` | Strict source manifests, deterministic source planning and selection, and installed plan or batch presentation |
 | `work_brief_models.py`, `work_briefs.py` | Strict v2 brief and review records, exact canonical codecs and semantic validation, digest computation, reviewed-authority checks, and complete Markdown rendering |
@@ -134,6 +135,8 @@ Pinboard does not require or produce a companion notes directory. Project docume
 ### Reads and validation
 
 Status, overview, exact item status, current definition, bounded newest-first definition history, action discovery, and parallel preview open one `StoredWorkState` snapshot through `SQLiteWorkStore`, then build application-owned read models. Expected absence or an unavailable selection returns a typed result. Each selected SQLite row is converted directly into its declared stored-state record; explicit storage checks are reserved for row cardinality, canonical history JSON, and relationships spanning records. These reads never parse generated Markdown. Interface-owned work-state composition verifies the database and every accepted artifact reference, validates live v2 brief identity and structure through the typed boundary, keeps historical terminal brief bytes opaque, then reports generated-view drift separately.
+
+`pinboard handover --json` opens one validated `StoredWorkState` snapshot, projects every admitted and pending project fact into the strict application-owned `pinboard-project-handover/v1` model, and lets the interface owner verify and read each referenced artifact through the filesystem adapter. Only after the full package is materialized does the CLI write canonical JSON. The path does not read generated views or mutate SQLite, artifacts, lifecycle, focus, or authority.
 
 ### Brief source planning
 

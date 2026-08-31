@@ -46,6 +46,7 @@ The code, branch, and conversation remain ordinary repository work. Pinboard kee
 - **Interruption and recovery:** block, pause, resume, or recover work without rebuilding its context from chat history.
 - **Parallel work:** preview independent items and recheck the group as each attempt starts, without creating tasks on the user's behalf.
 - **Review:** keep the submitted candidate and its evidence exact, then require a separate task to accept it or return it for correction.
+- **Handover:** export one complete revision-stamped JSON package containing admitted work, pending proposals, relationships, decisions, and verified review evidence without choosing a team-tool vendor.
 - **Recursive cleanup:** use `$slop-cleanup` to trace residue from revised or abandoned features, remove an approved family, and repeat until a fresh pass finds nothing new.
 
 The `$pinboard`, `$pinboard-intake`, and `$pinboard-deliver` skills provide the conversational workflows. The `pinboard` command validates and updates the repository-local ledger, rejects stale actions, and keeps unrelated attempts from invalidating one another.
@@ -70,6 +71,8 @@ pinboard item revise --file <pinboard-item-revision-v1.json> --task-id <task> --
 ```
 
 Revision files replace the whole `pinboard-work-item-definition/v1`; partial patches are rejected. Blocking can only name dependencies already present in that definition and never changes accepted dependencies itself.
+
+Run `pinboard handover --json` to materialize the strict `pinboard-project-handover/v1` document. The command reads one validated SQLite snapshot, verifies every accepted immutable artifact, embeds its exact bytes as UTF-8 text or base64, and writes nothing unless the complete package is ready.
 
 ## Install from GitHub
 
