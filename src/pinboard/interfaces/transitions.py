@@ -115,7 +115,9 @@ def transition(roots: cli_commands.ResolvedRoots, cli_command: cli_commands.Tran
         return transition_brief_identity
     match command:
         case decision_models.AcceptCheckpointCommand():
-            if isinstance(checkpoint_artifacts := publish_checkpoint_artifacts(roots, command, artifacts), CommandFailure):
+            if isinstance(
+                checkpoint_artifacts := publish_checkpoint_artifacts(roots, command, artifacts), CommandFailure
+            ):
                 return checkpoint_artifacts
             result = execute_checkpoint_acceptance(
                 store,
@@ -180,7 +182,9 @@ def read_brief_identity(
     command: decision_models.TransitionCommand,
     artifacts: ArtifactRepository,
 ) -> CommandResult[WorkBriefIdentity | None]:
-    if isinstance(identity := read_transition_work_brief_identity(store.snapshot(), command, artifacts), DecisionFailure):
+    if isinstance(
+        identity := read_transition_work_brief_identity(store.snapshot(), command, artifacts), DecisionFailure
+    ):
         return CommandFailure(identity.code, identity.message)
     return identity
 
@@ -370,7 +374,9 @@ def apply_borrowed_transition(
         return transition_brief_identity
     match command:
         case decision_models.AcceptCheckpointCommand():
-            if isinstance(checkpoint_artifacts := publish_checkpoint_artifacts(roots, command, artifacts), CommandFailure):
+            if isinstance(
+                checkpoint_artifacts := publish_checkpoint_artifacts(roots, command, artifacts), CommandFailure
+            ):
                 return checkpoint_artifacts
             result = execute_checkpoint_acceptance(
                 store,
