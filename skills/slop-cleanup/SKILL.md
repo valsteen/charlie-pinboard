@@ -121,6 +121,8 @@ Regroup by current concepts. Separate declarations from logic when each side has
 
 Run an archaeology pass over names, comments, error codes, schema labels, help text, examples, documentation, and tests. Remove wording that describes a predecessor, migration phase, plural capability that is now singular, or behavior the code can no longer perform. Collapse documentation around the surviving concepts, remove pages, sections, examples, diagrams, badges, and setup instructions whose feature or workflow was removed, and keep parallel documents consistent rather than leaving one stale version behind. Every advertised feature must trace to a supported entry point or explicitly labeled current limitation; do not turn deleted or never-shipped implementation into present-tense documentation or an invented roadmap. Remove stale lint, warning, ignore, and coverage suppressions with the ecosystem’s unused-suppression check when available.
 
+When a command or closed-variant family crosses several production owners, read and run the [developer-navigation stress test](references/dx-stress-test.md). Use its representative trace and sibling-change simulation to find repeated routing facts that ordinary reachability and line-count inventories miss. Keep exhaustive branches at justified decision and boundary owners; do not replace them with an open dispatch mechanism merely to make the edit count smaller.
+
 For structural boilerplate, use one repeatable pass:
 
 1. List collections traversed by neighboring projections. Group each collection once by the consumer key when repeated scans reconstruct the same relationship; keep the grouping local and explicit.
@@ -129,7 +131,7 @@ For structural boilerplate, use one repeatable pass:
 4. For each duplicated closed classification, list every encoding and choose one owner nearest the behavior. Keep a label-only vocabulary when alternatives have the same data and meaning, use data-bearing variants when alternatives require different data, and leave context-dependent legality in the decision that owns the surrounding state.
 5. Compare every branch that handles closed alternatives. Combine alternatives when their conditions, bound values, effects, and result are equivalent; remove a named alternative when a general branch already owns the same outcome. Preserve the alternatives themselves when another consumer, protocol, retry policy, or lifecycle decision distinguishes them.
 6. Preserve an independently owned external or persisted shape with one explicit exhaustive boundary conversion. Trace same-shaped values through every call and adapter, folding layers that add no validation, policy, protocol, or independently reused operation.
-7. Compare actual decision points before and after. Report explicit boundary conversion, dependency volume, and source-size change separately so a smaller file or dependency list cannot stand in for a simpler decision model.
+7. Compare actual decision points and developer navigation before and after. Report justified exhaustive sites, explicit boundary conversion, edit sites for one representative sibling, dependency volume, and source-size change separately so a smaller file or dependency list cannot stand in for a simpler decision model.
 8. Re-run these inventories after each fold. Stop only when a fresh pass finds no repeated traversal, nullable multi-operation record, hand-decoded structural mapping, orphaned same-shaped call trail, or equivalent alternative-handling branch in the accepted scope.
 
 Stop collapsing when the remaining alternatives are a legitimate vocabulary, the distinction has an independent consumer, or the boundary conversion would cost more decision structure than the invalid combinations it prevents.
@@ -146,6 +148,7 @@ After the last change, start the complete inventory again from the production ro
 
 - every production symbol is reachable, required for supported persisted data or protocol compatibility, or recorded as one exact retained exception;
 - every closed variant and branch has a real producer and consumer or an explicit boundary reason;
+- one representative command or variant can be traced and extended without rediscovering same-meaning routing facts in owners that add no boundary, decision, presentation, or effect;
 - no production API exists only for tests, and no advertised entry point can only reject;
 - surviving files and tests have meaningful, preferably symmetric conceptual ownership;
 - names, comments, docs, examples, diagrams, schema labels, and suppressions describe only current behavior;

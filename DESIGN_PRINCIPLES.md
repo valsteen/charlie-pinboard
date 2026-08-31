@@ -73,7 +73,30 @@ For a closed family, use concrete records or flat unions, exhaustive `match` sta
 
 When a module owns a coherent vocabulary, import the module and qualify its members at use sites. This keeps the owner visible and prevents long member-import lists from disguising cross-module coupling.
 
-Do not replace a closed branch with a handler registry, reflective attribute access, inheritance-based dispatch, or a callback pipeline. Those tools are appropriate only when supported behavior is genuinely open at runtime. Generics and protocols are useful when they preserve exact types across a real reusable boundary; they are not reasons to create one.
+Do not replace a closed decision or boundary conversion with a handler registry, reflective attribute access, inheritance-based dispatch, or a callback pipeline merely to shorten the branch. Dynamic dispatch is appropriate when behavior is genuinely open at runtime or the caller should not know the concrete implementation. Generics and protocols are useful when they preserve exact types across a real reusable boundary; they are not reasons to create one.
+
+## Make exhaustive sites earn their place
+
+Exhaustiveness belongs at an owner that must distinguish a real closed family or convert an independently required wire, storage, or presentation shape. It is not a quota for every layer traversed by that family. After one owner has selected a concrete alternative, pass that typed value directly until another owner has a different decision or representation to own.
+
+Stress-test navigation whenever a command or variant family crosses several production owners. Trace one representative value from its supported entry point to its effect, then simulate adding one sibling. Record every place a developer must discover and every place they must edit. A site earns retention when it adds validation, policy, protocol conversion, presentation, or an effect; a route enum, conversion table, wrapper variant, or exhaustive branch that only restates an already selected fact is duplicate ownership.
+
+Use that result to collapse same-meaning remaps and improve names and direct call paths. Do not introduce reflection, registries, callbacks, or polymorphism merely to reduce the number of exhaustive matches. The target is a navigable closed design: each necessary distinction is explicit once per owner, and a developer can predict the next owner without reconstructing a parallel routing system.
+
+## Choose dispatch by ownership and failure mode
+
+The primary hazard is implicit fallback, not dynamic dispatch by itself. For every dispatch site, ask whether the alternatives are closed, whether this owner must distinguish them, where a new alternative should force an edit, and what happens for an unsupported value. Reject catch-all `else` branches, mapping `.get()` defaults, optional handlers, inherited default implementations, and generic registrations that silently accept an unknown alternative.
+
+| Situation | Preferred shape | Why | Avoid |
+| --- | --- | --- | --- |
+| Incoming payload, CLI leaf, storage row, or protocol tag selects a closed representation | Decode directly to an exact record or tagged union; use one exhaustive `match` when coupled fields select among records | Validation and completeness belong at the boundary, and a new supported shape must update that owner | General namespaces past the boundary, stringly route enums, permissive fallback records |
+| A closed product decision, effect, persistence projection, or presentation genuinely differs by variant | Exhaustive `match` with `assert_never` in that owner | The branch is the readable specification and fails static checking when the family changes | Handler dictionaries, catch-all branches, repeated matches in pass-through layers |
+| A selecting site has already chosen a concrete same-shaped command model | Carry inert type metadata or the typed value and use one common operation | Navigation stays direct without restating the closed choice | Executable callbacks hidden in parser state, a second route enum, name-to-name conversion tables |
+| Pure in-module code delegates behavior that the caller should not distinguish | Direct method or function call; a small protocol is acceptable when every concrete implementation is explicitly wired nearby | The behavior owner is one jump away and another exhaustive caller adds no completeness | Base-class fallback behavior, reflective lookup, optional callback defaults |
+| A library, plugin, driver, or dependency-inversion seam is intentionally open | Protocol, required callback, abstract interface, or explicit registry at one composition root | Dynamic dispatch expresses the supported extension boundary | A default implementation that makes an unregistered or incomplete implementation appear supported |
+| A closed key selects inert data rather than behavior | Prefer an enum-keyed total record or exhaustive function when completeness matters; use a mapping only when it is genuinely data-driven and missing keys fail explicitly | Data tables can be clearer than control flow, but Python mappings do not prove totality | `.get()` fallbacks, default dictionaries, a behavior registry disguised as data |
+
+At Python dynamic seams, make completeness observable: protocols declare the required surface, every supported implementation supplies it explicitly, wiring is centralized and discoverable, and unsupported inputs fail at the boundary. Abstract base methods should not provide a usable fallback body. When those properties cannot be seen locally and the family is closed, prefer an exhaustive branch.
 
 ## Split by theme and preserve useful symmetry
 
