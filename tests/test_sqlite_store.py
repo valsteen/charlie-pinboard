@@ -28,16 +28,19 @@ from pinboard.application import stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.mutations import project_transition_mutation
 from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import AttemptLeaseStatus
+from pinboard.domain.authority_models import AttemptLeaseStatus, PreparationLeaseStatus
 from pinboard.domain.decisions import available_actions as available_actions_outcome
 from pinboard.domain.decisions import decide as decision_outcome
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
+from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import (
     ArtifactRefId,
     AttemptId,
     CandidateId,
+    HostId,
     ItemId,
     LeaseId,
+    TaskId,
 )
 from pinboard.domain.ledger import LedgerSnapshot
 from tests.domain_support import command, expect_success
@@ -84,6 +87,73 @@ class SQLiteStoreTest(unittest.TestCase):
         assert isinstance(result, DecisionFailure)
         self.assertEqual(DecisionFailureCode.ACTION_NOT_AVAILABLE, result.code)
 
+    def test_active_preparation_requires_ready_item_and_current_definition(self) -> None:
+        state = complete_sqlite_state()
+        definition = next(value for value in state.lifecycle.definition_revisions if value.item_id == ItemId("work-c"))
+        lease = stored_state.StoredPreparationLease(
+            ItemId("work-c"),
+            1,
+            definition.revision,
+            definition.digest,
+            SQLITE_NOW,
+            SQLITE_NOW + timedelta(minutes=5),
+            PreparationLeaseStatus.ACTIVE,
+        )
+        authority = replace_dataclass(
+            state.authority,
+            preparation_counters=(stored_state.PreparationLeaseCounter(ItemId("work-c"), 1),),
+            preparation_generations=(
+                stored_state.PreparationLeaseGeneration(
+                    ItemId("work-c"), 1, LeaseId("preparation-c"), TaskId("preparer-c"), HostId("host-a")
+                ),
+            ),
+            preparation_leases=(lease,),
+        )
+        non_ready_items = tuple(
+            replace_dataclass(value, state=stored_state.StoredWorkItemState.ACTIVE)
+            if value.item_id == ItemId("work-c")
+            else value
+            for value in state.lifecycle.work_items
+        )
+        self._assert_state_rejected(
+            "active preparation for non-ready item",
+            replace_dataclass(
+                state,
+                lifecycle=replace_dataclass(state.lifecycle, work_items=non_ready_items),
+                authority=authority,
+            ),
+        )
+
+        revised_definition = replace_dataclass(definition.definition, title="Revised work C")
+        revised_digest = expect_success(work_item_definition_digest(revised_definition))
+        revision = replace_dataclass(
+            definition,
+            revision=2,
+            digest=revised_digest,
+            definition=revised_definition,
+            before_digest=definition.digest,
+            after_digest=revised_digest,
+        )
+        revised_state = replace_dataclass(
+            state,
+            lifecycle=replace_dataclass(
+                state.lifecycle,
+                definition_revisions=(*state.lifecycle.definition_revisions, revision),
+            ),
+            authority=authority,
+        )
+        self._assert_state_rejected("active preparation for stale definition", revised_state)
+
+        inactive = replace_dataclass(lease, state=PreparationLeaseStatus.RELEASED)
+        _path, store = self._store(populated=False)
+        store.initialize_state(
+            replace_dataclass(
+                revised_state,
+                authority=replace_dataclass(authority, preparation_leases=(inactive,)),
+            )
+        )
+        self.assertEqual(PreparationLeaseStatus.RELEASED, store.snapshot().authority.preparation_leases[0].state)
+
     def test_schema_identity_initialization_backup_and_reopen_contract(self) -> None:
         path, store = self._store()
         self.assertEqual(complete_sqlite_state(), store.snapshot())
@@ -101,7 +171,7 @@ class SQLiteStoreTest(unittest.TestCase):
         for field, value, expected in (
             ("application", "wrong-application", StorageErrorCode.INVALID_STATE),
             ("schema_version", 0, StorageErrorCode.SCHEMA_UNSUPPORTED),
-            ("schema_version", 2, StorageErrorCode.SCHEMA_UNSUPPORTED),
+            ("schema_version", 3, StorageErrorCode.SCHEMA_UNSUPPORTED),
         ):
             tampered, _ = self._store(populated=False)
             connection = sqlite3.connect(tampered)
@@ -138,7 +208,7 @@ class SQLiteStoreTest(unittest.TestCase):
         try:
             self.assertEqual("wal", connection.execute("PRAGMA journal_mode = WAL").fetchone()[0])
             connection.execute("PRAGMA ignore_check_constraints = ON")
-            connection.execute("UPDATE project_meta SET schema_version = 2")
+            connection.execute("UPDATE project_meta SET schema_version = 3")
             connection.commit()
         finally:
             connection.close()
@@ -242,7 +312,7 @@ class SQLiteStoreTest(unittest.TestCase):
             connection.execute(
                 "CREATE TABLE project_meta (singleton INTEGER, application TEXT, schema_version INTEGER)"
             )
-            connection.execute("INSERT INTO project_meta VALUES (1, 'pinboard', 1)")
+            connection.execute("INSERT INTO project_meta VALUES (1, 'pinboard', 2)")
             connection.commit()
         finally:
             connection.close()
@@ -254,7 +324,7 @@ class SQLiteStoreTest(unittest.TestCase):
         invalid_types_connection = sqlite3.connect(invalid_types)
         try:
             invalid_types_connection.execute("CREATE TABLE project_meta (application, schema_version)")
-            invalid_types_connection.execute("INSERT INTO project_meta VALUES (7, 'sqlite-v1')")
+            invalid_types_connection.execute("INSERT INTO project_meta VALUES (7, 'sqlite-v2')")
             invalid_types_connection.commit()
         finally:
             invalid_types_connection.close()
@@ -558,7 +628,7 @@ class SQLiteStoreTest(unittest.TestCase):
             ).fetchone()[0]
         finally:
             connection.close()
-        self.assertEqual(16, table_count)
+        self.assertEqual(19, table_count)
 
         wrong_kind = replace(
             state,
@@ -692,7 +762,7 @@ class SQLiteStoreTest(unittest.TestCase):
     def test_domain_decision_commit_staleness_and_failure_rollback(self) -> None:
         _path, store = self._store()
         initial = store.snapshot()
-        snapshot = project_decision_snapshot(initial)
+        snapshot = project_decision_snapshot(initial, SQLITE_NOW)
         actor = decision_models.ActorAuthority(
             decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
         )
@@ -740,7 +810,7 @@ class SQLiteStoreTest(unittest.TestCase):
 
         failed_path, failed_store = self._store()
         failed_initial = failed_store.snapshot()
-        failed_snapshot = project_decision_snapshot(failed_initial)
+        failed_snapshot = project_decision_snapshot(failed_initial, SQLITE_NOW)
         failed_action = next(
             value
             for value in available_actions(
@@ -784,7 +854,7 @@ class SQLiteStoreTest(unittest.TestCase):
     def test_runtime_write_scope_propagates_programming_failure_and_closes(self) -> None:
         path, store = self._store()
         before = store.snapshot()
-        snapshot = project_decision_snapshot(before)
+        snapshot = project_decision_snapshot(before, SQLITE_NOW)
         actor = decision_models.ActorAuthority(
             decision_models.Role.COORDINATOR,
             decision_models.AuthorizationKind.COORDINATOR,
@@ -819,7 +889,7 @@ class SQLiteStoreTest(unittest.TestCase):
     def test_pause_updates_only_affected_relations_and_reloads(self) -> None:
         path, store = self._store()
         before = store.snapshot()
-        snapshot = project_decision_snapshot(before)
+        snapshot = project_decision_snapshot(before, SQLITE_NOW)
         actor = decision_models.ActorAuthority(
             decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
         )
@@ -855,7 +925,7 @@ class SQLiteStoreTest(unittest.TestCase):
     def test_direct_completion_commits_one_domain_decision_atomically(self) -> None:
         _path, store = self._store()
         before = store.snapshot()
-        snapshot = project_decision_snapshot(before)
+        snapshot = project_decision_snapshot(before, SQLITE_NOW)
         actor = decision_models.ActorAuthority(
             decision_models.Role.COORDINATOR, decision_models.AuthorizationKind.COORDINATOR, snapshot.generation
         )
@@ -891,7 +961,7 @@ class SQLiteStoreTest(unittest.TestCase):
     def test_review_submission_commits_exact_caller_supplied_candidate(self) -> None:
         _path, store = self._store()
         before = store.snapshot()
-        snapshot = project_decision_snapshot(before)
+        snapshot = project_decision_snapshot(before, SQLITE_NOW)
         actor = decision_models.ActorAuthority(
             decision_models.Role.WORKER,
             decision_models.AuthorizationKind.ATTEMPT,
@@ -938,7 +1008,7 @@ class SQLiteStoreTest(unittest.TestCase):
         )
         _path, store = self._store(populated=False)
         store.initialize_state(review_state)
-        snapshot = project_decision_snapshot(store.snapshot())
+        snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
         coordination = review_state.authority.coordination
         assert coordination is not None
         actor = decision_models.ActorAuthority(

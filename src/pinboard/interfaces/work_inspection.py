@@ -7,6 +7,7 @@ authority, refresh generated views, obtain a lease, or own a transaction.
 
 import sys
 from collections import Counter
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import assert_never
 
@@ -22,6 +23,7 @@ from pinboard.interfaces.cli_output import write_json
 
 
 def overview_item_view(item: query_models.OverviewItem) -> work_inspection_models.OverviewItemView:
+    preparation = item.preparation
     return work_inspection_models.OverviewItemView(
         item.item_id,
         item.label,
@@ -41,6 +43,20 @@ def overview_item_view(item: query_models.OverviewItem) -> work_inspection_model
         item.attempt_id,
         item.next_action,
         item.notes,
+        (
+            None
+            if preparation is None
+            else work_inspection_models.PreparationView(
+                preparation.definition_revision,
+                preparation.definition_digest,
+                preparation.task_id,
+                preparation.host_id,
+                preparation.lease_id,
+                preparation.generation,
+                preparation.expires_at,
+                preparation.status,
+            )
+        ),
     )
 
 
@@ -155,9 +171,11 @@ def parallel_preview_view(
     )
 
 
-def status_view(work: Path, source_checkout: Path, shared_repository: Path) -> work_inspection_models.StatusView:
+def status_view(
+    work: Path, source_checkout: Path, shared_repository: Path, now: datetime
+) -> work_inspection_models.StatusView:
     state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
-    overview_value = queries.overview_from_state(state)
+    overview_value = queries.overview_from_state(state, now)
     coordinator = state.authority.coordination
     return work_inspection_models.StatusView(
         valid=True,
@@ -183,12 +201,12 @@ def status_view(work: Path, source_checkout: Path, shared_repository: Path) -> w
             if coordinator is not None
             else None
         ),
-        authority="sqlite-v1",
+        authority="sqlite-v2",
     )
 
 
 def status(roots: cli_commands.ResolvedRoots, command: cli_commands.StatusCommand) -> int:
-    value = status_view(roots.work, roots.source_checkout, roots.shared_repository)
+    value = status_view(roots.work, roots.source_checkout, roots.shared_repository, datetime.now(UTC))
     if command.json:
         write_json(value)
     else:
@@ -199,7 +217,8 @@ def status(roots: cli_commands.ResolvedRoots, command: cli_commands.StatusComman
 
 
 def overview(roots: cli_commands.ResolvedRoots, command: cli_commands.OverviewCommand) -> int:
-    value = queries.overview_from_state(SQLiteWorkStore(roots.work / "state.sqlite3").snapshot())
+    now = datetime.now(UTC)
+    value = queries.overview_from_state(SQLiteWorkStore(roots.work / "state.sqlite3").snapshot(), now)
     if command.json:
         write_json(overview_view(value))
         return 0
@@ -208,10 +227,20 @@ def overview(roots: cli_commands.ResolvedRoots, command: cli_commands.OverviewCo
         print("live_work=none")
     for item in value.items:
         attempt = f" attempt={item.attempt_id}" if item.attempt_id is not None else ""
+        preparation = (
+            " preparation=none"
+            if item.preparation is None
+            else (
+                f" preparation={item.preparation.status}"
+                f" preparer={item.preparation.task_id}@{item.preparation.host_id}"
+                f" preparation_generation={item.preparation.generation}"
+                f" preparation_expires_at={item.preparation.expires_at}"
+            )
+        )
         next_action = item.next_action or "none"
         print(
             f"{item.position}\t{item.item_id}\t{item.state.value}\teligible={str(item.eligible).lower()}"
-            f"\tnext={next_action}{attempt}\t{item.label}"
+            f"\tnext={next_action}{attempt}{preparation}\t{item.label}"
         )
     print(
         f"intake_items={sum(1 for item in value.items if item.state == work_models.WorkState.INTAKE)} "
@@ -224,7 +253,7 @@ def item_status(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ItemStatusCommand,
 ) -> errors.CommandResult[int]:
-    value = queries.item_status(SQLiteWorkStore(roots.work / "state.sqlite3"), command.item_id)
+    value = queries.item_status(SQLiteWorkStore(roots.work / "state.sqlite3"), command.item_id, datetime.now(UTC))
     if isinstance(value, domain_errors.DecisionFailure):
         return errors.CommandFailure(value.code, value.message)
     if command.json:
@@ -239,6 +268,15 @@ def item_status(
         f"next_action={value.next_action or 'none'}"
     )
     print(f"outcome_evidence={value.outcome_evidence or 'none'} notes={value.notes or 'none'}")
+    if value.preparation is None:
+        print("preparation=none")
+    else:
+        print(
+            f"preparation={value.preparation.status} preparer={value.preparation.task_id}@{value.preparation.host_id} "
+            f"lease_id={value.preparation.lease_id} generation={value.preparation.generation} "
+            f"expires_at={value.preparation.expires_at} definition_revision={value.preparation.definition_revision} "
+            f"definition_digest={value.preparation.definition_digest}"
+        )
     if not value.attempts:
         print("attempts=none")
     for attempt in value.attempts:
@@ -310,6 +348,7 @@ def actions(
         command.role,
         lease_id=lease_id,
         generation=generation,
+        now=datetime.now(UTC),
     )
     if isinstance(available, domain_errors.DecisionFailure):
         return errors.CommandFailure(available.code, available.message)
@@ -381,6 +420,7 @@ def parallel(
     preview = queries.preview_parallel(
         SQLiteWorkStore(roots.work / "state.sqlite3"),
         selected=tuple(command.item),
+        now=datetime.now(UTC),
     )
     if isinstance(preview, query_models.QueryFailure):
         match preview.code:

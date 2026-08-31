@@ -136,7 +136,7 @@ def _attempt_renew_operation(
     retained = next(
         (
             value
-            for value in project_decision_snapshot(state).command_attempt_authorities
+            for value in project_decision_snapshot(state, now).command_attempt_authorities
             if value.attempt == command.attempt_id
         ),
         None,
@@ -158,7 +158,7 @@ def _attempt_release_operation(
     retained = next(
         (
             value
-            for value in project_decision_snapshot(state).command_attempt_authorities
+            for value in project_decision_snapshot(state, now).command_attempt_authorities
             if value.attempt == command.attempt_id
         ),
         None,
@@ -227,7 +227,12 @@ def change_attempt_authority(
     result = apply_attempt_authority_change(store, authority_operation)
     if isinstance(result, DecisionFailure):
         return CommandFailure(result.code, result.message)
-    refresh_result = work_views.refresh(roots, store, AffectedViews(queue=True, current_focus=True, history=True))
+    refresh_result = work_views.refresh(
+        roots,
+        store,
+        AffectedViews(queue=True, current_focus=True, history=True),
+        datetime.now(UTC),
+    )
     if refresh_result.warning is not None:
         print(refresh_result.warning.message, file=sys.stderr)
     return _emit_attempt_authority(store.snapshot(), command.attempt_id, json=command.json)

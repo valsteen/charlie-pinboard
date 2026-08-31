@@ -2,12 +2,12 @@ import unittest
 
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.domain.identifiers import ItemId, LeaseId
-from tests.support import complete_sqlite_state
+from tests.support import SQLITE_NOW, complete_sqlite_state
 
 
 class DecisionProjectionTest(unittest.TestCase):
     def test_stored_state_projects_current_decision_facts(self) -> None:
-        snapshot = project_decision_snapshot(complete_sqlite_state())
+        snapshot = project_decision_snapshot(complete_sqlite_state(), SQLITE_NOW)
 
         self.assertEqual("12", snapshot.revision)
         self.assertEqual(
@@ -20,7 +20,7 @@ class DecisionProjectionTest(unittest.TestCase):
         self.assertEqual(ItemId("work-a"), snapshot.focus_item)
 
     def test_terminal_work_is_history_not_live_work(self) -> None:
-        snapshot = project_decision_snapshot(complete_sqlite_state())
+        snapshot = project_decision_snapshot(complete_sqlite_state(), SQLITE_NOW)
 
         self.assertNotIn(ItemId("work-b"), snapshot.items_by_id())
         self.assertIn(ItemId("work-b"), snapshot.history_items)

@@ -4,7 +4,7 @@ from enum import Enum
 from typing import Literal, assert_never
 
 from pinboard.domain import work_models
-from pinboard.domain.authority_models import AttemptLeaseStatus
+from pinboard.domain.authority_models import AttemptLeaseStatus, PreparationLeaseStatus
 from pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -121,12 +121,13 @@ class TransitionHistoryAuthorizationKind(Enum):
     COORDINATOR = "coordinator"
     COORDINATION = "coordination"
     ATTEMPT = "attempt"
+    PREPARATION = "preparation"
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectRecord:
     application: Literal["pinboard"]
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     revision: int
     host_epoch: int
     created_at: datetime
@@ -276,6 +277,32 @@ class StoredAttemptLease:
 
 
 @dataclass(frozen=True, slots=True)
+class PreparationLeaseCounter:
+    item_id: ItemId
+    generation_high_water: int
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationLeaseGeneration:
+    item_id: ItemId
+    generation: int
+    lease_id: LeaseId
+    task_id: TaskId
+    host_id: HostId
+
+
+@dataclass(frozen=True, slots=True)
+class StoredPreparationLease:
+    item_id: ItemId
+    generation: int
+    definition_revision: int
+    definition_digest: str
+    acquired_at: datetime
+    expires_at: datetime
+    state: PreparationLeaseStatus
+
+
+@dataclass(frozen=True, slots=True)
 class StoredFocus:
     item_id: ItemId | None
     attempt_id: AttemptId | None
@@ -324,6 +351,9 @@ class AuthorityRecords:
     attempt_counters: tuple[AttemptLeaseCounter, ...] = ()
     attempt_generations: tuple[AttemptLeaseGeneration, ...] = ()
     attempt_leases: tuple[StoredAttemptLease, ...] = ()
+    preparation_counters: tuple[PreparationLeaseCounter, ...] = ()
+    preparation_generations: tuple[PreparationLeaseGeneration, ...] = ()
+    preparation_leases: tuple[StoredPreparationLease, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

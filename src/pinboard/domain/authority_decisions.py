@@ -6,6 +6,7 @@ from pinboard.domain import work_models
 from pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
+    AcquireInitialPreparationAuthority,
     AttemptAuthorityDecision,
     AttemptAuthorityOperation,
     AttemptLeaseAuthority,
@@ -13,16 +14,26 @@ from pinboard.domain.authority_models import (
     CoordinationAuthorityDecision,
     CoordinationAuthorityOperation,
     InactiveAttemptAuthority,
+    InactivePreparationAuthority,
+    PreparationAuthorityDecision,
+    PreparationAuthorityOperation,
+    PreparationLeaseAuthority,
+    PreparationLeaseStatus,
     ReleaseAttemptAuthority,
     ReleaseCoordinationAuthority,
+    ReleasePreparationAuthority,
     RenewAttemptAuthority,
     RenewCoordinationAuthority,
+    RenewPreparationAuthority,
     RevokeAttemptAuthority,
     RevokeCoordinationAuthority,
+    RevokePreparationAuthority,
     TransferAttemptAuthority,
+    TransferPreparationAuthority,
 )
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId, ItemId
+from pinboard.domain.ledger import LedgerSnapshot
 
 
 def _coordination_token(value: work_models.CoordinationLeaseAuthority) -> work_models.CoordinationCommandAuthority:
@@ -393,3 +404,231 @@ def _validate_coordination(
     ):
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Coordination authority is not current.")
     return None
+
+
+def _preparation_token(value: PreparationLeaseAuthority) -> work_models.PreparationCommandAuthority:
+    return work_models.PreparationCommandAuthority(
+        value.host_epoch,
+        value.item,
+        value.definition_revision,
+        value.definition_digest,
+        value.task_id,
+        value.host_id,
+        value.lease_id,
+        value.generation,
+        value.expires_at,
+    )
+
+
+def _validate_preparation_change(
+    retained: PreparationLeaseAuthority | None,
+    current: work_models.PreparationCommandAuthority,
+    now: datetime,
+) -> DecisionFailure | None:
+    if retained is None:
+        return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation authority does not exist.")
+    if retained.state != PreparationLeaseStatus.ACTIVE or _preparation_token(retained) != current:
+        return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Preparation authority is fenced.")
+    if retained.expires_at <= now:
+        return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation authority has expired.")
+    return None
+
+
+def _validate_preparation_transfer(
+    retained: PreparationLeaseAuthority | None,
+    current: InactivePreparationAuthority,
+    now: datetime,
+) -> DecisionFailure | None:
+    if retained is None:
+        return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation authority does not exist.")
+    if retained.state == PreparationLeaseStatus.ACTIVE and retained.expires_at > now:
+        return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation authority remains live.")
+    state = PreparationLeaseStatus.EXPIRED if retained.state == PreparationLeaseStatus.ACTIVE else retained.state
+    expected = InactivePreparationAuthority(
+        retained.host_epoch,
+        retained.item,
+        retained.definition_revision,
+        retained.definition_digest,
+        retained.task_id,
+        retained.host_id,
+        retained.lease_id,
+        retained.generation,
+        retained.expires_at,
+        state,
+    )
+    if (
+        state
+        not in {
+            PreparationLeaseStatus.EXPIRED,
+            PreparationLeaseStatus.RELEASED,
+            PreparationLeaseStatus.REVOKED,
+        }
+        or current != expected
+    ):
+        return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Preparation authority is fenced.")
+    return None
+
+
+def decide_preparation_authority(  # noqa: C901, PLR0912
+    retained: PreparationLeaseAuthority | None,
+    counter: int,
+    operation: PreparationAuthorityOperation,
+    snapshot: LedgerSnapshot | None,
+    now: datetime,
+) -> DecisionResult[PreparationAuthorityDecision]:
+    match operation:
+        case AcquireInitialPreparationAuthority(
+            host_epoch=host_epoch,
+            item=item,
+            expected_project_revision=expected_project_revision,
+            expected_item_subject_revision=expected_item_subject_revision,
+            expected_definition_revision=expected_definition_revision,
+            expected_definition_digest=expected_definition_digest,
+            coordination=supplied_coordination,
+            task_id=task_id,
+            host_id=host_id,
+            lease_id=lease_id,
+            acquired_at=acquired_at,
+            expires_at=expires_at,
+        ):
+            if snapshot is None:
+                return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation requires ledger state.")
+            item_value = snapshot.item(item)
+            definition = snapshot.definition(item)
+            if (
+                snapshot.host_epoch != host_epoch
+                or snapshot.revision != expected_project_revision
+                or snapshot.subject_revision(item) != expected_item_subject_revision
+                or item_value is None
+                or item_value.state != work_models.WorkState.READY
+                or any(dependency in snapshot.items_by_id() for dependency in item_value.depends_on)
+                or definition is None
+                or (definition.revision, definition.digest)
+                != (expected_definition_revision, expected_definition_digest)
+            ):
+                return DecisionFailure(
+                    DecisionFailureCode.ACTION_NOT_AVAILABLE,
+                    "Initial preparation requires the exact dependency-satisfied ready item and definition.",
+                )
+            if (failure := _validate_coordination(snapshot.coordination_lease, supplied_coordination, now)) is not None:
+                return failure
+            if counter != 0 or retained is not None:
+                return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Initial preparation is already claimed.")
+            if expires_at <= acquired_at:
+                return DecisionFailure(
+                    DecisionFailureCode.TRANSITION_INPUT_INVALID,
+                    "Preparation authority requires a positive bounded interval.",
+                )
+            after = PreparationLeaseAuthority(
+                host_epoch,
+                item,
+                definition.revision,
+                definition.digest,
+                task_id,
+                host_id,
+                lease_id,
+                1,
+                acquired_at,
+                expires_at,
+                PreparationLeaseStatus.ACTIVE,
+            )
+            return PreparationAuthorityDecision(item, 0, 1, None, after)
+        case TransferPreparationAuthority(
+            current=current,
+            coordination=supplied_coordination,
+            task_id=task_id,
+            host_id=host_id,
+            lease_id=lease_id,
+            acquired_at=acquired_at,
+            expires_at=expires_at,
+        ):
+            if snapshot is None or retained is None:
+                return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation transfer is unavailable.")
+            if (failure := _validate_preparation_transfer(retained, current, now)) is not None:
+                return failure
+            if (failure := _validate_coordination(snapshot.coordination_lease, supplied_coordination, now)) is not None:
+                return failure
+            item_value = snapshot.item(retained.item)
+            definition = snapshot.definition(retained.item)
+            if (
+                item_value is None
+                or item_value.state != work_models.WorkState.READY
+                or any(dependency in snapshot.items_by_id() for dependency in item_value.depends_on)
+                or definition is None
+                or expires_at <= acquired_at
+            ):
+                return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation cannot be transferred.")
+            after = replace(
+                retained,
+                definition_revision=definition.revision,
+                definition_digest=definition.digest,
+                task_id=task_id,
+                host_id=host_id,
+                lease_id=lease_id,
+                generation=counter + 1,
+                acquired_at=acquired_at,
+                expires_at=expires_at,
+                state=PreparationLeaseStatus.ACTIVE,
+            )
+            return PreparationAuthorityDecision(retained.item, counter, counter + 1, retained, after)
+        case RenewPreparationAuthority(current=current, renewed_at=renewed_at, expires_at=expires_at):
+            if (failure := _validate_preparation_change(retained, current, now)) is not None:
+                return failure
+            assert retained is not None
+            if expires_at <= renewed_at or expires_at <= retained.expires_at:
+                return DecisionFailure(
+                    DecisionFailureCode.TRANSITION_INPUT_INVALID,
+                    "Preparation renewal must extend its bounded expiry.",
+                )
+            return PreparationAuthorityDecision(
+                retained.item, counter, counter, retained, replace(retained, expires_at=expires_at)
+            )
+        case ReleasePreparationAuthority(current=current, released_at=released_at):
+            if (failure := _validate_preparation_change(retained, current, now)) is not None:
+                return failure
+            assert retained is not None
+            return PreparationAuthorityDecision(
+                retained.item,
+                counter,
+                counter + 1,
+                retained,
+                replace(
+                    retained,
+                    generation=counter + 1,
+                    expires_at=released_at,
+                    state=PreparationLeaseStatus.RELEASED,
+                ),
+            )
+        case RevokePreparationAuthority(
+            item=item,
+            lease_id=lease_id,
+            generation=generation,
+            coordination=supplied_coordination,
+            revoked_at=revoked_at,
+        ):
+            if snapshot is None:
+                return DecisionFailure(
+                    DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation revocation is unavailable."
+                )
+            if (failure := _validate_coordination(snapshot.coordination_lease, supplied_coordination, now)) is not None:
+                return failure
+            if retained is None or (retained.item, retained.lease_id, retained.generation) != (
+                item,
+                lease_id,
+                generation,
+            ):
+                return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Preparation authority is fenced.")
+            return PreparationAuthorityDecision(
+                item,
+                counter,
+                counter + 1,
+                retained,
+                replace(
+                    retained,
+                    generation=counter + 1,
+                    expires_at=revoked_at,
+                    state=PreparationLeaseStatus.REVOKED,
+                ),
+            )
+        case _ as unreachable:
+            assert_never(unreachable)

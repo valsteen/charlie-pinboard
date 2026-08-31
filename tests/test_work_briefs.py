@@ -4,6 +4,7 @@ import io
 import tempfile
 import unittest
 from dataclasses import replace as dataclass_replace
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,7 +19,7 @@ from pinboard.application.artifact_publication import validate_transition_work_b
 from pinboard.application.artifacts import NewArtifact
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
-from pinboard.domain.identifiers import ArtifactRefId, AttemptId, ItemId
+from pinboard.domain.identifiers import ArtifactRefId, AttemptId, HostId, ItemId, LeaseId, TaskId
 from pinboard.interfaces.cli import main
 from pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
 from pinboard.interfaces.work_brief_models import (
@@ -289,7 +290,22 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                 roots = resolve_durable_roots(project)
                 if name == "activate":
                     value = work_c_brief()
-                    capability = decision_models.MutationActionCapability(ItemId("work-c"), *capability_values)
+                    preparation = work_models.PreparationCommandAuthority(
+                        2,
+                        ItemId("work-c"),
+                        value.accepted_scope.revision,
+                        value.accepted_scope.digest,
+                        TaskId("preparer"),
+                        HostId("host-a"),
+                        LeaseId("preparation-c"),
+                        1,
+                        datetime.max.replace(tzinfo=UTC),
+                    )
+                    capability = decision_models.MutationActionCapability(
+                        ItemId("work-c"),
+                        *capability_values,
+                        preparation_authority=preparation,
+                    )
                     command = decision_models.ActivateCommand(
                         decision_models.ActivateAction(capability),
                         work_models.ActivateInput(
@@ -329,7 +345,37 @@ class WorkBriefBoundaryTest(unittest.TestCase):
 
                 identity = read_transition_work_brief_identity(state, command, artifacts)
                 self.assertNotIsInstance(identity, DecisionFailure)
+                assert identity is not None
                 self.assertIsNone(validate_transition_work_brief(state, command, identity))
+                for identity_mismatch in (
+                    dataclass_replace(identity, attempt_id="different-1"),
+                    dataclass_replace(identity, item_id="different"),
+                    dataclass_replace(identity, branch="codex/different"),
+                    dataclass_replace(identity, base_revision="different-base"),
+                    dataclass_replace(identity, accepted_scope_revision=identity.accepted_scope_revision + 1),
+                    dataclass_replace(identity, accepted_scope_digest="f" * 64),
+                ):
+                    self.assertIsInstance(
+                        validate_transition_work_brief(state, command, identity_mismatch),
+                        DecisionFailure,
+                    )
+                if isinstance(command, decision_models.ActivateCommand):
+                    authority = command.action.capability.preparation_authority
+                    assert authority is not None
+                    wrong_pin = dataclass_replace(
+                        command,
+                        action=dataclass_replace(
+                            command.action,
+                            capability=dataclass_replace(
+                                command.action.capability,
+                                preparation_authority=dataclass_replace(authority, definition_digest="f" * 64),
+                            ),
+                        ),
+                    )
+                    self.assertIsInstance(
+                        validate_transition_work_brief(state, wrong_pin, identity),
+                        DecisionFailure,
+                    )
                 with (
                     patch.object(ArtifactRepository, "verify"),
                     patch.object(ArtifactRepository, "path", return_value=project / "missing-accepted-brief.json"),

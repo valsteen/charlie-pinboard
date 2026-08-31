@@ -20,7 +20,7 @@ def _proposal_text(value: str) -> bool:
     return bool(value) and value.strip() == value and "|" not in value and "\n" not in value
 
 
-def decide_proposal_creation(  # noqa: C901
+def decide_proposal_creation(  # noqa: C901, PLR0912
     authority: LocalIntakeAuthority,
     current_project_revision: int,
     current_host_epoch: int,
@@ -87,6 +87,11 @@ def decide_proposal_creation(  # noqa: C901
         return digest
     prerequisite_change: PrerequisiteDependencyChange | None = None
     if isinstance(intake.relation, work_models.PrerequisiteProposalRelation):
+        if any(authority.item == intake.relation.item for authority in snapshot.command_preparation_authorities):
+            return DecisionFailure(
+                DecisionFailureCode.ACTION_NOT_AVAILABLE,
+                "A live preparation claim prevents prerequisite changes to its ready item.",
+            )
         target = snapshot.item(intake.relation.item)
         anchor = snapshot.definition(intake.relation.item)
         if target is not None and anchor is not None:

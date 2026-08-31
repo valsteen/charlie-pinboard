@@ -222,7 +222,7 @@ DIAGRAM = Diagram(
             "authority",
             "Mutation ownership",
             "Who may act now",
-            ("coordination lease · attempt lease",),
+            ("coordination · preparation · attempt",),
             (),
             610,
             780,

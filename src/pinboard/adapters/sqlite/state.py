@@ -20,6 +20,7 @@ from pinboard.adapters.sqlite.lifecycle import insert_focus, insert_lifecycle, r
 from pinboard.adapters.sqlite.proposals import insert_proposals, read_proposals
 from pinboard.application import stored_state
 from pinboard.domain import work_models
+from pinboard.domain.authority_models import PreparationLeaseStatus
 from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import (
     ActionId,
@@ -174,7 +175,20 @@ def _validate_current_state(state: stored_state.StoredWorkState, error_code: Sto
     if positions != list(range(1, len(positions) + 1)):
         raise StorageError(error_code, "Live work-item queue positions must be contiguous and one-based.")
     item_ids = {value.item_id for value in state.lifecycle.work_items}
-    _validate_dependencies(state, item_ids, _current_definitions(state, item_ids, error_code), error_code)
+    current_definitions = _current_definitions(state, item_ids, error_code)
+    item_states = {value.item_id: value.state for value in state.lifecycle.work_items}
+    for lease in state.authority.preparation_leases:
+        if lease.state != PreparationLeaseStatus.ACTIVE or lease.expires_at <= state.lifecycle.project.updated_at:
+            continue
+        current = current_definitions.get(lease.item_id)
+        if item_states.get(lease.item_id) != stored_state.StoredWorkItemState.READY:
+            raise StorageError(error_code, "An active preparation lease must name a ready work item.")
+        if current is None or (lease.definition_revision, lease.definition_digest) != (
+            current.revision,
+            current.digest,
+        ):
+            raise StorageError(error_code, "An active preparation lease must pin the current item definition.")
+    _validate_dependencies(state, item_ids, current_definitions, error_code)
 
 
 def read_state(connection: sqlite3.Connection) -> stored_state.StoredWorkState:

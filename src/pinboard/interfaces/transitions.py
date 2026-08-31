@@ -99,6 +99,8 @@ def transition(roots: cli_commands.ResolvedRoots, cli_command: cli_commands.Tran
     role = (
         decision_models.Role.WORKER
         if action.capability.authorization == decision_models.AuthorizationKind.ATTEMPT
+        else decision_models.Role.PREPARER
+        if action.capability.authorization == decision_models.AuthorizationKind.PREPARATION
         else decision_models.Role.COORDINATOR
     )
     action = action_selection.reselect_action(roots, action, role)
@@ -167,7 +169,7 @@ def transition(roots: cli_commands.ResolvedRoots, cli_command: cli_commands.Tran
         items=(result.item,) if result.item is not None else (),
         attempts=(affected_attempt,) if affected_attempt is not None else (),
     )
-    view_result = work_views.refresh(roots, store, affected)
+    view_result = work_views.refresh(roots, store, affected, datetime.now(UTC))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     revision = str(state.lifecycle.project.revision)
@@ -258,8 +260,8 @@ def execute_borrowed_coordination(
 ) -> CommandResult[str]:
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     artifacts = ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work))
-    now = datetime.now(UTC)
     state = store.snapshot()
+    now = datetime.now(UTC)
     acquire = AcquireCoordinationAuthority(
         state.lifecycle.project.host_epoch,
         task_id,
@@ -324,7 +326,7 @@ def execute_borrowed_coordination(
         )
     if isinstance(transition_result, CommandFailure):
         return transition_result
-    view_result = work_views.rebuild(roots, store)
+    view_result = work_views.rebuild(roots, store, datetime.now(UTC))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     return transition_result
@@ -345,6 +347,7 @@ def apply_borrowed_transition(
         decision_models.Role.COORDINATOR,
         lease_id=coordination.lease_id,
         generation=coordination.generation,
+        now=datetime.now(UTC),
     )
     if isinstance(available, DecisionFailure):
         return CommandFailure(available.code, available.message)

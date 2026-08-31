@@ -1,10 +1,10 @@
--- SQLite authority schema version 1.
+-- SQLite authority schema version 2.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE project_meta (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     application TEXT NOT NULL CHECK (application = 'pinboard'),
-    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 2),
     revision INTEGER NOT NULL CHECK (revision >= 0),
     host_epoch INTEGER NOT NULL CHECK (host_epoch >= 1),
     created_at TEXT NOT NULL,
@@ -200,6 +200,35 @@ CREATE TABLE attempt_leases (
     status TEXT NOT NULL CHECK (status IN ('active', 'released', 'revoked', 'expired')),
     FOREIGN KEY (attempt_id, generation)
         REFERENCES attempt_lease_generations(attempt_id, generation)
+) STRICT;
+
+CREATE TABLE preparation_lease_counters (
+    item_id TEXT PRIMARY KEY REFERENCES work_items(item_id) ON DELETE CASCADE,
+    generation_high_water INTEGER NOT NULL CHECK (generation_high_water >= 0)
+) STRICT;
+
+CREATE TABLE preparation_lease_generations (
+    item_id TEXT NOT NULL REFERENCES preparation_lease_counters(item_id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL CHECK (generation >= 1),
+    lease_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    host_id TEXT NOT NULL,
+    PRIMARY KEY (item_id, generation),
+    UNIQUE (item_id, lease_id, generation, task_id, host_id)
+) STRICT;
+
+CREATE TABLE preparation_leases (
+    item_id TEXT PRIMARY KEY REFERENCES preparation_lease_counters(item_id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL CHECK (generation >= 1),
+    definition_revision INTEGER NOT NULL CHECK (definition_revision >= 1),
+    definition_digest TEXT NOT NULL CHECK (length(definition_digest) = 64),
+    acquired_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'released', 'revoked', 'expired')),
+    FOREIGN KEY (item_id, generation)
+        REFERENCES preparation_lease_generations(item_id, generation),
+    FOREIGN KEY (item_id, definition_revision, definition_digest)
+        REFERENCES work_item_definition_revisions(item_id, definition_revision, definition_digest)
 ) STRICT;
 
 CREATE TABLE current_focus (

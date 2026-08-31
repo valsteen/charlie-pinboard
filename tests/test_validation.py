@@ -51,20 +51,20 @@ class SQLiteValidationTest(unittest.TestCase):
         project = Path(tempfile.mkdtemp()).resolve()
         receipt = initialize_work_state(project, now=SQLITE_NOW)
 
-        report = validate_work_state(receipt.work_root)
+        report = validate_work_state(receipt.work_root, now=SQLITE_NOW)
         self.assertTrue(report.valid, report.render())
         self.assertEqual("OK WORK_STATE_VALID", report.render())
 
         view = receipt.work_root / "views" / "queue.md"
         view.write_text("stale\n", encoding="utf-8")
-        stale = validate_work_state(receipt.work_root)
+        stale = validate_work_state(receipt.work_root, now=SQLITE_NOW)
         self.assertTrue(stale.valid)
         self.assertIn("VIEW_REFRESH_REQUIRED", stale.render())
         self.assertIn("pinboard views rebuild", stale.render())
 
     def test_missing_database_and_missing_accepted_artifacts_are_errors(self) -> None:
         missing = Path(tempfile.mkdtemp()).resolve() / ".codex" / "pinboard"
-        report = validate_work_state(missing)
+        report = validate_work_state(missing, now=SQLITE_NOW)
         self.assertFalse(report.valid)
         self.assertIn("STORAGE_IO_ERROR", report.render())
 
@@ -72,7 +72,7 @@ class SQLiteValidationTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         SQLiteWorkStore(roots.database_path).initialize_state(complete_sqlite_state())
-        invalid = validate_work_state(roots.work_root)
+        invalid = validate_work_state(roots.work_root, now=SQLITE_NOW)
         self.assertFalse(invalid.valid)
         self.assertIn("STORAGE_INVARIANT_VIOLATION", invalid.render())
 
@@ -87,8 +87,29 @@ class SQLiteValidationTest(unittest.TestCase):
     def test_initialization_reconciles_owned_publication_residue(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         first = initialize_work_state(project, now=SQLITE_NOW)
+        roots = resolve_durable_roots(project)
+        brief = work_a_brief(project)
+        published = write_revision(
+            roots,
+            NewArtifact(
+                stored_state.ArtifactKind.BRIEF,
+                brief.attempt_id,
+                1,
+                ".json",
+                canonical_work_brief_bytes(brief),
+            ),
+        )
         store = SQLiteWorkStore(first.database_path)
-        store.initialize_state(complete_sqlite_state())
+        state = complete_sqlite_state()
+        reference = replace(
+            state.artifact_references[0],
+            key=published.key,
+            revision=published.revision,
+            selector=published.selector,
+            content_sha256=published.content_sha256,
+            size_bytes=published.size_bytes,
+        )
+        store.initialize_state(replace(state, artifact_references=(reference, *state.artifact_references[1:])))
         before = store.snapshot()
         staging = first.database_path.with_name(f".{first.database_path.name}.pinboard-stage")
         staging.hardlink_to(first.database_path)
@@ -103,6 +124,8 @@ class SQLiteValidationTest(unittest.TestCase):
         self.assertTrue(resumed.database_path.exists())
         self.assertFalse(staging.exists())
         self.assertFalse(staging_journal.exists())
+        attempt_view = first.work_root / "views" / "attempts" / "work-a-1.md"
+        self.assertIn("canonical JSON is authoritative", attempt_view.read_text(encoding="utf-8"))
 
     def test_initialization_rejects_conflicting_publication_residue_without_mutation(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

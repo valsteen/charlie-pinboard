@@ -66,7 +66,7 @@ class _TransitionArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=Tr
     payload: Path
     subject_revision: str | None
     lease_id: cli_commands.StableLeaseId | None
-    authorization: Literal["coordinator", "coordination", "attempt"]
+    authorization: Literal["coordinator", "coordination", "attempt", "preparation"]
 
     def __post_init__(self) -> None:
         requires_lease = self.authorization != "coordinator"
@@ -164,6 +164,16 @@ def _decode_transition(values: RawCliValues) -> cli_commands.TransitionCommand:
         case "attempt":
             lease_id = cast("cli_commands.StableLeaseId", arguments.lease_id)
             return cli_commands.AttemptTransitionCommand(
+                action_id=arguments.action_id,
+                expected_revision=arguments.expected_revision,
+                generation=arguments.generation,
+                payload=arguments.payload,
+                lease_id=lease_id,
+                subject_revision=arguments.subject_revision,
+            )
+        case "preparation":
+            lease_id = cast("cli_commands.StableLeaseId", arguments.lease_id)
+            return cli_commands.PreparationTransitionCommand(
                 action_id=arguments.action_id,
                 expected_revision=arguments.expected_revision,
                 generation=arguments.generation,
@@ -301,6 +311,18 @@ def _decode_command(route: cli_commands.CliRoute, values: RawCliValues) -> cli_c
             return msgspec.convert(values, type=cli_commands.AttemptRevokeCommand, strict=True)
         case cli_commands.CliRoute.ATTEMPT_STATUS:
             return msgspec.convert(values, type=cli_commands.AttemptStatusCommand, strict=True)
+        case cli_commands.CliRoute.PREPARATION_ACQUIRE:
+            return msgspec.convert(values, type=cli_commands.CoordinatorPreparationAcquireCommand, strict=True)
+        case cli_commands.CliRoute.PREPARATION_TRANSFER:
+            return msgspec.convert(values, type=cli_commands.CoordinatedPreparationTransferCommand, strict=True)
+        case cli_commands.CliRoute.PREPARATION_RENEW:
+            return msgspec.convert(values, type=cli_commands.PreparationRenewCommand, strict=True)
+        case cli_commands.CliRoute.PREPARATION_RELEASE:
+            return msgspec.convert(values, type=cli_commands.PreparationReleaseCommand, strict=True)
+        case cli_commands.CliRoute.PREPARATION_REVOKE:
+            return msgspec.convert(values, type=cli_commands.PreparationRevokeCommand, strict=True)
+        case cli_commands.CliRoute.PREPARATION_STATUS:
+            return msgspec.convert(values, type=cli_commands.PreparationStatusCommand, strict=True)
         case cli_commands.CliRoute.PARALLEL_PREVIEW:
             return msgspec.convert(values, type=cli_commands.ParallelPreviewCommand, strict=True)
         case cli_commands.CliRoute.REBUILD_VIEWS:
@@ -386,6 +408,58 @@ def _add_attempt_parser(commands: argparse._SubParsersAction[argparse.ArgumentPa
     status.add_argument("--attempt-id", required=True)
     status.add_argument("--json", action="store_true")
     _select(status, cli_commands.CliRoute.ATTEMPT_STATUS)
+
+
+def _add_preparation_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    preparation = commands.add_parser("preparation", help="Manage a renewable ready-item preparation claim.")
+    operations = preparation.add_subparsers(required=True)
+    acquire = operations.add_parser("acquire")
+    acquire.add_argument("--item-id", required=True)
+    acquire.add_argument("--expected-project-revision", required=True)
+    acquire.add_argument("--expected-item-subject-revision", required=True)
+    acquire.add_argument("--expected-definition-revision", required=True, type=int)
+    acquire.add_argument("--expected-definition-digest", required=True)
+    acquire.add_argument("--task-id", required=True)
+    acquire.add_argument("--host-id", required=True)
+    acquire.add_argument("--ttl-seconds", required=True, type=int)
+    acquire.add_argument("--coordination-lease-id", required=True)
+    acquire.add_argument("--coordination-generation", required=True, type=int)
+    acquire.add_argument("--json", action="store_true")
+    _select(acquire, cli_commands.CliRoute.PREPARATION_ACQUIRE)
+    transfer = operations.add_parser("transfer")
+    transfer.add_argument("--item-id", required=True)
+    transfer.add_argument("--task-id", required=True)
+    transfer.add_argument("--host-id", required=True)
+    transfer.add_argument("--ttl-seconds", required=True, type=int)
+    transfer.add_argument("--coordination-lease-id", required=True)
+    transfer.add_argument("--coordination-generation", required=True, type=int)
+    transfer.add_argument("--json", action="store_true")
+    _select(transfer, cli_commands.CliRoute.PREPARATION_TRANSFER)
+    renew = operations.add_parser("renew")
+    renew.add_argument("--item-id", required=True)
+    renew.add_argument("--lease-id", required=True)
+    renew.add_argument("--generation", required=True, type=int)
+    renew.add_argument("--ttl-seconds", required=True, type=int)
+    renew.add_argument("--json", action="store_true")
+    _select(renew, cli_commands.CliRoute.PREPARATION_RENEW)
+    release = operations.add_parser("release")
+    release.add_argument("--item-id", required=True)
+    release.add_argument("--lease-id", required=True)
+    release.add_argument("--generation", required=True, type=int)
+    release.add_argument("--json", action="store_true")
+    _select(release, cli_commands.CliRoute.PREPARATION_RELEASE)
+    revoke = operations.add_parser("revoke")
+    revoke.add_argument("--item-id", required=True)
+    revoke.add_argument("--lease-id", required=True)
+    revoke.add_argument("--generation", required=True, type=int)
+    revoke.add_argument("--coordination-lease-id", required=True)
+    revoke.add_argument("--coordination-generation", required=True, type=int)
+    revoke.add_argument("--json", action="store_true")
+    _select(revoke, cli_commands.CliRoute.PREPARATION_REVOKE)
+    status = operations.add_parser("status")
+    status.add_argument("--item-id", required=True)
+    status.add_argument("--json", action="store_true")
+    _select(status, cli_commands.CliRoute.PREPARATION_STATUS)
 
 
 def _add_item_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -503,7 +577,9 @@ def build_parser() -> argparse.ArgumentParser:
     transition.add_argument("--subject-revision")
     transition.add_argument("--lease-id")
     transition.add_argument(
-        "--authorization", choices=("coordinator", "coordination", "attempt"), default="coordinator"
+        "--authorization",
+        choices=("coordinator", "coordination", "attempt", "preparation"),
+        default="coordinator",
     )
     transition.add_argument("--payload", required=True, type=Path)
     _select(transition, cli_commands.CliRoute.TRANSITION)
@@ -536,6 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
     _select(dispatch, cli_commands.CliRoute.DISPATCH)
     _add_coordination_parser(commands)
     _add_attempt_parser(commands)
+    _add_preparation_parser(commands)
     _add_parallel_parser(commands)
     views = commands.add_parser("views", help="Repair generated human-readable views.")
     rebuild = views.add_subparsers(required=True).add_parser("rebuild")

@@ -1,10 +1,10 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
 from pinboard.application import stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.ports import WorkStore
 from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import AttemptLeaseStatus
+from pinboard.domain.authority_models import AttemptLeaseStatus, PreparationLeaseStatus
 from pinboard.domain.decisions import available_actions
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId, LeaseId
@@ -36,11 +36,11 @@ def discover_actions(
     *,
     lease_id: LeaseId | None = None,
     generation: int | None = None,
-    now: datetime | None = None,
+    now: datetime,
 ) -> DecisionResult[tuple[decision_models.Action, ...]]:
     state = store.snapshot()
-    snapshot = project_decision_snapshot(state)
-    current = (now or datetime.now(UTC)).astimezone(UTC)
+    snapshot = project_decision_snapshot(state, now)
+    current = now
     selected_generation = generation if generation is not None else snapshot.generation
     match role:
         case decision_models.Role.OBSERVER:
@@ -74,5 +74,28 @@ def discover_actions(
                 lease_id,
                 attempts,
                 False,
+            )
+        case decision_models.Role.PREPARER:
+            if lease_id is None:
+                preparations = ()
+            else:
+                anchors = {
+                    (value.item_id, value.generation): value for value in state.authority.preparation_generations
+                }
+                preparations = tuple(
+                    lease.item_id
+                    for lease in state.authority.preparation_leases
+                    if lease.generation == selected_generation
+                    and lease.state == PreparationLeaseStatus.ACTIVE
+                    and lease.expires_at > current
+                    and (anchor := anchors.get((lease.item_id, lease.generation))) is not None
+                    and anchor.lease_id == lease_id
+                )
+            actor = decision_models.ActorAuthority(
+                decision_models.Role.PREPARER,
+                decision_models.AuthorizationKind.PREPARATION,
+                selected_generation,
+                lease_id,
+                preparations=preparations,
             )
     return available_actions(snapshot, actor)

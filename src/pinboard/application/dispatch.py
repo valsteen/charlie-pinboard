@@ -19,6 +19,7 @@ from pinboard.domain.identifiers import AttemptId, ItemId, ReviewId
 def _current_dispatch_action(
     store: WorkStore,
     supplied: decision_models.DispatchAction,
+    now: datetime,
 ) -> DispatchResult[decision_models.DispatchAction]:
     capability = supplied.capability
     actions = discover_actions(
@@ -26,6 +27,7 @@ def _current_dispatch_action(
         decision_models.Role.COORDINATOR,
         lease_id=capability.lease_id,
         generation=capability.coordinator_generation,
+        now=now,
     )
     if isinstance(actions, DecisionFailure):
         return DispatchFailure(actions.code, actions.message)
@@ -53,13 +55,14 @@ def _current_dispatch_action(
 def select_dispatch(
     store: WorkStore,
     action: decision_models.Action,
+    now: datetime,
 ) -> DispatchResult[tuple[stored_state.StoredAttempt, stored_state.ArtifactReference]]:
     if not isinstance(action, decision_models.DispatchAction):
         return DispatchFailure(
             DispatchRejectionCode.ACTION_UNAVAILABLE,
             f"Action '{decision_models.action_id(action)}' is not a dispatch action.",
         )
-    current = _current_dispatch_action(store, action)
+    current = _current_dispatch_action(store, action, now)
     if isinstance(current, DispatchFailure):
         return current
     state = store.snapshot()
@@ -160,6 +163,7 @@ def confirm_dispatch_authority(
     store: WorkStore,
     supplied: decision_models.DispatchAction,
     publication_revision: int | None,
+    now: datetime,
 ) -> DispatchFailure | None:
     capability = supplied.capability
     actions = discover_actions(
@@ -167,6 +171,7 @@ def confirm_dispatch_authority(
         decision_models.Role.COORDINATOR,
         lease_id=capability.lease_id,
         generation=capability.coordinator_generation,
+        now=now,
     )
     if isinstance(actions, DecisionFailure):
         return DispatchFailure(actions.code, actions.message)

@@ -86,7 +86,9 @@ def create_proposal(
     )
     if isinstance(result, DecisionFailure):
         return ProposalFailure(result.code, result.message)
-    view_result = work_views.refresh(roots, store, file_models.AffectedViews(queue=True, history=True))
+    view_result = work_views.refresh(
+        roots, store, file_models.AffectedViews(queue=True, history=True), datetime.now(UTC)
+    )
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     intake_item = next(

@@ -8,7 +8,7 @@ from pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
 from pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.files.models import AffectedViews
-from pinboard.adapters.files.views import rebuild, refresh
+from pinboard.adapters.files.views import rebuild_state, refresh_state
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
@@ -31,7 +31,7 @@ class GeneratedViewsTest(unittest.TestCase):
     def test_rebuild_creates_revision_stamped_non_authoritative_views(self) -> None:
         work_root, store = self._state()
 
-        result = rebuild(store, work_root)
+        result = rebuild_state(store.snapshot(), work_root, now=SQLITE_NOW)
 
         self.assertIsNone(result.warning)
         for selector in (
@@ -51,7 +51,7 @@ class GeneratedViewsTest(unittest.TestCase):
             "pinboard.adapters.files.views.atomic_replace",
             side_effect=FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, "disk full"),
         ):
-            result = refresh(store, work_root, AffectedViews(current_focus=True))
+            result = refresh_state(store.snapshot(), work_root, AffectedViews(current_focus=True), now=SQLITE_NOW)
 
         self.assertEqual(12, result.database_revision)
         self.assertIsNotNone(result.warning)
@@ -84,7 +84,7 @@ class GeneratedViewsTest(unittest.TestCase):
         store.initialize_state(state)
         attempt_briefs = build_attempt_brief_views(store.snapshot(), ArtifactRepository(roots))
 
-        result = rebuild(store, roots.work_root, attempt_briefs)
+        result = rebuild_state(store.snapshot(), roots.work_root, attempt_briefs, now=SQLITE_NOW)
 
         self.assertIsNone(result.warning)
         path = roots.work_root / "views" / "attempts" / "work-a-1.md"
@@ -94,7 +94,12 @@ class GeneratedViewsTest(unittest.TestCase):
         self.assertIn("Strict typed JSON remains canonical.", text)
         self.assertIn("typed-json-cutover", text)
         path.unlink()
-        rebuild(store, roots.work_root, build_attempt_brief_views(store.snapshot(), ArtifactRepository(roots)))
+        rebuild_state(
+            store.snapshot(),
+            roots.work_root,
+            build_attempt_brief_views(store.snapshot(), ArtifactRepository(roots)),
+            now=SQLITE_NOW,
+        )
         self.assertEqual(text, path.read_text(encoding="utf-8"))
 
     def test_live_attempt_rejects_a_non_json_accepted_brief(self) -> None:

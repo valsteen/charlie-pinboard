@@ -8,6 +8,7 @@ from pinboard.application.mutation_models import (
     CheckpointArtifactChanges,
     CoordinationAuthorityMutation,
     MutationReceipt,
+    PreparationAuthorityMutation,
     ProposalCreationMutation,
     StoredStateMutation,
     TransitionMutation,
@@ -71,7 +72,12 @@ def _history_outcome(mutation: StoredStateMutation) -> HistoryOutcome:
                     checkpoint=checkpoint,
                 ),
             )
-        case ProposalCreationMutation() | CoordinationAuthorityMutation() | AttemptAuthorityMutation():
+        case (
+            ProposalCreationMutation()
+            | CoordinationAuthorityMutation()
+            | AttemptAuthorityMutation()
+            | PreparationAuthorityMutation()
+        ):
             transition = mutation.receipt.transition
             return HistoryOutcome(
                 "transition-receipt/v1",
@@ -145,6 +151,7 @@ def _history_authorization_kind(
             decision_models.AuthorizationKind.COORDINATOR
             | decision_models.AuthorizationKind.COORDINATION
             | decision_models.AuthorizationKind.ATTEMPT
+            | decision_models.AuthorizationKind.PREPARATION
         ):
             return stored_state.TransitionHistoryAuthorizationKind(value.value)
         case _ as unreachable:
@@ -300,6 +307,10 @@ def _transition_receipt[SubjectT: SubjectId](
         coordination = before.authority.coordination
         if coordination is not None:
             actor_task_id, actor_host_id = coordination.task_id, coordination.host_id
+    elif capability.authorization == decision_models.AuthorizationKind.PREPARATION:
+        preparation = capability.preparation_authority
+        if preparation is not None:
+            actor_task_id, actor_host_id = preparation.task_id, preparation.host_id
     revision = before.lifecycle.project.revision + 1
     authorization = _history_authorization_kind(capability.authorization)
     return MutationReceipt(

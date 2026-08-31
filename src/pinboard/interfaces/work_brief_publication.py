@@ -59,7 +59,7 @@ def publish_brief(
     )
     if isinstance(accepted, DecisionFailure):
         return CommandFailure(accepted.code, accepted.message)
-    view_result = work_views.rebuild(roots, store)
+    view_result = work_views.rebuild(roots, store, datetime.now(UTC))
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     view = BriefPublicationView(

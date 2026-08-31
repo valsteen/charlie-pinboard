@@ -15,6 +15,8 @@ class LedgerSnapshot:
     subject_revisions: tuple[work_models.SubjectRevision, ...] = ()
     attempt_authorities: tuple[work_models.AttemptAuthority, ...] = ()
     command_attempt_authorities: tuple[work_models.CommandAttemptAuthority, ...] = ()
+    preparation_authorities: tuple[work_models.PreparationAuthority, ...] = ()
+    command_preparation_authorities: tuple[work_models.PreparationCommandAuthority, ...] = ()
     coordination_authority: work_models.CoordinationCommandAuthority | None = None
     history_items: tuple[ItemId, ...] = ()
     definitions: tuple[work_models.DefinitionAnchor, ...] = ()
@@ -58,6 +60,18 @@ class LedgerSnapshot:
                 if authority.attempt == attempt
                 and authority.lease_id == lease_id
                 and authority.generation == generation
+            ),
+            None,
+        )
+
+    def preparation_for(
+        self, item: ItemId, lease_id: LeaseId | None, generation: int
+    ) -> work_models.PreparationAuthority | None:
+        return next(
+            (
+                authority
+                for authority in self.preparation_authorities
+                if authority.item == item and authority.lease_id == lease_id and authority.generation == generation
             ),
             None,
         )

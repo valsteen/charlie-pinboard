@@ -17,7 +17,7 @@ import msgspec
 from pinboard.adapters.files.artifacts import verify_reference, write_revision
 from pinboard.adapters.files.errors import ArtifactError, FileIOError
 from pinboard.adapters.files.file_io import DurableRoots
-from pinboard.adapters.files.views import rebuild
+from pinboard.adapters.files.views import rebuild_state
 from pinboard.adapters.sqlite.database import (
     backup_database,
     open_database,
@@ -241,7 +241,7 @@ def create_portable_copy(source_work_root: Path, destination_work_root: Path) ->
         destination_state = destination_store.snapshot()
         for reference in destination_state.artifact_references:
             verify_reference(staging, reference)
-        rebuilt = rebuild(destination_store, staging)
+        rebuilt = rebuild_state(destination_state, staging, now=datetime.now(UTC))
         if rebuilt.warning is not None:
             raise PortableCopyError(PortableCopyErrorCode.STORAGE_IO_ERROR, rebuilt.warning.message)
         _sync_tree(staging)

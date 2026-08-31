@@ -82,6 +82,17 @@ def validate_transition_work_brief(
             DecisionFailureCode.ITEM_DEFINITION_INVALID,
             "The selected work item has no current definition.",
         )
+    if isinstance(command, decision_models.ActivateCommand):
+        preparation = command.action.capability.preparation_authority
+        if preparation is None or (
+            preparation.item,
+            preparation.definition_revision,
+            preparation.definition_digest,
+        ) != (item.item_id, definition.revision, definition.digest):
+            return DecisionFailure(
+                DecisionFailureCode.TRANSITION_INPUT_INVALID,
+                "The selected work brief does not match the live preparation pin.",
+            )
     expected = WorkBriefIdentity(
         attempt_id,
         item_id,

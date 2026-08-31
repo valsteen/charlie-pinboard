@@ -309,6 +309,19 @@ class CommandAttemptAuthority:
 
 
 @dataclass(frozen=True, slots=True)
+class PreparationCommandAuthority:
+    host_epoch: int
+    item: ItemId
+    definition_revision: int
+    definition_digest: str
+    task_id: TaskId
+    host_id: HostId
+    lease_id: LeaseId
+    generation: int
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class CoordinationCommandAuthority:
     host_epoch: int
     task_id: TaskId
@@ -334,6 +347,15 @@ class CoordinationLeaseAuthority:
 class AttemptAuthority:
     attempt: AttemptId
     item: ItemId
+    lease_id: LeaseId | None
+    generation: int
+
+
+@dataclass(frozen=True, slots=True)
+class PreparationAuthority:
+    item: ItemId
+    definition_revision: int
+    definition_digest: str
     lease_id: LeaseId | None
     generation: int
 

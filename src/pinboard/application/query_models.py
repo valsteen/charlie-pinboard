@@ -8,14 +8,26 @@ from pinboard.application import stored_state
 from pinboard.domain import work_models
 
 type ItemStatusSchema = Literal["pinboard-item-status/v1"]
-type ItemStatusAuthority = Literal["sqlite-v1"]
+type ItemStatusAuthority = Literal["sqlite-v2"]
 type DecimalRevision = Annotated[str, msgspec.Meta(pattern=r"^[0-9]+$")]
+type PreparationStatus = Literal["active", "expired", "released", "revoked"]
 
 
 class ItemStatusAttempt(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     attempt_id: str
     state: work_models.AttemptState
     candidate_revision: str | None
+
+
+class PreparationStatusView(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    definition_revision: int
+    definition_digest: str
+    task_id: str
+    host_id: str
+    lease_id: str
+    generation: int
+    expires_at: str
+    status: PreparationStatus
 
 
 class ItemStatus(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -30,6 +42,7 @@ class ItemStatus(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     next_action: str | None
     notes: str
     attempts: tuple[ItemStatusAttempt, ...]
+    preparation: PreparationStatusView | None = None
 
 
 class ParallelSelection(Enum):
@@ -41,6 +54,7 @@ class ParallelReasonCode(Enum):
     ATTEMPT_OWNED = "attempt-owned"
     DEPENDENCY_LIVE = "dependency-live"
     STATE_NOT_LAUNCHABLE = "state-not-launchable"
+    PREPARATION_OWNED = "preparation-owned"
 
 
 class QueryRejectionCode(Enum):
@@ -81,6 +95,7 @@ class OverviewItem(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     attempt_id: str | None
     next_action: str | None
     notes: str
+    preparation: PreparationStatusView | None = None
 
 
 class WorkOverview(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -141,7 +156,7 @@ class WorkItemDefinitionView(msgspec.Struct, frozen=True, forbid_unknown_fields=
 
 class ItemDefinition(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     schema: Literal["pinboard-item-definition/v1"]
-    authority: Literal["sqlite-v1"]
+    authority: Literal["sqlite-v2"]
     project_revision: int
     item_id: str
     definition_revision: int
@@ -163,7 +178,7 @@ class ItemDefinitionHistoryRow(msgspec.Struct, frozen=True, forbid_unknown_field
 
 class ItemDefinitionHistory(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     schema: Literal["pinboard-item-definition-history/v1"]
-    authority: Literal["sqlite-v1"]
+    authority: Literal["sqlite-v2"]
     project_revision: int
     item_id: str
     revisions: tuple[ItemDefinitionHistoryRow, ...]

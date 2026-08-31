@@ -11,6 +11,7 @@ from pinboard.application.mutation_models import (
     AttemptAuthorityMutation,
     CoordinationAuthorityMutation,
     MutationReceipt,
+    PreparationAuthorityMutation,
     ProposalCreationMutation,
 )
 from pinboard.application.mutations import (
@@ -22,20 +23,28 @@ from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_decisions import (
     decide_attempt_authority,
     decide_coordination_authority,
+    decide_preparation_authority,
 )
 from pinboard.domain.authority_models import (
     AcquireCoordinationAuthority,
     AcquireInitialAttemptAuthority,
+    AcquireInitialPreparationAuthority,
     AttemptAuthorityOperation,
     AttemptLeaseAuthority,
     CoordinationAuthorityOperation,
+    PreparationAuthorityOperation,
+    PreparationLeaseAuthority,
     ReleaseAttemptAuthority,
     ReleaseCoordinationAuthority,
+    ReleasePreparationAuthority,
     RenewAttemptAuthority,
     RenewCoordinationAuthority,
+    RenewPreparationAuthority,
     RevokeAttemptAuthority,
     RevokeCoordinationAuthority,
+    RevokePreparationAuthority,
     TransferAttemptAuthority,
+    TransferPreparationAuthority,
 )
 from pinboard.domain.decisions import decide, rediscover_action
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
@@ -45,6 +54,7 @@ from pinboard.domain.identifiers import (
     HistoryId,
     HistorySubjectId,
     HostId,
+    ItemId,
     LeaseId,
     TaskId,
 )
@@ -62,9 +72,20 @@ def change_coordination_authority(
 ) -> DecisionResult[decision_models.TransitionReceipt]:
     """Decide and persist one exact coordination-authority mutation."""
 
+    match operation:
+        case AcquireCoordinationAuthority(acquired_at=operation_time):
+            pass
+        case RenewCoordinationAuthority(renewed_at=operation_time):
+            pass
+        case ReleaseCoordinationAuthority(released_at=operation_time):
+            pass
+        case RevokeCoordinationAuthority(revoked_at=operation_time):
+            pass
+        case _ as unreachable:
+            assert_never(unreachable)
     with store.write() as transaction:
         before = transaction.snapshot()
-        snapshot = project_decision_snapshot(before)
+        snapshot = project_decision_snapshot(before, operation_time)
         decision = decide_coordination_authority(snapshot.coordination_lease, operation)
         if isinstance(decision, DecisionFailure):
             return decision
@@ -176,7 +197,7 @@ def change_attempt_authority(
             assert_never(unreachable)
     with store.write() as transaction:
         before = transaction.snapshot()
-        snapshot = project_decision_snapshot(before)
+        snapshot = project_decision_snapshot(before, decided_at)
         counter = next(
             (
                 value.generation_high_water
@@ -234,6 +255,109 @@ def change_attempt_authority(
         return transaction.commit(AttemptAuthorityMutation(receipt, decision))
 
 
+def _retained_preparation_authority(
+    state: stored_state.StoredWorkState,
+    item_id: ItemId,
+) -> PreparationLeaseAuthority | None:
+    lease = next((value for value in state.authority.preparation_leases if value.item_id == item_id), None)
+    if lease is None:
+        return None
+    anchor = next(
+        (
+            value
+            for value in state.authority.preparation_generations
+            if value.item_id == item_id and value.generation == lease.generation
+        ),
+        None,
+    )
+    if anchor is None:
+        return None
+    return PreparationLeaseAuthority(
+        state.lifecycle.project.host_epoch,
+        item_id,
+        lease.definition_revision,
+        lease.definition_digest,
+        anchor.task_id,
+        anchor.host_id,
+        anchor.lease_id,
+        lease.generation,
+        lease.acquired_at,
+        lease.expires_at,
+        lease.state,
+    )
+
+
+def change_preparation_authority(
+    store: WorkStore,
+    operation: PreparationAuthorityOperation,
+) -> DecisionResult[decision_models.TransitionReceipt]:
+    """Decide and persist one exact ready-item preparation mutation."""
+
+    match operation:
+        case AcquireInitialPreparationAuthority(item=item_id, acquired_at=decided_at):
+            outcome = "acquire-initial-preparation-authority"
+            authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
+        case TransferPreparationAuthority(current=current, acquired_at=decided_at):
+            item_id = current.item
+            outcome = "transfer-preparation-authority"
+            authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
+        case RenewPreparationAuthority(current=current, renewed_at=decided_at):
+            item_id = current.item
+            outcome = "renew-preparation-authority"
+            authorization = stored_state.TransitionHistoryAuthorizationKind.PREPARATION
+        case ReleasePreparationAuthority(current=current, released_at=decided_at):
+            item_id = current.item
+            outcome = "release-preparation-authority"
+            authorization = stored_state.TransitionHistoryAuthorizationKind.PREPARATION
+        case RevokePreparationAuthority(item=item_id, revoked_at=decided_at):
+            outcome = "revoke-preparation-authority"
+            authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
+        case _ as unreachable:
+            assert_never(unreachable)
+    with store.write() as transaction:
+        before = transaction.snapshot()
+        snapshot = project_decision_snapshot(before, decided_at)
+        counter = next(
+            (
+                value.generation_high_water
+                for value in before.authority.preparation_counters
+                if value.item_id == item_id
+            ),
+            0,
+        )
+        decision = decide_preparation_authority(
+            _retained_preparation_authority(before, item_id),
+            counter,
+            operation,
+            snapshot,
+            decided_at,
+        )
+        if isinstance(decision, DecisionFailure):
+            return decision
+        after = decision.current_after
+        transition = decision_models.TransitionReceipt(
+            ActionId(f"continue:preparation-authority:{item_id}:{after.generation}"),
+            item_id,
+            outcome,
+            None,
+            decided_at,
+        )
+        receipt = MutationReceipt(
+            transition,
+            HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
+            before.lifecycle.project.revision + 1,
+            stored_state.TransitionHistoryActionKind.CONTINUE,
+            HistorySubjectId(item_id),
+            None,
+            authorization,
+            after.task_id,
+            after.host_id,
+            "preparation-authority/v1",
+            work_models.CanonicalJson(b"{}"),
+        )
+        return transaction.commit(PreparationAuthorityMutation(receipt, decision))
+
+
 def create_proposal(
     store: WorkStore,
     operation: CreateProposalOperation,
@@ -249,7 +373,7 @@ def create_proposal(
             authority,
             project.revision,
             project.host_epoch,
-            project_decision_snapshot(before),
+            project_decision_snapshot(before, now),
             operation,
         )
         if isinstance(decision, DecisionFailure):
@@ -328,6 +452,26 @@ def _actor_for(
                 (authority.attempt,),
                 False,
             )
+        case decision_models.AuthorizationKind.PREPARATION:
+            authority = capability.preparation_authority
+            if (
+                authority is None
+                or capability.lease_id != authority.lease_id
+                or capability.coordinator_generation != authority.generation
+                or authority.expires_at <= now
+                or authority not in snapshot.command_preparation_authorities
+            ):
+                return DecisionFailure(
+                    DecisionFailureCode.ACTION_NOT_AVAILABLE,
+                    "The supplied preparation authority is no longer current.",
+                )
+            return decision_models.ActorAuthority(
+                decision_models.Role.PREPARER,
+                capability.authorization,
+                capability.coordinator_generation,
+                capability.lease_id,
+                preparations=(authority.item,),
+            )
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -344,7 +488,7 @@ def execute(
     supplied = command.action
     with store.write() as transaction:
         before = transaction.snapshot()
-        snapshot = project_decision_snapshot(before)
+        snapshot = project_decision_snapshot(before, now)
         actor = _actor_for(snapshot, supplied, now)
         if isinstance(actor, DecisionFailure):
             return actor
@@ -372,7 +516,7 @@ def execute_checkpoint_acceptance(
     supplied = command.action
     with store.write() as transaction:
         before = transaction.snapshot()
-        snapshot = project_decision_snapshot(before)
+        snapshot = project_decision_snapshot(before, now)
         actor = _actor_for(snapshot, supplied, now)
         if isinstance(actor, DecisionFailure):
             return actor

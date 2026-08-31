@@ -221,7 +221,7 @@ class SQLiteEffectContractTest(unittest.TestCase):
             validate_attempt_authority(mismatched_lease, StorageErrorCode.INVALID_STATE)
         self.assertEqual(StorageErrorCode.INVALID_STATE, invalid_lease.exception.code)
 
-        coordination = project_decision_snapshot(before).coordination_lease
+        coordination = project_decision_snapshot(before, SQLITE_NOW).coordination_lease
         assert coordination is not None
         connection = open_database(path, OpenMode.READ_WRITE)
         try:
@@ -290,7 +290,7 @@ class SQLiteEffectContractTest(unittest.TestCase):
                 )
             self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, unrelated_foreign_key.exception.code)
 
-            coordination = project_decision_snapshot(before).coordination_lease
+            coordination = project_decision_snapshot(before, SQLITE_NOW).coordination_lease
             assert coordination is not None
             with self.assertRaises(StorageError) as unrelated_check, write_transaction(connection):
                 connection.execute("DELETE FROM coordination_lease")
@@ -303,7 +303,7 @@ class SQLiteEffectContractTest(unittest.TestCase):
             self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, unrelated_check.exception.code)
 
             retained = before.authority.attempt_leases[0]
-            command = project_decision_snapshot(before).command_attempt_authorities[0]
+            command = project_decision_snapshot(before, SQLITE_NOW).command_attempt_authorities[0]
             current = AttemptLeaseAuthority(
                 command.host_epoch,
                 command.attempt,
