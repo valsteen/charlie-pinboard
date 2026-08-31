@@ -1,0 +1,197 @@
+from dataclasses import replace
+from datetime import datetime
+
+from pinboard.application import stored_state
+from pinboard.application.actions import discover_actions
+from pinboard.application.artifacts import ArtifactRelationship, NewArtifact
+from pinboard.application.dispatch_models import (
+    DispatchArtifactPort,
+    DispatchFailure,
+    DispatchRejectionCode,
+    DispatchResult,
+)
+from pinboard.application.ports import WorkStore
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.errors import DecisionFailure
+from pinboard.domain.identifiers import AttemptId, ItemId, ReviewId
+
+
+def _current_dispatch_action(
+    store: WorkStore,
+    supplied: decision_models.DispatchAction,
+    now: datetime,
+) -> DispatchResult[decision_models.DispatchAction]:
+    capability = supplied.capability
+    actions = discover_actions(
+        store,
+        decision_models.Role.COORDINATOR,
+        lease_id=capability.lease_id,
+        generation=capability.coordinator_generation,
+        now=now,
+    )
+    if isinstance(actions, DecisionFailure):
+        return DispatchFailure(actions.code, actions.message)
+    current = next(
+        (value for value in actions if decision_models.action_id(value) == decision_models.action_id(supplied)), None
+    )
+    if not isinstance(current, decision_models.DispatchAction):
+        return DispatchFailure(
+            DispatchRejectionCode.ACTION_UNAVAILABLE,
+            f"Action '{decision_models.action_id(supplied)}' is not available.",
+        )
+    if current != supplied:
+        if current.capability.expected_revision != capability.expected_revision:
+            return DispatchFailure(
+                DispatchRejectionCode.STALE_ACTION,
+                "The work ledger changed after this dispatch action was selected.",
+            )
+        return DispatchFailure(
+            DispatchRejectionCode.ACTION_INVALID,
+            "The dispatch action does not carry exact current authority.",
+        )
+    return current
+
+
+def select_dispatch(
+    store: WorkStore,
+    action: decision_models.Action,
+    now: datetime,
+) -> DispatchResult[tuple[stored_state.StoredAttempt, stored_state.ArtifactReference]]:
+    if not isinstance(action, decision_models.DispatchAction):
+        return DispatchFailure(
+            DispatchRejectionCode.ACTION_UNAVAILABLE,
+            f"Action '{decision_models.action_id(action)}' is not a dispatch action.",
+        )
+    current = _current_dispatch_action(store, action, now)
+    if isinstance(current, DispatchFailure):
+        return current
+    state = store.snapshot()
+    attempt_id = current.capability.subject
+    attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
+    if attempt is None or attempt.state != work_models.AttemptState.ACTIVE:
+        return DispatchFailure(DispatchRejectionCode.ATTEMPT_NOT_ACTIVE, f"Attempt '{attempt_id}' is not active.")
+    reference = next(
+        (
+            value
+            for value in state.artifact_references
+            if value.artifact_ref_id == attempt.brief_artifact_ref_id and value.kind == stored_state.ArtifactKind.BRIEF
+        ),
+        None,
+    )
+    if reference is None:
+        return DispatchFailure(DispatchRejectionCode.BRIEF_MISSING, "The attempt has no accepted brief artifact.")
+    return attempt, reference
+
+
+def _ready_review(
+    store: WorkStore,
+    attempt_id: AttemptId,
+    checkpoint_sha256: str,
+) -> stored_state.ArtifactReference | None:
+    key = f"{attempt_id}-brief-review-{checkpoint_sha256}"
+    return next(
+        (
+            value
+            for value in store.snapshot().artifact_references
+            if value.kind == stored_state.ArtifactKind.EVIDENCE and value.key == key and value.revision == 1
+        ),
+        None,
+    )
+
+
+def find_dispatch_review(
+    store: WorkStore,
+    attempt_id: AttemptId,
+    checkpoint_sha256: str,
+) -> DispatchResult[stored_state.ArtifactReference]:
+    existing = _ready_review(store, attempt_id, checkpoint_sha256)
+    if existing is None:
+        return DispatchFailure(DispatchRejectionCode.REVIEW_MISSING, "The exact ready brief review is absent.")
+    return existing
+
+
+def publish_dispatch_review(
+    store: WorkStore,
+    artifacts: DispatchArtifactPort,
+    attempt_id: AttemptId,
+    item_id: ItemId,
+    checkpoint_sha256: str,
+    candidate: bytes,
+    review_id: ReviewId,
+    accepted_at: datetime,
+) -> DispatchResult[tuple[stored_state.ArtifactReference, int | None]]:
+    key = f"{attempt_id}-brief-review-{checkpoint_sha256}"
+    existing = _ready_review(store, attempt_id, checkpoint_sha256)
+    if existing is not None:
+        artifacts.verify(existing)
+        if artifacts.path(existing).read_bytes() == candidate:
+            return existing, None
+        rejected = artifacts.publish(
+            NewArtifact(
+                stored_state.ArtifactKind.EVIDENCE,
+                f"{key}-rejected-{review_id}",
+                1,
+                ".json",
+                candidate,
+            )
+        )
+        rejected_acceptance = store.accept_artifact_reference(
+            artifacts.work_root,
+            rejected,
+            accepted_at,
+            relationship=ArtifactRelationship(item_id, work_models.ArtifactRole.EVIDENCE),
+        )
+        if isinstance(rejected_acceptance, DecisionFailure):
+            return DispatchFailure(DispatchRejectionCode.STALE_ACTION, rejected_acceptance.message)
+        return DispatchFailure(
+            DispatchRejectionCode.REVIEW_COLLISION,
+            f"Ready review already differs; later evidence is preserved at '{rejected.selector}'.",
+        )
+    published = artifacts.publish(NewArtifact(stored_state.ArtifactKind.EVIDENCE, key, 1, ".json", candidate))
+    accepted = store.accept_artifact_reference(
+        artifacts.work_root,
+        published,
+        accepted_at,
+        relationship=ArtifactRelationship(item_id, work_models.ArtifactRole.EVIDENCE),
+    )
+    if isinstance(accepted, DecisionFailure):
+        return DispatchFailure(DispatchRejectionCode.STALE_ACTION, accepted.message)
+    return accepted, accepted.accepted_revision
+
+
+def confirm_dispatch_authority(
+    store: WorkStore,
+    supplied: decision_models.DispatchAction,
+    publication_revision: int | None,
+    now: datetime,
+) -> DispatchFailure | None:
+    capability = supplied.capability
+    actions = discover_actions(
+        store,
+        decision_models.Role.COORDINATOR,
+        lease_id=capability.lease_id,
+        generation=capability.coordinator_generation,
+        now=now,
+    )
+    if isinstance(actions, DecisionFailure):
+        return DispatchFailure(actions.code, actions.message)
+    rediscovered = next(
+        (value for value in actions if decision_models.action_id(value) == decision_models.action_id(supplied)), None
+    )
+    current = rediscovered if isinstance(rediscovered, decision_models.DispatchAction) else None
+    current_matches = current == supplied
+    if current is not None and publication_revision is not None:
+        current_matches = (
+            current.capability.expected_revision == str(publication_revision)
+            and replace(
+                current,
+                capability=replace(current.capability, expected_revision=capability.expected_revision),
+            )
+            == supplied
+        )
+    if current_matches:
+        return None
+    return DispatchFailure(
+        DispatchRejectionCode.ACTION_UNAVAILABLE,
+        "Dispatch authority changed during prompt preparation.",
+    )

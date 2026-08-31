@@ -1,0 +1,452 @@
+import tempfile
+import unittest
+from dataclasses import replace
+from datetime import datetime, timedelta
+from pathlib import Path
+from threading import Event, Thread
+from time import sleep
+
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.files.views import expected_view_bytes
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.errors import StorageError
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application import query_models, stored_state
+from pinboard.application.decision_projection import project_decision_snapshot
+from pinboard.application.queries import overview_from_state, preview_parallel
+from pinboard.application.service import change_preparation_authority, create_proposal
+from pinboard.domain import decision_models, work_models
+from pinboard.domain.authority_decisions import decide_preparation_authority
+from pinboard.domain.authority_models import (
+    AcquireInitialPreparationAuthority,
+    InactivePreparationAuthority,
+    PreparationLeaseAuthority,
+    PreparationLeaseStatus,
+    ReleasePreparationAuthority,
+    RenewPreparationAuthority,
+    RevokePreparationAuthority,
+    TransferPreparationAuthority,
+)
+from pinboard.domain.errors import DecisionFailure
+from pinboard.domain.identifiers import HostId, ItemId, LeaseId, ProposalId, TaskId
+from pinboard.domain.proposal_models import CreateProposalOperation, ProposalIntake
+from tests.support import SQLITE_NOW, complete_sqlite_state, reject_table_inserts
+
+
+class PreparationAuthorityTest(unittest.TestCase):
+    def _store(self, state: stored_state.StoredWorkState | None = None) -> tuple[SQLiteWorkStore, Path]:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        store = SQLiteWorkStore(roots.database_path)
+        store.initialize_state(state if state is not None else complete_sqlite_state())
+        return store, roots.database_path
+
+    def _acquisition(
+        self,
+        state: stored_state.StoredWorkState,
+        *,
+        expires_at: datetime = SQLITE_NOW + timedelta(minutes=1),
+    ) -> AcquireInitialPreparationAuthority:
+        snapshot = project_decision_snapshot(state, SQLITE_NOW)
+        item = snapshot.item(ItemId("work-c"))
+        definition = snapshot.definition(ItemId("work-c"))
+        coordination = snapshot.coordination_authority
+        assert item is not None
+        assert definition is not None
+        assert coordination is not None
+        return AcquireInitialPreparationAuthority(
+            snapshot.host_epoch,
+            item.item,
+            snapshot.revision,
+            snapshot.subject_revision(item.item) or "",
+            definition.revision,
+            definition.digest,
+            coordination,
+            TaskId("preparer"),
+            HostId("host-a"),
+            LeaseId("preparation-a"),
+            SQLITE_NOW,
+            expires_at,
+        )
+
+    def test_initial_acquisition_pins_ready_item_definition_and_keeps_item_ready(self) -> None:
+        snapshot = project_decision_snapshot(complete_sqlite_state(), SQLITE_NOW)
+        item = snapshot.item(ItemId("work-c"))
+        definition = snapshot.definition(ItemId("work-c"))
+        coordination = snapshot.coordination_authority
+        assert item is not None
+        assert definition is not None
+        assert coordination is not None
+
+        decision = decide_preparation_authority(
+            None,
+            0,
+            AcquireInitialPreparationAuthority(
+                snapshot.host_epoch,
+                item.item,
+                snapshot.revision,
+                snapshot.subject_revision(item.item) or "",
+                definition.revision,
+                definition.digest,
+                coordination,
+                TaskId("preparer"),
+                HostId("host-a"),
+                LeaseId("preparation-a"),
+                SQLITE_NOW,
+                SQLITE_NOW + timedelta(minutes=5),
+            ),
+            snapshot,
+            SQLITE_NOW,
+        )
+
+        self.assertNotIsInstance(decision, DecisionFailure)
+        assert not isinstance(decision, DecisionFailure)
+        retained_item = snapshot.item(item.item)
+        assert retained_item is not None
+        self.assertEqual(work_models.WorkState.READY, retained_item.state)
+        self.assertEqual(
+            (definition.revision, definition.digest),
+            (decision.current_after.definition_revision, decision.current_after.definition_digest),
+        )
+        self.assertEqual(PreparationLeaseStatus.ACTIVE, decision.current_after.state)
+
+    def test_renew_and_release_require_the_exact_live_token(self) -> None:
+        current = PreparationLeaseAuthority(
+            2,
+            ItemId("work-c"),
+            1,
+            "definition-digest",
+            TaskId("preparer"),
+            HostId("host-a"),
+            LeaseId("preparation-a"),
+            3,
+            SQLITE_NOW,
+            SQLITE_NOW + timedelta(minutes=5),
+            PreparationLeaseStatus.ACTIVE,
+        )
+        token = work_models.PreparationCommandAuthority(
+            current.host_epoch,
+            current.item,
+            current.definition_revision,
+            current.definition_digest,
+            current.task_id,
+            current.host_id,
+            current.lease_id,
+            current.generation,
+            current.expires_at,
+        )
+
+        renewed = decide_preparation_authority(
+            current,
+            3,
+            RenewPreparationAuthority(token, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)),
+            None,
+            SQLITE_NOW + timedelta(seconds=1),
+        )
+        released = decide_preparation_authority(
+            current,
+            3,
+            ReleasePreparationAuthority(token, SQLITE_NOW + timedelta(seconds=1)),
+            None,
+            SQLITE_NOW + timedelta(seconds=1),
+        )
+        stale = decide_preparation_authority(
+            current,
+            3,
+            RenewPreparationAuthority(
+                replace(token, generation=4),
+                SQLITE_NOW + timedelta(seconds=1),
+                SQLITE_NOW + timedelta(minutes=6),
+            ),
+            None,
+            SQLITE_NOW + timedelta(seconds=1),
+        )
+
+        self.assertNotIsInstance(renewed, DecisionFailure)
+        self.assertNotIsInstance(released, DecisionFailure)
+        self.assertIsInstance(stale, DecisionFailure)
+
+    def test_only_preparer_with_live_authority_receives_activation(self) -> None:
+        state = complete_sqlite_state()
+        snapshot = project_decision_snapshot(state, SQLITE_NOW)
+        definition = snapshot.definition(ItemId("work-c"))
+        assert definition is not None
+        command = work_models.PreparationCommandAuthority(
+            snapshot.host_epoch,
+            ItemId("work-c"),
+            definition.revision,
+            definition.digest,
+            TaskId("preparer"),
+            HostId("host-a"),
+            LeaseId("preparation-a"),
+            1,
+            SQLITE_NOW + timedelta(minutes=5),
+        )
+        prepared = replace(
+            snapshot,
+            preparation_authorities=(
+                work_models.PreparationAuthority(
+                    command.item,
+                    command.definition_revision,
+                    command.definition_digest,
+                    command.lease_id,
+                    command.generation,
+                ),
+            ),
+            command_preparation_authorities=(command,),
+        )
+        actor = decision_models.ActorAuthority(
+            decision_models.Role.PREPARER,
+            decision_models.AuthorizationKind.PREPARATION,
+            command.generation,
+            command.lease_id,
+            preparations=(command.item,),
+        )
+
+        actions = __import__("pinboard.domain.decisions", fromlist=["available_actions"]).available_actions(
+            prepared, actor
+        )
+
+        self.assertNotIsInstance(actions, DecisionFailure)
+        assert not isinstance(actions, DecisionFailure)
+        self.assertEqual(["activate:work-c"], [str(decision_models.action_id(value)) for value in actions])
+        self.assertEqual(decision_models.AuthorizationKind.PREPARATION, actions[0].capability.authorization)
+
+    def test_preparation_persists_reloads_and_changes_visibility_exactly_at_expiry(self) -> None:
+        store, database_path = self._store()
+        expires_at = SQLITE_NOW + timedelta(seconds=1)
+        receipt = change_preparation_authority(store, self._acquisition(store.snapshot(), expires_at=expires_at))
+        self.assertNotIsInstance(receipt, DecisionFailure)
+
+        reloaded = SQLiteWorkStore(database_path).snapshot()
+        self.assertEqual((ItemId("work-c"),), tuple(value.item_id for value in reloaded.authority.preparation_leases))
+        before = overview_from_state(reloaded, expires_at - timedelta(microseconds=1))
+        at = overview_from_state(reloaded, expires_at)
+        before_item = next(value for value in before.items if value.item_id == "work-c")
+        at_item = next(value for value in at.items if value.item_id == "work-c")
+        assert before_item.preparation is not None
+        assert at_item.preparation is not None
+        self.assertEqual("active", before_item.preparation.status)
+        self.assertEqual("expired", at_item.preparation.status)
+        self.assertNotIn("work-c", before.immediate_options)
+        self.assertIn("work-c", at.immediate_options)
+        before_parallel = preview_parallel(store, selected=("work-c",), now=expires_at - timedelta(microseconds=1))
+        at_parallel = preview_parallel(store, selected=("work-c",), now=expires_at)
+        assert not isinstance(before_parallel, query_models.QueryFailure)
+        assert not isinstance(at_parallel, query_models.QueryFailure)
+        self.assertFalse(before_parallel.safe)
+        self.assertTrue(at_parallel.safe)
+        before_views = expected_view_bytes(reloaded, now=expires_at - timedelta(microseconds=1))
+        at_views = expected_view_bytes(reloaded, now=expires_at)
+        self.assertIn(b"- Preparation: active", before_views["items/work-c.md"])
+        self.assertIn(b"- Preparation: expired", at_views["items/work-c.md"])
+        self.assertNotEqual(before_views["queue.md"], at_views["queue.md"])
+
+    def test_live_preparation_rejects_prerequisite_proposal_atomically_then_expiry_admits_it(self) -> None:
+        store, database_path = self._store()
+        expires_at = SQLITE_NOW + timedelta(seconds=1)
+        acquired = change_preparation_authority(store, self._acquisition(store.snapshot(), expires_at=expires_at))
+        self.assertNotIsInstance(acquired, DecisionFailure)
+        intake = ProposalIntake(
+            ProposalId("required-before-work-c"),
+            SQLITE_NOW,
+            TaskId("discovering-task"),
+            "Required before Work C",
+            "Work C needs one newly discovered prerequisite.",
+            "The dependency must be preserved before activation.",
+            "Record the prerequisite and relationship.",
+            "A coordinator can evaluate it.",
+            work_models.PrerequisiteProposalRelation(ItemId("work-c")),
+            "The relationship is current.",
+            ("source:local",),
+            ("Work C remains ready.",),
+        )
+        before = store.snapshot()
+
+        rejected = create_proposal(
+            store,
+            CreateProposalOperation(intake),
+            expires_at - timedelta(microseconds=1),
+        )
+
+        self.assertIsInstance(rejected, DecisionFailure)
+        self.assertEqual(before, store.snapshot())
+        accepted = create_proposal(store, CreateProposalOperation(intake), expires_at)
+        self.assertNotIsInstance(accepted, DecisionFailure)
+        self.assertIn(
+            ProposalId("required-before-work-c"),
+            tuple(value.proposal_id for value in SQLiteWorkStore(database_path).snapshot().proposals.proposals),
+        )
+
+    def test_prerequisite_proposal_rolls_back_after_partial_insert_and_target_mutation_failure(self) -> None:
+        store, database_path = self._store()
+        intake = ProposalIntake(
+            ProposalId("required-before-work-c"),
+            SQLITE_NOW,
+            TaskId("discovering-task"),
+            "Required before Work C",
+            "Work C needs one newly discovered prerequisite.",
+            "The dependency must be preserved before activation.",
+            "Record the prerequisite and relationship.",
+            "A coordinator can evaluate it.",
+            work_models.PrerequisiteProposalRelation(ItemId("work-c")),
+            "The relationship is current.",
+            ("source:local",),
+            ("Work C remains ready.",),
+        )
+        before = store.snapshot()
+
+        for table in ("proposal_evidence", "item_dependencies"):
+            with self.subTest(table=table), reject_table_inserts(table), self.assertRaises(StorageError):
+                create_proposal(store, CreateProposalOperation(intake), SQLITE_NOW)
+            self.assertEqual(before, store.snapshot())
+            self.assertEqual(before, SQLiteWorkStore(database_path).snapshot())
+
+    def test_transfer_repins_current_definition_and_revocation_fences_the_holder(self) -> None:
+        snapshot = project_decision_snapshot(complete_sqlite_state(), SQLITE_NOW)
+        coordination = snapshot.coordination_authority
+        definition = snapshot.definition(ItemId("work-c"))
+        assert coordination is not None
+        assert definition is not None
+        retained = PreparationLeaseAuthority(
+            snapshot.host_epoch,
+            ItemId("work-c"),
+            definition.revision,
+            definition.digest,
+            TaskId("preparer-a"),
+            HostId("host-a"),
+            LeaseId("preparation-a"),
+            2,
+            SQLITE_NOW - timedelta(minutes=2),
+            SQLITE_NOW - timedelta(minutes=1),
+            PreparationLeaseStatus.RELEASED,
+        )
+        inactive = InactivePreparationAuthority(
+            retained.host_epoch,
+            retained.item,
+            retained.definition_revision,
+            retained.definition_digest,
+            retained.task_id,
+            retained.host_id,
+            retained.lease_id,
+            retained.generation,
+            retained.expires_at,
+            retained.state,
+        )
+        transferred = decide_preparation_authority(
+            retained,
+            2,
+            TransferPreparationAuthority(
+                inactive,
+                coordination,
+                TaskId("preparer-b"),
+                HostId("host-b"),
+                LeaseId("preparation-b"),
+                SQLITE_NOW,
+                SQLITE_NOW + timedelta(minutes=1),
+            ),
+            snapshot,
+            SQLITE_NOW,
+        )
+        self.assertNotIsInstance(transferred, DecisionFailure)
+        assert not isinstance(transferred, DecisionFailure)
+        revoked = decide_preparation_authority(
+            transferred.current_after,
+            transferred.counter_after,
+            RevokePreparationAuthority(
+                transferred.item,
+                transferred.current_after.lease_id,
+                transferred.current_after.generation,
+                coordination,
+                SQLITE_NOW + timedelta(seconds=1),
+            ),
+            snapshot,
+            SQLITE_NOW + timedelta(seconds=1),
+        )
+        self.assertNotIsInstance(revoked, DecisionFailure)
+        assert not isinstance(revoked, DecisionFailure)
+        self.assertEqual(PreparationLeaseStatus.REVOKED, revoked.current_after.state)
+        self.assertGreater(revoked.current_after.generation, transferred.current_after.generation)
+
+    def test_operation_start_time_remains_authoritative_while_write_lock_crosses_expiry(self) -> None:
+        state = complete_sqlite_state()
+        coordination = state.authority.coordination
+        assert coordination is not None
+        acquired_at = datetime.now(coordination.expires_at.tzinfo)
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                coordination=replace(
+                    coordination,
+                    acquired_at=acquired_at,
+                    expires_at=acquired_at + timedelta(minutes=1),
+                ),
+            ),
+        )
+        store, _database_path = self._store(state)
+        snapshot = project_decision_snapshot(store.snapshot(), acquired_at)
+        item = snapshot.item(ItemId("work-c"))
+        definition = snapshot.definition(ItemId("work-c"))
+        coordination_authority = snapshot.coordination_authority
+        assert item is not None
+        assert definition is not None
+        assert coordination_authority is not None
+        expires_at = acquired_at + timedelta(seconds=1)
+        acquired = change_preparation_authority(
+            store,
+            AcquireInitialPreparationAuthority(
+                snapshot.host_epoch,
+                item.item,
+                snapshot.revision,
+                snapshot.subject_revision(item.item) or "",
+                definition.revision,
+                definition.digest,
+                coordination_authority,
+                TaskId("preparer"),
+                HostId("host-a"),
+                LeaseId("preparation-lock-test"),
+                acquired_at,
+                expires_at,
+            ),
+        )
+        self.assertNotIsInstance(acquired, DecisionFailure)
+        command_authority = project_decision_snapshot(store.snapshot(), acquired_at).command_preparation_authorities[0]
+        locked = Event()
+
+        def hold_write_lock() -> None:
+            with store.write():
+                locked.set()
+                sleep(1.2)
+
+        holder = Thread(target=hold_write_lock)
+        holder.start()
+        self.assertTrue(locked.wait(timeout=1))
+        operation_start = datetime.now(expires_at.tzinfo)
+        self.assertLess(operation_start, expires_at)
+
+        released = change_preparation_authority(
+            store,
+            ReleasePreparationAuthority(command_authority, operation_start),
+        )
+
+        holder.join(timeout=2)
+        self.assertFalse(holder.is_alive())
+        next_operation_start = datetime.now(expires_at.tzinfo)
+        self.assertGreaterEqual(next_operation_start, expires_at)
+        self.assertNotIsInstance(released, DecisionFailure)
+        self.assertEqual(PreparationLeaseStatus.RELEASED, store.snapshot().authority.preparation_leases[0].state)
+        rejected = change_preparation_authority(
+            store,
+            RenewPreparationAuthority(
+                command_authority,
+                next_operation_start,
+                next_operation_start + timedelta(minutes=1),
+            ),
+        )
+        self.assertIsInstance(rejected, DecisionFailure)
+
+
+if __name__ == "__main__":
+    unittest.main()

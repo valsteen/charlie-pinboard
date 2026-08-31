@@ -5,24 +5,48 @@ import runpy
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-from repo_work.actions import actions_for, state_revision
-from repo_work.atomic import atomic_write_text as real_atomic_write_text
-from repo_work.cli import main
-from repo_work.leases import LeaseRecord
-from repo_work.leases import acquire_coordination as real_acquire_coordination
-from repo_work.leases import release_coordination as real_release_coordination
-from repo_work.markdown import parse_attempt, parse_current, parse_queue
-from repo_work.migration import migrate_to_v2
-from repo_work.model import AttemptState, WorkState
-from repo_work.root import RootError
-from repo_work.transaction_store import journal_path_for
-from repo_work.transition import apply_action as apply_transition
-from repo_work.validate import validate_work_state
+from msgspec.structs import replace as replace_struct
 
-from .support import JsonObject, JsonValue, create_state
+from pinboard.adapters.files.artifacts import write_revision
+from pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
+from pinboard.adapters.files.file_io import resolve_durable_roots
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application import service, stored_state
+from pinboard.application.actions import discover_actions
+from pinboard.application.artifacts import NewArtifact
+from pinboard.application.ports import WorkStore
+from pinboard.domain import authority_models, decision_models, work_models
+from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
+from pinboard.domain.history import work_item_definition_digest
+from pinboard.domain.identifiers import AttemptId, HostId, ItemId, LeaseId, TaskId
+from pinboard.interfaces import transitions as transition_interface
+from pinboard.interfaces.cli import build_parser, main
+from pinboard.interfaces.errors import CommandFailure, WorkBriefError, WorkBriefErrorCode
+from pinboard.interfaces.work_brief_models import (
+    AcceptedScope,
+    AcceptedScopeAuthorization,
+    CrossBoundaryCheckpoint,
+    LocalCheckpoint,
+)
+from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
+
+from .domain_support import expect_success
+from .support import (
+    SQLITE_NOW,
+    JsonObject,
+    JsonValue,
+    complete_sqlite_state,
+    test_definition,
+    with_definition_dependencies,
+)
+from .work_brief_support import work_a_brief, work_c_brief
 
 
 class CliTest(unittest.TestCase):
@@ -33,9 +57,6 @@ class CliTest(unittest.TestCase):
             result = main(arguments)
         return result, stdout.getvalue(), stderr.getvalue()
 
-    def snapshot(self, work: Path) -> dict[str, bytes]:
-        return {str(path.relative_to(work)): path.read_bytes() for path in work.rglob("*") if path.is_file()}
-
     def run_json_cli(self, *arguments: str) -> JsonObject:
         result, stdout, stderr = self.run_cli(*arguments, "--json")
         self.assertEqual(0, result, stderr)
@@ -44,37 +65,29 @@ class CliTest(unittest.TestCase):
             self.fail("CLI JSON result must be an object")
         return value
 
-    def json_object(self, value: JsonValue) -> JsonObject:
-        if not isinstance(value, dict):
-            self.fail("JSON value must be an object")
-        return value
+    def run_cli_parse_error(self, *arguments: str) -> str:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            main(arguments)
+        self.assertEqual(2, raised.exception.code)
+        return stderr.getvalue()
 
     def json_list(self, value: JsonValue) -> list[JsonValue]:
         if not isinstance(value, list):
             self.fail("JSON value must be a list")
         return value
 
-    def json_string(self, value: JsonValue) -> str:
-        if not isinstance(value, str):
-            self.fail("JSON value must be a string")
+    def json_object(self, value: JsonValue) -> JsonObject:
+        if not isinstance(value, dict):
+            self.fail("JSON value must be an object")
         return value
 
-    def json_object_at(self, value: JsonObject, *keys: str) -> JsonObject:
-        current = value
-        for key in keys[:-1]:
-            current = self.json_object(current[key])
-        return self.json_object(current[keys[-1]])
+    def json_int(self, value: JsonValue) -> int:
+        if not isinstance(value, int) or isinstance(value, bool):
+            self.fail("JSON value must be an integer")
+        return value
 
-    def json_schema_root(self, schema: JsonObject) -> JsonObject:
-        reference = self.json_string(schema["$ref"])
-        return self.json_object(self.json_object(schema["$defs"])[reference.rsplit("/", 1)[-1]])
-
-    def run_json_transition(
-        self,
-        common: tuple[str, ...],
-        action: JsonObject,
-        payload: Path,
-    ) -> tuple[int, str, str]:
+    def run_transition(self, common: tuple[str, ...], action: JsonObject, payload: Path) -> tuple[int, str, str]:
         arguments = [
             *common,
             "transition",
@@ -93,1147 +106,3394 @@ class CliTest(unittest.TestCase):
         lease_id = action.get("lease_id")
         if lease_id:
             arguments.extend(("--lease-id", str(lease_id)))
-        resource_claims = action.get("resource_claims", [])
-        if not isinstance(resource_claims, list):
-            self.fail("resource_claims must be a JSON list")
-        for claim in resource_claims:
-            if not isinstance(claim, dict):
-                self.fail("each resource claim must be a JSON object")
-            arguments.extend(
-                (
-                    "--resource-claim",
-                    str(claim["resource_id"]),
-                    str(claim["host_id"]),
-                    str(claim["lease_id"]),
-                    str(claim["generation"]),
-                )
-            )
         arguments.extend(("--payload", str(payload)))
         return self.run_cli(*arguments)
 
-    def test_validate_json_is_read_only(self) -> None:
-        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
-        before = self.snapshot(work)
+    def assert_prepared_activation_rejections(
+        self,
+        common: tuple[str, ...],
+        action: JsonObject,
+        prepared: JsonObject,
+        project: Path,
+        store: SQLiteWorkStore,
+        valid_payload: Path,
+    ) -> JsonObject:
+        for lease_id, generation in (
+            ("wrong-holder", prepared["generation"]),
+            (prepared["lease_id"], self.json_int(prepared["generation"]) + 1),
+        ):
+            rejected, _stdout, rejected_stderr = self.run_cli(
+                *common,
+                "actions",
+                "--role",
+                "preparer",
+                "--lease-id",
+                str(lease_id),
+                "--generation",
+                str(generation),
+                "--action-id",
+                "activate:work-c",
+            )
+            self.assertEqual(11, rejected)
+            self.assertIn("ACTION_NOT_AVAILABLE", rejected_stderr)
 
-        result, stdout, stderr = self.run_cli(
-            "--project-root",
-            str(project),
-            "--work-root",
-            str(work),
-            "validate",
-            "--json",
-        )
-
-        self.assertEqual(0, result, stderr)
-        self.assertTrue(json.loads(stdout)["valid"])
-        self.assertEqual(before, self.snapshot(work))
-
-    def test_invalid_state_has_stable_nonzero_result(self) -> None:
-        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
-        (work / "items" / "reveal-core.md").unlink()
-
-        result, stdout, _ = self.run_cli(
-            "--project-root",
-            str(project),
-            "--work-root",
-            str(work),
-            "validate",
-        )
-
-        self.assertEqual(10, result)
-        self.assertIn("ITEM_RECORD_MISSING", stdout)
-
-    def test_actions_json_exposes_transition_tokens(self) -> None:
-        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
-
-        result, stdout, stderr = self.run_cli(
-            "--project-root",
-            str(project),
-            "--work-root",
-            str(work),
-            "actions",
-            "--role",
-            "coordinator",
-            "--json",
-        )
-
-        self.assertEqual(0, result, stderr)
-        actions = json.loads(stdout)["actions"]
-        activation = next(action for action in actions if action["action_id"] == "activate:reveal-core")
-        self.assertEqual(64, len(activation["expected_revision"]))
-        self.assertEqual(1, activation["coordinator_generation"])
-
-    def test_exact_action_query_and_input_contract_avoid_broad_action_discovery(self) -> None:
-        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
-        common = ("--project-root", str(project), "--work-root", str(work))
-        before = self.snapshot(work)
-
-        actions = self.json_list(
-            self.run_json_cli(*common, "actions", "--role", "coordinator", "--action-id", "activate:reveal-core")[
-                "actions"
-            ]
-        )
-        action = self.json_object(actions[0])
-        self.assertEqual("activate:reveal-core", action["action_id"])
-        schema = self.json_object_at(action, "input_contract", "payload_schema")
-        activate = self.json_schema_root(schema)
-        self.assertEqual(["attempt", "branch", "base_revision", "owner"], activate["required"])
-        self.assertFalse(activate["additionalProperties"])
-
-        contract = self.run_json_cli(*common, "input-contract", "accept-proposal")
-        self.assertEqual("accept-proposal", contract["action_kind"])
-        contract_schema = self.json_object(contract["payload_schema"])
-        accepted = self.json_schema_root(contract_schema)
-        self.assertEqual(["item", "state", "next_action"], accepted["required"])
-        self.assertEqual([], self.json_object_at(accepted, "properties", "depends_on")["default"])
-        accepted_state = self.json_object_at(contract_schema, "$defs", "AcceptedProposalState")
-        self.assertEqual(["blocked", "deferred", "intake", "ready"], accepted_state["enum"])
-        empty = self.json_schema_root(
-            self.json_object(self.run_json_cli(*common, "input-contract", "submit-review")["payload_schema"])
-        )
-        self.assertEqual([], empty["required"])
-        self.assertEqual({}, empty["properties"])
-
-        missing_result, _, missing_stderr = self.run_cli(
-            *common,
-            "actions",
-            "--role",
-            "coordinator",
-            "--action-id",
-            "activate:missing",
-            "--json",
-        )
-        self.assertEqual(11, missing_result)
-        self.assertIn("ACTION_NOT_AVAILABLE", missing_stderr)
-        self.assertEqual(before, self.snapshot(work))
-
-    def test_one_shot_coordination_is_recoverable_before_during_and_after_apply(self) -> None:
-        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
-        migrate_to_v2(work, project)
-        common = ("--project-root", str(project), "--work-root", str(work))
-        payload = Path(tempfile.mkdtemp()) / "activate.json"
-        payload.write_text(
+        before_rejection = store.snapshot()
+        wrong_reference_payload = project / "activate-wrong-reference.json"
+        wrong_reference_payload.write_text(
             json.dumps(
                 {
-                    "attempt": "reveal-core-1",
-                    "branch": "codex/reveal-core",
-                    "base_revision": "abc123",
+                    "attempt": "work-c-1",
+                    "branch": "codex/work-c",
+                    "base_revision": "candidate-base",
                     "owner": "worker-task",
+                    "brief_artifact_ref_id": 999999,
                 }
             ),
             encoding="utf-8",
         )
-        invalid_payload = payload.with_name("invalid.json")
-        invalid_payload.write_text("{}", encoding="utf-8")
-        before = self.snapshot(work)
-        apply_arguments = (
-            *common,
-            "coordination",
-            "apply",
-            "--task-id",
-            "coordinator-task",
-            "--host-id",
-            "host",
-            "--action-id",
-            "activate:reveal-core",
-        )
+        rejected, _stdout, rejected_stderr = self.run_transition(common, action, wrong_reference_payload)
+        self.assertNotEqual(0, rejected)
+        self.assertIn("TRANSITION_INPUT_INVALID", rejected_stderr)
+        self.assertEqual(before_rejection, store.snapshot())
 
-        invalid_result, _, invalid_stderr = self.run_cli(*apply_arguments, "--payload", str(invalid_payload))
-        self.assertEqual(11, invalid_result)
-        self.assertIn("TRANSITION_INPUT_INVALID", invalid_stderr)
-        self.assertEqual(before, self.snapshot(work))
-
-        with (
-            patch("repo_work.cli.apply_action", side_effect=KeyboardInterrupt),
-            self.assertRaises(KeyboardInterrupt),
+        expires_at = datetime.fromisoformat(str(prepared["expires_at"]))
+        with patch("pinboard.interfaces.work_inspection.datetime") as inspection_clock:
+            inspection_clock.now.return_value = expires_at
+            rejected, _stdout, rejected_stderr = self.run_cli(
+                *common,
+                "actions",
+                "--role",
+                "preparer",
+                "--lease-id",
+                str(prepared["lease_id"]),
+                "--generation",
+                str(prepared["generation"]),
+                "--action-id",
+                "activate:work-c",
+            )
+        self.assertEqual(11, rejected)
+        self.assertIn("ACTION_NOT_AVAILABLE", rejected_stderr)
+        before_expired_activation = store.snapshot()
+        for label, observed_at in (
+            ("at", expires_at),
+            ("after", expires_at + timedelta(microseconds=1)),
         ):
-            self.run_cli(*apply_arguments, "--payload", str(payload))
-        self.assertEqual("released", self.run_json_cli(*common, "coordination", "status")["status"])
-        self.assertEqual(WorkState.READY, parse_queue(work / "v2" / "queue.md").items[0].state)
-        self.assertTrue(validate_work_state(work, project).valid)
+            with (
+                self.subTest(expired_activation=label),
+                patch("pinboard.interfaces.action_selection.datetime") as action_clock,
+            ):
+                action_clock.now.return_value = observed_at
+                rejected, _stdout, rejected_stderr = self.run_transition(common, action, valid_payload)
+            self.assertEqual(11, rejected)
+            self.assertIn("ACTION_NOT_AVAILABLE", rejected_stderr)
+            self.assertEqual(before_expired_activation, store.snapshot())
+        return self.assert_installed_activation_identity_rejections(common, action, project, store, valid_payload)
 
-        lease = self.run_json_cli(
-            *common,
-            "coordination",
-            "acquire",
-            "--task-id",
-            "interrupted-task",
-            "--host-id",
-            "host",
-            "--ttl-seconds",
-            "60",
+    def assert_installed_activation_identity_rejections(
+        self,
+        common: tuple[str, ...],
+        action: JsonObject,
+        project: Path,
+        store: SQLiteWorkStore,
+        valid_payload: Path,
+    ) -> JsonObject:
+        payload_values = self.json_object(json.loads(valid_payload.read_text(encoding="utf-8")))
+        for field, mismatch in (
+            ("attempt", "different-1"),
+            ("branch", "codex/different"),
+            ("base_revision", "different-base"),
+        ):
+            mismatched_payload = project / f"activate-wrong-{field}.json"
+            mismatched_payload.write_text(json.dumps({**payload_values, field: mismatch}), encoding="utf-8")
+            before = store.snapshot()
+            rejected, _stdout, rejected_stderr = self.run_transition(common, action, mismatched_payload)
+            self.assertEqual(11, rejected)
+            self.assertIn("TRANSITION_INPUT_INVALID", rejected_stderr)
+            self.assertEqual(before, store.snapshot())
+
+        retained_preparation = store.snapshot().authority.preparation_leases[0]
+        observed_at = retained_preparation.expires_at - timedelta(microseconds=1)
+        available = expect_success(
+            discover_actions(
+                store,
+                decision_models.Role.PREPARER,
+                lease_id=LeaseId(str(action["lease_id"])),
+                generation=self.json_int(action["coordinator_generation"]),
+                now=observed_at,
+            )
         )
-        retained_actions = self.json_list(
+        typed_action = next(
+            candidate
+            for candidate in available
+            if isinstance(candidate, decision_models.ActivateAction)
+            and decision_models.action_id(candidate) == "activate:work-c"
+        )
+        authority = typed_action.capability.preparation_authority
+        assert authority is not None
+        wrong_authority = replace(authority, definition_digest="f" * 64)
+        wrong_action = replace(
+            typed_action,
+            capability=replace(typed_action.capability, preparation_authority=wrong_authority),
+        )
+        decision_snapshot = service.project_decision_snapshot(store.snapshot(), observed_at)
+        wrong_snapshot = replace(decision_snapshot, command_preparation_authorities=(wrong_authority,))
+        before = store.snapshot()
+        with (
+            patch("pinboard.interfaces.action_selection.reselect_action", return_value=wrong_action),
+            patch("pinboard.application.service.project_decision_snapshot", return_value=wrong_snapshot),
+        ):
+            rejected, _stdout, rejected_stderr = self.run_transition(common, action, valid_payload)
+        self.assertEqual(11, rejected)
+        self.assertIn("live preparation pin", rejected_stderr)
+        self.assertEqual(before, store.snapshot())
+
+        candidate = work_c_brief()
+        checkpoint = candidate.checkpoint
+        assert isinstance(checkpoint, CrossBoundaryCheckpoint | LocalCheckpoint)
+        verification = checkpoint.verification[0]
+        wrong_item_checkpoint = replace_struct(
+            checkpoint,
+            verification=(
+                replace_struct(
+                    verification,
+                    authorization_basis=AcceptedScopeAuthorization("work-b", candidate.accepted_scope.revision),
+                ),
+            ),
+        )
+        mismatched_briefs = (
+            (
+                "item",
+                replace_struct(
+                    candidate,
+                    attempt_id="work-c-wrong-item",
+                    item_id="work-b",
+                    checkpoint=wrong_item_checkpoint,
+                ),
+            ),
+            (
+                "definition",
+                replace_struct(
+                    candidate,
+                    attempt_id="work-c-wrong-definition",
+                    accepted_scope=AcceptedScope(candidate.accepted_scope.revision, "f" * 64),
+                ),
+            ),
+        )
+        current_action = action
+        for name, mismatched_brief in mismatched_briefs:
+            brief_path = project / f"activate-wrong-{name}-brief.json"
+            brief_path.write_bytes(canonical_work_brief_bytes(mismatched_brief))
+            publication = self.run_json_cli(*common, "brief", "publish", "--file", str(brief_path))
+            payload = project / f"activate-wrong-{name}.json"
+            payload.write_text(
+                json.dumps(
+                    {
+                        **payload_values,
+                        "attempt": mismatched_brief.attempt_id,
+                        "brief_artifact_ref_id": publication["artifact_ref_id"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            current_action = self.json_object(
+                self.json_list(
+                    self.run_json_cli(
+                        *common,
+                        "actions",
+                        "--role",
+                        "preparer",
+                        "--lease-id",
+                        str(action["lease_id"]),
+                        "--generation",
+                        str(action["coordinator_generation"]),
+                        "--action-id",
+                        "activate:work-c",
+                    )["actions"]
+                )[0]
+            )
+            before = store.snapshot()
+            rejected, _stdout, rejected_stderr = self.run_transition(common, current_action, payload)
+            self.assertEqual(11, rejected)
+            self.assertIn("TRANSITION_INPUT_INVALID", rejected_stderr)
+            self.assertEqual(before, store.snapshot())
+        return current_action
+
+    def assert_installed_preparation_visibility(
+        self,
+        common: tuple[str, ...],
+        prepared: JsonObject,
+        store: SQLiteWorkStore,
+    ) -> None:
+        self.assertEqual(
+            stored_state.TransitionHistoryAuthorizationKind.COORDINATOR,
+            store.snapshot().transition_receipts[-1].authorization,
+        )
+        overview = self.run_json_cli(*common, "overview")
+        overview_item = next(
+            self.json_object(value)
+            for value in self.json_list(overview["items"])
+            if self.json_object(value)["item_id"] == "work-c"
+        )
+        overview_preparation = self.json_object(overview_item["preparation"])
+        item = self.run_json_cli(*common, "item", "status", "--item-id", "work-c")
+        item_preparation = self.json_object(item["preparation"])
+        for visible in (overview_preparation, item_preparation):
+            self.assertEqual("preparer-task", visible["task_id"])
+            self.assertEqual("studio", visible["host_id"])
+            self.assertEqual(prepared["lease_id"], visible["lease_id"])
+            self.assertEqual(prepared["generation"], visible["generation"])
+            self.assertEqual(prepared["expires_at"], visible["expires_at"])
+            self.assertEqual("active", visible["status"])
+        overview_result, overview_stdout, overview_stderr = self.run_cli(*common, "overview")
+        item_result, item_stdout, item_stderr = self.run_cli(*common, "item", "status", "--item-id", "work-c")
+        self.assertEqual(0, overview_result, overview_stderr)
+        self.assertEqual(0, item_result, item_stderr)
+        self.assertIn("preparation=active preparer=preparer-task@studio", overview_stdout)
+        self.assertIn("preparation=active preparer=preparer-task@studio", item_stdout)
+
+    def write_item_revision(
+        self,
+        path: Path,
+        item_id: ItemId,
+        revision: int,
+        digest: str,
+        definition: work_models.WorkItemDefinition,
+        *,
+        objective: str | None = None,
+        dependencies: tuple[ItemId, ...] | None = None,
+    ) -> Path:
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "pinboard-item-revision/v1",
+                    "item_id": item_id,
+                    "expected_revision": revision,
+                    "expected_digest": digest,
+                    "source_task": "owner-task",
+                    "reason": "Clarify the observable outcome.",
+                    "definition": {
+                        "schema": "pinboard-work-item-definition/v1",
+                        "title": definition.title,
+                        "objective": objective or definition.objective,
+                        "hypothesis": definition.hypothesis,
+                        "evidence": list(definition.evidence),
+                        "scope": list(definition.scope),
+                        "non_scope": list(definition.non_scope),
+                        "acceptance_criteria": list(definition.acceptance_criteria),
+                        "dependencies": list(definition.dependencies if dependencies is None else dependencies),
+                        "effect": definition.effect,
+                        "unlock": definition.unlock,
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def initialized_state(
+        self, state: stored_state.StoredWorkState | None = None
+    ) -> tuple[Path, Path, SQLiteWorkStore]:
+        project = Path(tempfile.mkdtemp()).resolve()
+        roots = resolve_durable_roots(project)
+        initialize_database(roots, SQLITE_NOW)
+        store = SQLiteWorkStore(roots.database_path)
+        if state is not None:
+            reference = state.artifact_references[0]
+            if reference.selector.endswith(".opaque"):
+                value = work_a_brief(project)
+                attempt = state.lifecycle.attempts[0]
+                value = replace_struct(
+                    value,
+                    accepted_scope=AcceptedScope(
+                        attempt.accepted_scope_revision,
+                        attempt.accepted_scope_digest,
+                    ),
+                )
+                published = write_revision(
+                    roots,
+                    NewArtifact(
+                        stored_state.ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)
+                    ),
+                )
+                reference = replace(
+                    reference,
+                    key=published.key,
+                    revision=published.revision,
+                    selector=published.selector,
+                    content_sha256=published.content_sha256,
+                    size_bytes=published.size_bytes,
+                )
+                state = replace(state, artifact_references=(reference, *state.artifact_references[1:]))
+            store.initialize_state(state)
+        return project, roots.work_root, store
+
+    def prepared_state(self, expires_at: datetime) -> stored_state.StoredWorkState:
+        state = complete_sqlite_state()
+        definition = next(value for value in state.lifecycle.definition_revisions if value.item_id == ItemId("work-c"))
+        return replace(
+            state,
+            authority=replace(
+                state.authority,
+                preparation_counters=(stored_state.PreparationLeaseCounter(ItemId("work-c"), 1),),
+                preparation_generations=(
+                    stored_state.PreparationLeaseGeneration(
+                        ItemId("work-c"),
+                        1,
+                        LeaseId("preparation-c"),
+                        TaskId("preparer-c"),
+                        HostId("studio"),
+                    ),
+                ),
+                preparation_leases=(
+                    stored_state.StoredPreparationLease(
+                        ItemId("work-c"),
+                        1,
+                        definition.revision,
+                        definition.digest,
+                        SQLITE_NOW,
+                        expires_at,
+                        authority_models.PreparationLeaseStatus.ACTIVE,
+                    ),
+                ),
+            ),
+        )
+
+    def test_current_command_surface_lists_every_command(self) -> None:
+        parser = build_parser()
+        help_text = parser.format_help()
+        for retained in (
+            "root",
+            "validate",
+            "status",
+            "overview",
+            "item",
+            "close",
+            "actions",
+            "input-contract",
+            "brief",
+            "brief-sources",
+            "init",
+            "proposal",
+            "transition",
+            "dispatch",
+            "coordination",
+            "attempt",
+            "parallel",
+            "views",
+        ):
+            self.assertIn(retained, help_text)
+        item_status_help = io.StringIO()
+        with contextlib.redirect_stdout(item_status_help), self.assertRaises(SystemExit) as raised:
+            parser.parse_args(("item", "status", "--help"))
+        self.assertEqual(0, raised.exception.code)
+        self.assertIn("--item-id", item_status_help.getvalue())
+        item_revise_help = io.StringIO()
+        with contextlib.redirect_stdout(item_revise_help), self.assertRaises(SystemExit) as raised:
+            parser.parse_args(("item", "revise", "--help"))
+        self.assertEqual(0, raised.exception.code)
+        self.assertIn("--file", item_revise_help.getvalue())
+
+    def test_item_revise_round_trips_through_the_installed_command(self) -> None:
+        state = complete_sqlite_state()
+        current = work_models.WorkItemDefinition(
+            "Work work-a",
+            "Make the state explicit.",
+            "The workflow needs this fact.",
+            ("artifacts/design.md",),
+            ("The state becomes explicit.",),
+            (),
+            ("The next decision can run.",),
+            (ItemId("work-c"),),
+            "The state becomes explicit.",
+            "The next decision can run.",
+        )
+        digest = expect_success(work_item_definition_digest(current))
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                definition_revisions=(
+                    *(value for value in state.lifecycle.definition_revisions if value.item_id != ItemId("work-a")),
+                    stored_state.ItemDefinitionRevision(
+                        ItemId("work-a"),
+                        1,
+                        digest,
+                        current,
+                        "Accepted proposal definition.",
+                        TaskId("proposal-source"),
+                        None,
+                        digest,
+                        3,
+                        SQLITE_NOW,
+                    ),
+                ),
+                attempts=(replace(state.lifecycle.attempts[0], accepted_scope_digest=digest),),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        payload = self.write_item_revision(
+            project / "revision.json",
+            ItemId("work-a"),
+            1,
+            digest,
+            current,
+            objective="Make the state explicit and observable.",
+            dependencies=(ItemId("intake-work"),),
+        )
+
+        value = self.run_json_cli(
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(work),
+            "item",
+            "revise",
+            "--file",
+            str(payload),
+            "--task-id",
+            "owner-task",
+            "--host-id",
+            "local",
+        )
+
+        self.assertEqual("work-a", value["item_id"])
+        self.assertEqual(2, value["definition_revision"])
+        self.assertEqual("14", value["project_revision"])
+        reopened = store.snapshot()
+        self.assertEqual(
+            2,
+            sum(value.item_id == ItemId("work-a") for value in reopened.lifecycle.definition_revisions),
+        )
+        self.assertEqual(
+            (ItemId("intake-work"),),
+            tuple(
+                dependency.dependency_id
+                for dependency in reopened.lifecycle.dependencies
+                if dependency.item_id == ItemId("work-a")
+            ),
+        )
+        current_value = self.run_json_cli(
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(work),
+            "item",
+            "definition",
+            "--item-id",
+            "work-a",
+        )
+        self.assertEqual(2, current_value["definition_revision"])
+        self.assertEqual(
+            "Make the state explicit and observable.", self.json_object(current_value["definition"])["objective"]
+        )
+        first_page = self.run_json_cli(
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(work),
+            "item",
+            "definition-history",
+            "--item-id",
+            "work-a",
+            "--limit",
+            "1",
+        )
+        self.assertEqual(2, first_page["next_before_revision"])
+        self.assertEqual(2, self.json_object(self.json_list(first_page["revisions"])[0])["revision"])
+        second_page = self.run_json_cli(
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(work),
+            "item",
+            "definition-history",
+            "--item-id",
+            "work-a",
+            "--limit",
+            "1",
+            "--before-revision",
+            "2",
+        )
+        self.assertIsNone(second_page["next_before_revision"])
+        self.assertEqual(1, self.json_object(self.json_list(second_page["revisions"])[0])["revision"])
+
+    def test_item_revise_rejections_preserve_sqlite_and_generated_views(self) -> None:
+        project, work, store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+        rebuild_result, _rebuild_stdout, rebuild_stderr = self.run_cli(*common, "views", "rebuild")
+        self.assertEqual(0, rebuild_result, rebuild_stderr)
+        views_root = work / "views"
+        before = store.snapshot()
+        before_views = tuple(
+            (path.relative_to(views_root), path.read_bytes())
+            for path in sorted(views_root.rglob("*"))
+            if path.is_file()
+        )
+        cases = (
+            (ItemId("work-a"), (ItemId("absent-work"),), "DEPENDENCY_NOT_SATISFIED"),
+            (ItemId("work-c"), (ItemId("work-a"),), "ITEM_DEPENDENCY_CYCLE"),
+        )
+        for item_id, dependencies, error_code in cases:
+            definition, digest = test_definition(item_id)
+            payload = self.write_item_revision(
+                project / f"{item_id}-rejected-revision.json",
+                item_id,
+                1,
+                digest,
+                definition,
+                dependencies=dependencies,
+            )
+            action_values = self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "coordinator",
+                    "--action-id",
+                    f"revise-item:{item_id}",
+                )["actions"]
+            )
+            action = self.json_object(action_values[0])
+
+            result, stdout, stderr = self.run_transition(common, action, payload)
+
+            with self.subTest(item_id=item_id):
+                self.assertNotEqual(0, result)
+                self.assertEqual("", stdout)
+                self.assertIn(error_code, stderr)
+                self.assertEqual(before, store.snapshot())
+                self.assertEqual(
+                    before_views,
+                    tuple(
+                        (path.relative_to(views_root), path.read_bytes())
+                        for path in sorted(views_root.rglob("*"))
+                        if path.is_file()
+                    ),
+                )
+
+    def test_revised_review_attempt_rejects_every_acceptance_path_through_the_cli(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        coordination = state.authority.coordination
+        assert coordination is not None
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                work_items=tuple(
+                    replace(value, state=stored_state.StoredWorkItemState.REVIEW)
+                    if value.item_id == ItemId("work-a")
+                    else value
+                    for value in state.lifecycle.work_items
+                ),
+                attempts=tuple(
+                    replace(
+                        value,
+                        state=work_models.AttemptState.REVIEW,
+                        candidate_revision="candidate-review",
+                        candidate_recorded_at=now,
+                    )
+                    if value.attempt_id == AttemptId("work-a-1")
+                    else value
+                    for value in state.lifecycle.attempts
+                ),
+            ),
+            authority=replace(
+                state.authority,
+                coordination=replace(coordination, acquired_at=now, expires_at=now + timedelta(minutes=5)),
+                attempt_leases=tuple(
+                    replace(value, acquired_at=now, expires_at=now + timedelta(minutes=5))
+                    for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        action_values = self.json_list(
             self.run_json_cli(
                 *common,
                 "actions",
                 "--role",
                 "coordinator",
                 "--lease-id",
-                str(lease["lease_id"]),
+                "coordination-a",
                 "--generation",
-                str(lease["generation"]),
-                "--action-id",
-                "activate:reveal-core",
+                "9",
             )["actions"]
         )
-        retained = self.json_object(retained_actions[0])
-        self.run_json_cli(
-            *common,
-            "coordination",
-            "release",
-            "--lease-id",
-            str(lease["lease_id"]),
-            "--generation",
-            str(lease["generation"]),
+        before_actions = {
+            str(action["action_id"]): action
+            for value in action_values
+            if (action := self.json_object(value))["action_id"]
+            in {
+                "accept-checkpoint:work-a-1",
+                "accept-review-and-continue:work-a-1",
+                "complete:work-a-1",
+            }
+        }
+        self.assertEqual(
+            {
+                "accept-checkpoint:work-a-1",
+                "accept-review-and-continue:work-a-1",
+                "complete:work-a-1",
+            },
+            set(before_actions),
         )
-        released = self.snapshot(work)
-
-        stale_result, _, stale_stderr = self.run_json_transition(common, retained, payload)
-        self.assertEqual(11, stale_result)
-        self.assertRegex(stale_stderr, "LEASE_FENCED|ACTION_NOT_AVAILABLE")
-        self.assertEqual(released, self.snapshot(work))
-
-        receipt = self.run_json_cli(*apply_arguments, "--payload", str(payload))
-        self.assertEqual("activate:reveal-core", receipt["action_id"])
-        self.assertEqual(64, len(self.json_string(receipt["revision"])))
-        self.assertEqual(WorkState.ACTIVE, parse_queue(work / "v2" / "queue.md").items[0].state)
-        self.assertTrue(validate_work_state(work, project).valid)
-        self.assertEqual("released", self.run_json_cli(*common, "coordination", "status")["status"])
-
-    def test_one_shot_coordination_cleans_catchable_acquire_and_release_interrupts(self) -> None:
-        for phase, interrupted_write, expected_state in (
-            ("acquire", 1, WorkState.READY),
-            ("release", 2, WorkState.ACTIVE),
-        ):
-            with self.subTest(phase=phase):
-                project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
-                migrate_to_v2(work, project)
-                common = ("--project-root", str(project), "--work-root", str(work))
-                payload = Path(tempfile.mkdtemp()) / "activate.json"
-                payload.write_text(
-                    json.dumps(
-                        {
-                            "attempt": "reveal-core-1",
-                            "branch": "codex/reveal-core",
-                            "base_revision": "abc123",
-                            "owner": "worker-task",
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-                writes = 0
-
-                def interrupt_after_write(path: Path, text: str, threshold: int = interrupted_write) -> None:
-                    nonlocal writes
-                    real_atomic_write_text(path, text)
-                    writes += 1
-                    if writes == threshold:
-                        raise KeyboardInterrupt
-
-                with (
-                    patch("repo_work.leases.atomic_write_text", side_effect=interrupt_after_write),
-                    self.assertRaises(KeyboardInterrupt),
-                ):
-                    self.run_cli(
-                        *common,
-                        "coordination",
-                        "apply",
-                        "--task-id",
-                        "coordinator-task",
-                        "--host-id",
-                        "host",
-                        "--action-id",
-                        "activate:reveal-core",
-                        "--payload",
-                        str(payload),
-                    )
-
-                self.assertEqual("released", self.run_json_cli(*common, "coordination", "status")["status"])
-                self.assertEqual(expected_state, parse_queue(work / "v2" / "queue.md").items[0].state)
-                self.assertTrue(validate_work_state(work, project).valid)
-
-    def test_one_shot_receipt_keeps_the_transition_revision_across_a_release_race(self) -> None:
-        project, work = create_state(
-            [
-                "| reveal-core | ready | — | — | — | design | activate | Ready. |",
-                "| later-work | ready | — | — | — | design | activate | Ready. |",
-            ]
+        definition, digest = test_definition(ItemId("work-a"))
+        revision = self.write_item_revision(
+            project / "review-item-revision.json",
+            ItemId("work-a"),
+            1,
+            digest,
+            definition,
+            objective="Make the reviewed state explicitly stale.",
         )
-        migrate_to_v2(work, project)
-        common = ("--project-root", str(project), "--work-root", str(work))
-        payload = Path(tempfile.mkdtemp()) / "activate.json"
-        payload.write_text(
-            json.dumps(
-                {
-                    "attempt": "reveal-core-1",
-                    "branch": "codex/reveal-core",
-                    "base_revision": "abc123",
-                    "owner": "worker-task",
-                }
-            ),
-            encoding="utf-8",
+        revision_action = next(
+            self.json_object(value)
+            for value in action_values
+            if self.json_object(value)["action_id"] == "revise-item:work-a"
         )
-        observed: dict[str, str] = {}
-
-        def release_then_change(work_root: Path, lease_id: str, generation: int) -> LeaseRecord:
-            observed["transition_revision"] = state_revision(work_root)
-            released = real_release_coordination(work_root, lease_id, generation)
-            replacement = real_acquire_coordination(work_root, "other-task", "host", 60)
-            action = next(
-                candidate
-                for candidate in actions_for(
-                    work_root,
-                    project,
+        revision_result, revision_stdout, revision_stderr = self.run_transition(common, revision_action, revision)
+        self.assertEqual(0, revision_result, revision_stderr)
+        self.assertIn("OK TRANSITION_APPLIED revise-item:work-a", revision_stdout)
+        after_ids = {
+            str(self.json_object(value)["action_id"])
+            for value in self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
                     "coordinator",
-                    lease_id=replacement.lease_id,
-                    generation=replacement.generation,
-                )
-                if candidate.action_id == "close:later-work"
+                    "--lease-id",
+                    "coordination-a",
+                    "--generation",
+                    "9",
+                )["actions"]
             )
-            apply_transition(
-                work_root,
-                project,
-                action,
-                json.dumps({"outcome": "done", "reason": "Concurrent decision completed."}),
-            )
-            real_release_coordination(work_root, replacement.lease_id, replacement.generation)
-            return released
+        }
+        self.assertTrue(set(before_actions).isdisjoint(after_ids))
+        after_revision = store.snapshot()
+        payloads = {
+            "accept-checkpoint:work-a-1": '{"checkpoint":"checkpoint-a","candidate":"candidate-review","evidence":"accepted"}',
+            "accept-review-and-continue:work-a-1": '{"candidate":"candidate-review","evidence":"accepted"}',
+            "complete:work-a-1": '{"evidence":"accepted"}',
+        }
+        for action_id, action in before_actions.items():
+            payload = project / f"{action_id.split(':', 1)[0]}.json"
+            payload.write_text(payloads[action_id], encoding="utf-8")
 
-        with patch("repo_work.cli.release_coordination", side_effect=release_then_change):
-            receipt = self.run_json_cli(
+            result, stdout, stderr = self.run_transition(common, action, payload)
+
+            with self.subTest(action_id=action_id):
+                self.assertNotEqual(0, result)
+                self.assertEqual("", stdout)
+                self.assertIn("ACTION_NOT_AVAILABLE", stderr)
+                self.assertEqual(after_revision, store.snapshot())
+
+    def test_item_revise_post_commit_view_warning_preserves_receipt_and_repairs(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        definition, digest = test_definition(ItemId("work-a"))
+        payload = self.write_item_revision(
+            project / "warning-revision.json",
+            ItemId("work-a"),
+            1,
+            digest,
+            definition,
+            objective="Preserve the authoritative revision when projection fails.",
+            dependencies=(ItemId("intake-work"),),
+        )
+
+        with patch(
+            "pinboard.interfaces.work_views.attempt_brief_views",
+            side_effect=WorkBriefError(WorkBriefErrorCode.BRIEF_INVALID, "injected revision projection failure"),
+        ):
+            result, stdout, stderr = self.run_cli(
                 *common,
-                "coordination",
-                "apply",
-                "--task-id",
-                "coordinator-task",
-                "--host-id",
-                "host",
-                "--action-id",
-                "activate:reveal-core",
-                "--payload",
+                "item",
+                "revise",
+                "--file",
                 str(payload),
+                "--task-id",
+                "owner-task",
+                "--host-id",
+                "local",
+                "--json",
             )
 
-        self.assertEqual(observed["transition_revision"], receipt["revision"])
-        self.assertNotEqual(state_revision(work), receipt["revision"])
-        self.assertTrue(validate_work_state(work, project).valid)
+        self.assertEqual(0, result, stderr)
+        self.assertEqual(2, self.json_int(self.json_object(json.loads(stdout))["definition_revision"]))
+        self.assertIn("injected revision projection failure", stderr)
+        self.assertIn("pinboard views rebuild", stderr)
+        reopened = store.snapshot()
+        revisions = tuple(
+            value for value in reopened.lifecycle.definition_revisions if value.item_id == ItemId("work-a")
+        )
+        self.assertEqual((1, 2), tuple(value.revision for value in revisions))
+        self.assertEqual((ItemId("intake-work"),), revisions[-1].definition.dependencies)
+        receipt = next(
+            value
+            for value in reopened.transition_receipts
+            if value.action_kind == stored_state.TransitionHistoryActionKind.REVISE_ITEM
+        )
+        self.assertEqual(revisions[-1].accepted_project_revision, receipt.project_revision)
+        rebuild_result, _rebuild_stdout, rebuild_stderr = self.run_cli(*common, "views", "rebuild")
+        self.assertEqual(0, rebuild_result, rebuild_stderr)
+        item_view = (work / "views/items/work-a.md").read_text(encoding="utf-8")
+        self.assertIn("- Revision: 2", item_view)
 
-    def test_transition_applies_action_from_machine_fields(self) -> None:
-        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
-        action = next(
-            action for action in actions_for(work, project, "coordinator") if action.action_id == "activate:reveal-core"
-        )
-        payload_path = Path(tempfile.mkdtemp()) / "payload.json"
-        payload_path.write_text(
-            json.dumps(
-                {
-                    "attempt": "reveal-core-1",
-                    "branch": "codex/reveal-core",
-                    "base_revision": "abc123",
-                    "owner": "worker-task",
-                }
-            ),
-            encoding="utf-8",
-        )
+    def test_init_and_current_read_commands_need_no_filesystem_authority(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        work = project / ".codex" / "work"
+        common = ("--project-root", str(project), "--work-root", str(work))
 
-        result, stdout, stderr = self.run_cli(
-            "--project-root",
-            str(project),
-            "--work-root",
-            str(work),
-            "transition",
-            "--action-id",
-            action.action_id,
-            "--expected-revision",
-            action.expected_revision,
-            "--generation",
-            str(action.coordinator_generation),
-            "--payload",
-            str(payload_path),
-        )
+        result, stdout, stderr = self.run_cli(*common, "init")
 
         self.assertEqual(0, result, stderr)
-        self.assertIn("TRANSITION_APPLIED", stdout)
-
-    def test_v1_worker_action_round_trips_through_review_and_completion(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],
-            focus_item="reveal-core",
-            focus_attempt="reveal-core-1",
-            create_active_attempt=True,
-        )
-        common = ("--project-root", str(project), "--work-root", str(work))
-        result_path = work / "attempts" / "reveal-core-1" / "result.md"
-        result_path.write_text("Ready for review.\n", encoding="utf-8")
-        payload = Path(tempfile.mkdtemp()) / "transition.json"
-        payload.write_text("{}\n", encoding="utf-8")
-
-        actions_result, actions_stdout, actions_stderr = self.run_cli(
-            *common,
-            "actions",
-            "--role",
-            "worker",
-            "--json",
-        )
-        self.assertEqual(0, actions_result, actions_stderr)
-        submit = next(
-            action
-            for action in json.loads(actions_stdout)["actions"]
-            if action["action_id"] == "submit-review:reveal-core-1"
-        )
-
-        before_rejection = self.snapshot(work)
-        wrong_role = {**submit, "authorization": "coordinator"}
-        rejected_result, _, rejected_stderr = self.run_json_transition(common, wrong_role, payload)
-
-        self.assertEqual(11, rejected_result)
-        self.assertIn("ACTION_NOT_AVAILABLE", rejected_stderr)
-        self.assertEqual(before_rejection, self.snapshot(work))
-        self.assertTrue(validate_work_state(work, project).valid)
-
-        transition_result, _, transition_stderr = self.run_json_transition(common, submit, payload)
-
-        self.assertEqual(0, transition_result, transition_stderr)
-        self.assertEqual("attempt", submit["authorization"])
-        self.assertEqual(WorkState.REVIEW, parse_queue(work / "queue.md").items[0].state)
+        self.assertIn("WORK_STATE_INITIALIZED", stdout)
+        self.assertTrue((work / "state.sqlite3").is_file())
+        self.assertFalse((work / "authority.json").exists())
+        self.assertFalse((work / "queue.md").exists())
+        self.assertTrue(self.run_json_cli(*common, "validate")["valid"])
+        self.assertEqual("sqlite-v2", self.run_json_cli(*common, "status")["authority"])
+        overview = self.run_json_cli(*common, "overview")
+        self.assertEqual("sqlite-v2", overview["authority"])
+        self.assertEqual("pinboard-overview/v2", overview["schema"])
+        actions = self.run_json_cli(*common, "actions", "--role", "observer")["actions"]
+        self.assertIsInstance(actions, list)
+        assert isinstance(actions, list)
+        action_ids: list[str] = []
+        for action in actions:
+            self.assertIsInstance(action, dict)
+            assert isinstance(action, dict)
+            action_id = action.get("action_id")
+            self.assertIsInstance(action_id, str)
+            assert isinstance(action_id, str)
+            action_ids.append(action_id)
+        self.assertEqual(["inspect:ledger"], action_ids)
         self.assertEqual(
-            AttemptState.REVIEW,
-            parse_attempt(work / "attempts" / "reveal-core-1" / "attempt.md").state,
-        )
-        self.assertIsNone(parse_current(work / "current.md").focus_item)
-        self.assertEqual("Ready for review.\n", result_path.read_text(encoding="utf-8"))
-
-        completion_payload = Path(tempfile.mkdtemp()) / "complete.json"
-        completion_payload.write_text('{"evidence":"accepted review"}\n', encoding="utf-8")
-        coordinator_result, coordinator_stdout, coordinator_stderr = self.run_cli(
-            *common,
-            "actions",
-            "--role",
-            "coordinator",
-            "--json",
-        )
-        self.assertEqual(0, coordinator_result, coordinator_stderr)
-        complete = next(
-            action
-            for action in json.loads(coordinator_stdout)["actions"]
-            if action["action_id"] == "complete:reveal-core-1"
+            "pinboard-parallel-preview/v1",
+            self.run_json_cli(*common, "parallel", "preview")["schema"],
         )
 
-        completion_result, _, completion_stderr = self.run_json_transition(common, complete, completion_payload)
-
-        self.assertEqual(0, completion_result, completion_stderr)
-        self.assertEqual((), parse_queue(work / "queue.md").items)
-        self.assertTrue((work / "history" / "items" / "reveal-core.md").is_file())
-        self.assertIsNone(parse_current(work / "current.md").focus_item)
-        self.assertTrue(validate_work_state(work, project).valid)
-
-    def test_root_status_and_actions_have_human_and_json_views(self) -> None:
-        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
-        common = ("--project-root", str(project), "--work-root", str(work))
-
-        root_result, root_stdout, _ = self.run_cli(*common, "root")
-        status_result, status_stdout, _ = self.run_cli(*common, "status")
-        status_json_result, status_json_stdout, _ = self.run_cli(*common, "status", "--json")
-        actions_result, actions_stdout, _ = self.run_cli(*common, "actions", "--role", "observer")
-
-        self.assertEqual(0, root_result)
-        self.assertEqual(str(work), json.loads(root_stdout)["work_root"])
-        self.assertEqual(0, status_result)
-        self.assertIn("focus_item=none", status_stdout)
-        self.assertEqual(0, status_json_result)
-        self.assertEqual(1, json.loads(status_json_stdout)["counts"]["ready"])
-        self.assertEqual(0, actions_result)
-        self.assertIn("inspect:ledger", actions_stdout)
-
-    def test_overview_returns_one_revision_stamped_live_snapshot_without_history(self) -> None:
-        project, work = create_state(
-            [
-                "| reveal-core | ready | cheaper-now | — | — | design | activate | Ready. |",
-                "| mapping | blocked | must-now | reveal-core | — | finding | none | Waiting. |",
-            ]
-        )
-        (work / "history" / "items" / "old-work.md").write_text(
-            "---\nkind: work-history\nschema: wrong\nitem: old-work\nstate: done\n---\n",
-            encoding="utf-8",
-        )
-        common = ("--project-root", str(project), "--work-root", str(work))
-        before = self.snapshot(work)
-
-        result, stdout, stderr = self.run_cli(*common, "overview", "--json")
-
+        coordination = self.run_json_cli(*common, "coordination", "status")
+        self.assertIsNone(coordination["lease"])
+        result, stdout, stderr = self.run_cli(*common, "coordination", "status")
         self.assertEqual(0, result, stderr)
-        value = json.loads(stdout)
-        self.assertEqual("repo-work-overview/v1", value["schema"])
-        self.assertEqual(64, len(value["revision"]))
-        self.assertEqual(["mapping", "reveal-core"], sorted(item["item_id"] for item in value["items"]))
-        self.assertNotIn("history", value)
-        reveal = next(item for item in value["items"] if item["item_id"] == "reveal-core")
-        self.assertEqual("Reveal Core", reveal["label"])
-        self.assertEqual("activate", reveal["next_action"])
-        self.assertEqual(["reveal-core"], value["immediate_options"])
-        self.assertFalse(validate_work_state(work, project).valid)
-        self.assertEqual(before, self.snapshot(work))
-
-        (work / "history" / "items" / "old-work.md").unlink()
-        migrate_to_v2(work, project)
-        v2_before = self.snapshot(work)
-        v2_result, v2_stdout, v2_stderr = self.run_cli(*common, "overview", "--json")
-        self.assertEqual(0, v2_result, v2_stderr)
-        self.assertEqual("v2", json.loads(v2_stdout)["authority"])
-        self.assertEqual(value["items"], json.loads(v2_stdout)["items"])
-        self.assertEqual(v2_before, self.snapshot(work))
-
-    def test_overview_reads_an_exact_historical_prerequisite_but_not_all_history(self) -> None:
-        project, work = create_state(["| dependent | blocked | — | completed-work | — | design | none | Waiting. |"])
-        history = work / "history" / "items" / "completed-work.md"
-        history.write_text(
-            "---\nkind: work-history\nschema: repo-work/v1\nitem: completed-work\nstate: done\n---\n",
-            encoding="utf-8",
-        )
-        common = ("--project-root", str(project), "--work-root", str(work))
-
-        result, _, stderr = self.run_cli(*common, "overview", "--json")
+        self.assertIn("COORDINATION_AVAILABLE", stdout)
+        result, stdout, stderr = self.run_cli(*common, "overview")
         self.assertEqual(0, result, stderr)
-
-        history.write_text(history.read_text(encoding="utf-8").replace("repo-work/v1", "wrong"), encoding="utf-8")
-        invalid_result, _, invalid_stderr = self.run_cli(*common, "overview", "--json")
-        self.assertEqual(11, invalid_result)
-        self.assertIn("DOCUMENT_SCHEMA_INVALID", invalid_stderr)
-
-    def test_close_records_a_terminal_decision_in_one_v1_command(self) -> None:
-        project, work = create_state(
-            ["| old-work | deferred | safe-to-defer | — | — | design | none | Revisit later. |"]
+        self.assertIn("live_work=none", stdout)
+        exact_result, _exact_stdout, exact_stderr = self.run_cli(
+            *common, "actions", "--role", "observer", "--action-id", "inspect:missing"
         )
-        common = ("--project-root", str(project), "--work-root", str(work))
-
-        result, stdout, stderr = self.run_cli(
+        self.assertEqual(11, exact_result)
+        self.assertIn("ACTION_NOT_AVAILABLE", exact_stderr)
+        renew_result, _renew_stdout, renew_stderr = self.run_cli(
             *common,
-            "close",
-            "old-work",
-            "--outcome",
-            "done",
-            "--reason",
-            "The user made the final decision.",
-            "--json",
-        )
-
-        self.assertEqual(0, result, stderr)
-        self.assertEqual("done", json.loads(stdout)["outcome"])
-        self.assertFalse((work / "items" / "old-work.md").exists())
-        history = work / "history" / "items" / "old-work.md"
-        self.assertTrue(history.is_file())
-        self.assertIn("The user made the final decision.", history.read_text(encoding="utf-8"))
-
-    def test_close_borrows_and_releases_v2_coordination_in_one_command(self) -> None:
-        project, work = create_state(
-            ["| old-work | deferred | safe-to-defer | — | — | design | none | Revisit later. |"]
-        )
-        migrate_to_v2(work, project)
-        common = ("--project-root", str(project), "--work-root", str(work))
-
-        result, stdout, stderr = self.run_cli(
-            *common,
-            "close",
-            "old-work",
-            "--outcome",
-            "dropped",
-            "--reason",
-            "No longer useful.",
-            "--task-id",
-            "chat-a",
-            "--host-id",
-            "mac--one",
-            "--json",
-        )
-
-        self.assertEqual(0, result, stderr)
-        self.assertEqual("dropped", json.loads(stdout)["outcome"])
-        lease_result, lease_stdout, lease_stderr = self.run_cli(*common, "coordination", "status", "--json")
-        self.assertEqual(0, lease_result, lease_stderr)
-        self.assertEqual("released", json.loads(lease_stdout)["status"])
-
-    def test_close_refuses_active_work_and_dropped_prerequisites(self) -> None:
-        active_project, active_work = create_state(
-            ["| active-work | active | — | — | active-work-1 | design | continue | Active. |"],
-            focus_item="active-work",
-            focus_attempt="active-work-1",
-            create_active_attempt=True,
-        )
-        active_before = self.snapshot(active_work)
-
-        active_result, _, active_stderr = self.run_cli(
-            "--project-root",
-            str(active_project),
-            "--work-root",
-            str(active_work),
-            "close",
-            "active-work",
-            "--outcome",
-            "done",
-            "--reason",
-            "Skip review.",
-        )
-
-        self.assertEqual(11, active_result)
-        self.assertIn("ACTION_NOT_AVAILABLE", active_stderr)
-        self.assertEqual(active_before, self.snapshot(active_work))
-
-        project, work = create_state(
-            [
-                "| prerequisite | deferred | safe-to-defer | — | — | design | none | Old. |",
-                "| dependent | blocked | — | prerequisite | — | design | none | Waiting. |",
-            ]
-        )
-        before = self.snapshot(work)
-        result, _, stderr = self.run_cli(
-            "--project-root",
-            str(project),
-            "--work-root",
-            str(work),
-            "close",
-            "prerequisite",
-            "--outcome",
-            "dropped",
-            "--reason",
-            "Not doing it.",
-        )
-
-        self.assertEqual(11, result)
-        self.assertIn("LIVE_DEPENDENTS", stderr)
-        self.assertEqual(before, self.snapshot(work))
-
-        migrate_to_v2(work, project)
-        v2_result, _, v2_stderr = self.run_cli(
-            "--project-root",
-            str(project),
-            "--work-root",
-            str(work),
-            "close",
-            "prerequisite",
-            "--outcome",
-            "dropped",
-            "--reason",
-            "Not doing it.",
-            "--task-id",
-            "chat-a",
-            "--host-id",
-            "studio",
-        )
-        self.assertEqual(11, v2_result)
-        self.assertIn("LIVE_DEPENDENTS", v2_stderr)
-        self.assertTrue((work / "v2" / "items" / "prerequisite.md").is_file())
-        lease_result, lease_stdout, lease_stderr = self.run_cli(
-            "--project-root",
-            str(project),
-            "--work-root",
-            str(work),
-            "coordination",
-            "status",
-            "--json",
-        )
-        self.assertEqual(0, lease_result, lease_stderr)
-        self.assertEqual("released", json.loads(lease_stdout)["status"])
-
-    def test_init_and_proposal_commands_use_installed_package_paths(self) -> None:
-        project = Path(tempfile.mkdtemp()).resolve()
-        work = project / ".codex" / "work"
-        common = ("--project-root", str(project), "--work-root", str(work))
-
-        init_result, init_stdout, init_stderr = self.run_cli(
-            *common,
-            "init",
-            "--coordinator-task-id",
-            "coordinator",
-            "--host-id",
-            "local",
-        )
-        proposal_path = project / "proposal.json"
-        proposal_path.write_text(
-            json.dumps(
-                {
-                    "schema": "repo-work/v1",
-                    "proposal_id": "finding-1",
-                    "created_at": "2026-08-16T12:30:00Z",
-                    "source_task_id": "investigation",
-                    "user_label": "Reveal ownership",
-                    "trigger": "Ownership is coupled.",
-                    "evidence": ["source"],
-                    "why_it_matters": "Changes are wider.",
-                    "relation": {"kind": "independent", "item": None},
-                    "effect": "Ownership narrows.",
-                    "unlock": "Consumers reuse it.",
-                    "urgency_evidence": "Current objective.",
-                    "freshness_assumptions": ["Code is current."],
-                }
-            ),
-            encoding="utf-8",
-        )
-        proposal_result, proposal_stdout, proposal_stderr = self.run_cli(
-            *common, "proposal", "--file", str(proposal_path)
-        )
-
-        self.assertEqual(0, init_result, init_stderr)
-        self.assertIn("WORK_STATE_INITIALIZED", init_stdout)
-        self.assertEqual(0, proposal_result, proposal_stderr)
-        self.assertIn("PROPOSAL_CREATED", proposal_stdout)
-
-    def test_v2_init_needs_no_master_task_and_coordination_is_borrowed(self) -> None:
-        project = Path(tempfile.mkdtemp()).resolve()
-        work = project / ".codex" / "work"
-        common = ("--project-root", str(project), "--work-root", str(work))
-
-        init_result, _, init_stderr = self.run_cli(*common, "init")
-        status_result, status_stdout, status_stderr = self.run_cli(*common, "status", "--json")
-        acquire_result, acquire_stdout, acquire_stderr = self.run_cli(
-            *common,
-            "coordination",
-            "acquire",
-            "--task-id",
-            "chat-a",
-            "--host-id",
-            "mac--one",
-            "--ttl-seconds",
-            "60",
-            "--json",
-        )
-
-        self.assertEqual(0, init_result, init_stderr)
-        self.assertEqual(0, status_result, status_stderr)
-        self.assertEqual("v2", json.loads(status_stdout)["authority"])
-        self.assertIsNone(json.loads(status_stdout)["coordinator"])
-        self.assertEqual(0, acquire_result, acquire_stderr)
-        self.assertEqual("chat-a", json.loads(acquire_stdout)["task_id"])
-
-    def test_v1_lease_and_resource_commands_require_explicit_migration(self) -> None:
-        project, work = create_state([])
-        common = ("--project-root", str(project), "--work-root", str(work))
-        commands = (
-            ("coordination", "status"),
-            ("attempt", "status", "--attempt-id", "attempt-1"),
-            ("resource", "status", "--resource-id", "bitwig-live"),
-        )
-        for command in commands:
-            with self.subTest(command=command):
-                result, _, stderr = self.run_cli(*common, *command)
-                self.assertEqual(11, result)
-                self.assertIn("MIGRATION_REQUIRED", stderr)
-                self.assertIn("pinboard migrate --to v2", stderr)
-
-    def test_parallel_preview_has_machine_and_human_views_and_exact_selection(self) -> None:
-        project, work = create_state(
-            [
-                "| alpha | ready | — | — | — | design | activate | Ready. |",
-                "| foundation | intake | — | — | — | finding | classify | Intake. |",
-            ]
-        )
-        common = ("--project-root", str(project), "--work-root", str(work))
-        self.assertEqual(0, self.run_cli(*common, "migrate", "--to", "v2")[0])
-
-        json_result, json_stdout, json_stderr = self.run_cli(
-            *common,
-            "parallel",
-            "preview",
-            "--host-id",
-            "studio",
-            "--json",
-        )
-        selected_result, selected_stdout, selected_stderr = self.run_cli(
-            *common,
-            "parallel",
-            "preview",
-            "--host-id",
-            "studio",
-            "--item",
-            "alpha",
-            "--json",
-        )
-        human_result, human_stdout, human_stderr = self.run_cli(
-            *common,
-            "parallel",
-            "preview",
-            "--host-id",
-            "studio",
-        )
-
-        self.assertEqual(0, json_result, json_stderr)
-        preview = json.loads(json_stdout)
-        self.assertEqual("repo-work-parallel-preview/v1", preview["schema"])
-        self.assertEqual("all-safe", preview["selection"])
-        self.assertTrue(preview["safe"])
-        self.assertEqual(["alpha"], [item["item_id"] for item in preview["launchable"]])
-        self.assertEqual(
-            ["state-not-launchable"],
-            [reason["code"] for reason in preview["excluded"][0]["reasons"]],
-        )
-        self.assertEqual(0, selected_result, selected_stderr)
-        self.assertEqual("selected", json.loads(selected_stdout)["selection"])
-        self.assertEqual(0, human_result, human_stderr)
-        self.assertIn("Ready to launch together", human_stdout)
-        self.assertIn("Not launchable", human_stdout)
-
-    def test_parallel_preview_requires_schema_v2(self) -> None:
-        project, work = create_state(["| alpha | ready | — | — | — | design | activate | Ready. |"])
-        result, _, stderr = self.run_cli(
-            "--project-root",
-            str(project),
-            "--work-root",
-            str(work),
-            "parallel",
-            "preview",
-            "--host-id",
-            "studio",
-        )
-
-        self.assertEqual(11, result)
-        self.assertIn("MIGRATION_REQUIRED", stderr)
-
-    def test_cli_path_identities_cannot_escape_v2_authoritative_directories(self) -> None:
-        project = Path(tempfile.mkdtemp()).resolve()
-        work = project / ".codex" / "work"
-        common = ("--project-root", str(project), "--work-root", str(work))
-        self.assertEqual(0, self.run_cli(*common, "init")[0])
-        commands = (
-            (
-                "coordination",
-                "acquire",
-                "--task-id",
-                "task",
-                "--host-id",
-                "../../escape",
-                "--ttl-seconds",
-                "60",
-            ),
-            ("attempt", "status", "--attempt-id", "../../escape"),
-            ("resource", "status", "--resource-id", "bitwig-live", "--host-id", "../../escape"),
-        )
-        for command in commands:
-            with self.subTest(command=command):
-                result, _, stderr = self.run_cli(*common, *command)
-                self.assertEqual(11, result)
-                self.assertRegex(stderr, "IDENTITY_INVALID|ID_INVALID")
-        self.assertFalse((work / "escape").exists())
-        self.assertFalse((project / "escape").exists())
-
-    def test_migrate_and_v2_actions_expose_lease_authority(self) -> None:
-        project, work = create_state(["| reveal-core | ready | — | — | — | design | activate | Ready. |"])
-        common = ("--project-root", str(project), "--work-root", str(work))
-        migrate_result, migrate_stdout, migrate_stderr = self.run_cli(*common, "migrate", "--to", "v2", "--json")
-        acquire_result, acquire_stdout, acquire_stderr = self.run_cli(
-            *common,
-            "coordination",
-            "acquire",
-            "--task-id",
-            "chat-a",
-            "--host-id",
-            "mac--one",
-            "--ttl-seconds",
-            "60",
-            "--json",
-        )
-        lease = json.loads(acquire_stdout)
-        actions_result, actions_stdout, actions_stderr = self.run_cli(
-            *common,
-            "actions",
-            "--role",
-            "coordinator",
-            "--lease-id",
-            lease["lease_id"],
-            "--generation",
-            str(lease["generation"]),
-            "--json",
-        )
-
-        self.assertEqual(0, migrate_result, migrate_stderr)
-        self.assertTrue(json.loads(migrate_stdout)["cutover"])
-        self.assertEqual(0, acquire_result, acquire_stderr)
-        self.assertEqual(0, actions_result, actions_stderr)
-        activation = next(value for value in json.loads(actions_stdout)["actions"] if value["kind"] == "activate")
-        self.assertEqual("coordination", activation["authorization"])
-        self.assertEqual(lease["lease_id"], activation["lease_id"])
-
-    def test_v2_lease_and_resource_commands_cover_the_concurrent_chat_lifecycle(self) -> None:
-        project, work = create_state(
-            ["| reveal-core | active | — | — | reveal-core-1 | design | continue | Active. |"],
-            focus_item="reveal-core",
-            focus_attempt="reveal-core-1",
-            create_active_attempt=True,
-        )
-        common = ("--project-root", str(project), "--work-root", str(work))
-        self.assertEqual(0, self.run_cli(*common, "migrate", "--to", "v2")[0])
-
-        def json_command(*arguments: str) -> dict[str, str | int]:
-            result, stdout, stderr = self.run_cli(*common, *arguments, "--json")
-            self.assertEqual(0, result, stderr)
-            value = json.loads(stdout)
-            self.assertIsInstance(value, dict)
-            return value
-
-        coordination = json_command(
-            "coordination",
-            "acquire",
-            "--task-id",
-            "chat-a",
-            "--host-id",
-            "mac--one",
-            "--ttl-seconds",
-            "60",
-        )
-        json_command("coordination", "status")
-        coordination = json_command(
             "coordination",
             "renew",
             "--lease-id",
-            str(coordination["lease_id"]),
+            "missing",
             "--generation",
-            str(coordination["generation"]),
+            "1",
             "--ttl-seconds",
-            "120",
+            "60",
         )
-        json_command(
-            "resource",
-            "declare",
-            "--resource-id",
-            "bitwig-live",
-            "--label",
-            "Bitwig live application",
-            "--scope",
-            "host-local",
+        self.assertEqual(11, renew_result)
+        self.assertIn("COORDINATION_LEASE_REQUIRED", renew_stderr)
+
+    def test_installed_initialization_samples_its_operation_time_once(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        work = project / ".codex" / "work"
+        initialized_at = datetime.now(UTC)
+
+        with patch("pinboard.interfaces.work_state_commands.datetime") as clock:
+            clock.now.return_value = initialized_at
+            result, stdout, stderr = self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "init",
+            )
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("WORK_STATE_INITIALIZED", stdout)
+        self.assertEqual(1, clock.now.call_count)
+        self.assertEqual(
+            initialized_at, SQLiteWorkStore(work / "state.sqlite3").snapshot().lifecycle.project.updated_at
+        )
+
+    def test_installed_initialization_observes_preparation_expiry_boundary(self) -> None:
+        expires_at = SQLITE_NOW + timedelta(minutes=1)
+        for label, observed_at, expected_status in (
+            ("before", expires_at - timedelta(microseconds=1), "active"),
+            ("at", expires_at, "expired"),
+            ("after", expires_at + timedelta(microseconds=1), "expired"),
+        ):
+            with self.subTest(label=label):
+                project, work, _store = self.initialized_state(self.prepared_state(expires_at))
+                with patch("pinboard.interfaces.work_state_commands.datetime") as clock:
+                    clock.now.return_value = observed_at
+                    result, stdout, stderr = self.run_cli(
+                        "--project-root",
+                        str(project),
+                        "--work-root",
+                        str(work),
+                        "init",
+                    )
+                self.assertEqual(0, result, stderr)
+                self.assertIn("WORK_STATE_INITIALIZED", stdout)
+                self.assertEqual(1, clock.now.call_count)
+                self.assertIn(
+                    f"- Preparation: {expected_status}".encode(),
+                    (work / "views" / "items" / "work-c.md").read_bytes(),
+                )
+                self.assertIn(
+                    f"| {expected_status} |".encode(),
+                    (work / "views" / "queue.md").read_bytes(),
+                )
+
+    def assert_activation_commit_and_duplicate(
+        self,
+        common: tuple[str, ...],
+        activation: JsonObject,
+        prepared: JsonObject,
+        payload: Path,
+        store: SQLiteWorkStore,
+    ) -> None:
+        activation_expiry = datetime.fromisoformat(str(prepared["expires_at"]))
+        with (
+            patch(
+                "pinboard.adapters.files.views.atomic_replace",
+                side_effect=FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, "injected view failure"),
+            ),
+            patch("pinboard.interfaces.action_selection.datetime") as reselection_clock,
+            patch("pinboard.interfaces.transitions.datetime") as transition_clock,
+        ):
+            reselection_clock.now.return_value = activation_expiry - timedelta(microseconds=3)
+            transition_clock.now.side_effect = (
+                activation_expiry - timedelta(microseconds=2),
+                activation_expiry - timedelta(microseconds=1),
+            )
+            result, _stdout, stderr = self.run_transition(common, activation, payload)
+        self.assertEqual(0, result, stderr)
+        self.assertIn("generated views need repair", stderr)
+        self.assertEqual(1, reselection_clock.now.call_count)
+        self.assertEqual(2, transition_clock.now.call_count)
+        self.assertEqual(
+            "revoked", self.run_json_cli(*common, "preparation", "status", "--item-id", "work-c")["status"]
+        )
+        activated_state = store.snapshot()
+        duplicate, _stdout, duplicate_stderr = self.run_transition(common, activation, payload)
+        self.assertEqual(11, duplicate)
+        self.assertIn("ACTION_NOT_AVAILABLE", duplicate_stderr)
+        self.assertEqual(activated_state, store.snapshot())
+
+    def test_coordination_and_attempt_lifecycle_use_sqlite(self) -> None:
+        project, work, store = self.initialized_state(complete_sqlite_state())
+        state = store.snapshot()
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                coordination=None,
+                attempt_counters=(),
+                attempt_generations=(),
+                attempt_leases=(),
+            ),
+        )
+        work.unlink(missing_ok=True) if work.is_file() else None
+        database = work / "state.sqlite3"
+        database.unlink()
+        initialize_database(resolve_durable_roots(project), SQLITE_NOW)
+        store = SQLiteWorkStore(database)
+        store.initialize_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        candidate = work_c_brief()
+        brief_path = project / "work-c-brief.json"
+        brief_path.write_bytes(canonical_work_brief_bytes(candidate))
+        publication = self.run_json_cli(*common, "brief", "publish", "--file", str(brief_path))
+        payload = project / "activate.json"
+        payload.write_text(
+            json.dumps(
+                {
+                    "attempt": "work-c-1",
+                    "branch": "codex/work-c",
+                    "base_revision": "candidate-base",
+                    "owner": "worker-task",
+                    "brief_artifact_ref_id": publication["artifact_ref_id"],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        coordination = self.run_json_cli(
+            *common,
+            "coordination",
+            "acquire",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--ttl-seconds",
+            "60",
+        )
+        definition = self.run_json_cli(*common, "item", "definition", "--item-id", "work-c")
+        status = self.run_json_cli(*common, "item", "status", "--item-id", "work-c")
+        prepared = self.run_json_cli(
+            *common,
+            "preparation",
+            "acquire",
+            "--item-id",
+            "work-c",
+            "--expected-project-revision",
+            str(status["revision"]),
+            "--expected-item-subject-revision",
+            "7",
+            "--expected-definition-revision",
+            str(definition["definition_revision"]),
+            "--expected-definition-digest",
+            str(definition["definition_digest"]),
+            "--task-id",
+            "preparer-task",
+            "--host-id",
+            "studio",
+            "--ttl-seconds",
+            "60",
             "--coordination-lease-id",
             str(coordination["lease_id"]),
             "--coordination-generation",
             str(coordination["generation"]),
         )
-        attempt = json_command(
+        self.assert_installed_preparation_visibility(common, prepared, store)
+        self.run_json_cli(
+            *common,
+            "coordination",
+            "release",
+            "--lease-id",
+            str(coordination["lease_id"]),
+            "--generation",
+            str(coordination["generation"]),
+        )
+        self.assertEqual("released", self.run_json_cli(*common, "coordination", "status")["status"])
+        activation = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "preparer",
+                    "--lease-id",
+                    str(prepared["lease_id"]),
+                    "--generation",
+                    str(prepared["generation"]),
+                    "--action-id",
+                    "activate:work-c",
+                )["actions"]
+            )[0]
+        )
+        activation = self.assert_prepared_activation_rejections(common, activation, prepared, project, store, payload)
+        self.assert_activation_commit_and_duplicate(common, activation, prepared, payload, store)
+
+        acquired = self.run_json_cli(
+            *common,
             "attempt",
             "acquire",
             "--attempt-id",
-            "reveal-core-1",
+            "work-c-1",
             "--task-id",
-            "chat-a",
+            "worker-task",
             "--host-id",
-            "mac--one",
+            "studio",
             "--ttl-seconds",
-            "120",
+            "60",
         )
-        json_command("attempt", "status", "--attempt-id", "reveal-core-1")
-        attempt = json_command(
+        renewed = self.run_json_cli(
+            *common,
             "attempt",
             "renew",
             "--attempt-id",
-            "reveal-core-1",
+            "work-c-1",
             "--lease-id",
-            str(attempt["lease_id"]),
+            str(acquired["lease_id"]),
             "--generation",
-            str(attempt["generation"]),
+            str(acquired["generation"]),
             "--ttl-seconds",
-            "180",
+            "120",
         )
-        claim = json_command(
-            "resource",
-            "claim",
-            "--resource-id",
-            "bitwig-live",
+        released = self.run_json_cli(
+            *common,
+            "attempt",
+            "release",
             "--attempt-id",
-            "reveal-core-1",
+            "work-c-1",
+            "--lease-id",
+            str(renewed["lease_id"]),
+            "--generation",
+            str(renewed["generation"]),
+        )
+        self.assertEqual("released", released["status"])
+
+        coordination = self.run_json_cli(
+            *common,
+            "coordination",
+            "acquire",
             "--task-id",
-            "chat-a",
+            "coordinator-task",
             "--host-id",
-            "mac--one",
+            "studio",
             "--ttl-seconds",
             "60",
-            "--attempt-lease-id",
-            str(attempt["lease_id"]),
-            "--attempt-generation",
-            str(attempt["generation"]),
         )
-        item_path = work / "v2" / "items" / "reveal-core.md"
-        item_path.write_text(
-            item_path.read_text(encoding="utf-8").replace("resources: —", "resources: bitwig-live"),
+        coordination = self.run_json_cli(
+            *common,
+            "coordination",
+            "renew",
+            "--lease-id",
+            str(coordination["lease_id"]),
+            "--generation",
+            str(coordination["generation"]),
+            "--ttl-seconds",
+            "120",
+        )
+        reacquired = self.run_json_cli(
+            *common,
+            "attempt",
+            "acquire",
+            "--attempt-id",
+            "work-c-1",
+            "--task-id",
+            "worker-task-2",
+            "--host-id",
+            "studio",
+            "--coordination-lease-id",
+            str(coordination["lease_id"]),
+            "--coordination-generation",
+            str(coordination["generation"]),
+            "--ttl-seconds",
+            "60",
+        )
+        self.assertEqual("active", reacquired["status"])
+        revoked = self.run_json_cli(
+            *common,
+            "attempt",
+            "revoke",
+            "--attempt-id",
+            "work-c-1",
+            "--lease-id",
+            str(reacquired["lease_id"]),
+            "--generation",
+            str(reacquired["generation"]),
+            "--coordination-lease-id",
+            str(coordination["lease_id"]),
+            "--coordination-generation",
+            str(coordination["generation"]),
+        )
+        self.assertEqual("revoked", revoked["status"])
+        released_coordination = self.run_json_cli(
+            *common,
+            "coordination",
+            "release",
+            "--lease-id",
+            str(coordination["lease_id"]),
+            "--generation",
+            str(coordination["generation"]),
+        )
+        self.assertEqual("released", released_coordination["status"])
+        replacement = self.run_json_cli(
+            *common,
+            "coordination",
+            "acquire",
+            "--task-id",
+            "replacement-task",
+            "--host-id",
+            "studio",
+            "--ttl-seconds",
+            "60",
+        )
+        revoked_coordination = self.run_json_cli(*common, "coordination", "revoke")
+        self.assertGreater(
+            self.json_int(revoked_coordination["generation"]),
+            self.json_int(replacement["generation"]),
+        )
+
+    def test_preparation_renew_release_transfer_and_revoke_use_sqlite(self) -> None:
+        state = complete_sqlite_state()
+        coordination = state.authority.coordination
+        assert coordination is not None
+        current = datetime.now(UTC)
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                coordination=replace(
+                    coordination,
+                    acquired_at=current,
+                    expires_at=current + timedelta(minutes=5),
+                ),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        coordination = store.snapshot().authority.coordination
+        assert coordination is not None
+        definition = self.run_json_cli(*common, "item", "definition", "--item-id", "work-c")
+        status = self.run_json_cli(*common, "item", "status", "--item-id", "work-c")
+        acquired = self.run_json_cli(
+            *common,
+            "preparation",
+            "acquire",
+            "--item-id",
+            "work-c",
+            "--expected-project-revision",
+            str(status["revision"]),
+            "--expected-item-subject-revision",
+            "7",
+            "--expected-definition-revision",
+            str(definition["definition_revision"]),
+            "--expected-definition-digest",
+            str(definition["definition_digest"]),
+            "--task-id",
+            "preparer-a",
+            "--host-id",
+            "studio",
+            "--ttl-seconds",
+            "60",
+            "--coordination-lease-id",
+            str(coordination.lease_id),
+            "--coordination-generation",
+            str(coordination.generation),
+        )
+        renewed = self.run_json_cli(
+            *common,
+            "preparation",
+            "renew",
+            "--item-id",
+            "work-c",
+            "--lease-id",
+            str(acquired["lease_id"]),
+            "--generation",
+            str(acquired["generation"]),
+            "--ttl-seconds",
+            "120",
+        )
+        self.assertGreater(str(renewed["expires_at"]), str(acquired["expires_at"]))
+        released = self.run_json_cli(
+            *common,
+            "preparation",
+            "release",
+            "--item-id",
+            "work-c",
+            "--lease-id",
+            str(renewed["lease_id"]),
+            "--generation",
+            str(renewed["generation"]),
+        )
+        self.assertEqual("released", released["status"])
+        transferred = self.run_json_cli(
+            *common,
+            "preparation",
+            "transfer",
+            "--item-id",
+            "work-c",
+            "--task-id",
+            "preparer-b",
+            "--host-id",
+            "studio",
+            "--ttl-seconds",
+            "60",
+            "--coordination-lease-id",
+            str(coordination.lease_id),
+            "--coordination-generation",
+            str(coordination.generation),
+        )
+        self.assertEqual("active", transferred["status"])
+        self.assertEqual("preparer-b", transferred["task_id"])
+        self.assertGreater(self.json_int(transferred["generation"]), self.json_int(released["generation"]))
+        revoked = self.run_json_cli(
+            *common,
+            "preparation",
+            "revoke",
+            "--item-id",
+            "work-c",
+            "--lease-id",
+            str(transferred["lease_id"]),
+            "--generation",
+            str(transferred["generation"]),
+            "--coordination-lease-id",
+            str(coordination.lease_id),
+            "--coordination-generation",
+            str(coordination.generation),
+        )
+        self.assertEqual("revoked", revoked["status"])
+        self.assertEqual("ready", self.run_json_cli(*common, "item", "status", "--item-id", "work-c")["state"])
+
+    def test_installed_authority_callers_sample_operation_refresh_and_preparation_render_separately(self) -> None:
+        operation_time = SQLITE_NOW + timedelta(seconds=1)
+        render_time = operation_time + timedelta(microseconds=1)
+        coordination_state = replace(
+            complete_sqlite_state(),
+            authority=replace(complete_sqlite_state().authority, coordination=None),
+        )
+        project, work, _store = self.initialized_state(coordination_state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        with patch("pinboard.interfaces.coordination_authority.datetime") as coordination_clock:
+            coordination_clock.now.side_effect = (operation_time, render_time)
+            acquired = self.run_json_cli(
+                *common,
+                "coordination",
+                "acquire",
+                "--task-id",
+                "coordinator",
+                "--host-id",
+                "studio",
+                "--ttl-seconds",
+                "60",
+            )
+        self.assertEqual(operation_time.isoformat(), acquired["acquired_at"])
+        self.assertEqual(2, coordination_clock.now.call_count)
+
+        project, work, state_store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+        attempt = state_store.snapshot().authority.attempt_leases[0]
+        with patch("pinboard.interfaces.attempt_authority.datetime") as attempt_clock:
+            attempt_clock.now.side_effect = (operation_time, render_time)
+            renewed = self.run_json_cli(
+                *common,
+                "attempt",
+                "renew",
+                "--attempt-id",
+                "work-a-1",
+                "--lease-id",
+                "attempt-lease-a",
+                "--generation",
+                str(attempt.generation),
+                "--ttl-seconds",
+                "600",
+            )
+        self.assertEqual((operation_time + timedelta(seconds=600)).isoformat(), renewed["expires_at"])
+        self.assertEqual(2, attempt_clock.now.call_count)
+
+        expires_at = SQLITE_NOW + timedelta(minutes=1)
+        project, work, _store = self.initialized_state(self.prepared_state(expires_at))
+        common = ("--project-root", str(project), "--work-root", str(work))
+        preparation_render_time = render_time + timedelta(microseconds=1)
+        with patch("pinboard.interfaces.preparation_authority.datetime") as preparation_clock:
+            preparation_clock.now.side_effect = (operation_time, render_time, preparation_render_time)
+            renewed = self.run_json_cli(
+                *common,
+                "preparation",
+                "renew",
+                "--item-id",
+                "work-c",
+                "--lease-id",
+                "preparation-c",
+                "--generation",
+                "1",
+                "--ttl-seconds",
+                "60",
+            )
+        self.assertEqual((operation_time + timedelta(seconds=60)).isoformat(), renewed["expires_at"])
+        self.assertEqual(3, preparation_clock.now.call_count)
+
+    def test_installed_coordinator_never_advertises_claimless_activation(self) -> None:
+        project, work, store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+        coordination = store.snapshot().authority.coordination
+        assert coordination is not None
+        for authority in (
+            (),
+            (
+                "--lease-id",
+                str(coordination.lease_id),
+                "--generation",
+                str(coordination.generation),
+            ),
+        ):
+            with (
+                self.subTest(authority=authority),
+                patch("pinboard.interfaces.work_inspection.datetime") as inspection_clock,
+            ):
+                inspection_clock.now.return_value = SQLITE_NOW
+                result, _stdout, stderr = self.run_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "coordinator",
+                    *authority,
+                    "--action-id",
+                    "activate:work-c",
+                )
+                self.assertEqual(11, result)
+                self.assertIn("ACTION_NOT_AVAILABLE", stderr)
+
+    def test_installed_proposal_and_brief_publication_sample_commit_and_render_separately(self) -> None:
+        project, work, _store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+        proposal_path = project / "timed-proposal.json"
+        proposal_path.write_text(
+            json.dumps(
+                {
+                    "schema": "pinboard-proposal/v1",
+                    "proposal_id": "timed-proposal",
+                    "created_at": SQLITE_NOW.isoformat(),
+                    "source_task_id": "discoverer",
+                    "user_label": "Timed proposal",
+                    "trigger": "Prove fresh time sampling.",
+                    "evidence": ["source:test"],
+                    "why_it_matters": "Separate phases must not reuse time.",
+                    "relation": {"kind": "independent", "item": None},
+                    "effect": "The proposal is stored.",
+                    "unlock": "The caller contract is covered.",
+                    "urgency_evidence": "The accepted brief requires it.",
+                    "freshness_assumptions": ["SQLite remains authoritative."],
+                }
+            ),
             encoding="utf-8",
         )
-        exact_actions = self.json_list(
+        commit_time = SQLITE_NOW + timedelta(seconds=1)
+        render_time = commit_time + timedelta(microseconds=1)
+        with patch("pinboard.interfaces.proposal_commands.datetime") as proposal_clock:
+            proposal_clock.fromisoformat.side_effect = datetime.fromisoformat
+            proposal_clock.now.side_effect = (commit_time, render_time)
+            result, _stdout, stderr = self.run_cli(*common, "proposal", "--file", str(proposal_path))
+        self.assertEqual(0, result, stderr)
+        self.assertEqual(2, proposal_clock.now.call_count)
+
+        brief_path = project / "timed-brief.json"
+        timed_brief = replace_struct(work_c_brief(), attempt_id="timed-brief-attempt")
+        brief_path.write_bytes(canonical_work_brief_bytes(timed_brief))
+        with patch("pinboard.interfaces.work_brief_publication.datetime") as publication_clock:
+            publication_clock.now.side_effect = (commit_time, render_time)
+            self.run_json_cli(*common, "brief", "publish", "--file", str(brief_path))
+        self.assertEqual(2, publication_clock.now.call_count)
+
+    def test_installed_read_render_and_validation_matrix_agrees_before_at_and_after_preparation_expiry(self) -> None:
+        expires_at = SQLITE_NOW + timedelta(minutes=1)
+        for label, observed_at, expected_status, expected_available in (
+            ("before", expires_at - timedelta(microseconds=1), "active", False),
+            ("at", expires_at, "expired", True),
+            ("after", expires_at + timedelta(microseconds=1), "expired", True),
+        ):
+            with self.subTest(label=label):
+                project, work, _store = self.initialized_state(self.prepared_state(expires_at))
+                common = ("--project-root", str(project), "--work-root", str(work))
+                with patch("pinboard.interfaces.work_inspection.datetime") as inspection_clock:
+                    inspection_clock.now.return_value = observed_at
+                    overview = self.run_json_cli(*common, "overview")
+                    item = self.run_json_cli(*common, "item", "status", "--item-id", "work-c")
+                    parallel = self.run_json_cli(*common, "parallel", "preview", "--item", "work-c")
+                    action_result, _stdout, action_stderr = self.run_cli(
+                        *common,
+                        "actions",
+                        "--role",
+                        "preparer",
+                        "--lease-id",
+                        "preparation-c",
+                        "--generation",
+                        "1",
+                        "--action-id",
+                        "activate:work-c",
+                    )
+                overview_item = next(
+                    self.json_object(value)
+                    for value in self.json_list(overview["items"])
+                    if self.json_object(value)["item_id"] == "work-c"
+                )
+                self.assertEqual(expected_status, self.json_object(overview_item["preparation"])["status"])
+                self.assertEqual(expected_status, self.json_object(item["preparation"])["status"])
+                self.assertEqual(expected_available, "work-c" in self.json_list(overview["immediate_options"]))
+                self.assertEqual(expected_available, parallel["safe"])
+                self.assertEqual(0 if not expected_available else 11, action_result)
+                if expected_available:
+                    self.assertIn("ACTION_NOT_AVAILABLE", action_stderr)
+                with patch("pinboard.interfaces.work_state_commands.datetime") as work_state_clock:
+                    work_state_clock.now.side_effect = (observed_at, observed_at)
+                    view_result, _view_stdout, view_stderr = self.run_cli(*common, "views", "rebuild")
+                    validation_result, validation_stdout, validation_stderr = self.run_cli(
+                        *common, "validate", "--json"
+                    )
+                self.assertEqual(0, view_result, view_stderr)
+                self.assertEqual(10, validation_result, validation_stderr)
+                validation = self.json_object(json.loads(validation_stdout))
+                self.assertNotIn(
+                    "VIEW_REFRESH_REQUIRED",
+                    tuple(self.json_object(value)["code"] for value in self.json_list(validation["diagnostics"])),
+                )
+                self.assertEqual(2, work_state_clock.now.call_count)
+                item_bytes = (work / "views" / "items" / "work-c.md").read_bytes()
+                queue_bytes = (work / "views" / "queue.md").read_bytes()
+                self.assertIn(f"- Preparation: {expected_status}".encode(), item_bytes)
+                self.assertIn(f"| {expected_status} |".encode(), queue_bytes)
+
+    def test_installed_prerequisite_proposal_observes_preparation_expiry_boundary(self) -> None:
+        expires_at = SQLITE_NOW + timedelta(minutes=1)
+        for label, observed_at, accepted in (
+            ("before", expires_at - timedelta(microseconds=1), False),
+            ("at", expires_at, True),
+            ("after", expires_at + timedelta(microseconds=1), True),
+        ):
+            with self.subTest(label=label):
+                project, work, store = self.initialized_state(self.prepared_state(expires_at))
+                common = ("--project-root", str(project), "--work-root", str(work))
+                proposal_id = f"expiry-{label}"
+                proposal_path = project / f"{proposal_id}.json"
+                proposal_path.write_text(
+                    json.dumps(
+                        {
+                            "schema": "pinboard-proposal/v1",
+                            "proposal_id": proposal_id,
+                            "created_at": SQLITE_NOW.isoformat(),
+                            "source_task_id": "discoverer",
+                            "user_label": f"Expiry {label}",
+                            "trigger": "Exercise the preparation boundary.",
+                            "evidence": ["source:test"],
+                            "why_it_matters": "Prerequisites must respect live preparation.",
+                            "relation": {"kind": "prerequisite", "item": "work-c"},
+                            "effect": "The prerequisite is stored.",
+                            "unlock": "The expiry contract is observable.",
+                            "urgency_evidence": "The accepted brief requires boundary evidence.",
+                            "freshness_assumptions": ["SQLite remains authoritative."],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                before = store.snapshot()
+                with patch("pinboard.interfaces.proposal_commands.datetime") as clock:
+                    clock.fromisoformat.side_effect = datetime.fromisoformat
+                    clock.now.side_effect = (observed_at, observed_at)
+                    result, _stdout, stderr = self.run_cli(*common, "proposal", "--file", str(proposal_path))
+                self.assertEqual(0 if accepted else 13, result, stderr)
+                self.assertEqual(2 if accepted else 1, clock.now.call_count)
+                if accepted:
+                    self.assertTrue(
+                        any(str(value.proposal_id) == proposal_id for value in store.snapshot().proposals.proposals)
+                    )
+                else:
+                    self.assertIn("ACTION_NOT_AVAILABLE", stderr)
+                    self.assertEqual(before, store.snapshot())
+
+    def test_pause_transition_round_trips_through_the_installed_command(self) -> None:
+        project, work, _store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+        payload = project / "pause.json"
+        payload.write_text('{"reason":"Pause through the installed command."}\n', encoding="utf-8")
+
+        applied = self.run_json_cli(
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--action-id",
+            "pause:work-a-1",
+            "--payload",
+            str(payload),
+        )
+
+        self.assertEqual("pause:work-a-1", applied["action_id"])
+        reopened = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        self.assertEqual(stored_state.StoredWorkItemState.PAUSED, reopened.lifecycle.work_items[1].state)
+        self.assertEqual(work_models.AttemptState.PAUSED, reopened.lifecycle.attempts[0].state)
+        self.assertEqual(
+            1,
+            sum(
+                value.action_kind == stored_state.TransitionHistoryActionKind.PAUSE
+                for value in reopened.transition_receipts
+            ),
+        )
+
+    def test_checkpoint_acceptance_archives_exact_attempt_receipts_in_one_transition(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        assert state.authority.coordination is not None
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                work_items=tuple(
+                    replace(value, state=stored_state.StoredWorkItemState.REVIEW)
+                    if value.item_id == ItemId("work-a")
+                    else value
+                    for value in state.lifecycle.work_items
+                ),
+                attempts=tuple(
+                    replace(
+                        value,
+                        state=work_models.AttemptState.REVIEW,
+                        candidate_revision="candidate-a",
+                        candidate_recorded_at=now,
+                    )
+                    if value.attempt_id == AttemptId("work-a-1")
+                    else value
+                    for value in state.lifecycle.attempts
+                ),
+            ),
+            authority=replace(
+                state.authority,
+                coordination=replace(state.authority.coordination, expires_at=now + timedelta(minutes=5)),
+            ),
+            focus=replace(state.focus, next_action="review"),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        attempt_root = work / "attempts" / "work-a-1"
+        attempt_root.mkdir(parents=True)
+        result_bytes = b"candidate result\n"
+        review_bytes = b"independent review\n"
+        (attempt_root / "result.md").write_bytes(result_bytes)
+        payload = project / "accept-checkpoint.json"
+        payload.write_text(
+            '{"checkpoint":"checkpoint-a","candidate":"candidate-a","evidence":"Accepted."}\n',
+            encoding="utf-8",
+        )
+        action = next(
+            self.json_object(value)
+            for value in self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "coordinator",
+                    "--lease-id",
+                    "coordination-a",
+                    "--generation",
+                    "9",
+                )["actions"]
+            )
+            if self.json_object(value)["action_id"] == "accept-checkpoint:work-a-1"
+        )
+        before_missing = store.snapshot()
+
+        missing_result, _missing_stdout, missing_stderr = self.run_transition(common, action, payload)
+
+        self.assertNotEqual(0, missing_result)
+        self.assertIn("TRANSITION_INPUT_INVALID", missing_stderr)
+        self.assertEqual(before_missing, store.snapshot())
+        (attempt_root / "review.md").write_bytes(review_bytes)
+
+        with patch(
+            "pinboard.adapters.sqlite.state.append_history",
+            side_effect=StorageError(StorageErrorCode.IO_ERROR, "injected checkpoint write failure"),
+        ):
+            failed_result, _failed_stdout, failed_stderr = self.run_transition(common, action, payload)
+
+        self.assertNotEqual(0, failed_result)
+        self.assertIn("STORAGE_IO_ERROR", failed_stderr)
+        self.assertEqual(before_missing, store.snapshot())
+        self.assertEqual(result_bytes, (work / "artifacts/results/work-a-1-checkpoint-a-result/1.md").read_bytes())
+        self.assertEqual(review_bytes, (work / "artifacts/evidence/work-a-1-checkpoint-a-review/1.md").read_bytes())
+
+        (attempt_root / "review.md").write_bytes(b"conflicting review\n")
+        collision_result, _collision_stdout, collision_stderr = self.run_transition(common, action, payload)
+
+        self.assertNotEqual(0, collision_result)
+        self.assertIn("STORAGE_INVARIANT_VIOLATION", collision_stderr)
+        self.assertEqual(before_missing, store.snapshot())
+        self.assertEqual(review_bytes, (work / "artifacts/evidence/work-a-1-checkpoint-a-review/1.md").read_bytes())
+        (attempt_root / "review.md").write_bytes(review_bytes)
+
+        accepted_result, _accepted_stdout, accepted_stderr = self.run_transition(common, action, payload)
+
+        self.assertEqual(0, accepted_result, accepted_stderr)
+        reloaded = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
+        result_reference = next(
+            value for value in reloaded.artifact_references if value.key == "work-a-1-checkpoint-a-result"
+        )
+        review_reference = next(
+            value for value in reloaded.artifact_references if value.key == "work-a-1-checkpoint-a-review"
+        )
+        self.assertEqual(result_reference.artifact_ref_id, attempt.result_artifact_ref_id)
+        self.assertEqual(review_reference.artifact_ref_id, reloaded.transition_receipts[-1].artifact_ref_id)
+        self.assertEqual(result_bytes, (work / result_reference.selector).read_bytes())
+        self.assertEqual(review_bytes, (work / review_reference.selector).read_bytes())
+        self.assertEqual(before_missing.lifecycle.project.revision + 1, reloaded.lifecycle.project.revision)
+        self.assertEqual(len(before_missing.transition_receipts) + 1, len(reloaded.transition_receipts))
+
+    def test_current_read_surface_has_human_and_json_views(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        assert state.authority.coordination is not None
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                coordination=replace(state.authority.coordination, expires_at=now + timedelta(minutes=5)),
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, _store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        status = self.run_json_cli(*common, "status")
+        self.assertEqual("sqlite-v2", status["authority"])
+        self.assertEqual(2, status["intake_item_count"])
+        status_result, status_stdout, status_stderr = self.run_cli(*common, "status")
+        self.assertEqual(0, status_result, status_stderr)
+        self.assertIn("intake_items=2", status_stdout)
+        overview = self.run_json_cli(*common, "overview")
+        self.assertEqual("12", overview["revision"])
+        actions = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "coordinator",
+                "--lease-id",
+                "coordination-a",
+                "--generation",
+                "9",
+            )["actions"]
+        )
+        self.assertTrue(actions)
+        self.assertEqual(
+            "active", self.run_json_cli(*common, "attempt", "status", "--attempt-id", "work-a-1")["status"]
+        )
+        parallel = self.run_json_cli(*common, "parallel", "preview")
+        self.assertEqual(
+            {"excluded", "launchable", "revision", "safe", "schema", "selection"},
+            set(parallel),
+        )
+        self.assertEqual(
+            ("pinboard-parallel-preview/v1", "12", "all-safe", True),
+            (parallel["schema"], parallel["revision"], parallel["selection"], parallel["safe"]),
+        )
+        items = [
+            self.json_object(item)
+            for item in (*self.json_list(parallel["launchable"]), *self.json_list(parallel["excluded"]))
+        ]
+        self.assertTrue(
+            all(set(item) == {"attempt_id", "item_id", "label", "outcome", "reasons", "state"} for item in items)
+        )
+        self.assertEqual(
+            [
+                ("work-c", "Work work-c", "ready", None, "launchable", []),
+                (
+                    "intake-work",
+                    "Work intake-work",
+                    "intake",
+                    None,
+                    "excluded",
+                    [
+                        {
+                            "code": "state-not-launchable",
+                            "message": "Item 'intake-work' is intake; only ready items and unowned active attempts can launch.",
+                        }
+                    ],
+                ),
+                (
+                    "work-a",
+                    "Work work-a",
+                    "active",
+                    "work-a-1",
+                    "excluded",
+                    [
+                        {
+                            "code": "dependency-live",
+                            "message": "Item 'work-a' still depends on live work: work-c.",
+                        }
+                    ],
+                ),
+                (
+                    "zz-proposal-a",
+                    "Proposal A",
+                    "intake",
+                    None,
+                    "excluded",
+                    [
+                        {
+                            "code": "state-not-launchable",
+                            "message": "Item 'zz-proposal-a' is intake; only ready items and unowned active attempts can launch.",
+                        }
+                    ],
+                ),
+            ],
+            [
+                (
+                    item["item_id"],
+                    item["label"],
+                    item["state"],
+                    item["attempt_id"],
+                    item["outcome"],
+                    item["reasons"],
+                )
+                for item in items
+            ],
+        )
+        self.assertIn("payload_schema", self.run_json_cli(*common, "input-contract", "activate"))
+
+        human_commands = (
+            ("root",),
+            ("status",),
+            ("overview",),
+            ("actions", "--role", "observer"),
+            ("input-contract", "activate"),
+            ("attempt", "status", "--attempt-id", "work-a-1"),
+            ("parallel", "preview"),
+            ("views", "rebuild"),
+        )
+        for command in human_commands:
+            with self.subTest(command=command):
+                result, stdout, stderr = self.run_cli(*common, *command)
+                self.assertEqual(0, result, stderr)
+                self.assertTrue(stdout)
+        result, stdout, stderr = self.run_cli(*common, "parallel", "preview")
+        self.assertEqual(0, result, stderr)
+        self.assertEqual(
+            """OK PARALLEL_PREVIEW revision=12 selection=all-safe safe=yes
+Ready to launch together:
+- work-c (ready)
+Not launchable:
+- intake-work (intake) — Item 'intake-work' is intake; only ready items and unowned active attempts can launch.
+- work-a (active, attempt work-a-1) — Item 'work-a' still depends on live work: work-c.
+- zz-proposal-a (intake) — Item 'zz-proposal-a' is intake; only ready items and unowned active attempts can launch.
+""",
+            stdout,
+        )
+
+    def test_blocker_actions_and_input_contracts_are_unambiguous(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        assert state.authority.coordination is not None
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                coordination=replace(state.authority.coordination, expires_at=now + timedelta(minutes=5)),
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, _store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        coordinator_actions = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "coordinator",
+                "--lease-id",
+                "coordination-a",
+                "--generation",
+                "9",
+            )["actions"]
+        )
+        worker_actions = self.json_list(
             self.run_json_cli(
                 *common,
                 "actions",
                 "--role",
                 "worker",
                 "--lease-id",
-                str(attempt["lease_id"]),
+                "attempt-lease-a",
                 "--generation",
-                str(attempt["generation"]),
-                "--action-id",
-                "submit-review:reveal-core-1",
+                "3",
             )["actions"]
         )
-        submit = self.json_object(exact_actions[0])
-        self.assertEqual(
-            [
+        expected: dict[str, tuple[str, str, JsonObject]] = {
+            "report-blocker": (
+                "report-blocker:work-a-1",
+                "Prepare blocker report for work-a",
                 {
-                    "generation": claim["generation"],
-                    "host_id": "mac--one",
-                    "lease_id": claim["lease_id"],
-                    "resource_id": "bitwig-live",
+                    "use_case": "Preserve blocker evidence for coordination.",
+                    "effect": "advisory",
+                    "permitted_roles": ["worker"],
+                    "subject_kind": "attempt",
+                    "lifecycle_precondition": "active-attempt",
+                    "practical_result": "Prepare a blocker report without changing shared lifecycle state.",
+                },
+            ),
+            "block": (
+                "block:work-a-1",
+                "Block active attempt for work-a",
+                {
+                    "use_case": "Stop an active attempt on dependencies already accepted in its definition.",
+                    "effect": "mutating",
+                    "permitted_roles": ["coordinator"],
+                    "subject_kind": "attempt",
+                    "lifecycle_precondition": "active-attempt",
+                    "practical_result": "Move the item and attempt to blocked without changing accepted dependencies.",
+                },
+            ),
+            "block-item": (
+                "block-item:intake-work",
+                "Block unstarted work item intake-work",
+                {
+                    "use_case": "Stop unstarted intake work on dependencies already accepted in its definition.",
+                    "effect": "mutating",
+                    "permitted_roles": ["coordinator"],
+                    "subject_kind": "item",
+                    "lifecycle_precondition": "intake-item",
+                    "practical_result": "Move the item to blocked without changing accepted dependencies or creating an attempt.",
+                },
+            ),
+        }
+        all_actions = tuple(self.json_object(action) for action in (*coordinator_actions, *worker_actions))
+        selected = {
+            kind: next(action for action in all_actions if action["action_id"] == action_id)
+            for kind, (action_id, _label, _semantics) in expected.items()
+        }
+        for kind, (action_id, label, semantics) in expected.items():
+            with self.subTest(kind=kind):
+                action = selected[kind]
+                self.assertEqual(action_id, action["action_id"])
+                self.assertEqual(label, action["label"])
+                self.assertEqual(semantics, self.json_object(action["semantics"]))
+                contract = self.run_json_cli(*common, "input-contract", kind)
+                self.assertEqual(kind, contract["action_kind"])
+                self.assertEqual(semantics, self.json_object(contract["semantics"]))
+                if kind == "report-blocker":
+                    self.assertIsNone(contract["payload_schema"])
+                else:
+                    self.assertIsInstance(contract["payload_schema"], dict)
+
+        continue_contract = self.run_json_cli(*common, "input-contract", "continue")
+        self.assertEqual(["coordinator", "worker"], self.json_object(continue_contract["semantics"])["permitted_roles"])
+        self.assertIsNone(continue_contract["payload_schema"])
+        continue_actions = tuple(action for action in all_actions if action["action_id"] == "continue:work-a-1")
+        self.assertEqual({"coordination", "attempt"}, {action["authorization"] for action in continue_actions})
+        for action in continue_actions:
+            self.assertEqual(continue_contract["semantics"], action["semantics"])
+
+    def test_resume_and_reopen_command_semantics_match_contextual_action_results(self) -> None:
+        state = complete_sqlite_state()
+        lifecycle = replace(
+            state.lifecycle,
+            work_items=tuple(
+                replace(value, state=stored_state.StoredWorkItemState.PAUSED, next_action="resume")
+                if value.item_id == ItemId("work-a")
+                else replace(value, state=stored_state.StoredWorkItemState.BLOCKED, next_action="resume")
+                if value.item_id == ItemId("work-c")
+                else replace(value, state=stored_state.StoredWorkItemState.DEFERRED, next_action="reopen")
+                if value.item_id == ItemId("intake-work")
+                else value
+                for value in state.lifecycle.work_items
+            ),
+            attempts=tuple(
+                replace(value, state=work_models.AttemptState.PAUSED)
+                if value.attempt_id == AttemptId("work-a-1")
+                else value
+                for value in state.lifecycle.attempts
+            ),
+            dependencies=tuple(value for value in state.lifecycle.dependencies if value.item_id != ItemId("work-a")),
+        )
+        state = replace(state, lifecycle=lifecycle, focus=replace(state.focus, next_action="resume"))
+        state = with_definition_dependencies(state, ItemId("work-a"), ())
+        project, work, _store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        actions = {
+            action["action_id"]: action
+            for value in self.json_list(self.run_json_cli(*common, "actions", "--role", "coordinator")["actions"])
+            if (action := self.json_object(value))["action_id"]
+            in {"resume:work-a", "resume:work-c", "reopen:intake-work"}
+        }
+
+        self.assertEqual("Return work-a to active", actions["resume:work-a"]["label"])
+        self.assertEqual("Return work-c to ready", actions["resume:work-c"]["label"])
+        self.assertEqual("Reopen intake-work for intake", actions["reopen:intake-work"]["label"])
+        resume_contract = self.run_json_cli(*common, "input-contract", "resume")
+        reopen_contract = self.run_json_cli(*common, "input-contract", "reopen")
+        self.assertEqual(resume_contract["semantics"], actions["resume:work-a"]["semantics"])
+        self.assertEqual(resume_contract["semantics"], actions["resume:work-c"]["semantics"])
+        self.assertEqual(reopen_contract["semantics"], actions["reopen:intake-work"]["semantics"])
+        self.assertEqual(
+            "Return paused or blocked work to active when an attempt exists, otherwise ready.",
+            self.json_object(resume_contract["semantics"])["practical_result"],
+        )
+        self.assertEqual(
+            "Return deferred work to intake.",
+            self.json_object(reopen_contract["semantics"])["practical_result"],
+        )
+
+    def test_active_attempt_blocker_flow_persists_dependencies_and_resumes_through_commands(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        lifecycle = replace(
+            state.lifecycle,
+            dependencies=tuple(value for value in state.lifecycle.dependencies if value.item_id != ItemId("work-a")),
+        )
+        state = replace(
+            state,
+            lifecycle=lifecycle,
+            authority=replace(
+                state.authority,
+                coordination=None,
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        state = with_definition_dependencies(state, ItemId("work-a"), (ItemId("intake-work"),))
+        project, work, _store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        report = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "worker",
+                    "--lease-id",
+                    "attempt-lease-a",
+                    "--generation",
+                    "3",
+                    "--action-id",
+                    "report-blocker:work-a-1",
+                )["actions"]
+            )[0]
+        )
+        self.assertEqual("advisory", self.json_object(report["semantics"])["effect"])
+        released = self.run_json_cli(
+            *common,
+            "attempt",
+            "release",
+            "--attempt-id",
+            "work-a-1",
+            "--lease-id",
+            "attempt-lease-a",
+            "--generation",
+            "3",
+        )
+        self.assertEqual("released", released["status"])
+
+        block = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "coordinator",
+                    "--action-id",
+                    "block:work-a-1",
+                )["actions"]
+            )[0]
+        )
+        self.assertEqual("active-attempt", self.json_object(block["semantics"])["lifecycle_precondition"])
+        block_payload = project / "block.json"
+        block_payload.write_text(
+            '{"reason":"Waiting for the intake prerequisite.","depends_on":["intake-work"]}\n',
+            encoding="utf-8",
+        )
+        self.run_json_cli(
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--action-id",
+            "block:work-a-1",
+            "--payload",
+            str(block_payload),
+        )
+
+        blocked = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        blocked_item = next(value for value in blocked.lifecycle.work_items if value.item_id == ItemId("work-a"))
+        blocked_attempt = next(
+            value for value in blocked.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
+        )
+        self.assertEqual(stored_state.StoredWorkItemState.BLOCKED, blocked_item.state)
+        self.assertEqual(work_models.AttemptState.BLOCKED, blocked_attempt.state)
+        self.assertEqual(
+            ("intake-work",),
+            tuple(
+                str(value.dependency_id)
+                for value in blocked.lifecycle.dependencies
+                if value.item_id == ItemId("work-a")
+            ),
+        )
+
+        self.run_json_cli(
+            *common,
+            "close",
+            "intake-work",
+            "--outcome",
+            "done",
+            "--reason",
+            "The prerequisite is satisfied.",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+        )
+        resume = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "coordinator",
+                    "--action-id",
+                    "resume:work-a",
+                )["actions"]
+            )[0]
+        )
+        self.assertEqual("resume:work-a", resume["action_id"])
+        resume_payload = project / "resume.json"
+        resume_payload.write_text("{}\n", encoding="utf-8")
+        self.run_json_cli(
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--action-id",
+            "resume:work-a",
+            "--payload",
+            str(resume_payload),
+        )
+        resumed = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        resumed_item = next(value for value in resumed.lifecycle.work_items if value.item_id == ItemId("work-a"))
+        resumed_attempt = next(
+            value for value in resumed.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
+        )
+        self.assertEqual(stored_state.StoredWorkItemState.ACTIVE, resumed_item.state)
+        self.assertEqual(work_models.AttemptState.ACTIVE, resumed_attempt.state)
+
+    def test_revised_brief_resume_keeps_scope_identity_atomic_through_supported_commands(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                dependencies=tuple(
+                    value for value in state.lifecycle.dependencies if value.item_id != ItemId("work-a")
+                ),
+                item_artifacts=(),
+            ),
+            authority=replace(
+                state.authority,
+                coordination=None,
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+            artifact_references=(state.artifact_references[0],),
+            transition_receipts=(replace(state.transition_receipts[0], artifact_ref_id=None),),
+        )
+        state = with_definition_dependencies(state, ItemId("work-a"), ())
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        pause_payload = project / "pause.json"
+        pause_payload.write_text('{"reason":"Pause before accepting revised scope."}\n', encoding="utf-8")
+
+        self.run_json_cli(
+            *common,
+            "coordination",
+            "apply",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+            "--action-id",
+            "pause:work-a-1",
+            "--payload",
+            str(pause_payload),
+        )
+        proposal_path = project / "required-first.json"
+        proposal_path.write_text(
+            json.dumps(
+                {
+                    "schema": "pinboard-proposal/v1",
+                    "proposal_id": "required-first",
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "source_task_id": "discovering-task",
+                    "user_label": "Required first",
+                    "trigger": "Work A needs one newly discovered prerequisite.",
+                    "evidence": ["source:command-scenario"],
+                    "why_it_matters": "The revised accepted scope must remain aligned with its resumed brief.",
+                    "relation": {"kind": "prerequisite", "item": "work-a"},
+                    "effect": "Record the prerequisite candidate and relationship.",
+                    "unlock": "Resume Work A from one revised canonical brief.",
+                    "urgency_evidence": "This reproduces the supported release-blocking sequence.",
+                    "freshness_assumptions": ["Work A remains live."],
                 }
-            ],
-            submit["resource_claims"],
+            ),
+            encoding="utf-8",
         )
-        submit_input = self.json_schema_root(self.json_object_at(submit, "input_contract", "payload_schema"))
-        self.assertEqual([], submit_input["required"])
-        self.assertEqual({}, submit_input["properties"])
-        payload = Path(tempfile.mkdtemp()) / "submit.json"
-        payload.write_text("{}\n", encoding="utf-8")
-        transition_result, _, transition_stderr = self.run_json_transition(common, submit, payload)
-        self.assertEqual(0, transition_result, transition_stderr)
-        json_command("resource", "status", "--resource-id", "bitwig-live")
-        json_command("resource", "status", "--resource-id", "bitwig-live", "--host-id", "mac--one")
-        validate_result, _, validate_stderr = self.run_cli(*common, "validate")
-        self.assertEqual(0, validate_result, validate_stderr)
-        claim = json_command(
-            "resource",
-            "renew",
-            "--resource-id",
-            "bitwig-live",
-            "--host-id",
-            "mac--one",
-            "--lease-id",
-            str(claim["lease_id"]),
-            "--generation",
-            str(claim["generation"]),
-            "--ttl-seconds",
-            "120",
-        )
-        json_command(
-            "resource",
-            "release",
-            "--resource-id",
-            "bitwig-live",
-            "--host-id",
-            "mac--one",
-            "--lease-id",
-            str(claim["lease_id"]),
-            "--generation",
-            str(claim["generation"]),
-        )
-        claim = json_command(
-            "resource",
-            "claim",
-            "--resource-id",
-            "bitwig-live",
-            "--attempt-id",
-            "reveal-core-1",
+        self.run_cli(*common, "proposal", "--file", str(proposal_path))
+        self.run_json_cli(
+            *common,
+            "close",
+            "required-first",
+            "--outcome",
+            "done",
+            "--reason",
+            "The prerequisite is satisfied.",
             "--task-id",
-            "chat-a",
+            "coordinator-task",
             "--host-id",
-            "mac--one",
-            "--ttl-seconds",
-            "60",
-            "--attempt-lease-id",
-            str(attempt["lease_id"]),
-            "--attempt-generation",
-            str(attempt["generation"]),
+            "studio",
         )
-        revoked_claim = json_command(
-            "resource",
-            "revoke",
-            "--resource-id",
-            "bitwig-live",
-            "--host-id",
-            "mac--one",
-            "--coordination-lease-id",
-            str(coordination["lease_id"]),
-            "--coordination-generation",
-            str(coordination["generation"]),
+        revised_definition = next(
+            value
+            for value in reversed(store.snapshot().lifecycle.definition_revisions)
+            if value.item_id == ItemId("work-a")
         )
-        self.assertGreater(int(revoked_claim["generation"]), int(claim["generation"]))
+        brief = work_a_brief(project)
+        checkpoint = brief.checkpoint
+        self.assertIsInstance(checkpoint, CrossBoundaryCheckpoint)
+        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
+        authorization = AcceptedScopeAuthorization("work-a", revised_definition.revision)
+        checkpoint = replace_struct(
+            checkpoint,
+            contracts=(replace_struct(checkpoint.contracts[0], authorization_basis=authorization),),
+            verification=(replace_struct(checkpoint.verification[0], authorization_basis=authorization),),
+        )
+        brief = replace_struct(
+            brief,
+            artifact_revision=2,
+            accepted_scope=AcceptedScope(revised_definition.revision, revised_definition.digest),
+            checkpoint=checkpoint,
+        )
+        brief_path = project / "work-a-brief-2.json"
+        brief_path.write_bytes(canonical_work_brief_bytes(brief))
+        publication = self.run_json_cli(*common, "brief", "publish", "--file", str(brief_path))
+        resume_payload = project / "resume-revised.json"
+        resume_payload.write_text(
+            json.dumps({"brief_artifact_ref_id": publication["artifact_ref_id"]}), encoding="utf-8"
+        )
 
-        json_command(
-            "attempt",
-            "release",
-            "--attempt-id",
-            "reveal-core-1",
-            "--lease-id",
-            str(attempt["lease_id"]),
-            "--generation",
-            str(attempt["generation"]),
-        )
-        attempt = json_command(
-            "attempt",
-            "acquire",
-            "--attempt-id",
-            "reveal-core-1",
-            "--task-id",
-            "chat-b",
-            "--host-id",
-            "mac--one",
-            "--ttl-seconds",
-            "60",
-        )
-        revoked_attempt = json_command(
-            "attempt",
-            "revoke",
-            "--attempt-id",
-            "reveal-core-1",
-            "--coordination-lease-id",
-            str(coordination["lease_id"]),
-            "--coordination-generation",
-            str(coordination["generation"]),
-        )
-        self.assertGreater(int(revoked_attempt["generation"]), int(attempt["generation"]))
-
-        json_command(
+        resumed = self.run_json_cli(
+            *common,
             "coordination",
-            "release",
-            "--lease-id",
-            str(coordination["lease_id"]),
-            "--generation",
-            str(coordination["generation"]),
-        )
-        replacement = json_command(
-            "coordination",
-            "acquire",
+            "apply",
             "--task-id",
-            "chat-b",
+            "coordinator-task",
             "--host-id",
-            "mac--one",
-            "--ttl-seconds",
-            "60",
+            "studio",
+            "--action-id",
+            "resume:work-a",
+            "--payload",
+            str(resume_payload),
         )
-        revoked_coordination = json_command("coordination", "revoke")
-        self.assertGreater(int(revoked_coordination["generation"]), int(replacement["generation"]))
 
-    def test_cli_maps_root_registration_and_json_failures_to_stable_results(self) -> None:
-        project, work = create_state([])
+        reloaded = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        reloaded_item = next(value for value in reloaded.lifecycle.work_items if value.item_id == ItemId("work-a"))
+        reloaded_definition = next(
+            value for value in reversed(reloaded.lifecycle.definition_revisions) if value.item_id == ItemId("work-a")
+        )
+        reloaded_attempt = next(
+            value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1")
+        )
+        self.assertEqual(
+            (
+                stored_state.StoredWorkItemState.ACTIVE,
+                work_models.AttemptState.ACTIVE,
+                publication["artifact_ref_id"],
+                reloaded_definition.revision,
+                reloaded_definition.digest,
+            ),
+            (
+                reloaded_item.state,
+                reloaded_attempt.state,
+                reloaded_attempt.brief_artifact_ref_id,
+                reloaded_attempt.accepted_scope_revision,
+                reloaded_attempt.accepted_scope_digest,
+            ),
+        )
+        self.assertEqual(str(reloaded.lifecycle.project.revision - 1), resumed["revision"])
+        validation_result, validation_stdout, validation_stderr = self.run_cli(*common, "validate")
+        self.assertEqual(0, validation_result, f"{validation_stdout}\n{validation_stderr}")
+        self.assertIn("OK WORK_STATE_VALID", validation_stdout)
+        coordinator_actions = self.json_list(self.run_json_cli(*common, "actions", "--role", "coordinator")["actions"])
+        self.assertIn(
+            "dispatch:work-a-1",
+            tuple(str(self.json_object(value)["action_id"]) for value in coordinator_actions),
+        )
+
+    def test_revised_brief_identity_mismatches_reject_at_command_boundary_without_effects(self) -> None:
+        base_brief = replace_struct(work_a_brief(Path(tempfile.mkdtemp()).resolve()), artifact_revision=2)
+        checkpoint = base_brief.checkpoint
+        self.assertIsInstance(checkpoint, CrossBoundaryCheckpoint)
+        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
+
+        def with_scope_identity(item_id: str, revision: int) -> CrossBoundaryCheckpoint:
+            authorization = AcceptedScopeAuthorization(item_id, revision)
+            return replace_struct(
+                checkpoint,
+                contracts=(replace_struct(checkpoint.contracts[0], authorization_basis=authorization),),
+                verification=(replace_struct(checkpoint.verification[0], authorization_basis=authorization),),
+            )
+
+        mismatches = (
+            ("attempt", replace_struct(base_brief, attempt_id="different-1")),
+            (
+                "item",
+                replace_struct(
+                    base_brief,
+                    item_id="different",
+                    checkpoint=with_scope_identity("different", base_brief.accepted_scope.revision),
+                ),
+            ),
+            ("branch", replace_struct(base_brief, branch="codex/different")),
+            ("base", replace_struct(base_brief, base_revision="different-base")),
+            (
+                "scope-revision",
+                replace_struct(
+                    base_brief,
+                    accepted_scope=AcceptedScope(2, base_brief.accepted_scope.digest),
+                    checkpoint=with_scope_identity(base_brief.item_id, 2),
+                ),
+            ),
+            (
+                "scope-digest",
+                replace_struct(base_brief, accepted_scope=AcceptedScope(1, "f" * 64)),
+            ),
+        )
+
+        for name, mismatched_brief in mismatches:
+            with self.subTest(identity=name):
+                state = complete_sqlite_state()
+                now = datetime.now(UTC)
+                assert state.authority.coordination is not None
+                state = replace(
+                    state,
+                    lifecycle=replace(
+                        state.lifecycle,
+                        work_items=tuple(
+                            replace(value, state=stored_state.StoredWorkItemState.PAUSED)
+                            if value.item_id == ItemId("work-a")
+                            else value
+                            for value in state.lifecycle.work_items
+                        ),
+                        attempts=(replace(state.lifecycle.attempts[0], state=work_models.AttemptState.PAUSED),),
+                        dependencies=tuple(
+                            value for value in state.lifecycle.dependencies if value.item_id != ItemId("work-a")
+                        ),
+                    ),
+                    authority=replace(
+                        state.authority,
+                        coordination=replace(state.authority.coordination, expires_at=now + timedelta(minutes=5)),
+                    ),
+                )
+                state = with_definition_dependencies(state, ItemId("work-a"), ())
+                project, work, _store = self.initialized_state(state)
+                common = ("--project-root", str(project), "--work-root", str(work))
+                brief_path = project / f"mismatched-{name}.json"
+                brief_path.write_bytes(canonical_work_brief_bytes(mismatched_brief))
+                publication = self.run_json_cli(*common, "brief", "publish", "--file", str(brief_path))
+                rebuild_result, rebuild_stdout, rebuild_stderr = self.run_cli(*common, "views", "rebuild")
+                self.assertEqual(0, rebuild_result, f"{rebuild_stdout}\n{rebuild_stderr}")
+                action = self.json_object(
+                    self.json_list(
+                        self.run_json_cli(
+                            *common,
+                            "actions",
+                            "--role",
+                            "coordinator",
+                            "--lease-id",
+                            "coordination-a",
+                            "--generation",
+                            "9",
+                            "--action-id",
+                            "resume:work-a",
+                        )["actions"]
+                    )[0]
+                )
+                payload = project / f"resume-{name}.json"
+                payload.write_text(
+                    json.dumps({"brief_artifact_ref_id": publication["artifact_ref_id"]}), encoding="utf-8"
+                )
+                database_path = work / "state.sqlite3"
+                before = SQLiteWorkStore(database_path).snapshot()
+                views_root = work / "views"
+                before_views = tuple(
+                    (path.relative_to(views_root), path.read_bytes())
+                    for path in sorted(views_root.rglob("*"))
+                    if path.is_file()
+                )
+
+                result, stdout, stderr = self.run_transition(common, action, payload)
+
+                self.assertNotEqual(0, result)
+                self.assertEqual("", stdout)
+                self.assertIn("TRANSITION_INPUT_INVALID", stderr)
+                self.assertEqual(before, SQLiteWorkStore(database_path).snapshot())
+                self.assertEqual(
+                    before_views,
+                    tuple(
+                        (path.relative_to(views_root), path.read_bytes())
+                        for path in sorted(views_root.rglob("*"))
+                        if path.is_file()
+                    ),
+                )
+
+    def test_post_commit_brief_projection_failure_keeps_borrowed_transition_receipt(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, authority=replace(state.authority, coordination=None))
+        project, work, store = self.initialized_state(state)
+
+        with patch(
+            "pinboard.interfaces.work_views.attempt_brief_views",
+            side_effect=WorkBriefError(WorkBriefErrorCode.BRIEF_INVALID, "injected projection failure"),
+        ):
+            result, stdout, stderr = self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "close",
+                "work-c",
+                "--outcome",
+                "done",
+                "--reason",
+                "The prerequisite outcome is complete.",
+                "--task-id",
+                "coordinator-task",
+                "--host-id",
+                "studio",
+            )
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK WORK_ITEM_CLOSED item=work-c outcome=done revision=14", stdout)
+        self.assertIn("Generated views could not be rebuilt", stderr)
+        self.assertIn("injected projection failure", stderr)
+        self.assertIn("pinboard views rebuild", stderr)
+        reloaded = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        closed = next(value for value in reloaded.lifecycle.work_items if value.item_id == ItemId("work-c"))
+        self.assertEqual(stored_state.StoredWorkItemState.DONE, closed.state)
+        self.assertEqual(14, reloaded.transition_receipts[-2].project_revision)
+        self.assertEqual(15, store.snapshot().lifecycle.project.revision)
+        rebuild_result, rebuild_stdout, rebuild_stderr = self.run_cli(
+            "--project-root", str(project), "--work-root", str(work), "views", "rebuild"
+        )
+        self.assertEqual(0, rebuild_result, f"{rebuild_stdout}\n{rebuild_stderr}")
+
+    def test_post_commit_brief_projection_failure_keeps_direct_transition_receipt(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        action = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "worker",
+                    "--lease-id",
+                    "attempt-lease-a",
+                    "--generation",
+                    "3",
+                    "--action-id",
+                    "submit-review:work-a-1",
+                )["actions"]
+            )[0]
+        )
+        payload = project / "submit-review.json"
+        payload.write_text('{"candidate":"projection-failure-candidate"}\n', encoding="utf-8")
+
+        with patch(
+            "pinboard.interfaces.work_views.attempt_brief_views",
+            side_effect=WorkBriefError(WorkBriefErrorCode.BRIEF_INVALID, "injected projection failure"),
+        ):
+            result, stdout, stderr = self.run_transition(common, action, payload)
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK TRANSITION_APPLIED submit-review:work-a-1 revision=13", stdout)
+        self.assertIn("SQLite transition succeeded, but generated views need repair", stderr)
+        self.assertIn("pinboard views rebuild", stderr)
+        reloaded = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
+        self.assertEqual(work_models.AttemptState.REVIEW, attempt.state)
+        self.assertEqual(13, store.snapshot().transition_receipts[-1].project_revision)
+        rebuild_result, rebuild_stdout, rebuild_stderr = self.run_cli(*common, "views", "rebuild")
+        self.assertEqual(0, rebuild_result, f"{rebuild_stdout}\n{rebuild_stderr}")
+
+    def test_unexpected_post_commit_projection_exception_remains_exceptional(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        action = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "worker",
+                    "--lease-id",
+                    "attempt-lease-a",
+                    "--generation",
+                    "3",
+                    "--action-id",
+                    "submit-review:work-a-1",
+                )["actions"]
+            )[0]
+        )
+        payload = project / "submit-review.json"
+        payload.write_text('{"candidate":"unexpected-projection-candidate"}\n', encoding="utf-8")
+
+        with (
+            patch("pinboard.interfaces.work_views.attempt_brief_views", side_effect=RuntimeError("unexpected")),
+            self.assertRaisesRegex(RuntimeError, "unexpected"),
+        ):
+            self.run_transition(common, action, payload)
+
+        reloaded = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
+        self.assertEqual(work_models.AttemptState.REVIEW, attempt.state)
+        self.assertEqual(13, store.snapshot().transition_receipts[-1].project_revision)
+
+    def test_blocker_skill_guidance_names_advisory_and_mutating_responsibilities(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        coordinator = (repository / "skills" / "pinboard" / "SKILL.md").read_text(encoding="utf-8")
+        worker = (repository / "skills" / "pinboard-deliver" / "SKILL.md").read_text(encoding="utf-8")
+
+        for text in (coordinator, worker):
+            self.assertIn("report-blocker:<attempt>", text)
+            self.assertIn("block:<attempt>", text)
+            self.assertIn("block-item:<item>", text)
+            self.assertIn("pause:<attempt>", text)
+        self.assertIn("advisory and has no mutation payload", worker)
+        self.assertIn("never use the intake-only `block-item:<item>` action for active work", coordinator)
+
+    def test_invalid_current_inputs_map_to_stable_cli_failures(self) -> None:
+        project, work, _store = self.initialized_state(complete_sqlite_state())
         common = ("--project-root", str(project), "--work-root", str(work))
         invalid = project / "invalid.json"
         invalid.write_text("[]", encoding="utf-8")
-
-        registration_result, _, registration_stderr = self.run_cli(
-            *common,
-            "init",
-            "--coordinator-task-id",
-            "replacement",
-            "--host-id",
-            "local",
+        cases = (
+            (("proposal", "--file", str(invalid)), "PROPOSAL_INVALID"),
+            (("attempt", "status", "--attempt-id", "missing"), "ATTEMPT_LEASE_REQUIRED"),
+            (
+                ("coordination", "renew", "--lease-id", "wrong", "--generation", "9", "--ttl-seconds", "60"),
+                "LEASE_FENCED",
+            ),
         )
-        proposal_result, _, proposal_stderr = self.run_cli(*common, "proposal", "--file", str(invalid))
-        with patch("repo_work.cli.resolve_project_root", side_effect=RootError("PROJECT_ROOT_NOT_FOUND", "missing")):
-            root_result, _, root_stderr = self.run_cli("root")
-        journal_path_for(work).mkdir()
-        recovery_result, _, recovery_stderr = self.run_cli(*common, "recover")
+        for arguments, code in cases:
+            with self.subTest(arguments=arguments):
+                result, _stdout, stderr = self.run_cli(*common, *arguments)
+                self.assertNotEqual(0, result)
+                self.assertIn(code, stderr)
 
-        self.assertEqual(12, registration_result)
-        self.assertIn("WORK_STATE_ALREADY_EXISTS", registration_stderr)
-        self.assertEqual(2, proposal_result)
-        self.assertIn("Expected `object`, got `array`", proposal_stderr)
-        self.assertEqual(2, root_result)
-        self.assertIn("PROJECT_ROOT_NOT_FOUND", root_stderr)
-        self.assertEqual(11, recovery_result)
-        self.assertIn("COMMIT_JOURNAL_INVALID", recovery_stderr)
+        identifier_stderr = self.run_cli_parse_error(
+            *common,
+            "coordination",
+            "acquire",
+            "--task-id",
+            "..",
+            "--host-id",
+            "studio",
+            "--ttl-seconds",
+            "60",
+        )
+        self.assertIn("pinboard coordination acquire", identifier_stderr)
+        self.assertIn("$.task_id", identifier_stderr)
+
+    def test_direct_transition_reselects_exact_worker_capability(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, _store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        exact = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "worker",
+                "--lease-id",
+                "attempt-lease-a",
+                "--generation",
+                "3",
+                "--action-id",
+                "submit-review:work-a-1",
+            )["actions"]
+        )
+        action = self.json_object(exact[0])
+        before_mismatch = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        mismatched_payload = project / "pause-payload.json"
+        mismatched_payload.write_text('{"reason":"pause"}\n', encoding="utf-8")
+
+        mismatch_result, _mismatch_stdout, mismatch_stderr = self.run_transition(common, action, mismatched_payload)
+
+        self.assertEqual(11, mismatch_result)
+        self.assertIn("TRANSITION_INPUT_INVALID:", mismatch_stderr)
+        self.assertEqual(before_mismatch, SQLiteWorkStore(work / "state.sqlite3").snapshot())
+
+        payload = project / "submit-review.json"
+        payload.write_text('{"candidate":"candidate-cli-direct"}\n', encoding="utf-8")
+
+        result, stdout, stderr = self.run_transition(common, action, payload)
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK TRANSITION_APPLIED submit-review:work-a-1", stdout)
+
+        invalid_cases = (
+            (("--action-id", "invalid"), "ACTION_ID_INVALID"),
+            (
+                (
+                    "--action-id",
+                    "invented:work-a",
+                ),
+                "ACTION_ID_INVALID",
+            ),
+        )
+        for replacement, code in invalid_cases:
+            arguments = [
+                *common,
+                "transition",
+                "--action-id",
+                "pause:work-a-1",
+                "--expected-revision",
+                "stale",
+                "--generation",
+                "3",
+                "--authorization",
+                "attempt",
+                "--lease-id",
+                "attempt-lease-a",
+                "--payload",
+                str(payload),
+            ]
+            option = replacement[0]
+            if option == "--action-id":
+                index = arguments.index(option)
+                arguments[index : index + 2] = replacement
+            else:
+                arguments.extend(replacement)
+            with self.subTest(code=code):
+                invalid_result, _invalid_stdout, invalid_stderr = self.run_cli(*arguments)
+                self.assertEqual(11, invalid_result)
+                self.assertIn(code, invalid_stderr)
+
+    def test_review_acceptance_and_continuation_uses_the_exact_coordination_capability(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        coordination = state.authority.coordination
+        assert coordination is not None
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                work_items=tuple(
+                    replace(value, state=stored_state.StoredWorkItemState.REVIEW)
+                    if value.item_id == ItemId("work-a")
+                    else value
+                    for value in state.lifecycle.work_items
+                ),
+                attempts=tuple(
+                    replace(
+                        value,
+                        state=work_models.AttemptState.REVIEW,
+                        candidate_revision="candidate-cli-review",
+                        candidate_recorded_at=now,
+                    )
+                    if value.attempt_id == AttemptId("work-a-1")
+                    else value
+                    for value in state.lifecycle.attempts
+                ),
+            ),
+            authority=replace(
+                state.authority,
+                coordination=replace(
+                    coordination,
+                    acquired_at=now,
+                    expires_at=now + timedelta(minutes=5),
+                ),
+                attempt_leases=tuple(
+                    replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+                ),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        exact = self.json_list(
+            self.run_json_cli(
+                *common,
+                "actions",
+                "--role",
+                "coordinator",
+                "--lease-id",
+                "coordination-a",
+                "--generation",
+                "9",
+                "--action-id",
+                "accept-review-and-continue:work-a-1",
+            )["actions"]
+        )
+        action = self.json_object(exact[0])
+        payload = project / "accept-review-and-continue.json"
+        payload.write_text(
+            '{"candidate":"candidate-cli-review","evidence":"accepted through the CLI"}\n',
+            encoding="utf-8",
+        )
+
+        result, stdout, stderr = self.run_transition(common, action, payload)
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK TRANSITION_APPLIED accept-review-and-continue:work-a-1", stdout)
+        reloaded = store.snapshot()
+        attempt = next(value for value in reloaded.lifecycle.attempts if value.attempt_id == AttemptId("work-a-1"))
+        self.assertEqual(work_models.AttemptState.ACTIVE, attempt.state)
+        self.assertIsNone(attempt.candidate_revision)
+
+    def test_close_borrows_sqlite_coordination_and_records_terminal_history(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, authority=replace(state.authority, coordination=None))
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        missing_stderr = self.run_cli_parse_error(
+            *common,
+            "close",
+            "work-c",
+            "--outcome",
+            "done",
+            "--reason",
+            "The prerequisite outcome is already complete.",
+        )
+        self.assertIn("pinboard close", missing_stderr)
+        self.assertIn("--task-id, --host-id", missing_stderr)
+
+        closed = self.run_json_cli(
+            *common,
+            "close",
+            "work-c",
+            "--outcome",
+            "done",
+            "--reason",
+            "The prerequisite outcome is already complete.",
+            "--task-id",
+            "coordinator-task",
+            "--host-id",
+            "studio",
+        )
+        self.assertEqual("work-c", closed["item_id"])
+        self.assertEqual("done", closed["outcome"])
+        coordination = store.snapshot().authority.coordination
+        self.assertIsNotNone(coordination)
+        assert coordination is not None
+        self.assertEqual("released", coordination.state.value)
+
+    def test_borrowed_coordination_rejects_retained_authority_transfer_and_releases_its_lease(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, authority=replace(state.authority, coordination=None))
+        project, work, store = self.initialized_state(state)
+        payload = project / "transfer-coordinator.json"
+        payload.write_text('{"task_id":"next-task","host_id":"next-host"}\n', encoding="utf-8")
+        before = store.snapshot()
+
+        result, _, stderr = self.run_cli(
+            "--project-root",
+            str(project),
+            "--work-root",
+            str(work),
+            "coordination",
+            "apply",
+            "--task-id",
+            "borrowing-task",
+            "--host-id",
+            "borrowing-host",
+            "--action-id",
+            "transfer-coordinator:ledger",
+            "--payload",
+            str(payload),
+        )
+
+        self.assertEqual(11, result)
+        self.assertIn("ACTION_NOT_AVAILABLE: Borrowed coordination cannot transfer retained authority.", stderr)
+        current = store.snapshot()
+        coordination = current.authority.coordination
+        assert coordination is not None
+        self.assertEqual(work_models.CoordinationLeaseStatus.RELEASED, coordination.state)
+        self.assertEqual(before.lifecycle.work_items, current.lifecycle.work_items)
+        self.assertNotIn(
+            "transfer-coordinator",
+            tuple(receipt.action_kind.value for receipt in current.transition_receipts),
+        )
+
+    def test_borrowed_coordination_samples_acquire_discovery_execute_release_and_render_separately(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, authority=replace(state.authority, coordination=None))
+        project, work, _store = self.initialized_state(state)
+        samples = tuple(SQLITE_NOW + timedelta(seconds=offset) for offset in range(5))
+
+        with (
+            patch("pinboard.interfaces.transitions.datetime") as clock,
+            patch(
+                "pinboard.interfaces.transitions.change_coordination_authority",
+                wraps=transition_interface.change_coordination_authority,
+            ) as authority_call,
+            patch(
+                "pinboard.interfaces.transitions.discover_actions", wraps=transition_interface.discover_actions
+            ) as discovery,
+            patch("pinboard.interfaces.transitions.execute", wraps=transition_interface.execute) as execution,
+            patch(
+                "pinboard.interfaces.transitions.work_views.rebuild", wraps=transition_interface.work_views.rebuild
+            ) as rebuild,
+        ):
+            clock.now.side_effect = samples
+            result, _stdout, stderr = self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "close",
+                "work-c",
+                "--outcome",
+                "done",
+                "--reason",
+                "The prerequisite outcome is already complete.",
+                "--task-id",
+                "coordinator-task",
+                "--host-id",
+                "studio",
+            )
+
+        self.assertEqual(0, result, stderr)
+        acquired_operation = authority_call.call_args_list[0].args[1]
+        released_operation = authority_call.call_args_list[1].args[1]
+        assert isinstance(acquired_operation, authority_models.AcquireCoordinationAuthority)
+        assert isinstance(released_operation, authority_models.ReleaseCoordinationAuthority)
+        self.assertEqual(samples[0], acquired_operation.acquired_at)
+        self.assertEqual(samples[1], discovery.call_args.kwargs["now"])
+        self.assertEqual(samples[2], execution.call_args.args[2])
+        self.assertEqual(samples[3], released_operation.released_at)
+        self.assertEqual(samples[4], rebuild.call_args.args[2])
+
+    def test_borrowed_coordination_reports_release_failure_after_the_transition_applies(self) -> None:
+        state = complete_sqlite_state()
+        state = replace(state, authority=replace(state.authority, coordination=None))
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        original = service.change_coordination_authority
+
+        def fail_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "injected release failure")
+            return original(selected_store, operation)
+
+        with patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=fail_release):
+            result, _, stderr = self.run_cli(
+                *common,
+                "close",
+                "work-c",
+                "--outcome",
+                "done",
+                "--reason",
+                "The prerequisite outcome is already complete.",
+                "--task-id",
+                "coordinator-task",
+                "--host-id",
+                "studio",
+            )
+
+        self.assertEqual(11, result)
+        self.assertIn(
+            "LEASE_FENCED: Borrowed coordination release failed after transition revision 14: injected release failure",
+            stderr,
+        )
+        current = store.snapshot()
+        closed = next(value for value in current.lifecycle.work_items if value.item_id == ItemId("work-c"))
+        self.assertEqual(stored_state.StoredWorkItemState.DONE, closed.state)
+        coordination = current.authority.coordination
+        assert coordination is not None
+        self.assertEqual(work_models.CoordinationLeaseStatus.ACTIVE, coordination.state)
+
+    def test_borrowed_coordination_reports_cleanup_rejection_over_transition_rejection(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, _store = self.initialized_state(state)
+        payload = project / "payload.json"
+        payload.write_text("{}\n", encoding="utf-8")
+        original = service.change_coordination_authority
+
+        def reject_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "cleanup rejected")
+            return original(selected_store, operation)
+
+        with (
+            patch(
+                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                return_value=CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "transition rejected"),
+            ),
+            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=reject_release),
+        ):
+            result, _, stderr = self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "coordination",
+                "apply",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+                "--action-id",
+                "close:work-c",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual(11, result)
+        self.assertIn(
+            "LEASE_FENCED: Borrowed coordination release failed after transition rejection "
+            "ACTION_NOT_AVAILABLE: transition rejected: cleanup rejected",
+            stderr,
+        )
+
+    def test_borrowed_coordination_keeps_transition_exception_primary_over_cleanup_rejection(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, _store = self.initialized_state(state)
+        payload = project / "payload.json"
+        payload.write_text("{}\n", encoding="utf-8")
+        original = service.change_coordination_authority
+
+        def reject_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "cleanup rejected")
+            return original(selected_store, operation)
+
+        with (
+            patch(
+                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                side_effect=RuntimeError("transition broke"),
+            ),
+            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=reject_release),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "coordination",
+                "apply",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+                "--action-id",
+                "close:work-c",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual("transition broke", str(raised.exception))
+        self.assertEqual(
+            ["Borrowed coordination cleanup failed with LEASE_FENCED: cleanup rejected"],
+            raised.exception.__notes__,
+        )
+
+    def test_borrowed_coordination_raises_cleanup_exception_over_transition_rejection(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, _store = self.initialized_state(state)
+        payload = project / "payload.json"
+        payload.write_text("{}\n", encoding="utf-8")
+        original = service.change_coordination_authority
+
+        def raise_on_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                raise RuntimeError("cleanup broke")
+            return original(selected_store, operation)
+
+        with (
+            patch(
+                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                return_value=CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "transition rejected"),
+            ),
+            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=raise_on_release),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "coordination",
+                "apply",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+                "--action-id",
+                "close:work-c",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual("cleanup broke", str(raised.exception))
+        self.assertEqual(
+            ["Original transition rejection ACTION_NOT_AVAILABLE: transition rejected"],
+            raised.exception.__notes__,
+        )
+
+    def test_borrowed_coordination_keeps_transition_exception_primary_over_cleanup_exception(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, _store = self.initialized_state(state)
+        payload = project / "payload.json"
+        payload.write_text("{}\n", encoding="utf-8")
+        original = service.change_coordination_authority
+
+        def raise_on_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                raise ValueError("cleanup broke")
+            return original(selected_store, operation)
+
+        with (
+            patch(
+                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                side_effect=RuntimeError("transition broke"),
+            ),
+            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=raise_on_release),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "coordination",
+                "apply",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+                "--action-id",
+                "close:work-c",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual("transition broke", str(raised.exception))
+        self.assertEqual(
+            ["Borrowed coordination cleanup raised ValueError: cleanup broke"],
+            raised.exception.__notes__,
+        )
+
+    def test_borrowed_coordination_cleanup_exception_identifies_committed_revision(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, _store = self.initialized_state(state)
+        original = service.change_coordination_authority
+
+        def raise_on_release(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[decision_models.TransitionReceipt]:
+            if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
+                raise RuntimeError("cleanup broke")
+            return original(selected_store, operation)
+
+        with (
+            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=raise_on_release),
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "close",
+                "work-c",
+                "--outcome",
+                "done",
+                "--reason",
+                "The prerequisite outcome is already complete.",
+                "--task-id",
+                "coordinator-task",
+                "--host-id",
+                "studio",
+            )
+
+        self.assertEqual("cleanup broke", str(raised.exception))
+        self.assertEqual(
+            ["Transition committed at revision 14 before cleanup failed."],
+            raised.exception.__notes__,
+        )
+
+    def test_proposal_persists_once_through_native_intake(self) -> None:
+        project, work, store = self.initialized_state(complete_sqlite_state())
+        proposal_path = project / "proposal.json"
+        proposal_path.write_text(
+            json.dumps(
+                {
+                    "schema": "pinboard-proposal/v1",
+                    "proposal_id": "cli-sqlite-proposal",
+                    "created_at": (SQLITE_NOW + timedelta(seconds=1)).isoformat(),
+                    "source_task_id": "discovering-task",
+                    "user_label": "SQLite CLI proposal",
+                    "trigger": "The public proposal command must use current authority.",
+                    "evidence": ["source:cli"],
+                    "why_it_matters": "A filesystem writer cannot persist to SQLite authority.",
+                    "relation": {"kind": "follow-up", "item": "work-c"},
+                    "effect": "The proposal appears once as an intake item.",
+                    "unlock": "Use the application proposal service.",
+                    "urgency_evidence": "The installed command must remain current.",
+                    "freshness_assumptions": ["SQLite remains authoritative."],
+                }
+            ),
+            encoding="utf-8",
+        )
+        common = ("--project-root", str(project), "--work-root", str(work))
+        before_revision = store.snapshot().lifecycle.project.revision
+
+        result, stdout, stderr = self.run_cli(*common, "proposal", "--file", str(proposal_path))
+        duplicate_result, _, duplicate_stderr = self.run_cli(*common, "proposal", "--file", str(proposal_path))
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK PROPOSAL_CREATED cli-sqlite-proposal", stdout)
+        after = store.snapshot()
+        self.assertEqual(before_revision + 1, after.lifecycle.project.revision)
+        intake_item = next(value for value in after.lifecycle.work_items if str(value.item_id) == "cli-sqlite-proposal")
+        self.assertEqual(
+            (stored_state.StoredWorkItemState.INTAKE, 5),
+            (intake_item.state, intake_item.queue_position),
+        )
+        self.assertEqual(("work-a", "work-a-1"), (str(after.focus.item_id), str(after.focus.attempt_id)))
+        self.assertEqual(
+            ("work-c",),
+            tuple(
+                str(value.dependency_id)
+                for value in after.lifecycle.dependencies
+                if value.item_id == intake_item.item_id
+            ),
+        )
+        self.assertEqual(13, duplicate_result)
+        self.assertIn("PROPOSAL_ALREADY_EXISTS", duplicate_stderr)
+
+    def test_proposal_timestamp_and_file_failures_are_stable(self) -> None:
+        project, work, _store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+        path = project / "proposal.json"
+        value: JsonObject = {
+            "schema": "pinboard-proposal/v1",
+            "proposal_id": "date-only-proposal",
+            "created_at": "2026-08-25",
+            "source_task_id": "task",
+            "user_label": "Date-only proposal",
+            "trigger": "A timestamp boundary needs coverage.",
+            "evidence": ["source:test"],
+            "why_it_matters": "The boundary remains deterministic.",
+            "relation": {"kind": "independent", "item": None},
+            "effect": "The proposal persists.",
+            "unlock": "Timestamp normalization is explicit.",
+            "urgency_evidence": "This is current intake behavior.",
+            "freshness_assumptions": ["SQLite remains authoritative."],
+        }
+        path.write_text(json.dumps(value), encoding="utf-8")
+        result, _stdout, stderr = self.run_cli(*common, "proposal", "--file", str(path))
+        self.assertEqual(0, result, stderr)
+
+        for proposal_id, created_at in (
+            ("naive-proposal", "2026-08-25T12:00:00"),
+            ("invalid-date-proposal", "not-a-date"),
+        ):
+            value["proposal_id"] = proposal_id
+            value["created_at"] = created_at
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.subTest(created_at=created_at):
+                invalid, _invalid_stdout, invalid_stderr = self.run_cli(*common, "proposal", "--file", str(path))
+                self.assertEqual(2, invalid)
+                self.assertIn("PROPOSAL_INVALID", invalid_stderr)
+
+        missing, _missing_stdout, missing_stderr = self.run_cli(
+            *common, "proposal", "--file", str(project / "missing.json")
+        )
+        self.assertEqual(2, missing)
+        self.assertIn("PROPOSAL_INVALID", missing_stderr)
+
+    def test_status_uses_one_snapshot_and_query_failures_are_stable(self) -> None:
+        project, work, _store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+        original_snapshot = SQLiteWorkStore.snapshot
+        calls = 0
+
+        def counted(store: SQLiteWorkStore) -> stored_state.StoredWorkState:
+            nonlocal calls
+            calls += 1
+            return original_snapshot(store)
+
+        with patch.object(SQLiteWorkStore, "snapshot", counted):
+            status = self.run_json_cli(*common, "status")
+        self.assertEqual("12", status["revision"])
+        self.assertEqual(1, calls)
+
+        result, _, stderr = self.run_cli(*common, "parallel", "preview", "--item", "missing")
+        self.assertEqual(11, result)
+        self.assertIn("PARALLEL_SELECTION_INVALID", stderr)
+
+    def test_item_status_emits_exact_json_and_text_from_one_snapshot(self) -> None:
+        state = complete_sqlite_state()
+        active = state.lifecycle.attempts[0]
+        done_item = replace(
+            state.lifecycle.work_items[2],
+            state=stored_state.StoredWorkItemState.DONE,
+            timing=work_models.Timing.SAFE_TO_DEFER,
+            outcome_evidence="accepted completion",
+            next_action=None,
+            notes=None,
+        )
+        done_attempt = replace(
+            active,
+            attempt_id=AttemptId("work-b-1"),
+            item_id=done_item.item_id,
+            state=work_models.AttemptState.DONE,
+            accepted_scope_digest=test_definition(done_item.item_id)[1],
+            candidate_revision="candidate-b",
+            candidate_recorded_at=SQLITE_NOW,
+        )
+        state = replace(
+            state,
+            lifecycle=replace(
+                state.lifecycle,
+                work_items=(*state.lifecycle.work_items[:2], done_item, *state.lifecycle.work_items[3:]),
+                attempts=(*state.lifecycle.attempts, done_attempt),
+            ),
+        )
+        project, work, _store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        original_snapshot = SQLiteWorkStore.snapshot
+        calls = 0
+
+        def counted(store: SQLiteWorkStore) -> stored_state.StoredWorkState:
+            nonlocal calls
+            calls += 1
+            return original_snapshot(store)
+
+        with patch.object(SQLiteWorkStore, "snapshot", counted):
+            status = self.run_json_cli(*common, "item", "status", "--item-id", "work-b")
+
+        self.assertEqual(1, calls)
+        self.assertEqual(
+            {
+                "schema": "pinboard-item-status/v1",
+                "authority": "sqlite-v2",
+                "revision": "12",
+                "item_id": "work-b",
+                "label": "Work work-b",
+                "state": "done",
+                "timing": "safe-to-defer",
+                "outcome_evidence": "accepted completion",
+                "next_action": None,
+                "notes": "",
+                "attempts": [{"attempt_id": "work-b-1", "state": "done", "candidate_revision": "candidate-b"}],
+                "preparation": None,
+            },
+            status,
+        )
+        self.assertEqual(
+            {
+                "schema": "pinboard-item-status/v1",
+                "authority": "sqlite-v2",
+                "revision": "12",
+                "item_id": "work-a",
+                "label": "Work work-a",
+                "state": "active",
+                "timing": "must-now",
+                "outcome_evidence": None,
+                "next_action": "continue",
+                "notes": "Current work remains bounded.",
+                "attempts": [{"attempt_id": "work-a-1", "state": "active", "candidate_revision": None}],
+                "preparation": None,
+            },
+            self.run_json_cli(*common, "item", "status", "--item-id", "work-a"),
+        )
+        result, stdout, stderr = self.run_cli(*common, "item", "status", "--item-id", "work-b")
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK ITEM_STATUS item=work-b state=done revision=12 authority=sqlite-v2", stdout)
+        self.assertIn("outcome_evidence=accepted completion", stdout)
+        self.assertIn("attempt=work-b-1 state=done candidate=candidate-b", stdout)
+
+    def test_item_status_rejects_missing_and_malformed_identities(self) -> None:
+        project, work, _store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+
+        missing, _missing_stdout, missing_stderr = self.run_cli(*common, "item", "status", "--item-id", "missing-item")
+        malformed_stderr = self.run_cli_parse_error(*common, "item", "status", "--item-id", "bad/item")
+
+        self.assertEqual(11, missing)
+        self.assertIn("ITEM_NOT_FOUND", missing_stderr)
+        self.assertIn("pinboard item status", malformed_stderr)
+        self.assertIn("$.item_id", malformed_stderr)
+
+    def test_relational_cli_inputs_are_rejected_at_the_selected_leaf(self) -> None:
+        cases = (
+            (("actions", "--role", "worker", "--lease-id", "lease-a"), "pinboard actions"),
+            (
+                (
+                    "attempt",
+                    "acquire",
+                    "--attempt-id",
+                    "attempt-a",
+                    "--task-id",
+                    "task-a",
+                    "--host-id",
+                    "host-a",
+                    "--ttl-seconds",
+                    "60",
+                    "--coordination-lease-id",
+                    "coordination-a",
+                ),
+                "pinboard attempt acquire",
+            ),
+            (
+                (
+                    "transition",
+                    "--action-id",
+                    "pause:attempt-a",
+                    "--expected-revision",
+                    "1",
+                    "--generation",
+                    "1",
+                    "--authorization",
+                    "attempt",
+                    "--payload",
+                    "payload.json",
+                ),
+                "pinboard transition",
+            ),
+            (
+                (
+                    "dispatch",
+                    "--action-id",
+                    "dispatch:attempt-a",
+                    "--expected-revision",
+                    "1",
+                    "--generation",
+                    "1",
+                    "--checkpoint",
+                    "checkpoint-a",
+                    "--environment",
+                    "environment.json",
+                    "--review-id",
+                    "review-a",
+                ),
+                "pinboard dispatch",
+            ),
+        )
+        for arguments, route in cases:
+            with self.subTest(arguments=arguments):
+                stderr = self.run_cli_parse_error(*arguments)
+                self.assertIn(route, stderr)
+
+    def test_custom_command_decoders_preserve_identifier_constraints(self) -> None:
+        cases = (
+            (("actions", "--role", "observer", "--action-id", "bad/id"), "$.action_id"),
+            (
+                (
+                    "attempt",
+                    "acquire",
+                    "--attempt-id",
+                    "bad/id",
+                    "--task-id",
+                    "task-a",
+                    "--host-id",
+                    "host-a",
+                    "--ttl-seconds",
+                    "60",
+                ),
+                "$.attempt_id",
+            ),
+            (
+                (
+                    "transition",
+                    "--action-id",
+                    "bad/id",
+                    "--expected-revision",
+                    "1",
+                    "--generation",
+                    "1",
+                    "--payload",
+                    "payload.json",
+                ),
+                "$.action_id",
+            ),
+            (
+                (
+                    "dispatch",
+                    "--action-id",
+                    "bad/id",
+                    "--expected-revision",
+                    "1",
+                    "--generation",
+                    "1",
+                    "--checkpoint",
+                    "checkpoint-a",
+                    "--environment",
+                    "environment.json",
+                ),
+                "$.action_id",
+            ),
+        )
+        for arguments, field_path in cases:
+            with self.subTest(arguments=arguments):
+                self.assertIn(field_path, self.run_cli_parse_error(*arguments))
 
     def test_module_entrypoint_delegates_to_cli(self) -> None:
         with patch.object(sys, "argv", ["pinboard", "--version"]), self.assertRaises(SystemExit) as raised:
-            runpy.run_module("repo_work.__main__", run_name="__main__")
+            runpy.run_module("pinboard.__main__", run_name="__main__")
 
         self.assertEqual(0, raised.exception.code)
 

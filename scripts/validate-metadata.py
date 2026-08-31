@@ -8,9 +8,11 @@ import yaml
 
 ROOT: Final = Path(__file__).resolve().parent.parent
 SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
-PLUGIN_NAME: Final = "charlie-pinboard"
-EXPECTED_SKILLS: Final = frozenset({"pinboard", "pinboard-deliver", "pinboard-intake"})
-EXPECTED_ENTRY_POINTS: Final = {"pinboard": "repo_work.cli:main", "repo-work": "repo_work.cli:main"}
+PLUGIN_NAME: Final = "pinboard"
+EXPECTED_SKILLS: Final = frozenset({"pinboard", "pinboard-deliver", "pinboard-intake", "slop-cleanup"})
+EXPECTED_ENTRY_POINTS: Final = {
+    "pinboard": "pinboard.interfaces.cli:main",
+}
 
 type YamlScalar = str | int | float | bool | None
 type YamlValue = YamlScalar | list[YamlValue] | dict[str, YamlValue]
@@ -77,9 +79,12 @@ class MarketplaceManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=Tru
     plugins: tuple[MarketplacePlugin, ...]
 
 
-class SkillFrontmatter(msgspec.Struct, frozen=True):
+class SkillFrontmatter(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     name: str
     description: str
+    license: str | None = None
+    allowed_tools: str | tuple[str, ...] | None = msgspec.field(name="allowed-tools", default=None)
+    metadata: dict[str, str | int | float | bool | tuple[str, ...] | None] | None = None
 
 
 class SkillInterface(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -101,14 +106,6 @@ def load_yaml(text: str, path: Path) -> YamlValue:
 
 def decode_skill_frontmatter(text: str, path: Path) -> SkillFrontmatter:
     value = load_yaml(text, path)
-    if not isinstance(value, dict):
-        raise ValueError(f"{path}: frontmatter must be a YAML mapping")
-    if not all(isinstance(field, str) for field in value):
-        raise ValueError(f"{path}: frontmatter field names must be strings")
-    allowed = {"name", "description", "license", "allowed-tools", "metadata"}
-    unexpected = set(value) - allowed
-    if unexpected:
-        raise ValueError(f"{path}: unexpected frontmatter fields: {', '.join(sorted(unexpected))}")
     try:
         return msgspec.convert(value, type=SkillFrontmatter, strict=True)
     except msgspec.ValidationError as error:
@@ -142,7 +139,7 @@ def validate_project_metadata() -> None:
     if project.name != PLUGIN_NAME:
         raise ValueError("distribution and plugin identities must match")
     if project.scripts != EXPECTED_ENTRY_POINTS:
-        raise ValueError("pinboard must be primary and repo-work must remain an alias to the same engine")
+        raise ValueError("pinboard must be the only project entry point to the current engine")
 
 
 def validate_marketplace() -> None:
@@ -150,7 +147,7 @@ def validate_marketplace() -> None:
     value = msgspec.json.decode(path.read_bytes(), type=MarketplaceManifest)
     expected = MarketplaceManifest(
         name=PLUGIN_NAME,
-        interface=MarketplaceInterface(display_name="Charlie's pinboard"),
+        interface=MarketplaceInterface(display_name="Pinboard"),
         plugins=(
             MarketplacePlugin(
                 name=PLUGIN_NAME,
@@ -197,7 +194,7 @@ def main() -> None:
     validate_marketplace()
     skill_paths = tuple(sorted((ROOT / "skills").glob("*/SKILL.md")))
     if {path.parent.name for path in skill_paths} != EXPECTED_SKILLS:
-        raise ValueError("public skills must be exactly pinboard, pinboard-deliver, and pinboard-intake")
+        raise ValueError("public skills must be exactly pinboard, pinboard-deliver, pinboard-intake, and slop-cleanup")
     for path in skill_paths:
         validate_skill(path)
     print(f"validated plugin marketplace and {len(skill_paths)} skills")

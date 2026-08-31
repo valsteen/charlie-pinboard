@@ -1,87 +1,59 @@
 import contextlib
 import io
-import json
-import multiprocessing
+import subprocess
 import tempfile
 import unittest
-from multiprocessing.synchronize import Event as EventType
+from collections.abc import Callable
+from dataclasses import replace as dataclass_replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
-from repo_work.actions import Action, actions_for
-from repo_work.atomic import transition_lock
-from repo_work.cli import main
-from repo_work.dispatch import DispatchError, prepare_dispatch, read_dispatch_environment
+import msgspec
+from msgspec.structs import replace
 
-from .support import create_state
-
-CHECKPOINT = "Sequence 2 — Complete the shared protocol cutover"
-CONTRACT_TABLE = """\
-#### Contract table
-
-| Invariant | Authority / owner | Required consumer or production observation | Failure classification | Exact verification | Preflight / final revalidation |
-| --- | --- | --- | --- | --- | --- |
-| Kotlin and Rust use protocol v13 together. | Extension protocol | Rust connector | Unsupported version is explicit. | `pnpm rust:test` | Re-run after both consumers change. |
-"""
-ATTEMPT = f"""\
----
-kind: work-attempt
-schema: repo-work/v1
-attempt: universal-reveal-core-1
-item: universal-reveal-core
-state: active
-branch: codex/universal-reveal-core
-base_revision: abc123
-owner: worker-task
-updated: "2026-08-16"
----
-
-# Attempt
-
-### {CHECKPOINT}
-
-Checkpoint boundary: cross-boundary
-Checkpoint outcome: independently-buildable
-
-{CONTRACT_TABLE}
-
-Implement the coherent cutover described here.
-
-### Sequence 3 — Wire the product UI
-
-Later work.
-"""
-
-OLD_CONTRADICTORY_PROMPT = """\
-Use the bounded implementer for sequence 2 only.
-
-Read completely attempt.md, review.md, result.md, all current guidance, and every linked source before editing.
-Update canonical Kotlin vectors and matching Rust decode fixtures now, even though the Rust product adapter remains sequence 3.
-Run the Kotlin checks and only the proportionate Rust format/lint checks needed for protocol model changes.
-Do not begin sequence 3.
-"""
+from pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
+from pinboard.adapters.files.file_io import DurableRoots, resolve_durable_roots
+from pinboard.adapters.sqlite.database import initialize_database
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
+from pinboard.application import stored_state
+from pinboard.application.actions import discover_actions
+from pinboard.application.artifacts import NewArtifact
+from pinboard.application.dispatch_models import DispatchEnvironment, DispatchPermission
+from pinboard.domain import decision_models
+from pinboard.domain.identifiers import ReviewId
+from pinboard.interfaces.cli import main
+from pinboard.interfaces.dispatch_brief import (
+    SuppliedDispatchReview,
+    prepare_dispatch,
+    prepare_dispatch_from_artifact,
+    read_dispatch_environment,
+)
+from pinboard.interfaces.errors import DispatchErrorCode, DispatchFailure, DispatchResult
+from pinboard.interfaces.work_brief_models import (
+    CrossBoundaryCheckpoint,
+    LocalCheckpoint,
+    WorkBrief,
+    WorkBriefReview,
+)
+from pinboard.interfaces.work_briefs import canonical_work_brief_bytes, canonical_work_brief_review_bytes
+from tests.domain_support import expect_success
+from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
+from tests.work_brief_support import CHECKPOINT_ID, ready_review, work_a_brief
 
 
-def _prepare_waiting_dispatch(
-    work: str,
-    project: str,
-    environment: str,
-    action: Action,
-    started: EventType,
-    result: str,
-) -> None:
-    started.set()
-    try:
-        prepare_dispatch(
-            Path(work),
-            Path(project),
-            action,
-            CHECKPOINT,
-            read_dispatch_environment(Path(environment)),
-        )
-        outcome = "success"
-    except DispatchError as error:
-        outcome = error.code
-    Path(result).write_text(outcome, encoding="utf-8")
+def expect_dispatch_success[T](result: DispatchResult[T]) -> T:
+    if isinstance(result, DispatchFailure):
+        raise AssertionError(str(result))
+    return result
+
+
+def expect_dispatch_failure[T](result: DispatchResult[T], code: DispatchErrorCode) -> DispatchFailure:
+    if not isinstance(result, DispatchFailure):
+        raise AssertionError(f"Expected {code.value}, got success: {result!r}")
+    if result.code != code:
+        raise AssertionError(f"Expected {code.value}, got {result.code.value}: {result.message}")
+    return result
 
 
 class DispatchTest(unittest.TestCase):
@@ -92,203 +64,634 @@ class DispatchTest(unittest.TestCase):
             result = main(arguments)
         return result, stdout.getvalue(), stderr.getvalue()
 
-    def active_state(self) -> tuple[Path, Path, Path]:
-        project, work = create_state(
-            ["| universal-reveal-core | active | — | — | universal-reveal-core-1 | design | continue | Active. |"],
-            focus_item="universal-reveal-core",
-            focus_attempt="universal-reveal-core-1",
-            create_active_attempt=True,
+    def environment(self, project: Path) -> DispatchEnvironment:
+        return DispatchEnvironment(
+            "pinboard-dispatch/v1",
+            str(project),
+            "codex/work-a",
+            "base-revision",
+            (DispatchPermission.REPOSITORY_READ,),
         )
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(ATTEMPT, encoding="utf-8")
-        environment_path = Path(tempfile.mkdtemp()) / "environment.json"
-        environment_path.write_text(
-            json.dumps(
-                {
-                    "schema": "repo-work-dispatch/v1",
-                    "checkout": str(project),
-                    "branch": "codex/universal-reveal-core",
-                    "starting_revision": "def456",
-                    "permissions": ["repository-read", "repository-write"],
-                }
+
+    def run_git(self, cwd: Path, *arguments: str) -> None:
+        subprocess.run(["git", *arguments], cwd=cwd, check=True, capture_output=True)
+
+    def initialized(
+        self,
+        project: Path | None = None,
+        roots: DurableRoots | None = None,
+    ) -> tuple[
+        Path,
+        DurableRoots,
+        SQLiteWorkStore,
+        WorkBrief,
+        Callable[[], decision_models.DispatchAction],
+        DispatchEnvironment,
+    ]:
+        project = Path(tempfile.mkdtemp()).resolve() if project is None else project
+        roots = resolve_durable_roots(project) if roots is None else roots
+        initialize_database(roots, SQLITE_NOW)
+        brief = work_a_brief(project)
+        published = write_revision(
+            roots,
+            NewArtifact(
+                stored_state.ArtifactKind.BRIEF,
+                brief.attempt_id,
+                brief.artifact_revision,
+                ".json",
+                canonical_work_brief_bytes(brief),
             ),
+        )
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        assert state.authority.coordination is not None
+        coordination = dataclass_replace(state.authority.coordination, expires_at=now + timedelta(minutes=5))
+        leases = tuple(
+            dataclass_replace(value, expires_at=now + timedelta(minutes=5)) for value in state.authority.attempt_leases
+        )
+        reference = dataclass_replace(
+            state.artifact_references[0],
+            key=published.key,
+            revision=published.revision,
+            selector=published.selector,
+            content_sha256=published.content_sha256,
+            size_bytes=published.size_bytes,
+        )
+        state = dataclass_replace(
+            state,
+            artifact_references=(reference, *state.artifact_references[1:]),
+            authority=dataclass_replace(state.authority, coordination=coordination, attempt_leases=leases),
+        )
+        store = SQLiteWorkStore(roots.database_path)
+        store.initialize_state(state)
+
+        def action() -> decision_models.DispatchAction:
+            actions = expect_success(
+                discover_actions(
+                    store,
+                    decision_models.Role.COORDINATOR,
+                    lease_id=coordination.lease_id,
+                    generation=coordination.generation,
+                    now=SQLITE_NOW,
+                )
+            )
+            selected = next(candidate for candidate in actions if candidate.kind == decision_models.ActionKind.DISPATCH)
+            assert isinstance(selected, decision_models.DispatchAction)
+            return selected
+
+        return project, roots, store, brief, action, self.environment(project)
+
+    def test_direct_typed_dispatch_validates_identity_sources_review_and_prompt(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        value = work_a_brief(project)
+        path = project / "brief.json"
+        path.write_bytes(canonical_work_brief_bytes(value))
+        environment = self.environment(project)
+        candidate = ready_review(value)
+
+        prompt = expect_dispatch_success(
+            prepare_dispatch_from_artifact(
+                path,
+                value.attempt_id,
+                value.branch,
+                project,
+                CHECKPOINT_ID,
+                environment,
+                accepted_item_id=value.item_id,
+                accepted_scope_revision=value.accepted_scope.revision,
+                accepted_scope_digest=value.accepted_scope.digest,
+                accepted_review=candidate,
+            )
+        )
+
+        self.assertIn(f"Checkpoint: {CHECKPOINT_ID}", prompt)
+        self.assertIn(f"Canonical brief: {path}", prompt)
+        altered_prompt = expect_dispatch_failure(
+            prepare_dispatch_from_artifact(
+                path,
+                value.attempt_id,
+                value.branch,
+                project,
+                CHECKPOINT_ID,
+                environment,
+                accepted_item_id=value.item_id,
+                accepted_scope_revision=value.accepted_scope.revision,
+                accepted_scope_digest=value.accepted_scope.digest,
+                supplied_prompt=(prompt + "extra").encode(),
+                accepted_review=candidate,
+            ),
+            DispatchErrorCode.DISPATCH_PROMPT_NOT_CANONICAL,
+        )
+        self.assertIn("launch adds or changes instructions", altered_prompt.message)
+
+        project.joinpath("architecture.md").write_text("# Architecture\n\n## Contract\n\nChanged.\n", encoding="utf-8")
+        stale_source = expect_dispatch_failure(
+            prepare_dispatch_from_artifact(
+                path,
+                value.attempt_id,
+                value.branch,
+                project,
+                CHECKPOINT_ID,
+                environment,
+                accepted_item_id=value.item_id,
+                accepted_scope_revision=value.accepted_scope.revision,
+                accepted_scope_digest=value.accepted_scope.digest,
+                accepted_review=candidate,
+            ),
+            DispatchErrorCode.DISPATCH_AUTHORITY_STALE,
+        )
+        self.assertIn("changed after review", stale_source.message)
+
+    def test_dispatch_samples_selection_publication_and_confirmation_times_separately(self) -> None:
+        project, roots, store, brief, action, environment = self.initialized()
+        selected_action = action()
+        first = datetime.now(UTC)
+        samples = (first, first + timedelta(microseconds=1), first + timedelta(microseconds=2))
+
+        with patch("pinboard.interfaces.dispatch_brief.datetime") as clock:
+            clock.now.side_effect = samples
+            prompt = expect_dispatch_success(
+                prepare_dispatch(
+                    store,
+                    ArtifactRepository(roots),
+                    project,
+                    selected_action,
+                    CHECKPOINT_ID,
+                    environment,
+                    supplied_review=SuppliedDispatchReview(ready_review(brief), ReviewId("timed-review")),
+                )
+            )
+
+        self.assertIn(f"Checkpoint: {CHECKPOINT_ID}", prompt)
+        self.assertEqual(3, clock.now.call_count)
+
+    def test_installed_dispatch_observes_authority_expiry_boundary(self) -> None:
+        for label, offset, accepted in (
+            ("before", timedelta(microseconds=-1), True),
+            ("at", timedelta(), False),
+            ("after", timedelta(microseconds=1), False),
+        ):
+            with self.subTest(label=label):
+                project, roots, store, value, action, environment = self.initialized()
+                selected = action()
+                coordination = store.snapshot().authority.coordination
+                assert coordination is not None
+                observed_at = coordination.expires_at + offset
+                selection_time = coordination.expires_at - timedelta(microseconds=2)
+                publication_time = coordination.expires_at - timedelta(microseconds=1)
+                environment_path = project / "environment.json"
+                environment_path.write_bytes(msgspec.json.encode(environment))
+                review_path = project / "review.json"
+                review_path.write_bytes(ready_review(value))
+                before = store.snapshot()
+                with (
+                    patch("pinboard.interfaces.action_selection.datetime") as action_clock,
+                    patch("pinboard.interfaces.dispatch_brief.datetime") as dispatch_clock,
+                ):
+                    action_clock.now.return_value = selection_time
+                    dispatch_clock.now.side_effect = (selection_time, publication_time, observed_at)
+                    result, prompt, stderr = self.run_cli(
+                        "--project-root",
+                        str(project),
+                        "--work-root",
+                        str(roots.work_root),
+                        "dispatch",
+                        "--action-id",
+                        str(decision_models.action_id(selected)),
+                        "--expected-revision",
+                        selected.capability.expected_revision,
+                        "--generation",
+                        str(selected.capability.coordinator_generation),
+                        "--lease-id",
+                        str(selected.capability.lease_id),
+                        "--checkpoint",
+                        CHECKPOINT_ID,
+                        "--environment",
+                        str(environment_path),
+                        "--brief-review",
+                        str(review_path),
+                        "--review-id",
+                        f"expiry-{label}",
+                    )
+                self.assertEqual(0, result, stderr) if accepted else self.assertNotEqual(0, result)
+                self.assertEqual(1, action_clock.now.call_count)
+                self.assertEqual(3, dispatch_clock.now.call_count)
+                if accepted:
+                    self.assertIn(f"Checkpoint: {CHECKPOINT_ID}", prompt)
+                else:
+                    self.assertIn("COORDINATION_LEASE_REQUIRED", stderr)
+                    after = store.snapshot()
+                    self.assertEqual(before.lifecycle.attempts, after.lifecycle.attempts)
+                    self.assertEqual(before.authority.coordination, after.authority.coordination)
+
+    def test_identity_review_and_environment_failure_matrix_is_stable(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        value = work_a_brief(project)
+        path = project / "brief.json"
+        path.write_bytes(canonical_work_brief_bytes(value))
+        environment = self.environment(project)
+
+        cases = (
+            ("attempt", {"attempt_id": "other"}, DispatchErrorCode.DISPATCH_BRIEF_INVALID),
+            ("item", {"accepted_item_id": "other"}, DispatchErrorCode.DISPATCH_BRIEF_INVALID),
+            ("scope-revision", {"accepted_scope_revision": 2}, DispatchErrorCode.DISPATCH_BRIEF_INVALID),
+            ("scope-digest", {"accepted_scope_digest": "f" * 64}, DispatchErrorCode.DISPATCH_BRIEF_INVALID),
+            ("checkpoint", {"checkpoint": "other"}, DispatchErrorCode.DISPATCH_CHECKPOINT_MISSING),
+            (
+                "branch",
+                {"environment": replace(environment, branch="other")},
+                DispatchErrorCode.DISPATCH_BRANCH_MISMATCH,
+            ),
+            (
+                "checkout",
+                {"environment": replace(environment, checkout=str(project / "missing"))},
+                DispatchErrorCode.DISPATCH_CHECKOUT_MISSING,
+            ),
+            (
+                "checkout-mismatch",
+                {"source_checkout_root": Path(tempfile.mkdtemp()).resolve()},
+                DispatchErrorCode.DISPATCH_CHECKOUT_MISMATCH,
+            ),
+        )
+        for _name, changed, code in cases:
+            arguments = {
+                "attempt_path": path,
+                "attempt_id": value.attempt_id,
+                "attempt_branch": value.branch,
+                "source_checkout_root": project,
+                "checkpoint": CHECKPOINT_ID,
+                "environment": environment,
+                "accepted_item_id": value.item_id,
+                "accepted_scope_revision": value.accepted_scope.revision,
+                "accepted_scope_digest": value.accepted_scope.digest,
+                "accepted_review": ready_review(value),
+            }
+            arguments.update(changed)
+            with self.subTest(name=_name):
+                expect_dispatch_failure(prepare_dispatch_from_artifact(**arguments), code)
+
+        review = msgspec.json.decode(ready_review(value), type=WorkBriefReview)
+        for changed, code in (
+            ({"reviewer_task_id": value.owner_task_id}, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT),
+            ({"checkpoint_sha256": "f" * 64}, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_STALE),
+            ({"coverage": ()}, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_INVALID),
+        ):
+            with self.subTest(changed=changed):
+                failure = prepare_dispatch_from_artifact(
+                    path,
+                    value.attempt_id,
+                    value.branch,
+                    project,
+                    CHECKPOINT_ID,
+                    environment,
+                    accepted_item_id=value.item_id,
+                    accepted_scope_revision=value.accepted_scope.revision,
+                    accepted_scope_digest=value.accepted_scope.digest,
+                    accepted_review=canonical_work_brief_review_bytes(replace(review, **changed)),
+                )
+                expect_dispatch_failure(failure, code)
+
+    def test_local_checkpoint_rejects_review_arguments(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        value = work_a_brief(project)
+        cross = value.checkpoint
+        assert isinstance(cross, CrossBoundaryCheckpoint)
+        local = LocalCheckpoint(
+            "local-cutover",
+            "Local cutover",
+            cross.architecture_impact,
+            cross.outcome_description,
+            cross.acceptance_criteria,
+            cross.verification,
+            cross.deferrals,
+        )
+        value = replace(value, checkpoint=local)
+        path = project / "local.json"
+        path.write_bytes(canonical_work_brief_bytes(value))
+
+        prompt = expect_dispatch_success(
+            prepare_dispatch_from_artifact(
+                path,
+                value.attempt_id,
+                value.branch,
+                project,
+                local.checkpoint_id,
+                self.environment(project),
+                accepted_item_id=value.item_id,
+                accepted_scope_revision=1,
+                accepted_scope_digest=SQLITE_DIGEST,
+            )
+        )
+        self.assertIn("Checkpoint: local-cutover", prompt)
+        rejected = prepare_dispatch_from_artifact(
+            path,
+            value.attempt_id,
+            value.branch,
+            project,
+            local.checkpoint_id,
+            self.environment(project),
+            accepted_item_id=value.item_id,
+            accepted_scope_revision=1,
+            accepted_scope_digest=SQLITE_DIGEST,
+            accepted_review=b"{}",
+        )
+        expect_dispatch_failure(rejected, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID)
+
+    def test_sqlite_dispatch_publishes_reuses_and_preserves_review_collisions(self) -> None:
+        project, roots, store, value, action, environment = self.initialized()
+        first_review = ready_review(value)
+
+        prompt = expect_dispatch_success(
+            prepare_dispatch(
+                store,
+                ArtifactRepository(roots),
+                project,
+                action(),
+                CHECKPOINT_ID,
+                environment,
+                supplied_review=SuppliedDispatchReview(first_review, ReviewId("first-review")),
+            )
+        )
+
+        self.assertIn(f"Checkpoint: {CHECKPOINT_ID}", prompt)
+        after_first = store.snapshot()
+        ready = tuple(
+            reference
+            for reference in after_first.artifact_references
+            if reference.kind == stored_state.ArtifactKind.EVIDENCE and "brief-review" in reference.key
+        )
+        self.assertEqual(1, len(ready))
+        self.assertTrue(ready[0].selector.endswith(".json"))
+
+        reused = expect_dispatch_success(
+            prepare_dispatch(
+                store,
+                ArtifactRepository(roots),
+                project,
+                action(),
+                CHECKPOINT_ID,
+                environment,
+            )
+        )
+        self.assertEqual(prompt, reused)
+        self.assertEqual(after_first, store.snapshot())
+
+        collision = prepare_dispatch(
+            store,
+            ArtifactRepository(roots),
+            project,
+            action(),
+            CHECKPOINT_ID,
+            environment,
+            supplied_review=SuppliedDispatchReview(
+                ready_review(value, result="Different complete result."),
+                ReviewId("later-review"),
+            ),
+        )
+        expect_dispatch_failure(collision, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_COLLISION)
+        self.assertTrue(
+            any("rejected-later-review" in reference.key for reference in store.snapshot().artifact_references)
+        )
+
+    def test_sqlite_dispatch_rejects_stale_action_and_cli_verifies_prompt(self) -> None:
+        project, roots, store, value, action, environment = self.initialized()
+        selected = action()
+        expect_success(
+            store.accept_artifact_reference(
+                roots.work_root,
+                write_revision(
+                    roots, NewArtifact(stored_state.ArtifactKind.EVIDENCE, "revision-bump", 1, ".json", b"{}\n")
+                ),
+                datetime.now(UTC),
+            )
+        )
+        stale = prepare_dispatch(
+            store,
+            ArtifactRepository(roots),
+            project,
+            selected,
+            CHECKPOINT_ID,
+            environment,
+            supplied_review=SuppliedDispatchReview(ready_review(value), ReviewId("review-id")),
+        )
+        expect_dispatch_failure(stale, DispatchErrorCode.STALE_ACTION)
+
+        project, roots, store, value, action, environment = self.initialized()
+        selected = action()
+        environment_path = project / "environment.json"
+        environment_path.write_bytes(msgspec.json.encode(environment))
+        review_path = project / "review.json"
+        review_path.write_bytes(ready_review(value))
+        common = ("--project-root", str(project), "--work-root", str(roots.work_root))
+        arguments = (
+            *common,
+            "dispatch",
+            "--action-id",
+            str(decision_models.action_id(selected)),
+            "--expected-revision",
+            selected.capability.expected_revision,
+            "--generation",
+            str(selected.capability.coordinator_generation),
+            "--lease-id",
+            str(selected.capability.lease_id),
+            "--checkpoint",
+            CHECKPOINT_ID,
+            "--environment",
+            str(environment_path),
+            "--brief-review",
+            str(review_path),
+            "--review-id",
+            "cli-review",
+        )
+        result, prompt, stderr = self.run_cli(*arguments)
+        self.assertEqual(0, result, stderr)
+        prompt_path = project / "prompt.txt"
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        refreshed = action()
+        verify_arguments = list(arguments)
+        verify_arguments[verify_arguments.index(selected.capability.expected_revision)] = (
+            refreshed.capability.expected_revision
+        )
+        verify_arguments.extend(("--prompt", str(prompt_path)))
+        result, stdout, stderr = self.run_cli(*verify_arguments)
+        self.assertEqual(0, result, stderr)
+        self.assertIn("DISPATCH_READY", stdout)
+
+    def test_cli_dispatch_revalidates_the_linked_source_checkout_against_the_shared_ledger(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            linked = root / "linked"
+            repository.mkdir()
+            self.run_git(repository, "init", "-b", "main")
+            (repository / "architecture.md").write_text(
+                "# Architecture\n\n## Contract\n\nTyped JSON is canonical.\n",
+                encoding="utf-8",
+            )
+            self.run_git(repository, "add", "architecture.md")
+            self.run_git(
+                repository,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            )
+            self.run_git(repository, "worktree", "add", "-b", "codex/work-a", str(linked))
+            _, roots, _, value, action, environment = self.initialized(linked, resolve_durable_roots(repository))
+            (repository / "architecture.md").write_text(
+                "# Architecture\n\n## Contract\n\nDirty primary authority.\n",
+                encoding="utf-8",
+            )
+            environment_path = linked / "environment.json"
+            environment_path.write_bytes(msgspec.json.encode(environment))
+            review_path = linked / "review.json"
+            review_path.write_bytes(ready_review(value))
+            selected = action()
+
+            result, prompt, stderr = self.run_cli(
+                "--project-root",
+                str(linked),
+                "dispatch",
+                "--action-id",
+                str(decision_models.action_id(selected)),
+                "--expected-revision",
+                selected.capability.expected_revision,
+                "--generation",
+                str(selected.capability.coordinator_generation),
+                "--lease-id",
+                str(selected.capability.lease_id),
+                "--checkpoint",
+                CHECKPOINT_ID,
+                "--environment",
+                str(environment_path),
+                "--brief-review",
+                str(review_path),
+                "--review-id",
+                "linked-review",
+            )
+            shared_database_exists = (roots.work_root / "state.sqlite3").is_file()
+            duplicate_ledger_exists = (linked / ".codex" / "pinboard").exists()
+            linked_checkout = str(linked)
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn(f"Checkout: {linked_checkout}", prompt)
+        self.assertTrue(shared_database_exists)
+        self.assertFalse(duplicate_ledger_exists)
+
+    def test_dispatch_environment_is_strict(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        path = project / "environment.json"
+        path.write_text(
+            '{"schema":"pinboard-dispatch/v2","checkout":"x","branch":"b","starting_revision":"r","permissions":[]}',
             encoding="utf-8",
         )
-        return project, work, environment_path
-
-    def dispatch_arguments(self, project: Path, work: Path, environment: Path) -> tuple[str, ...]:
-        action = next(
-            action
-            for action in actions_for(work, project, "coordinator")
-            if action.action_id == "dispatch:universal-reveal-core-1"
+        expect_dispatch_failure(
+            read_dispatch_environment(path),
+            DispatchErrorCode.DISPATCH_ENVIRONMENT_INVALID,
         )
-        return (
+        missing_environment = project / "missing-environment.json"
+        unreadable = expect_dispatch_failure(
+            read_dispatch_environment(missing_environment),
+            DispatchErrorCode.DISPATCH_ENVIRONMENT_UNREADABLE,
+        )
+        self.assertTrue(unreadable.message.startswith(f"Cannot read '{missing_environment}': "))
+
+        project, roots, _store, _value, action, _environment = self.initialized()
+        selected = action()
+        path = project / "invalid-environment.json"
+        path.write_text(
+            '{"schema":"pinboard-dispatch/v2","checkout":"x","branch":"b","starting_revision":"r","permissions":[]}',
+            encoding="utf-8",
+        )
+        base_arguments = (
             "--project-root",
             str(project),
             "--work-root",
-            str(work),
+            str(roots.work_root),
             "dispatch",
             "--action-id",
-            action.action_id,
+            str(decision_models.action_id(selected)),
             "--expected-revision",
-            action.expected_revision,
+            selected.capability.expected_revision,
             "--generation",
-            str(action.coordinator_generation),
+            str(selected.capability.coordinator_generation),
+            "--lease-id",
+            str(selected.capability.lease_id),
             "--checkpoint",
-            CHECKPOINT,
+            CHECKPOINT_ID,
+        )
+        result, stdout, stderr = self.run_cli(
+            *base_arguments,
             "--environment",
-            str(environment),
+            str(path),
         )
-
-    def test_real_contradictory_launch_is_rejected_but_canonical_launch_is_accepted(self) -> None:
-        project, work, environment = self.active_state()
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        render_result, canonical_prompt, render_stderr = self.run_cli(*arguments)
-        canonical_path = project / "canonical-prompt.txt"
-        canonical_path.write_text(canonical_prompt, encoding="utf-8")
-        old_path = project / "old-prompt.txt"
-        old_path.write_text(OLD_CONTRADICTORY_PROMPT, encoding="utf-8")
-
-        rejected_result, _, rejected_stderr = self.run_cli(*arguments, "--prompt", str(old_path))
-        accepted_result, accepted_stdout, accepted_stderr = self.run_cli(*arguments, "--prompt", str(canonical_path))
-
-        self.assertEqual(0, render_result, render_stderr)
-        self.assertIn("Use $deliver", canonical_prompt)
-        self.assertIn("sole semantic execution contract", canonical_prompt)
-        self.assertNotIn("pnpm rust:test", canonical_prompt)
-        self.assertEqual(14, rejected_result)
-        self.assertIn("DISPATCH_PROMPT_NOT_CANONICAL", rejected_stderr)
-        self.assertIn("adds or changes instructions", rejected_stderr)
-        self.assertEqual(0, accepted_result, accepted_stderr)
-        self.assertIn("OK DISPATCH_READY", accepted_stdout)
-
-    def test_cross_boundary_checkpoint_requires_a_complete_contract_table(self) -> None:
-        project, work, environment = self.active_state()
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(ATTEMPT.replace("Rust connector", "—"), encoding="utf-8")
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, _, stderr = self.run_cli(*arguments)
-
         self.assertEqual(14, result)
-        self.assertIn("DISPATCH_CONTRACT_INCOMPLETE", stderr)
-        self.assertIn("Required consumer or production observation", stderr)
+        self.assertEqual("", stdout)
+        self.assertTrue(stderr.startswith("DISPATCH_ENVIRONMENT_INVALID: Cannot decode dispatch environment: "))
 
-    def test_contract_table_requires_a_markdown_separator(self) -> None:
-        project, work, environment = self.active_state()
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        invalid_separator = "| not | a | markdown | table | separator | row |"
-        attempt_path.write_text(
-            ATTEMPT.replace("| --- | --- | --- | --- | --- | --- |", invalid_separator),
-            encoding="utf-8",
+        valid_environment = project / "valid-environment.json"
+        valid_environment.write_bytes(msgspec.json.encode(self.environment(project)))
+        missing_prompt = project / "missing-prompt.txt"
+        result, stdout, stderr = self.run_cli(
+            *base_arguments,
+            "--environment",
+            str(valid_environment),
+            "--prompt",
+            str(missing_prompt),
         )
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, _, stderr = self.run_cli(*arguments)
-
         self.assertEqual(14, result)
-        self.assertIn("DISPATCH_CONTRACT_INVALID", stderr)
+        self.assertEqual("", stdout)
+        self.assertTrue(stderr.startswith(f"DISPATCH_PROMPT_UNREADABLE: Cannot read '{missing_prompt}': "))
 
-    def test_cross_boundary_checkpoint_must_be_independently_buildable(self) -> None:
-        project, work, environment = self.active_state()
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(
-            ATTEMPT.replace("Checkpoint outcome: independently-buildable", "Checkpoint outcome: partial"),
-            encoding="utf-8",
+        missing_review = project / "missing-review.json"
+        result, stdout, stderr = self.run_cli(
+            *base_arguments,
+            "--environment",
+            str(valid_environment),
+            "--brief-review",
+            str(missing_review),
+            "--review-id",
+            "missing-review",
         )
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, _, stderr = self.run_cli(*arguments)
-
         self.assertEqual(14, result)
-        self.assertIn("DISPATCH_CHECKPOINT_NOT_BUILDABLE", stderr)
+        self.assertEqual("", stdout)
+        self.assertTrue(stderr.startswith(f"DISPATCH_BRIEF_REVIEW_INVALID: Cannot read '{missing_review}': "))
 
-    def test_checkpoint_requires_an_explicit_boundary_classification(self) -> None:
-        project, work, environment = self.active_state()
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(ATTEMPT.replace("Checkpoint boundary: cross-boundary\n", ""), encoding="utf-8")
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, _, stderr = self.run_cli(*arguments)
-
+        review_without_id = project / "review-without-id.json"
+        review_without_id.write_bytes(b"{}")
+        result, stdout, stderr = self.run_cli(
+            *base_arguments,
+            "--environment",
+            str(valid_environment),
+            "--brief-review",
+            str(review_without_id),
+        )
         self.assertEqual(14, result)
-        self.assertIn("DISPATCH_BOUNDARY_MISSING", stderr)
-
-    def test_local_checkpoint_does_not_require_a_contract_table(self) -> None:
-        project, work, environment = self.active_state()
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-        attempt_path.write_text(
-            ATTEMPT.replace("Checkpoint boundary: cross-boundary", "Checkpoint boundary: local").replace(
-                f"{CONTRACT_TABLE}\n", ""
-            ),
-            encoding="utf-8",
+        self.assertEqual("", stdout)
+        self.assertEqual(
+            "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID: --brief-review requires one kebab-case --review-id.\n",
+            stderr,
         )
-        arguments = self.dispatch_arguments(project, work, environment)
 
-        result, prompt, stderr = self.run_cli(*arguments)
-
-        self.assertEqual(0, result, stderr)
-        self.assertIn("sole semantic execution contract", prompt)
-
-    def test_environment_branch_must_match_the_attempt(self) -> None:
-        project, work, environment = self.active_state()
-        environment.write_text(
-            json.dumps(
-                {
-                    "schema": "repo-work-dispatch/v1",
-                    "checkout": str(project),
-                    "branch": "codex/different-branch",
-                    "starting_revision": "def456",
-                    "permissions": ["repository-read"],
-                }
-            ),
-            encoding="utf-8",
+        result, stdout, stderr = self.run_cli(
+            *base_arguments,
+            "--environment",
+            str(valid_environment),
+            "--brief-review",
+            str(review_without_id),
+            "--review-id",
+            "NOT KEBAB",
         )
-        arguments = self.dispatch_arguments(project, work, environment)
-
-        result, _, stderr = self.run_cli(*arguments)
-
         self.assertEqual(14, result)
-        self.assertIn("DISPATCH_BRANCH_MISMATCH", stderr)
-
-    def test_coordinator_replacement_has_a_distinct_dispatch_outcome(self) -> None:
-        project, work, environment = self.active_state()
-        arguments = self.dispatch_arguments(project, work, environment)
-        coordinator_path = work / "coordinator.json"
-        registration = json.loads(coordinator_path.read_text(encoding="utf-8"))
-        registration["generation"] = 2
-        coordinator_path.write_text(json.dumps(registration) + "\n", encoding="utf-8")
-
-        result, _, stderr = self.run_cli(*arguments)
-
-        self.assertEqual(14, result)
-        self.assertIn("COORDINATOR_REPLACED", stderr)
-
-    def test_dispatch_waits_for_transition_lock_then_rejects_changed_state(self) -> None:
-        project, work, environment = self.active_state()
-        action = next(
-            candidate
-            for candidate in actions_for(work, project, "coordinator")
-            if candidate.action_id == "dispatch:universal-reveal-core-1"
+        self.assertEqual("", stdout)
+        self.assertEqual(
+            "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID: --brief-review requires one kebab-case --review-id.\n",
+            stderr,
         )
-        result_path = project / "dispatch-result.txt"
-        context = multiprocessing.get_context("fork")
-        started = context.Event()
-        process = context.Process(
-            target=_prepare_waiting_dispatch,
-            args=(str(work), str(project), str(environment), action, started, str(result_path)),
-        )
-        attempt_path = work / "attempts" / "universal-reveal-core-1" / "attempt.md"
-
-        with transition_lock(work):
-            process.start()
-            self.assertTrue(started.wait(timeout=5))
-            attempt_path.write_text(ATTEMPT.replace("Later work.", "Later accepted work."), encoding="utf-8")
-        process.join(timeout=10)
-
-        self.assertEqual(0, process.exitcode)
-        self.assertEqual("STALE_ACTION", result_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

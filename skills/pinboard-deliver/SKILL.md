@@ -1,21 +1,23 @@
 ---
 name: pinboard-deliver
-description: Deliver exactly one active pinboard attempt from its accepted brief and renewable lease. Use when the item, checkout, scope, acceptance criteria, and verification are already recorded. Do not use for intake, portfolio selection, broad audits, design exploration, or acceptance review.
+description: Deliver exactly one active pinboard attempt from its accepted brief, current definition identity, and renewable lease. Use when the item, checkout, definition, acceptance criteria, and verification are already recorded. Do not use for intake, portfolio selection, broad audits, design exploration, or acceptance review.
 ---
 
 # Deliver from the pinboard
 
-Implement one accepted attempt, verify it, leave a durable result, and return it accurately for independent coordination review.
+Deliver the accepted checkpoint of one active attempt: implement its complete scope, verify it, leave a durable result, and return it accurately for review.
 
 ## Establish the attempt
 
 1. Resolve the pinboard executable relative to the installed plugin as `../../scripts/pinboard`.
-2. Run `pinboard status --json`. If it reports v1 authority, stop with `MIGRATION_REQUIRED` and the exact `pinboard migrate --to v2` command; do not imply that v1 has attempt-lease semantics. On v2, acquire or validate the user-supplied attempt lease, then run `pinboard actions --role worker` with its lease identity and fencing generation.
+2. Run `pinboard status --json` and require authority `sqlite-v2`. Stop if validation fails or another authority is reported; never infer current state from generated views or archived files. Acquire or validate the user-supplied attempt lease, then run `pinboard actions --role worker` with its lease identity and fencing generation.
 3. Require the user-supplied attempt to be present and active. Other disjoint attempts may also be active. Stop if state is invalid, the supplied attempt is absent, its item and attempt records disagree, or another unexpired owner holds it. Report that owner and expiry instead of guessing or silently revoking it.
-4. Read that attempt's `attempt.md` fully, then read only the project guidance, item context, accepted knowledge, and source authorities it names. Preserve exact file and section selectors instead of broadening them into exploratory reads.
+4. Read the attempt's accepted canonical `.json` brief fully and read `pinboard item definition --item-id <item> --json`. Require the brief's accepted revision and digest to match that current definition before continuing. Its generated Markdown view is inspection convenience, not an editable or parseable contract. Then read only the project guidance, accepted definition, accepted knowledge, and source authorities the JSON record names. Before loading several or potentially large named authorities, create a temporary `pinboard-brief-sources/v1` manifest and run `pinboard brief-sources --file <manifest> --json` to measure the complete set. Read each emitted batch once in order. Preserve exact selectors and selected digests; reuse unchanged receipts and reread only changed owners. If output truncates, continue at the first unread batch or line without replaying returned content.
 5. Inspect the checkout, branch/worktree, base revision, and unrelated user changes before editing.
 
-Confirm the attempt identity, checkpoint, and execution environment without rewriting its semantics. The canonical attempt remains the sole source for scope, ordering, deferrals, and verification. Ask only when missing information would change product behavior, architecture, scope, compatibility, or verification expectations.
+Confirm the attempt identity, current definition revision and digest, stable checkpoint ID, and execution environment without rewriting its semantics. The canonical JSON brief remains the sole source for execution ordering, deferrals, and verification, while the matching immutable definition owns accepted item semantics. Ask only when missing information would change product behavior, architecture, scope, compatibility, or verification expectations.
+
+When reacquiring an attempt returned from review, read the durable correction reason and `review.md` before editing. Keep the same accepted brief, branch, evidence, and attempt identity. Treat the earlier `result.md` as preserved history, not a current readiness claim; refresh it only after the corrected candidate is stable and all required checks pass.
 
 ## Stay inside the attempt
 
@@ -24,14 +26,23 @@ Confirm the attempt identity, checkpoint, and execution environment without rewr
 - Preserve unrelated user changes.
 - Follow the repository's own testing, formatting, lint, documentation, and safety guidance.
 - Treat a stale instruction as an instruction defect before reshaping working code around it.
-- Do not edit generated `queue.md`, `current.md`, coordination leases, or another item's authoritative lifecycle fields.
-- Before live use, claim every scarce resource named by the item with the current attempt-lease token. If a resource is busy, report its holder and expiry; continue only work that does not use it.
+- Do not edit generated views, SQLite authority, coordination leases, or another item's lifecycle state outside the executable workflow.
 - Do not accept or complete your own item.
-- Prepare the stable candidate for independent review, then return it using the confirmed-delivery rules below. A later chat may borrow coordination to review and accept it; no permanent coordinator chat is required. Do not invoke a generic reviewer-dispatch workflow or launch another reviewer from the worker role.
+- Prepare the stable candidate for independent review, then follow the current-responsibility and confirmed-delivery rules below. No permanent coordinator chat is required.
 
-Worker diff inspection, requirement mapping, and fresh verification are pre-review evidence. They do not replace independent review under a current coordination lease.
+Worker diff inspection, requirement mapping, and fresh verification are pre-review evidence. They do not replace independent review.
+
+For a cross-boundary attempt, map every observable behavior and behavior-defining test to an authorized Contract row before adding it. The row's `Authorization basis` must resolve to the current accepted scope or to an exact reviewed authority family. Ordinary internal choices that preserve supported behavior—such as helper names, local refactors, and equivalent algorithms—need no separate provenance record.
+
+When the canonical brief explicitly selects the optional engineering-health baseline, read the shared [engineering-health baseline](../pinboard/references/engineering-health-baseline.md) and apply it only through the brief's authorized contracts and verification. Do not infer the selection from perceived complexity, architecture impact, or the number of changed files.
+
+Run every basis-bearing entry in the accepted `Verification` section as a mandatory check. Do not add a tool, threshold, platform promise, compatibility obligation, or hardening check to that mandatory list unless the brief gives it an accepted basis. Proportionate exploratory checks remain available when they help implementation, but they do not become acceptance obligations merely because they were run or suggested during review.
+
+When a useful addition has no authorized row, stop widening that part of the implementation and report the unsupported addition. Continue independent in-scope work when possible. Create an intake proposal only when the user explicitly authorizes preservation; proposal creation does not authorize implementation. Do not invent a ledger state or transition to represent the discovery.
 
 If additional work is useful but not required, invoke `$pinboard-intake` only when the user explicitly wants it preserved. Otherwise mention it in the result without creating shared state.
+
+When authorized intake is nested inside delivery, retain the attempt ID, current accepted objective, and next promised implementation or verification action as a continuation anchor. After the proposal is persisted and optional delivery handling ends, return to that action. Intake alone does not pause or reprioritize the attempt. Before the final result, account for every announced pending action as completed, durably deferred at an exact owner, or blocked by one exact decision.
 
 If a discovered problem blocks the attempt:
 
@@ -39,15 +50,18 @@ If a discovered problem blocks the attempt:
 2. preserve the current commit/worktree and verification;
 3. write `blocker.md` in the active attempt directory with the observation, affected criterion, completed work, and safest next action;
 4. use `$pinboard-intake` to propose a prerequisite when explicitly requested;
-5. report the blocker so any chat can borrow coordination and choose the available block or pause transition.
+5. use the worker-visible `report-blocker:<attempt>` affordance to report that preserved evidence; it is advisory and has no mutation payload;
+6. leave shared lifecycle mutation to coordination, which must select the exact `block:<attempt>` action only for dependencies already accepted in the current definition or `pause:<attempt>` when no accepted dependency condition applies; a newly accepted dependency requires a complete item revision and revised-brief recovery, and `block-item:<item>` is only for unstarted intake work.
 
 ## Implement and verify
 
 Use the repository's selected testing mode. Prefer the smallest evidence that can disprove the important failure, then run the broader changed-surface gate required by the attempt.
 
+Continue through the complete accepted checkpoint while in-scope work can proceed without user input. A green internal seam, implementation milestone, or long-running turn is a commentary update, not a reason to end the turn. Once implementation begins, end delivery only with a stable candidate and `result.md` ready for review, a `blocker.md` naming the exact condition that prevents further work, or an explicit user request for a partial stop or background execution. If the execution host forces an earlier return, say so plainly, preserve the exact continuation point, and state whether any user action is required.
+
 Before review:
 
-1. finish the coherent implementation batch;
+1. finish the complete accepted checkpoint;
 2. run every command required by the attempt, without replacing it with a narrower package, test, formatter, or linter command;
 3. inspect the final diff;
 4. identify the stable candidate by commit or working-tree fingerprint;
@@ -65,15 +79,19 @@ The result must record:
 - any material test removal and its replacement evidence;
 - production-entry-point evidence for lifecycle claims;
 - preserved unrelated changes;
-- new findings or exact unknowns;
+- new concerns or exact unknowns;
 - whether the attempt is ready for review or blocked.
+
+When the accepted checkpoint is one of several recorded for the item, report its exact candidate and the brief's remaining-work boundary without claiming that the whole item is complete. Do not turn an internal implementation seam into an unrecorded checkpoint. Checkpoint acceptance belongs to an independent coordinator after review; the worker does not archive its own checkpoint evidence or resume the next checkpoint.
 
 ## Return the candidate for review
 
 `result.md` makes the candidate durably ready for review. It does not by itself notify another task.
 
-1. When the launch includes an exact `source_thread_id` and task messaging is available, send that task a concise review request containing the attempt ID, candidate identity, and absolute `result.md` path. Treat delivery as successful only after the messaging tool confirms it.
-2. If the launch has no exact return task, messaging is unavailable, or delivery fails, do not guess a destination or create a reviewer. Report `ready for coordination review` and state plainly that no task was notified. The durable receipt remains sufficient for any later chat to borrow coordination and review the candidate.
-3. Say `submitted for coordination review` only after confirmed delivery to the exact return task. A written receipt without confirmed delivery is `ready for coordination review`, not submitted.
+Apply the [current-responsibility review route](../pinboard/SKILL.md#coordinate-review-responsibility-and-checkout-use). By default, the task carrying this attempt commissions one fresh-context, candidate-read-only review subagent and processes its complete verdict. In user-facing updates, call this `review by a separate Codex reviewer`; reserve `ready for your review` for an actual human review request. An exact `source_thread_id`, prior dispatch, scope clarification, earlier message, or former coordination is not sufficient reason to wake another visible task.
+
+Send a concise review request containing the attempt ID, candidate identity, and absolute `result.md` path to another visible task only when the user explicitly selected it or it remains the active user-facing coordinator for the same live workflow. Treat delivery as successful only after task messaging confirms it. Name that task and its expected review action after confirmed delivery; otherwise say `ready for review by a separate Codex reviewer` and state plainly that no visible task was notified. The durable receipt remains sufficient if reviewer creation or permitted delivery is unavailable.
 
 Do not claim canonical completion until a current coordination lease authorizes the completion transition.
+
+If the attempt was returned for correction, report the new candidate normally. Do not present the return itself as a new concern or imply that the earlier review was accepted. The compact human outcome is: `Correction ready — <candidate>; the same attempt has been resubmitted for review by a separate Codex reviewer.`

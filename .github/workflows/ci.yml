@@ -43,10 +43,16 @@ jobs:
           uv run --locked coverage report
       - name: Validate plugin and skill metadata
         run: uv run --locked python scripts/validate-metadata.py
+      - name: Check generated visitor guide
+        run: uv run --locked python -m docs.how_it_works.render --check
       - name: Build without workspace sources
         run: uv build --no-sources
       - name: Smoke-test the isolated wheel
         run: |
           uv run --isolated --no-project --with ./dist/*.whl pinboard --version
           uv run --isolated --no-project --with ./dist/*.whl pinboard --help
-          uv run --isolated --no-project --with ./dist/*.whl repo-work --version
+          smoke_repository=$(mktemp -d)
+          git -C "$smoke_repository" init
+          uv run --isolated --no-project --with ./dist/*.whl pinboard --project-root "$smoke_repository" init
+          test -f "$smoke_repository/.codex/pinboard/state.sqlite3"
+          git -C "$smoke_repository" check-ignore -q .codex/pinboard/state.sqlite3
