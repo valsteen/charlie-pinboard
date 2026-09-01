@@ -6,7 +6,7 @@ from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.decisions import available_actions as available_actions_outcome
 from pinboard.domain.decisions import decide as decision_outcome
-from pinboard.domain.decisions import rediscover_action as rediscover_action_outcome
+from pinboard.domain.decisions import validate_supplied_action
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import (
     ArtifactRefId,
@@ -44,12 +44,6 @@ def decide(
     snapshot: LedgerSnapshot, command: decision_models.TransitionCommand, now: datetime
 ) -> decision_models.Decision:
     return expect_success(decision_outcome(snapshot, command, now))
-
-
-def rediscover_action(
-    snapshot: LedgerSnapshot, actor: decision_models.ActorAuthority, supplied: decision_models.Action
-) -> decision_models.Action:
-    return expect_success(rediscover_action_outcome(snapshot, actor, supplied))
 
 
 def _stored_action(snapshot: LedgerSnapshot) -> decision_models.SubmitReviewAction:
@@ -267,7 +261,7 @@ class ExactMutationAuthorityTest(unittest.TestCase):
             ),
         )
 
-    def test_exact_rediscovery_rejects_single_fact_substitutions_not_global_revision(self) -> None:
+    def test_exact_validation_rejects_single_fact_substitutions_not_global_revision(self) -> None:
         state = complete_sqlite_state()
         snapshot = project_decision_snapshot(state, SQLITE_NOW)
         selected = _stored_action(snapshot)
@@ -284,8 +278,9 @@ class ExactMutationAuthorityTest(unittest.TestCase):
         )
         for supplied in substitutions:
             with self.subTest(supplied=supplied):
-                rejected = rediscover_action_outcome(snapshot, _worker_actor(), supplied)
+                rejected = validate_supplied_action(snapshot, _worker_actor(), supplied)
                 self.assertIsInstance(rejected, DecisionFailure)
+                assert isinstance(rejected, DecisionFailure)
             self.assertEqual(DecisionFailureCode.ACTION_NOT_AVAILABLE, rejected.code)
 
         advanced_state = replace(
@@ -295,10 +290,9 @@ class ExactMutationAuthorityTest(unittest.TestCase):
                 project=replace(state.lifecycle.project, revision=state.lifecycle.project.revision + 1),
             ),
         )
-        rediscovered = rediscover_action(
-            project_decision_snapshot(advanced_state, SQLITE_NOW), _worker_actor(), selected
+        self.assertIsNone(
+            validate_supplied_action(project_decision_snapshot(advanced_state, SQLITE_NOW), _worker_actor(), selected)
         )
-        self.assertEqual(decision_models.action_id(selected), decision_models.action_id(rediscovered))
 
 
 if __name__ == "__main__":

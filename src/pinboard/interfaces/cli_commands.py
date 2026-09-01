@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
@@ -15,45 +14,6 @@ type StableHostId = Annotated[HostId, _STABLE_ID]
 type StableItemId = Annotated[ItemId, _STABLE_ID]
 type StableLeaseId = Annotated[LeaseId, _STABLE_ID]
 type StableTaskId = Annotated[TaskId, _STABLE_ID]
-
-
-class CliRoute(Enum):
-    ROOT = "root"
-    VALIDATE = "validate"
-    STATUS = "status"
-    OVERVIEW = "overview"
-    ITEM_STATUS = "item-status"
-    ITEM_DEFINITION = "item-definition"
-    ITEM_DEFINITION_HISTORY = "item-definition-history"
-    ITEM_REVISE = "item-revise"
-    CLOSE = "close"
-    ACTIONS = "actions"
-    INPUT_CONTRACT = "input-contract"
-    BRIEF_SOURCES = "brief-sources"
-    BRIEF_PUBLISH = "brief-publish"
-    INITIALIZE = "initialize"
-    PROPOSAL = "proposal"
-    TRANSITION = "transition"
-    DISPATCH = "dispatch"
-    COORDINATION_APPLY = "coordination-apply"
-    COORDINATION_ACQUIRE = "coordination-acquire"
-    COORDINATION_RENEW = "coordination-renew"
-    COORDINATION_RELEASE = "coordination-release"
-    COORDINATION_REVOKE = "coordination-revoke"
-    COORDINATION_STATUS = "coordination-status"
-    ATTEMPT_ACQUIRE = "attempt-acquire"
-    ATTEMPT_RENEW = "attempt-renew"
-    ATTEMPT_RELEASE = "attempt-release"
-    ATTEMPT_REVOKE = "attempt-revoke"
-    ATTEMPT_STATUS = "attempt-status"
-    PREPARATION_ACQUIRE = "preparation-acquire"
-    PREPARATION_TRANSFER = "preparation-transfer"
-    PREPARATION_RENEW = "preparation-renew"
-    PREPARATION_RELEASE = "preparation-release"
-    PREPARATION_REVOKE = "preparation-revoke"
-    PREPARATION_STATUS = "preparation-status"
-    PARALLEL_PREVIEW = "parallel-preview"
-    REBUILD_VIEWS = "rebuild-views"
 
 
 class RootSelection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):

@@ -291,10 +291,10 @@ def available_actions(  # noqa: PLR0912
             assert_never(unreachable)
 
 
-def rediscover_action(
+def validate_supplied_action(
     snapshot: LedgerSnapshot, actor: decision_models.ActionActorAuthority, supplied: decision_models.Action
-) -> DecisionResult[decision_models.Action]:
-    """Reselect one action and compare its complete subject-scoped mutation authority."""
+) -> DecisionFailure | None:
+    """Reject an action that no longer matches its current subject-scoped mutation authority."""
 
     available = available_actions(snapshot, actor)
     if isinstance(available, DecisionFailure):
@@ -334,7 +334,7 @@ def rediscover_action(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             f"Action '{decision_models.action_id(supplied)}' no longer carries the exact current authority.",
         )
-    return current
+    return None
 
 
 def _receipt(

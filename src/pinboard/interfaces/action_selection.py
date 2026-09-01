@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import assert_never
 
@@ -10,9 +11,15 @@ from pinboard.interfaces import cli_commands
 from pinboard.interfaces.errors import CommandErrorCode, CommandFailure, CommandResult
 
 
-def action_from_command(  # noqa: C901, PLR0912, PLR0915
+@dataclass(frozen=True, slots=True)
+class ParsedActionReceipt:
+    action: decision_models.Action
+    role: decision_models.MutationRole
+
+
+def parse_action_receipt(  # noqa: C901, PLR0912, PLR0915
     command: cli_commands.TransitionCommand | cli_commands.DispatchCommand,
-) -> CommandResult[decision_models.Action]:
+) -> CommandResult[ParsedActionReceipt]:
     selected_action_id = command.action_id
     if ":" not in selected_action_id:
         return CommandFailure(CommandErrorCode.ACTION_ID_INVALID, "Action identity must be 'kind:subject'.")
@@ -24,15 +31,20 @@ def action_from_command(  # noqa: C901, PLR0912, PLR0915
     match command:
         case cli_commands.CoordinatorTransitionCommand(subject_revision=subject_revision):
             authorization = decision_models.AuthorizationKind.COORDINATOR
+            role = decision_models.Role.COORDINATOR
             lease_id = None
         case cli_commands.CoordinationTransitionCommand(lease_id=lease_id, subject_revision=subject_revision):
             authorization = decision_models.AuthorizationKind.COORDINATION
+            role = decision_models.Role.COORDINATOR
         case cli_commands.AttemptTransitionCommand(lease_id=lease_id, subject_revision=subject_revision):
             authorization = decision_models.AuthorizationKind.ATTEMPT
+            role = decision_models.Role.WORKER
         case cli_commands.PreparationTransitionCommand(lease_id=lease_id, subject_revision=subject_revision):
             authorization = decision_models.AuthorizationKind.PREPARATION
+            role = decision_models.Role.PREPARER
         case cli_commands.CoordinatorDispatchCommand() | cli_commands.CoordinatorReviewedDispatchCommand():
             authorization = decision_models.AuthorizationKind.COORDINATOR
+            role = decision_models.Role.COORDINATOR
             lease_id = None
             subject_revision = None
         case (
@@ -40,6 +52,7 @@ def action_from_command(  # noqa: C901, PLR0912, PLR0915
             | cli_commands.CoordinationReviewedDispatchCommand(lease_id=lease_id)
         ):
             authorization = decision_models.AuthorizationKind.COORDINATION
+            role = decision_models.Role.COORDINATOR
             subject_revision = None
         case _ as unreachable:
             assert_never(unreachable)
@@ -59,66 +72,67 @@ def action_from_command(  # noqa: C901, PLR0912, PLR0915
 
     match kind:
         case decision_models.ActionKind.ACCEPT_CHECKPOINT:
-            return decision_models.AcceptCheckpointAction(capability(AttemptId(subject)))
+            action = decision_models.AcceptCheckpointAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE:
-            return decision_models.AcceptReviewAndContinueAction(capability(AttemptId(subject)))
+            action = decision_models.AcceptReviewAndContinueAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.ACCEPT_PROPOSAL:
-            return decision_models.AcceptProposalAction(capability(ProposalId(subject)))
+            action = decision_models.AcceptProposalAction(capability(ProposalId(subject)))
         case decision_models.ActionKind.ACTIVATE:
-            return decision_models.ActivateAction(capability(ItemId(subject)))
+            action = decision_models.ActivateAction(capability(ItemId(subject)))
         case decision_models.ActionKind.BLOCK:
-            return decision_models.BlockAttemptAction(capability(AttemptId(subject)))
+            action = decision_models.BlockAttemptAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.BLOCK_ITEM:
-            return decision_models.BlockItemAction(capability(ItemId(subject)))
+            action = decision_models.BlockItemAction(capability(ItemId(subject)))
         case decision_models.ActionKind.COMPLETE:
-            return decision_models.CompleteAction(capability(AttemptId(subject)))
+            action = decision_models.CompleteAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.CLOSE:
-            return decision_models.CloseAction(capability(ItemId(subject)))
+            action = decision_models.CloseAction(capability(ItemId(subject)))
         case decision_models.ActionKind.CONTINUE:
-            return decision_models.ContinueAction(capability(AttemptId(subject)))
+            action = decision_models.ContinueAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.DEFER:
-            return decision_models.DeferAction(capability(ItemId(subject)))
+            action = decision_models.DeferAction(capability(ItemId(subject)))
         case decision_models.ActionKind.DISPATCH:
-            return decision_models.DispatchAction(capability(AttemptId(subject)))
+            action = decision_models.DispatchAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.INSPECT:
-            return decision_models.InspectAction(capability(LedgerId(subject)))
+            action = decision_models.InspectAction(capability(LedgerId(subject)))
         case decision_models.ActionKind.MARK_READY:
-            return decision_models.MarkReadyAction(capability(ItemId(subject)))
+            action = decision_models.MarkReadyAction(capability(ItemId(subject)))
         case decision_models.ActionKind.MERGE_PROPOSAL:
-            return decision_models.MergeProposalAction(capability(ProposalId(subject)))
+            action = decision_models.MergeProposalAction(capability(ProposalId(subject)))
         case decision_models.ActionKind.PAUSE:
-            return decision_models.PauseAction(capability(AttemptId(subject)))
+            action = decision_models.PauseAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.REJECT_PROPOSAL:
-            return decision_models.RejectProposalAction(capability(ProposalId(subject)))
+            action = decision_models.RejectProposalAction(capability(ProposalId(subject)))
         case decision_models.ActionKind.REOPEN:
-            return decision_models.ReopenAction(capability(ItemId(subject)))
+            action = decision_models.ReopenAction(capability(ItemId(subject)))
         case decision_models.ActionKind.REPORT_BLOCKER:
-            return decision_models.ReportBlockerAction(capability(AttemptId(subject)))
+            action = decision_models.ReportBlockerAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.RESUME:
-            return decision_models.ResumeAction(capability(ItemId(subject)))
+            action = decision_models.ResumeAction(capability(ItemId(subject)))
         case decision_models.ActionKind.RETURN_FOR_CORRECTION:
-            return decision_models.ReturnForCorrectionAction(capability(AttemptId(subject)))
+            action = decision_models.ReturnForCorrectionAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.RETURN_PROPOSAL:
-            return decision_models.ReturnProposalAction(capability(ProposalId(subject)))
+            action = decision_models.ReturnProposalAction(capability(ProposalId(subject)))
         case decision_models.ActionKind.REVISE_ITEM:
-            return decision_models.ReviseItemAction(capability(ItemId(subject)))
+            action = decision_models.ReviseItemAction(capability(ItemId(subject)))
         case decision_models.ActionKind.SUBMIT_REVIEW:
-            return decision_models.SubmitReviewAction(capability(AttemptId(subject)))
+            action = decision_models.SubmitReviewAction(capability(AttemptId(subject)))
         case decision_models.ActionKind.TRANSFER_COORDINATOR:
-            return decision_models.TransferCoordinatorAction(capability(LedgerId(subject)))
+            action = decision_models.TransferCoordinatorAction(capability(LedgerId(subject)))
         case _ as unreachable:
             assert_never(unreachable)
+    return ParsedActionReceipt(action, role)
 
 
-def reselect_action(
+def select_current_action(
     roots: cli_commands.ResolvedRoots,
-    supplied: decision_models.Action,
-    role: decision_models.Role,
+    supplied: ParsedActionReceipt,
 ) -> CommandResult[decision_models.Action]:
-    supplied_capability = supplied.capability
+    supplied_action = supplied.action
+    supplied_capability = supplied_action.capability
     available = discover_actions(
         SQLiteWorkStore(roots.work / "state.sqlite3"),
-        role,
+        supplied.role,
         lease_id=supplied_capability.lease_id,
         generation=supplied_capability.coordinator_generation,
         now=datetime.now(UTC),
@@ -126,12 +140,17 @@ def reselect_action(
     if isinstance(available, DecisionFailure):
         return CommandFailure(available.code, available.message)
     current = next(
-        (value for value in available if decision_models.action_id(value) == decision_models.action_id(supplied)), None
+        (
+            value
+            for value in available
+            if decision_models.action_id(value) == decision_models.action_id(supplied_action)
+        ),
+        None,
     )
     if current is None:
         return CommandFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
-            f"Action '{decision_models.action_id(supplied)}' is not currently legal.",
+            f"Action '{decision_models.action_id(supplied_action)}' is not currently legal.",
         )
     current_capability = current.capability
     if current_capability.expected_revision != supplied_capability.expected_revision:
@@ -151,6 +170,6 @@ def reselect_action(
     if current_authority != supplied_authority:
         return CommandFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
-            f"Action '{decision_models.action_id(supplied)}' no longer has exact current authority.",
+            f"Action '{decision_models.action_id(supplied_action)}' no longer has exact current authority.",
         )
     return current

@@ -89,21 +89,14 @@ def revise_item(roots: cli_commands.ResolvedRoots, command: cli_commands.ItemRev
 
 
 def transition(roots: cli_commands.ResolvedRoots, cli_command: cli_commands.TransitionCommand) -> CommandResult[int]:
-    action = action_selection.action_from_command(cli_command)
-    if isinstance(action, CommandFailure):
-        return action
+    supplied_action = action_selection.parse_action_receipt(cli_command)
+    if isinstance(supplied_action, CommandFailure):
+        return supplied_action
     try:
         payload = cli_command.payload.read_bytes()
     except OSError as error:
         return CommandFailure(DecisionFailureCode.TRANSITION_INPUT_INVALID, f"Cannot read transition payload: {error}")
-    role = (
-        decision_models.Role.WORKER
-        if action.capability.authorization == decision_models.AuthorizationKind.ATTEMPT
-        else decision_models.Role.PREPARER
-        if action.capability.authorization == decision_models.AuthorizationKind.PREPARATION
-        else decision_models.Role.COORDINATOR
-    )
-    action = action_selection.reselect_action(roots, action, role)
+    action = action_selection.select_current_action(roots, supplied_action)
     if isinstance(action, CommandFailure):
         return action
     command = parse_transition_command(action, payload)

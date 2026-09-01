@@ -46,7 +46,7 @@ from pinboard.domain.authority_models import (
     TransferAttemptAuthority,
     TransferPreparationAuthority,
 )
-from pinboard.domain.decisions import decide, rediscover_action
+from pinboard.domain.decisions import decide, validate_supplied_action
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import (
     ActionId,
@@ -483,7 +483,7 @@ def execute(
     *,
     transition_brief_identity: WorkBriefIdentity | None = None,
 ) -> DecisionResult[decision_models.TransitionReceipt]:
-    """Rediscover, decide, and persist one lifecycle mutation under one write lock."""
+    """Validate, decide, and persist one lifecycle mutation under one write lock."""
 
     supplied = command.action
     with store.write() as transaction:
@@ -492,9 +492,8 @@ def execute(
         actor = _actor_for(snapshot, supplied, now)
         if isinstance(actor, DecisionFailure):
             return actor
-        rediscovered = rediscover_action(snapshot, actor, supplied)
-        if isinstance(rediscovered, DecisionFailure):
-            return rediscovered
+        if (failure := validate_supplied_action(snapshot, actor, supplied)) is not None:
+            return failure
         if (failure := validate_transition_work_brief(before, command, transition_brief_identity)) is not None:
             return failure
         decision = decide(snapshot, command, now)
@@ -511,7 +510,7 @@ def execute_checkpoint_acceptance(
     *,
     transition_brief_identity: WorkBriefIdentity | None = None,
 ) -> DecisionResult[decision_models.TransitionReceipt]:
-    """Rediscover, decide, and persist checkpoint acceptance with its required artifacts."""
+    """Validate, decide, and persist checkpoint acceptance with its required artifacts."""
 
     supplied = command.action
     with store.write() as transaction:
@@ -520,9 +519,8 @@ def execute_checkpoint_acceptance(
         actor = _actor_for(snapshot, supplied, now)
         if isinstance(actor, DecisionFailure):
             return actor
-        rediscovered = rediscover_action(snapshot, actor, supplied)
-        if isinstance(rediscovered, DecisionFailure):
-            return rediscovered
+        if (failure := validate_supplied_action(snapshot, actor, supplied)) is not None:
+            return failure
         if (failure := validate_transition_work_brief(before, command, transition_brief_identity)) is not None:
             return failure
         decision = decide(snapshot, command, now)

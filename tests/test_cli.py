@@ -240,7 +240,7 @@ class CliTest(unittest.TestCase):
         wrong_snapshot = replace(decision_snapshot, command_preparation_authorities=(wrong_authority,))
         before = store.snapshot()
         with (
-            patch("pinboard.interfaces.action_selection.reselect_action", return_value=wrong_action),
+            patch("pinboard.interfaces.action_selection.select_current_action", return_value=wrong_action),
             patch("pinboard.application.service.project_decision_snapshot", return_value=wrong_snapshot),
         ):
             rejected, _stdout, rejected_stderr = self.run_transition(common, action, valid_payload)
@@ -974,10 +974,10 @@ class CliTest(unittest.TestCase):
                 "pinboard.adapters.files.views.atomic_replace",
                 side_effect=FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, "injected view failure"),
             ),
-            patch("pinboard.interfaces.action_selection.datetime") as reselection_clock,
+            patch("pinboard.interfaces.action_selection.datetime") as selection_clock,
             patch("pinboard.interfaces.transitions.datetime") as transition_clock,
         ):
-            reselection_clock.now.return_value = activation_expiry - timedelta(microseconds=3)
+            selection_clock.now.return_value = activation_expiry - timedelta(microseconds=3)
             transition_clock.now.side_effect = (
                 activation_expiry - timedelta(microseconds=2),
                 activation_expiry - timedelta(microseconds=1),
@@ -985,7 +985,7 @@ class CliTest(unittest.TestCase):
             result, _stdout, stderr = self.run_transition(common, activation, payload)
         self.assertEqual(0, result, stderr)
         self.assertIn("generated views need repair", stderr)
-        self.assertEqual(1, reselection_clock.now.call_count)
+        self.assertEqual(1, selection_clock.now.call_count)
         self.assertEqual(2, transition_clock.now.call_count)
         self.assertEqual(
             "revoked", self.run_json_cli(*common, "preparation", "status", "--item-id", "work-c")["status"]
@@ -2618,7 +2618,7 @@ Not launchable:
         self.assertIn("pinboard coordination acquire", identifier_stderr)
         self.assertIn("$.task_id", identifier_stderr)
 
-    def test_direct_transition_reselects_exact_worker_capability(self) -> None:
+    def test_direct_transition_selects_exact_worker_capability(self) -> None:
         state = complete_sqlite_state()
         now = datetime.now(UTC)
         state = replace(
@@ -2689,7 +2689,7 @@ Not launchable:
                 "--lease-id",
                 "attempt-lease-a",
                 "--payload",
-                str(payload),
+                str(project / "missing-transition-payload.json"),
             ]
             option = replacement[0]
             if option == "--action-id":

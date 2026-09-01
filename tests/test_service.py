@@ -146,7 +146,7 @@ class ServiceTest(unittest.TestCase):
         assert isinstance(selected, action_type)
         return selected
 
-    def test_execute_rediscovers_and_commits_one_transition_from_the_locked_snapshot(self) -> None:
+    def test_execute_validates_and_commits_one_transition_from_the_locked_snapshot(self) -> None:
         store = self._store()
         before = store.snapshot()
         action = self._coordinator_action(store, decision_models.PauseAction)
