@@ -4,7 +4,7 @@ Use this test when a command or closed-variant family crosses several production
 
 ## Trace one supported value
 
-Choose one representative command or variant with a real production entry point and effect. Follow it from input through validation, decisions, conversions, effects, and presentation. Record each production site a developer must discover, in order, and classify why it exists:
+Choose a representative command or variant with a real production entry point and effect. Follow it from input through validation, decisions, conversions, effects, and presentation. Repeat for another family only when it has a distinct routing shape, such as state mutation versus read projection or direct versus borrowed authority; stop adding traces when a new shape exposes no new owner category. Record each production site a developer must discover, in order, and classify why it exists:
 
 - boundary validation or conversion;
 - product or authorization decision;
@@ -24,6 +24,16 @@ Search the complete production surface for these signals, then verify each with 
 - repeated `match`, `isinstance`, ternary, or membership tests over the same closed family along one use-case path;
 - a closed family handled through `else`, `case _`, mapping defaults, inherited behavior, optional callbacks, or a default registry handler;
 - separate vocabularies with identical members and consumers that appear to assign the same meaning.
+
+Before closing this pass, sweep the complete production surface for several shapes that ordinary reachability counts systematically miss:
+
+- methods or functions whose body only returns one attribute, reapplies a constructor, or delegates unchanged arguments;
+- the same effect, transition, or presentation choice selected independently by neighboring modes or routes;
+- a test-only public root and the private helper chain that exists only beneath it;
+- base protocols plus composite protocols whose required members overlap without distinct substitution consumers;
+- defaults, version labels, compatibility names, and plural capability names that describe a predecessor rather than the supported product.
+
+For each shape, record the search or analyzer, scope, candidate selectors or zero result, and disposition in the compact ledger. A representative trace can validate a design, but one trace is not evidence that these other shapes were searched.
 
 The last signal needs extra care. Identical spelling does not prove identical product identity. Retain nominally separate vocabularies when they prevent cross-family assignment, have different transition rules or consumers, or may evolve independently as distinct product concepts. Collapse them only when they name the same fact and all current owners interpret that fact identically.
 
@@ -65,4 +75,4 @@ The same test can justify superficially repeated work. Selecting an advertised c
 
 ## Evidence and stop condition
 
-Report the before-and-after trace, sibling edit sites, retained exhaustive sites with their owned distinction, and deleted pass-through sites. Stop when a fresh representative trace finds no same-meaning routing fact repeated outside a boundary, decision, effect, or presentation owner, and the sibling simulation exposes no ceremonial edit site in scope.
+Report the before-and-after traces, sibling edit sites, retained exhaustive sites with their owned distinction, semantic sweep receipts, and deleted pass-through sites. Stop when fresh traces for each distinct routing shape find no same-meaning routing fact repeated outside a boundary, decision, effect, or presentation owner, the sibling simulations expose no ceremonial edit site in scope, and every sweep above has a concrete zero-result or disposition receipt.
