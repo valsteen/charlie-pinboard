@@ -1,12 +1,10 @@
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import Annotated, Literal, Protocol
 
 import msgspec
 
-from pinboard.application import stored_state
-from pinboard.application.artifacts import ArtifactRef, NewArtifact
+from pinboard.application.artifact_publication import ArtifactPublisher, ArtifactReader
 from pinboard.domain.errors import DecisionFailureCode
 
 type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
@@ -49,12 +47,5 @@ class DispatchEnvironment(msgspec.Struct, frozen=True, forbid_unknown_fields=Tru
     permissions: tuple[DispatchPermission, ...]
 
 
-class DispatchArtifactPort(Protocol):
-    @property
-    def work_root(self) -> Path: ...
-
-    def verify(self, reference: stored_state.ArtifactReference) -> None: ...
-
-    def path(self, reference: stored_state.ArtifactReference) -> Path: ...
-
-    def publish(self, artifact: NewArtifact) -> ArtifactRef: ...
+class DispatchArtifactPort(ArtifactPublisher, ArtifactReader, Protocol):
+    pass

@@ -63,7 +63,13 @@ from pinboard.domain.proposal_models import (
 from pinboard.interfaces.transition_input import parse_transition_command
 from tests.domain_support import command as make_command
 from tests.domain_support import expect_transition_command
-from tests.support import SQLITE_NOW, complete_sqlite_state, reject_table_deletes, with_definition_dependencies
+from tests.support import (
+    SQLITE_NOW,
+    complete_sqlite_state,
+    initialize_store,
+    reject_table_deletes,
+    with_definition_dependencies,
+)
 
 
 def non_checkpoint_command(
@@ -88,7 +94,7 @@ class ServiceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         return store
 
     def _store_with_state(self, state: stored_state.StoredWorkState) -> tuple[SQLiteWorkStore, Path]:
@@ -96,7 +102,7 @@ class ServiceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(state)
+        initialize_store(store, state)
         return store, roots.database_path
 
     def _coordinator_action[ActionT: decision_models.Action](
@@ -312,7 +318,7 @@ class ServiceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         database_path = roots.database_path
         submit = non_checkpoint_command(
             make_command(

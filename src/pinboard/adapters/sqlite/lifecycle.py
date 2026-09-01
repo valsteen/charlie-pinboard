@@ -1,4 +1,4 @@
-"""Read, initialize, and change lifecycle records on a supplied connection.
+"""Read and change lifecycle records on a supplied connection.
 
 This module never commits, rolls back, closes the connection, calls callbacks,
 reads the filesystem, or obtains time. Expected stale CAS writes return a
@@ -134,93 +134,6 @@ def read_focus(connection: sqlite3.Connection) -> stored_state.StoredFocus:
     if not rows:
         return stored_state.StoredFocus(None, None, "select", 0)
     return decode_row(rows[0], stored_state.StoredFocus)
-
-
-def insert_lifecycle(connection: sqlite3.Connection, records: stored_state.LifecycleRecords) -> None:
-    connection.executemany(
-        """
-        INSERT INTO work_items (
-            item_id, state, timing, source, outcome_evidence, next_action, notes, subject_revision,
-            recorded_at, updated_at, queue_position
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        tuple(
-            (
-                value.item_id,
-                value.state.value,
-                None if value.timing is None else value.timing.value,
-                value.source,
-                value.outcome_evidence,
-                value.next_action,
-                value.notes,
-                value.subject_revision,
-                value.recorded_at.isoformat(),
-                value.updated_at.isoformat(),
-                value.queue_position,
-            )
-            for value in records.work_items
-        ),
-    )
-    connection.executemany(
-        "INSERT INTO item_dependencies (item_id, dependency_id, position) VALUES (?, ?, ?)",
-        tuple((value.item_id, value.dependency_id, value.position) for value in records.dependencies),
-    )
-    connection.executemany(
-        """
-        INSERT INTO work_item_definition_revisions (
-            item_id, definition_revision, definition_digest, definition_json, reason,
-            source_task_id, before_digest, after_digest, accepted_project_revision, accepted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        tuple(_definition_revision_values(value) for value in records.definition_revisions),
-    )
-    connection.executemany(
-        "INSERT INTO item_artifacts (item_id, artifact_ref_id, role, position) VALUES (?, ?, ?, ?)",
-        tuple(
-            (value.item_id, value.artifact_ref_id, value.role.value, value.position) for value in records.item_artifacts
-        ),
-    )
-    connection.executemany(
-        """
-        INSERT INTO attempts (
-            attempt_id, item_id, state, branch, base_revision, provenance,
-            brief_artifact_ref_id, brief_artifact_kind, result_artifact_ref_id, result_artifact_kind,
-            candidate_revision, candidate_recorded_at,
-            accepted_scope_revision, accepted_scope_digest, subject_revision, recorded_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'brief', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        tuple(
-            (
-                value.attempt_id,
-                value.item_id,
-                value.state.value,
-                value.branch,
-                value.base_revision,
-                value.provenance,
-                value.brief_artifact_ref_id,
-                value.result_artifact_ref_id,
-                None if value.result_artifact_ref_id is None else "result",
-                value.candidate_revision,
-                None if value.candidate_recorded_at is None else value.candidate_recorded_at.isoformat(),
-                value.accepted_scope_revision,
-                value.accepted_scope_digest,
-                value.subject_revision,
-                value.recorded_at.isoformat(),
-                value.updated_at.isoformat(),
-            )
-            for value in records.attempts
-        ),
-    )
-
-
-def insert_focus(connection: sqlite3.Connection, focus: stored_state.StoredFocus) -> None:
-    connection.execute(
-        """
-        INSERT INTO current_focus (singleton, item_id, attempt_id, next_action, subject_revision)
-        VALUES (1, ?, ?, ?, ?)
-        """,
-        (focus.item_id, focus.attempt_id, focus.next_action, focus.subject_revision),
-    )
 
 
 def item(state: stored_state.StoredWorkState, item_id: ItemId) -> stored_state.StoredWorkItem:

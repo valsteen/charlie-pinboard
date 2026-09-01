@@ -66,13 +66,13 @@ Expected rejections return typed failure values. Domain and stale-persistence pa
 
 | Owner group | Responsibility |
 | --- | --- |
-| `stored_state.py` | Complete typed read and initialization aggregate plus explicit storage vocabulary |
+| `stored_state.py` | Complete typed read aggregate plus explicit storage vocabulary |
 | `mutation_models.py`, `mutations.py`, `ports.py` | Closed focused mutation records, exhaustive decision-to-relational conversion, and storage-independent transactional capabilities |
 | `decision_projection.py`, `service.py` | Shared-index projection of complete stored collections into domain decision facts and locked mutation orchestration |
 | `actions.py`, `query_models.py`, `queries.py` | Legal-action discovery plus current overview, exact item-status, current-definition, bounded definition-history, parallel-preview records, and result-shaped queries with closed query rejection codes |
 | `artifacts.py`, `artifact_publication.py`, `dispatch_models.py`, `dispatch.py` | Immutable artifact references and typed brief identity, artifact-acceptance capabilities, activation and resume brief guards, and result-shaped dispatch selection, review publication, and final authority confirmation |
 
-SQLite rows are not active domain objects. `StoredWorkState` is the exact typed read and initialization aggregate without SQL handles or filesystem paths, while live mutations carry only the accepted decision, receipt, and affected auxiliary values. `LedgerSnapshot` remains the storage-independent decision input.
+SQLite rows are not active domain objects. `StoredWorkState` is the exact typed read aggregate without SQL handles or filesystem paths, while live mutations carry only the accepted decision, receipt, and affected auxiliary values. `LedgerSnapshot` remains the storage-independent decision input.
 
 ### Adapters
 
@@ -83,10 +83,10 @@ Adapters own concrete persistence and filesystem mechanics without deciding prod
 | `files/root.py`, `files/file_io.py`, `files/models.py`, `files/errors.py` | Distinct Git-backed source-checkout and shared-repository discovery, repository-local exclusion of the default durable root, durable-root resolution, file-operation records, exact failure families, directory creation, and atomic file publication |
 | `files/artifacts.py` | Immutable artifact naming, publication, digest verification, and reference resolution |
 | `files/views.py` | Revision-stamped queue, focus, item, attempt, and history projections; interface composition supplies complete live-v2 brief projections |
-| `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, typed row conversion, compare-and-set result helpers, schema verification, initialization and diagnostic transaction scopes, backup, synchronization, and exact storage failures |
+| `sqlite/schema.sql`, `sqlite/database.py`, `sqlite/models.py`, `sqlite/errors.py` | Exact current schema, connection configuration, typed row conversion, compare-and-set result helpers, schema verification, initialization and diagnostic transaction scopes, synchronization, and exact storage failures |
 | `sqlite/store.py` | Complete runtime connection and transaction lifetime, public store capabilities, exhaustive accepted-mutation routing, project revision advancement, expected-result rollback selection, and post-write readback |
-| `sqlite/state.py` | Complete `StoredWorkState` assembly, cross-record validation, initialization-only aggregate insertion, project metadata, and transition history |
-| `sqlite/lifecycle.py`, `sqlite/proposals.py`, `sqlite/artifacts.py`, `sqlite/authority.py` | Thematic row conversion, initialization, reads, and focused effects over an explicitly supplied connection |
+| `sqlite/state.py` | Complete `StoredWorkState` assembly, cross-record validation, project metadata, and transition history |
+| `sqlite/lifecycle.py`, `sqlite/proposals.py`, `sqlite/artifacts.py`, `sqlite/authority.py` | Thematic row conversion, reads, and focused effects over an explicitly supplied connection |
 
 ### Interfaces
 
@@ -111,7 +111,7 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 
 ### Authoritative SQLite state
 
-`.codex/pinboard/state.sqlite3` owns project revision and host epoch; immutable work-item definition revisions; item, attempt, focus, dependency, requirement, and proposal state; coordination, preparation, and attempt authority; accepted artifact references; and transition history. Relational dependency rows are the query-efficient projection of the current definition and must match it exactly. A mutation opens a write transaction, reselects current state and authority, updates only the relations named by one accepted closed mutation, and advances the revision with its history receipt. Revision and affected-row guards return typed stale-action or fencing rejection values. The transaction owner rolls back those expected failures; SQLite, persisted-invariant, and programming failures roll back and remain exceptional. Complete aggregate insertion is reserved for initialization, not live mutation persistence.
+`.codex/pinboard/state.sqlite3` owns project revision and host epoch; immutable work-item definition revisions; item, attempt, focus, dependency, requirement, and proposal state; coordination, preparation, and attempt authority; accepted artifact references; and transition history. Relational dependency rows are the query-efficient projection of the current definition and must match it exactly. A mutation opens a write transaction, reselects current state and authority, updates only the relations named by one accepted closed mutation, and advances the revision with its history receipt. Revision and affected-row guards return typed stale-action or fencing rejection values. The transaction owner rolls back those expected failures; SQLite, persisted-invariant, and programming failures roll back and remain exceptional. Initialization creates the exact empty current schema directly; live state enters only through focused mutations.
 
 ### Immutable artifacts
 

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from pinboard.adapters.sqlite import store as sqlite_store
 from pinboard.adapters.sqlite.models import OpenMode
+from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.domain import work_models
 from pinboard.domain.authority_models import AttemptLeaseStatus
@@ -24,6 +25,7 @@ from pinboard.domain.identifiers import (
     ProposalId,
     TaskId,
 )
+from tests.sqlite_support import insert_initial_state
 
 type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
 type JsonObject = dict[str, JsonValue]
@@ -44,6 +46,13 @@ SQLITE_DEFINITION = work_models.WorkItemDefinition(
 _SQLITE_DEFINITION_DIGEST = work_item_definition_digest(SQLITE_DEFINITION)
 assert isinstance(_SQLITE_DEFINITION_DIGEST, str)
 SQLITE_DIGEST = _SQLITE_DEFINITION_DIGEST
+
+
+def initialize_store(store: SQLiteWorkStore, state: stored_state.StoredWorkState) -> None:
+    """Seed a freshly initialized test database with an exact aggregate."""
+
+    with store.write() as transaction:
+        insert_initial_state(transaction.connection, state)
 
 
 def test_definition(item: ItemId) -> tuple[work_models.WorkItemDefinition, str]:

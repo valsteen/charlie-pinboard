@@ -1,4 +1,4 @@
-"""Read, initialize, and change authority records on a supplied connection.
+"""Read and change authority records on a supplied connection.
 
 This module never commits, rolls back, closes the connection, calls callbacks,
 reads the filesystem, or obtains time. Expected stale CAS writes return a
@@ -113,90 +113,6 @@ def read_authority(connection: sqlite3.Connection) -> stored_state.AuthorityReco
         preparation_counters,
         preparation_generations,
         preparation_leases,
-    )
-
-
-def insert_authority(connection: sqlite3.Connection, records: stored_state.AuthorityRecords) -> None:
-    if records.coordination is not None:
-        value = records.coordination
-        connection.execute(
-            """
-            INSERT INTO coordination_lease (
-                singleton, lease_id, task_id, host_id, generation, acquired_at, expires_at, status
-            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                value.lease_id,
-                value.task_id,
-                value.host_id,
-                value.generation,
-                value.acquired_at.isoformat(),
-                value.expires_at.isoformat(),
-                value.state.value,
-            ),
-        )
-    connection.executemany(
-        "INSERT INTO attempt_lease_counters (attempt_id, generation_high_water) VALUES (?, ?)",
-        tuple((value.attempt_id, value.generation_high_water) for value in records.attempt_counters),
-    )
-    connection.executemany(
-        """
-        INSERT INTO attempt_lease_generations (attempt_id, generation, lease_id, task_id, host_id)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        tuple(
-            (value.attempt_id, value.generation, value.lease_id, value.task_id, value.host_id)
-            for value in records.attempt_generations
-        ),
-    )
-    connection.executemany(
-        "INSERT INTO preparation_lease_counters (item_id, generation_high_water) VALUES (?, ?)",
-        tuple((value.item_id, value.generation_high_water) for value in records.preparation_counters),
-    )
-    connection.executemany(
-        """
-        INSERT INTO preparation_lease_generations (item_id, generation, lease_id, task_id, host_id)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        tuple(
-            (value.item_id, value.generation, value.lease_id, value.task_id, value.host_id)
-            for value in records.preparation_generations
-        ),
-    )
-    connection.executemany(
-        """
-        INSERT INTO preparation_leases (
-            item_id, generation, definition_revision, definition_digest, acquired_at, expires_at, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        tuple(
-            (
-                value.item_id,
-                value.generation,
-                value.definition_revision,
-                value.definition_digest,
-                value.acquired_at.isoformat(),
-                value.expires_at.isoformat(),
-                value.state.value,
-            )
-            for value in records.preparation_leases
-        ),
-    )
-    connection.executemany(
-        """
-        INSERT INTO attempt_leases (attempt_id, generation, acquired_at, expires_at, status)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        tuple(
-            (
-                value.attempt_id,
-                value.generation,
-                value.acquired_at.isoformat(),
-                value.expires_at.isoformat(),
-                value.state.value,
-            )
-            for value in records.attempt_leases
-        ),
     )
 
 

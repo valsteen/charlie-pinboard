@@ -43,6 +43,7 @@ from .support import (
     JsonObject,
     JsonValue,
     complete_sqlite_state,
+    initialize_store,
     test_definition,
     with_definition_dependencies,
 )
@@ -425,7 +426,7 @@ class CliTest(unittest.TestCase):
                     size_bytes=published.size_bytes,
                 )
                 state = replace(state, artifact_references=(reference, *state.artifact_references[1:]))
-            store.initialize_state(state)
+            initialize_store(store, state)
         return project, roots.work_root, store
 
     def prepared_state(self, expires_at: datetime) -> stored_state.StoredWorkState:
@@ -1013,7 +1014,7 @@ class CliTest(unittest.TestCase):
         database.unlink()
         initialize_database(resolve_durable_roots(project), SQLITE_NOW)
         store = SQLiteWorkStore(database)
-        store.initialize_state(state)
+        initialize_store(store, state)
         common = ("--project-root", str(project), "--work-root", str(work))
         candidate = work_c_brief()
         brief_path = project / "work-c-brief.json"

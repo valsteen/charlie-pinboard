@@ -23,7 +23,7 @@ from pinboard.domain import work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import ItemId
 from tests.domain_support import expect_success
-from tests.support import SQLITE_NOW, complete_sqlite_state, reject_table_deletes
+from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store, reject_table_deletes
 
 
 class ArtifactPersistenceTest(unittest.TestCase):
@@ -32,7 +32,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         published = write_revision(
             roots,
             NewArtifact(stored_state.ArtifactKind.EVIDENCE, "intake-work-review", 1, ".md", b"ready\n"),
@@ -62,7 +62,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         published = write_revision(
             roots,
             NewArtifact(stored_state.ArtifactKind.EVIDENCE, "review-a", 1, ".md", b"ready\n"),
@@ -154,7 +154,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         published = write_revision(
             roots,
             NewArtifact(stored_state.ArtifactKind.EVIDENCE, "review-reuse", 1, ".md", b"ready\n"),
@@ -220,7 +220,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         for relationship in (False, True):
             published = write_revision(
                 roots,

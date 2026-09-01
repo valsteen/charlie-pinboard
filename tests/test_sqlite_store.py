@@ -14,7 +14,6 @@ from pinboard.adapters.files.file_io import (
     resolve_durable_roots,
 )
 from pinboard.adapters.sqlite.database import (
-    backup_database,
     initialize_database,
     open_database,
     read_operation,
@@ -45,7 +44,7 @@ from pinboard.domain.identifiers import (
 from pinboard.domain.ledger import LedgerSnapshot
 from tests.domain_support import command, expect_success
 from tests.domain_support import replace as replace_dataclass
-from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state, initialize_store
 
 
 def available_actions(
@@ -71,14 +70,14 @@ class SQLiteStoreTest(unittest.TestCase):
         store = SQLiteWorkStore(roots.database_path)
         if populated:
             state = complete_sqlite_state()
-            store.initialize_state(state)
+            initialize_store(store, state)
         return roots.database_path, store
 
     def _assert_state_rejected(self, state_name: str, state: stored_state.StoredWorkState) -> None:
         path, store = self._store(populated=False)
         self.assertTrue(path.exists())
         with self.subTest(state_name=state_name), self.assertRaises(StorageError) as raised:
-            store.initialize_state(state)
+            initialize_store(store, state)
         self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, raised.exception.code, state_name)
         self.assertEqual(0, store.snapshot().lifecycle.project.revision)
 
@@ -146,15 +145,16 @@ class SQLiteStoreTest(unittest.TestCase):
 
         inactive = replace_dataclass(lease, state=PreparationLeaseStatus.RELEASED)
         _path, store = self._store(populated=False)
-        store.initialize_state(
+        initialize_store(
+            store,
             replace_dataclass(
                 revised_state,
                 authority=replace_dataclass(authority, preparation_leases=(inactive,)),
-            )
+            ),
         )
         self.assertEqual(PreparationLeaseStatus.RELEASED, store.snapshot().authority.preparation_leases[0].state)
 
-    def test_schema_identity_initialization_backup_and_reopen_contract(self) -> None:
+    def test_schema_identity_initialization_and_reopen_contract(self) -> None:
         path, store = self._store()
         self.assertEqual(complete_sqlite_state(), store.snapshot())
         connection = open_database(path, OpenMode.READ_ONLY)
@@ -163,10 +163,6 @@ class SQLiteStoreTest(unittest.TestCase):
             self.assertEqual("delete", connection.execute("PRAGMA journal_mode").fetchone()[0])
         finally:
             connection.close()
-
-        backup = path.with_name("state-backup.sqlite3")
-        backup_database(path, backup)
-        self.assertEqual(store.snapshot(), SQLiteWorkStore(backup).snapshot())
 
         for field, value, expected in (
             ("application", "wrong-application", StorageErrorCode.INVALID_STATE),
@@ -332,7 +328,7 @@ class SQLiteStoreTest(unittest.TestCase):
             open_database(invalid_types, OpenMode.READ_WRITE)
         self.assertEqual(StorageErrorCode.INVALID_STATE, invalid_types_error.exception.code)
 
-    def test_schema_initialization_and_backup_failures_are_stable(self) -> None:
+    def test_schema_initialization_failures_are_stable(self) -> None:
         path, _store = self._store(populated=False)
         malformed = path.with_name("malformed.sqlite3")
         malformed_connection = sqlite3.connect(malformed)
@@ -366,18 +362,6 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(StorageErrorCode.IO_ERROR, initialize_error.exception.code)
         self.assertFalse(interrupted_roots.database_path.exists())
 
-        existing_backup = path.with_name("existing.sqlite3")
-        existing_backup.touch()
-        with self.assertRaises(StorageError) as existing_error:
-            backup_database(path, existing_backup)
-        self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, existing_error.exception.code)
-
-        missing_parent_backup = path.parent / "missing-parent" / "backup.sqlite3"
-        with self.assertRaises(StorageError) as backup_error:
-            backup_database(path, missing_parent_backup)
-        self.assertEqual(StorageErrorCode.IO_ERROR, backup_error.exception.code)
-        self.assertFalse(missing_parent_backup.exists())
-
     def test_database_publication_failures_leave_no_accepted_file(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
@@ -391,16 +375,6 @@ class SQLiteStoreTest(unittest.TestCase):
             initialize_database(roots, SQLITE_NOW)
         self.assertEqual(StorageErrorCode.IO_ERROR, synchronization_error.exception.code)
         self.assertFalse(roots.database_path.exists())
-
-        initialize_database(roots, SQLITE_NOW)
-        backup = roots.database_path.with_name("interrupted-backup.sqlite3")
-        with (
-            patch("pinboard.adapters.sqlite.database.os.open", side_effect=OSError("injected open failure")),
-            self.assertRaises(StorageError) as backup_error,
-        ):
-            backup_database(roots.database_path, backup)
-        self.assertEqual(StorageErrorCode.IO_ERROR, backup_error.exception.code)
-        self.assertFalse(backup.exists())
 
     def test_database_cleanup_failures_preserve_typed_errors_and_resume(self) -> None:
         prepublication_project = Path(tempfile.mkdtemp()).resolve()
@@ -438,24 +412,6 @@ class SQLiteStoreTest(unittest.TestCase):
             initialize_database(synchronization_roots, SQLITE_NOW)
         self.assertIs(synchronization_failure, synchronization_error.exception)
         initialize_database(synchronization_roots, SQLITE_NOW)
-
-        backup = synchronization_roots.database_path.with_name("cleanup-retry.sqlite3")
-        with (
-            patch("pinboard.adapters.sqlite.database.os.open", side_effect=OSError("injected backup failure")),
-            patch(
-                "pinboard.adapters.sqlite.database.Path.unlink",
-                side_effect=OSError("injected backup cleanup failure"),
-            ),
-            self.assertRaises(StorageError) as backup_error,
-        ):
-            backup_database(synchronization_roots.database_path, backup)
-        self.assertEqual(StorageErrorCode.IO_ERROR, backup_error.exception.code)
-        self.assertFalse(backup.exists())
-        backup_database(synchronization_roots.database_path, backup)
-        self.assertEqual(
-            SQLiteWorkStore(synchronization_roots.database_path).snapshot(),
-            SQLiteWorkStore(backup).snapshot(),
-        )
 
     def test_typed_row_boundary_rejects_malformed_current_state(self) -> None:
         cases = (
@@ -661,27 +617,8 @@ class SQLiteStoreTest(unittest.TestCase):
             authority=replace(state.authority, attempt_generations=(), attempt_leases=()),
         )
         _path, collected_store = self._store(populated=False)
-        collected_store.initialize_state(collected_anchors)
+        initialize_store(collected_store, collected_anchors)
         self.assertEqual(collected_anchors, collected_store.snapshot())
-
-        portable = path.with_name("portable.sqlite3")
-        backup_database(path, portable)
-        connection = open_database(portable, OpenMode.READ_WRITE)
-        try:
-            with write_transaction(connection):
-                for table in (
-                    "attempt_leases",
-                    "attempt_lease_generations",
-                    "attempt_lease_counters",
-                    "coordination_lease",
-                ):
-                    connection.execute(f"DELETE FROM {table}")
-                connection.execute("UPDATE project_meta SET host_epoch = host_epoch + 1, revision = revision + 1")
-        finally:
-            connection.close()
-        portable_state = SQLiteWorkStore(portable).snapshot()
-        self.assertEqual(state.lifecycle.attempts, portable_state.lifecycle.attempts)
-        self.assertEqual((), portable_state.authority.attempt_leases)
 
     def test_schema_rejects_removed_and_incomplete_closed_variants(self) -> None:
         path, _store = self._store()
@@ -715,7 +652,7 @@ class SQLiteStoreTest(unittest.TestCase):
             artifact_references=(*state.artifact_references, same_identity_other_kind),
         )
         _accepted_path, accepted_store = self._store(populated=False)
-        accepted_store.initialize_state(accepted_relational_state)
+        initialize_store(accepted_store, accepted_relational_state)
         self.assertEqual(accepted_relational_state, accepted_store.snapshot())
 
         for item_state, attempt_state, candidate, accepted in (
@@ -754,7 +691,7 @@ class SQLiteStoreTest(unittest.TestCase):
             with self.subTest(item_state=item_state, candidate=candidate, accepted=accepted):
                 if accepted:
                     _candidate_path, candidate_store = self._store(populated=False)
-                    candidate_store.initialize_state(candidate_state)
+                    initialize_store(candidate_store, candidate_state)
                     self.assertEqual(candidate_state, candidate_store.snapshot())
                 else:
                     self._assert_state_rejected(f"{item_state.value}/{candidate}", candidate_state)
@@ -1007,7 +944,7 @@ class SQLiteStoreTest(unittest.TestCase):
             lifecycle=replace(state.lifecycle, work_items=tuple(items), attempts=(attempt,)),
         )
         _path, store = self._store(populated=False)
-        store.initialize_state(review_state)
+        initialize_store(store, review_state)
         snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
         coordination = review_state.authority.coordination
         assert coordination is not None

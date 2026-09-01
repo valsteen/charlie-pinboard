@@ -111,52 +111,9 @@ def transition(roots: cli_commands.ResolvedRoots, cli_command: cli_commands.Tran
         return CommandFailure(command.code, command.message)
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     artifacts = ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work))
-    transition_brief_identity = read_brief_identity(store, command, artifacts)
-    if isinstance(transition_brief_identity, CommandFailure):
-        return transition_brief_identity
-    match command:
-        case decision_models.AcceptCheckpointCommand():
-            checkpoint_artifacts = publish_checkpoint_artifacts(roots, command, artifacts)
-            if isinstance(checkpoint_artifacts, CommandFailure):
-                return checkpoint_artifacts
-            result = execute_checkpoint_acceptance(
-                store,
-                command,
-                datetime.now(UTC),
-                checkpoint_artifacts,
-                transition_brief_identity=transition_brief_identity,
-            )
-        case (
-            decision_models.AcceptReviewAndContinueCommand()
-            | decision_models.ActivateCommand()
-            | decision_models.PauseCommand()
-            | decision_models.BlockCommand()
-            | decision_models.CompleteCommand()
-            | decision_models.CloseCommand()
-            | decision_models.ResumeCommand()
-            | decision_models.SubmitReviewCommand()
-            | decision_models.ReturnForCorrectionCommand()
-            | decision_models.ReopenCommand()
-            | decision_models.MarkReadyCommand()
-            | decision_models.BlockItemCommand()
-            | decision_models.DeferCommand()
-            | decision_models.AcceptProposalCommand()
-            | decision_models.MergeProposalCommand()
-            | decision_models.ReturnProposalCommand()
-            | decision_models.RejectProposalCommand()
-            | decision_models.ReviseItemCommand()
-            | decision_models.TransferCoordinatorCommand()
-        ):
-            result = execute(
-                store,
-                command,
-                datetime.now(UTC),
-                transition_brief_identity=transition_brief_identity,
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
-    if isinstance(result, DecisionFailure):
-        return CommandFailure(result.code, result.message)
+    result = _execute_transition_command(roots, store, artifacts, command)
+    if isinstance(result, CommandFailure):
+        return result
     state = store.snapshot()
     affected_attempt = next(
         (attempt.attempt_id for attempt in state.lifecycle.attempts if attempt.attempt_id == action.capability.subject),
@@ -222,6 +179,61 @@ def publish_checkpoint_artifacts(
         ResultArtifactRef(result.key, result.revision, result.selector, result.content_sha256, result.size_bytes),
         EvidenceArtifactRef(review.key, review.revision, review.selector, review.content_sha256, review.size_bytes),
     )
+
+
+def _execute_transition_command(
+    roots: cli_commands.ResolvedRoots,
+    store: SQLiteWorkStore,
+    artifacts: ArtifactRepository,
+    command: decision_models.TransitionCommand,
+) -> CommandResult[decision_models.TransitionReceipt]:
+    transition_brief_identity = read_brief_identity(store, command, artifacts)
+    if isinstance(transition_brief_identity, CommandFailure):
+        return transition_brief_identity
+    match command:
+        case decision_models.AcceptCheckpointCommand():
+            checkpoint_artifacts = publish_checkpoint_artifacts(roots, command, artifacts)
+            if isinstance(checkpoint_artifacts, CommandFailure):
+                return checkpoint_artifacts
+            result = execute_checkpoint_acceptance(
+                store,
+                command,
+                datetime.now(UTC),
+                checkpoint_artifacts,
+                transition_brief_identity=transition_brief_identity,
+            )
+        case (
+            decision_models.AcceptReviewAndContinueCommand()
+            | decision_models.ActivateCommand()
+            | decision_models.PauseCommand()
+            | decision_models.BlockCommand()
+            | decision_models.CompleteCommand()
+            | decision_models.CloseCommand()
+            | decision_models.ResumeCommand()
+            | decision_models.SubmitReviewCommand()
+            | decision_models.ReturnForCorrectionCommand()
+            | decision_models.ReopenCommand()
+            | decision_models.MarkReadyCommand()
+            | decision_models.BlockItemCommand()
+            | decision_models.DeferCommand()
+            | decision_models.AcceptProposalCommand()
+            | decision_models.MergeProposalCommand()
+            | decision_models.ReturnProposalCommand()
+            | decision_models.RejectProposalCommand()
+            | decision_models.ReviseItemCommand()
+            | decision_models.TransferCoordinatorCommand()
+        ):
+            result = execute(
+                store,
+                command,
+                datetime.now(UTC),
+                transition_brief_identity=transition_brief_identity,
+            )
+        case _ as unreachable:
+            assert_never(unreachable)
+    if isinstance(result, DecisionFailure):
+        return CommandFailure(result.code, result.message)
+    return result
 
 
 def coordinated_transition(
@@ -368,50 +380,7 @@ def apply_borrowed_transition(
     command = parse_transition_command(action, payload)
     if isinstance(command, TransitionInputFailure):
         return CommandFailure(command.code, command.message)
-    transition_brief_identity = read_brief_identity(store, command, artifacts)
-    if isinstance(transition_brief_identity, CommandFailure):
-        return transition_brief_identity
-    match command:
-        case decision_models.AcceptCheckpointCommand():
-            checkpoint_artifacts = publish_checkpoint_artifacts(roots, command, artifacts)
-            if isinstance(checkpoint_artifacts, CommandFailure):
-                return checkpoint_artifacts
-            result = execute_checkpoint_acceptance(
-                store,
-                command,
-                datetime.now(UTC),
-                checkpoint_artifacts,
-                transition_brief_identity=transition_brief_identity,
-            )
-        case (
-            decision_models.AcceptReviewAndContinueCommand()
-            | decision_models.ActivateCommand()
-            | decision_models.PauseCommand()
-            | decision_models.BlockCommand()
-            | decision_models.CompleteCommand()
-            | decision_models.CloseCommand()
-            | decision_models.ResumeCommand()
-            | decision_models.SubmitReviewCommand()
-            | decision_models.ReturnForCorrectionCommand()
-            | decision_models.ReopenCommand()
-            | decision_models.MarkReadyCommand()
-            | decision_models.BlockItemCommand()
-            | decision_models.DeferCommand()
-            | decision_models.AcceptProposalCommand()
-            | decision_models.MergeProposalCommand()
-            | decision_models.ReturnProposalCommand()
-            | decision_models.RejectProposalCommand()
-            | decision_models.ReviseItemCommand()
-            | decision_models.TransferCoordinatorCommand()
-        ):
-            result = execute(
-                store,
-                command,
-                datetime.now(UTC),
-                transition_brief_identity=transition_brief_identity,
-            )
-        case _ as unreachable:
-            assert_never(unreachable)
-    if isinstance(result, DecisionFailure):
-        return CommandFailure(result.code, result.message)
+    result = _execute_transition_command(roots, store, artifacts, command)
+    if isinstance(result, CommandFailure):
+        return result
     return str(store.snapshot().lifecycle.project.revision)

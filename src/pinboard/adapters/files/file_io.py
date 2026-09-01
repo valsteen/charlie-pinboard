@@ -125,8 +125,6 @@ def _write_and_sync(path: Path, content: bytes) -> None:
 def _cleanup_staging(path: Path, parent: Path) -> None:
     try:
         path.unlink()
-    except FileNotFoundError:
-        return
     except OSError:
         return
     with suppress(FileIOError):

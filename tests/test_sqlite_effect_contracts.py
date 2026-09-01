@@ -25,7 +25,7 @@ from pinboard.domain import decision_models, work_models
 from pinboard.domain.authority_models import AttemptAuthorityDecision, AttemptLeaseAuthority, AttemptLeaseStatus
 from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.identifiers import ArtifactRefId, AttemptId, ItemId, ProposalId
-from tests.support import SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
 
 
 class SQLiteEffectContractTest(unittest.TestCase):
@@ -34,7 +34,7 @@ class SQLiteEffectContractTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         return roots.database_path, store
 
     def test_checkpoint_artifact_identity_is_exact(self) -> None:
@@ -105,7 +105,7 @@ class SQLiteEffectContractTest(unittest.TestCase):
             connection.close()
 
         with self.assertRaises(StorageError) as occupied:
-            store.initialize_state(before)
+            initialize_store(store, before)
         self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, occupied.exception.code)
         self.assertEqual(before, store.snapshot())
 

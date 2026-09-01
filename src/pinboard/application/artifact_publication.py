@@ -114,9 +114,9 @@ def transition_work_brief_reference(
     command: decision_models.TransitionCommand,
 ) -> stored_state.ArtifactReference | None:
     match command:
-        case decision_models.ActivateCommand(value=value):
-            artifact_ref_id = value.brief_artifact_ref_id
-        case decision_models.ResumeCommand(value=value) if value.brief_artifact_ref_id is not None:
+        case decision_models.ActivateCommand(value=value) | decision_models.ResumeCommand(value=value) if (
+            value.brief_artifact_ref_id is not None
+        ):
             artifact_ref_id = value.brief_artifact_ref_id
         case _:
             return None
