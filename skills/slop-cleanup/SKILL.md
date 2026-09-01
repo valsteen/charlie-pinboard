@@ -40,7 +40,7 @@ Use runtime observations and real stores when they cheaply distinguish a require
 
 For a repository-wide pass, read [references/reachability-inventory.md](references/reachability-inventory.md). Run its bundled inventory with the repository's existing analyzers. On a Python repository, run the same inputs once in generic mode and once with Python AST enrichment; compare their coverage and candidates so language-specific precision does not conceal what the portable pass can and cannot establish. The inventory generates candidates and explicit coverage receipts, not semantic reachability by itself.
 
-Keep one compact private ledger outside tracked product files unless the user requests a durable audit artifact. Record production roots, dynamic mechanisms, completed inventory passes, candidate selectors, dispositions, retained exceptions, and the next unresolved batch. Store selectors and short evidence summaries instead of full source listings or raw analyzer output. Inspect candidate bodies in coherent batches and update the ledger after each batch.
+Keep one compact private ledger outside tracked product files unless the user requests a durable audit artifact. Record production roots, dynamic mechanisms, completed inventory passes, per-category coverage receipts, atom-level producer/consumer evidence, candidate selectors, dispositions, retained exceptions, and the next unresolved batch. Store selectors and short evidence summaries instead of full source listings or raw analyzer output. Inspect candidate bodies in coherent batches and update the ledger after each batch.
 
 If context is compacted or work resumes later, re-ground from current product authority, production roots, and this ledger. Do not replay completed scans unless the code or relevant authority changed. After a coherent removal, rerun the affected inventories; reserve one complete inventory for the final fixed-point pass.
 
@@ -129,7 +129,7 @@ Regroup by current concepts. Separate declarations from logic when each side has
 
 Run an archaeology pass over names, comments, error codes, schema labels, help text, examples, documentation, and tests. Remove wording that describes a predecessor, migration phase, plural capability that is now singular, or behavior the code can no longer perform. Collapse documentation around the surviving concepts, remove pages, sections, examples, diagrams, badges, and setup instructions whose feature or workflow was removed, and keep parallel documents consistent rather than leaving one stale version behind. Every advertised feature must trace to a supported entry point or explicitly labeled current limitation; do not turn deleted or never-shipped implementation into present-tense documentation or an invented roadmap. Remove stale lint, warning, ignore, and coverage suppressions with the ecosystem’s unused-suppression check when available.
 
-When a command or closed-variant family crosses several production owners, read and run the [developer-navigation stress test](references/dx-stress-test.md). Use its representative trace and sibling-change simulation to find repeated routing facts that ordinary reachability and line-count inventories miss. Keep exhaustive branches at justified decision and boundary owners; do not replace them with an open dispatch mechanism merely to make the edit count smaller.
+When a command or closed-variant family crosses several production owners, read and run the [developer-navigation stress test](references/dx-stress-test.md). Use its distinct-shape traces, sibling-change simulation, and named semantic sweeps to find repeated routing facts and called-but-ceremonial APIs that ordinary reachability and line-count inventories miss. Keep exhaustive branches at justified decision and boundary owners; do not replace them with an open dispatch mechanism merely to make the edit count smaller.
 
 For structural boilerplate, use one repeatable pass:
 
@@ -156,7 +156,7 @@ After the last change, rerun the complete inventory from the production roots. F
 
 - every production definition is accounted for by a supported root, a verified dynamic mechanism, supported persisted data or protocol compatibility, or one exact retained exception;
 - every closed variant and branch has a real producer and consumer or an explicit boundary reason;
-- one representative command or variant can be traced and extended without rediscovering same-meaning routing facts in owners that add no boundary, decision, presentation, or effect;
+- each distinct cross-owner routing shape can be traced and extended without rediscovering same-meaning routing facts in owners that add no boundary, decision, presentation, or effect;
 - no production API exists only for tests, and no advertised entry point can only reject;
 - surviving files and tests have meaningful, preferably symmetric conceptual ownership;
 - names, comments, docs, examples, diagrams, schema labels, and suppressions describe only current behavior;
