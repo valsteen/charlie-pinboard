@@ -218,6 +218,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--production-root", action="append", required=True)
     parser.add_argument("--test-root", action="append", default=[])
     parser.add_argument("--mode", choices=("generic", "python-ast"), required=True)
+    parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
 
@@ -1015,7 +1016,27 @@ def main() -> None:
         "schema_objects": [asdict(item) for item in schema_objects],
         "candidates": candidates,
     }
-    print(json.dumps(report, indent=2, sort_keys=True))
+    serialized_report = json.dumps(report, indent=2, sort_keys=True)
+    if arguments.output is None:
+        print(serialized_report)
+        return
+
+    output = arguments.output.resolve()
+    output.write_text(f"{serialized_report}\n", encoding="utf-8")
+    print(
+        json.dumps(
+            {
+                "schema": "slop-cleanup-inventory-receipt/v1",
+                "mode": report["mode"],
+                "input_digest": report["input_digest"],
+                "output": str(output),
+                "summary": report["summary"],
+                "candidate_counts": {name: len(items) for name, items in candidates.items()},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

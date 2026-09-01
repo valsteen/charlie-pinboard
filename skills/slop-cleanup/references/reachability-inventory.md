@@ -18,16 +18,18 @@ Keep paths, symbols, counts, and short conclusions. Do not paste full source fil
 
 ## Run the bundled inventory
 
-Resolve `../scripts/inventory.py` relative to this reference. Run it through the repository-owned environment command when the repository specifies one; otherwise use the Python interpreter provided by the plugin host. Do not bypass a repository's locked environment or invoke a prohibited ambient interpreter merely because the helper is installed outside the checkout. Give it the repository and exact production and test roots. Keep its JSON in private scratch space; inspect `coverage`, `summary`, and `candidates` before loading individual declaration or family records.
+Resolve `../scripts/inventory.py` relative to this reference. Run it through the repository-owned environment command when the repository specifies one; otherwise use the Python interpreter provided by the plugin host. Do not bypass a repository's locked environment or invoke a prohibited ambient interpreter merely because the helper is installed outside the checkout. Give it the repository and exact production and test roots. Do not read the helper implementation during an ordinary audit. Inspect its source only when execution fails, its receipt contradicts this documented contract, or the task is changing the helper itself.
+
+Write each full report once to private scratch space with `--output`. The command prints a compact receipt containing the input digest, summary, and candidate counts. Query the saved JSON for individual candidate families instead of printing the complete report or rerunning the helper to extract another section.
 
 For a repository containing production Python, run the same tracked revision and roots twice:
 
 ```text
-python inventory.py --repository <repo> --production-root <root> --test-root <root> --mode generic
-python inventory.py --repository <repo> --production-root <root> --test-root <root> --mode python-ast
+python inventory.py --repository <repo> --production-root <root> --test-root <root> --mode generic --output <private-scratch>/generic.json
+python inventory.py --repository <repo> --production-root <root> --test-root <root> --mode python-ast --output <private-scratch>/python-ast.json
 ```
 
-Require the two reports to have the same `input_digest`. Use the generic run as the portability baseline and the AST run as additional Python evidence. Compare candidate selectors and closed-family atoms in both directions. Investigate useful generic findings that disappear under enrichment, and record which additional candidates depend on AST precision. Do not silently replace the generic run with the richer one.
+Run each mode once per input digest. Require the two reports to have the same `input_digest`. Use the generic run as the portability baseline and the AST run as additional Python evidence. Compare candidate selectors and closed-family atoms in both directions. Investigate useful generic findings that disappear under enrichment, and record which additional candidates depend on AST precision. Do not silently replace the generic run with the richer one.
 
 The generic pass deliberately uses conservative text structure rather than language parsers. Its current coverage receipt names the exact recognized forms: declaration-like symbols in Go, Kotlin, Python, Rust, and TypeScript; common enum shapes where available; SQLite `CREATE` objects; literal `CHECK ... IN (...)` vocabularies even when SQL is embedded in another source file; tracked text; and common assets. Pair it with analyzers already declared by the repository. Add no parser or permanent dependency merely to make another language resemble Python.
 

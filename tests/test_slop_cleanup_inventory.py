@@ -178,6 +178,30 @@ def test_helper() -> None:
         self.assertIsInstance(value, dict)
         return value
 
+    def inventory_to_file(self, mode: str, output: Path) -> JsonObject:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(INVENTORY),
+                "--repository",
+                str(self.repository),
+                "--production-root",
+                "src",
+                "--test-root",
+                "tests",
+                "--mode",
+                mode,
+                "--output",
+                str(output),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        receipt = json.loads(result.stdout)
+        self.assertIsInstance(receipt, dict)
+        return receipt
+
     def json_object(self, value: JsonValue) -> JsonObject:
         if not isinstance(value, dict):
             self.fail("JSON value must be an object")
@@ -361,6 +385,25 @@ def test_helper() -> None:
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("inventory root does not exist: missing", result.stderr)
+
+    def test_output_file_keeps_full_report_and_prints_only_a_compact_receipt(self) -> None:
+        output = self.repository / "generic-report.json"
+
+        receipt = self.inventory_to_file("generic", output)
+        report = self.json_object(json.loads(output.read_text(encoding="utf-8")))
+
+        self.assertEqual("slop-cleanup-inventory-receipt/v1", receipt["schema"])
+        self.assertEqual(str(output.resolve()), receipt["output"])
+        self.assertEqual(report["mode"], receipt["mode"])
+        self.assertEqual(report["input_digest"], receipt["input_digest"])
+        self.assertEqual(report["summary"], receipt["summary"])
+        expected_candidate_counts: dict[str, int] = {}
+        for name, candidates in self.json_object(report["candidates"]).items():
+            if not isinstance(candidates, list):
+                self.fail("candidate collection must be a list")
+            expected_candidate_counts[name] = len(candidates)
+        self.assertEqual(expected_candidate_counts, receipt["candidate_counts"])
+        self.assertNotIn("declarations", receipt)
 
 
 if __name__ == "__main__":
