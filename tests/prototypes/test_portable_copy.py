@@ -29,7 +29,7 @@ from pinboard.domain.identifiers import ArtifactRefId, CandidateId, CheckpointId
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 from tests.domain_support import command
 from tests.prototypes.portable_copy import PortableCopyError, PortableCopyErrorCode, create_portable_copy
-from tests.support import SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
 from tests.work_brief_support import work_a_brief
 
 
@@ -100,7 +100,7 @@ class PortableCopyTest(unittest.TestCase):
             )
         state = replace(state, artifact_references=tuple(references))
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(state)
+        initialize_store(store, state)
         return roots.work_root, store
 
     @staticmethod

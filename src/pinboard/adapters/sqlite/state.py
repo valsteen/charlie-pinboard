@@ -1,4 +1,4 @@
-"""Compose, validate, and initialize complete state on a supplied connection.
+"""Compose and validate complete state on a supplied connection.
 
 This module reads and writes SQLite but never commits, rolls back, closes the
 connection, calls callbacks, reads the filesystem, or obtains time. SQLite and
@@ -12,12 +12,12 @@ from itertools import pairwise
 
 import msgspec
 
-from pinboard.adapters.sqlite.artifacts import insert_artifacts, read_artifacts
-from pinboard.adapters.sqlite.authority import insert_authority, read_authority, validate_attempt_authority
-from pinboard.adapters.sqlite.database import APPLICATION, SCHEMA_VERSION, decode_row
+from pinboard.adapters.sqlite.artifacts import read_artifacts
+from pinboard.adapters.sqlite.authority import read_authority, validate_attempt_authority
+from pinboard.adapters.sqlite.database import decode_row
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
-from pinboard.adapters.sqlite.lifecycle import insert_focus, insert_lifecycle, read_focus, read_lifecycle
-from pinboard.adapters.sqlite.proposals import insert_proposals, read_proposals
+from pinboard.adapters.sqlite.lifecycle import read_focus, read_lifecycle
+from pinboard.adapters.sqlite.proposals import read_proposals
 from pinboard.application import stored_state
 from pinboard.domain import work_models
 from pinboard.domain.authority_models import PreparationLeaseStatus
@@ -241,55 +241,4 @@ def append_history(
             )
             for value in records
         ),
-    )
-
-
-def insert_initial_state(connection: sqlite3.Connection, state: stored_state.StoredWorkState) -> None:
-    project = state.lifecycle.project
-    if project.application != APPLICATION or project.schema_version != SCHEMA_VERSION:
-        raise StorageError(
-            StorageErrorCode.INVALID_STATE, "Stored state does not match the current application schema."
-        )
-    _validate_current_state(state, StorageErrorCode.INVARIANT_VIOLATION)
-    occupied_rows = (
-        row["count"]
-        for table in (
-            "artifact_refs",
-            "work_items",
-            "item_dependencies",
-            "item_artifacts",
-            "attempts",
-            "proposals",
-            "proposal_evidence",
-            "proposal_freshness",
-            "coordination_lease",
-            "attempt_lease_counters",
-            "attempt_lease_generations",
-            "attempt_leases",
-            "current_focus",
-            "transition_history",
-        )
-        for row in connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchall()
-    )
-    try:
-        occupied = sum(msgspec.convert(tuple(occupied_rows), type=tuple[int, ...], strict=True))
-    except msgspec.ValidationError as error:
-        raise StorageError(StorageErrorCode.INVALID_STATE, f"Stored row is invalid: {error}") from error
-    current_revision = connection.execute("SELECT revision FROM project_meta WHERE singleton = 1").fetchone()
-    if occupied != 0 or current_revision is None or current_revision[0] != 0:
-        raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "Initial state requires a new empty database.")
-    connection.execute("PRAGMA defer_foreign_keys = ON")
-    insert_artifacts(connection, state.artifact_references)
-    insert_lifecycle(connection, state.lifecycle)
-    insert_proposals(connection, state.proposals)
-    insert_authority(connection, state.authority)
-    insert_focus(connection, state.focus)
-    append_history(connection, state.transition_receipts)
-    connection.execute(
-        """
-        UPDATE project_meta
-        SET revision = ?, host_epoch = ?, created_at = ?, updated_at = ?
-        WHERE singleton = 1
-        """,
-        (project.revision, project.host_epoch, project.created_at.isoformat(), project.updated_at.isoformat()),
     )

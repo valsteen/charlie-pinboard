@@ -30,7 +30,7 @@ from pinboard.domain.authority_models import (
 from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.identifiers import HostId, ItemId, LeaseId, ProposalId, TaskId
 from pinboard.domain.proposal_models import CreateProposalOperation, ProposalIntake
-from tests.support import SQLITE_NOW, complete_sqlite_state, reject_table_inserts
+from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store, reject_table_inserts
 
 
 class PreparationAuthorityTest(unittest.TestCase):
@@ -39,7 +39,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(state if state is not None else complete_sqlite_state())
+        initialize_store(store, state if state is not None else complete_sqlite_state())
         return store, roots.database_path
 
     def _acquisition(

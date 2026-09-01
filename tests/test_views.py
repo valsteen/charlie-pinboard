@@ -15,7 +15,7 @@ from pinboard.application import stored_state
 from pinboard.application.artifacts import NewArtifact
 from pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
 from pinboard.interfaces.work_briefs import build_attempt_brief_views, canonical_work_brief_bytes
-from tests.support import SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
 from tests.work_brief_support import work_a_brief
 
 
@@ -25,7 +25,7 @@ class GeneratedViewsTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         return roots.work_root, store
 
     def test_rebuild_creates_revision_stamped_non_authoritative_views(self) -> None:
@@ -81,7 +81,7 @@ class GeneratedViewsTest(unittest.TestCase):
         )
         state = replace(state, artifact_references=(reference, *state.artifact_references[1:]))
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(state)
+        initialize_store(store, state)
         attempt_briefs = build_attempt_brief_views(store.snapshot(), ArtifactRepository(roots))
 
         result = rebuild_state(store.snapshot(), roots.work_root, attempt_briefs, now=SQLITE_NOW)

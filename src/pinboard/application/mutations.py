@@ -206,12 +206,15 @@ def _checkpoint_artifact_ids(
 
 def _change_subjects(change: decision_models.DecisionChange) -> tuple[ItemId | None, AttemptId | None, bool]:
     match change:
-        case decision_models.ItemStateChange(item=item):
-            return item, None, False
-        case decision_models.ActivationChange(item=item, attempt=attempt):
-            return item, attempt, False
         case (
-            decision_models.AttemptStateChange(item=item, attempt=attempt)
+            decision_models.ItemStateChange(item=item)
+            | decision_models.BlockItemChange(item=item)
+            | DefinitionRevisionDecision(item=item)
+        ):
+            return item, None, False
+        case (
+            decision_models.ActivationChange(item=item, attempt=attempt)
+            | decision_models.AttemptStateChange(item=item, attempt=attempt)
             | decision_models.BlockAttemptChange(item=item, attempt=attempt)
             | decision_models.ResumeAttemptChange(item=item, attempt=attempt)
             | decision_models.ReviewSubmissionChange(item=item, attempt=attempt)
@@ -220,16 +223,13 @@ def _change_subjects(change: decision_models.DecisionChange) -> tuple[ItemId | N
             | decision_models.CheckpointAcceptanceChange(item=item, attempt=attempt)
         ):
             return item, attempt, False
-        case decision_models.CompletionChange(item=item, attempt=attempt):
-            return item, attempt, True
-        case decision_models.AttemptClosureChange(item=item, attempt=attempt):
+        case (
+            decision_models.CompletionChange(item=item, attempt=attempt)
+            | decision_models.AttemptClosureChange(item=item, attempt=attempt)
+        ):
             return item, attempt, True
         case decision_models.ItemClosureChange(item=item):
             return item, None, True
-        case decision_models.BlockItemChange(item=item):
-            return item, None, False
-        case DefinitionRevisionDecision(item=item):
-            return item, None, False
         case decision_models.AcceptedProposalChange(accepted_item=accepted):
             return accepted.item, None, False
         case (

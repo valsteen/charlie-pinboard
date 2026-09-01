@@ -1,4 +1,4 @@
-"""Read, initialize, and change proposal records on a supplied connection.
+"""Read and change proposal records on a supplied connection.
 
 This module never commits, rolls back, closes the connection, calls callbacks,
 reads the filesystem, or obtains time. Expected stale CAS writes return a
@@ -212,46 +212,6 @@ def read_proposals(connection: sqlite3.Connection) -> stored_state.ProposalRecor
         ).fetchall()
     )
     return stored_state.ProposalRecords(proposals, evidence, freshness)
-
-
-def insert_proposals(connection: sqlite3.Connection, records: stored_state.ProposalRecords) -> None:
-    connection.executemany(
-        """
-        INSERT INTO proposals (
-            proposal_id, created_at, recorded_at, source_task_id, user_label,
-            trigger, why_it_matters, relation_kind, relation_item_id, effect, unlock,
-            urgency_evidence, disposition, disposition_target_item_id, disposition_reason,
-            disposition_recorded_at, subject_revision
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        tuple(
-            (
-                value.proposal_id,
-                value.created_at.isoformat(),
-                value.recorded_at.isoformat(),
-                value.source_task_id,
-                value.user_label,
-                value.trigger,
-                value.why_it_matters,
-                value.relation.kind.value,
-                value.relation.item,
-                value.effect,
-                value.unlock,
-                value.urgency_evidence,
-                *_proposal_disposition_columns(value.disposition),
-                value.subject_revision,
-            )
-            for value in records.proposals
-        ),
-    )
-    connection.executemany(
-        "INSERT INTO proposal_evidence (proposal_id, position, selector) VALUES (?, ?, ?)",
-        tuple((value.proposal_id, value.position, value.selector) for value in records.evidence),
-    )
-    connection.executemany(
-        "INSERT INTO proposal_freshness (proposal_id, position, assumption) VALUES (?, ?, ?)",
-        tuple((value.proposal_id, value.position, value.assumption) for value in records.freshness),
-    )
 
 
 def set_proposal_disposition(

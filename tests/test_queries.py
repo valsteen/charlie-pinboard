@@ -21,7 +21,13 @@ from pinboard.domain.identifiers import (
     LeaseId,
 )
 from tests.domain_support import expect_success
-from tests.support import SQLITE_NOW, complete_sqlite_state, test_definition, with_definition_dependencies
+from tests.support import (
+    SQLITE_NOW,
+    complete_sqlite_state,
+    initialize_store,
+    test_definition,
+    with_definition_dependencies,
+)
 
 
 class SQLiteQueriesTest(unittest.TestCase):
@@ -30,7 +36,7 @@ class SQLiteQueriesTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(state or complete_sqlite_state())
+        initialize_store(store, state or complete_sqlite_state())
         return store
 
     def test_overview_and_parallel_preview_read_only_sqlite_state(self) -> None:

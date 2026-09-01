@@ -1,4 +1,4 @@
-"""Own SQLite connection setup, schema identity, publication, and backup effects.
+"""Own SQLite connection setup, schema identity, and publication effects.
 
 Database initialization owns its staging connection and transaction because it
 must publish an unverified schema atomically. ``write_transaction`` scopes that
@@ -378,8 +378,6 @@ def open_database(path: Path, mode: OpenMode) -> sqlite3.Connection:
 def read_operation(connection: sqlite3.Connection) -> Generator[sqlite3.Connection]:
     try:
         yield connection
-    except StorageError:
-        raise
     except sqlite3.Error as error:
         raise translate_database_error(error, opening=True) from error
 
@@ -390,9 +388,6 @@ def write_transaction(connection: sqlite3.Connection) -> Generator[sqlite3.Conne
         connection.execute("BEGIN IMMEDIATE")
         try:
             yield connection
-        except StorageError:
-            connection.rollback()
-            raise
         except sqlite3.Error as error:
             connection.rollback()
             raise translate_database_error(error) from error
@@ -404,35 +399,5 @@ def write_transaction(connection: sqlite3.Connection) -> Generator[sqlite3.Conne
         except sqlite3.Error as error:
             connection.rollback()
             raise translate_database_error(error) from error
-    except StorageError:
-        raise
     except sqlite3.Error as error:
         raise translate_database_error(error) from error
-
-
-def backup_database(source: Path, destination: Path) -> None:
-    staging = _prepare_database_publication(destination)
-    source_connection = open_database(source, OpenMode.READ_ONLY)
-    destination_connection: sqlite3.Connection | None = None
-    try:
-        try:
-            destination_connection = sqlite3.connect(staging, isolation_level=None)
-            source_connection.backup(destination_connection)
-            destination_connection.close()
-            destination_connection = None
-            verified = open_database(staging, OpenMode.READ_ONLY)
-            verified.close()
-        finally:
-            source_connection.close()
-            if destination_connection is not None:
-                destination_connection.close()
-        _sync_database(staging)
-    except StorageError:
-        _cleanup_database_files(staging)
-        raise
-    except (OSError, sqlite3.Error) as error:
-        _cleanup_database_files(staging)
-        if isinstance(error, sqlite3.Error):
-            raise translate_database_error(error) from error
-        raise StorageError(StorageErrorCode.IO_ERROR, "The SQLite backup could not be published.") from error
-    _publish_database(staging, destination)

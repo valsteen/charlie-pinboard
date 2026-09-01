@@ -673,10 +673,6 @@ class SQLiteWorkStore:
     def write(self) -> _SQLiteWorkTransaction:
         return _SQLiteWorkTransaction(self._path)
 
-    def initialize_state(self, state: stored_state.StoredWorkState) -> None:
-        with _SQLiteWorkTransaction(self._path) as transaction:
-            sqlite_state.insert_initial_state(transaction.connection, state)
-
     def accept_artifact_reference(
         self,
         work_root: Path,

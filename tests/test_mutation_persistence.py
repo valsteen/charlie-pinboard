@@ -46,7 +46,13 @@ from pinboard.domain.ledger import LedgerSnapshot
 from pinboard.interfaces.transition_input import parse_transition_command
 from tests.domain_support import command as make_command
 from tests.domain_support import expect_success, expect_transition_command
-from tests.support import SQLITE_NOW, complete_sqlite_state, reject_table_deletes, reject_table_inserts
+from tests.support import (
+    SQLITE_NOW,
+    complete_sqlite_state,
+    initialize_store,
+    reject_table_deletes,
+    reject_table_inserts,
+)
 
 
 def available_actions(
@@ -70,7 +76,7 @@ class MutationPersistenceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         return store
 
     def _store_pair(self) -> tuple[SQLiteWorkStore, SQLiteWorkStore]:
@@ -78,7 +84,7 @@ class MutationPersistenceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         first = SQLiteWorkStore(roots.database_path)
-        first.initialize_state(complete_sqlite_state())
+        initialize_store(first, complete_sqlite_state())
         return first, SQLiteWorkStore(roots.database_path)
 
     def _store_with_state(self, state: stored_state.StoredWorkState) -> SQLiteWorkStore:
@@ -86,7 +92,7 @@ class MutationPersistenceTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(state)
+        initialize_store(store, state)
         return store
 
     def _coordination_decision(
@@ -722,7 +728,7 @@ class MutationPersistenceTest(unittest.TestCase):
                 roots = resolve_durable_roots(project)
                 initialize_database(roots, SQLITE_NOW)
                 store = SQLiteWorkStore(roots.database_path)
-                store.initialize_state(complete_sqlite_state())
+                initialize_store(store, complete_sqlite_state())
                 before = store.snapshot()
                 snapshot = project_decision_snapshot(before, SQLITE_NOW)
                 actor = decision_models.ActorAuthority(
