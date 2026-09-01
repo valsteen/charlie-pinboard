@@ -19,9 +19,19 @@ Names, imports, and direct calls should make the next owner predictable. A pass-
 Choose the cheapest available path without changing the required coverage:
 
 - **Analyzer path:** Use a repository-declared syntax or semantic analyzer when it can enumerate a category completely. For Python, consume the AST inventory's `trivial_callable_bodies`, `equivalent_match_arms`, and `duplicated_match_structures` before semantic inspection.
-- **Language-neutral fallback:** For every category the available analyzers leave partial or unsupported, enumerate the relevant constructs across the complete production surface with repository search and small read-only queries. Inspect declaration-sized slices rather than whole files. Record the search or query, exact scope, selectors or explicit zero, and disposition.
+- **Language-neutral fallback:** For every category the available analyzers leave partial or unsupported, use an existing syntax tool or a disposable extractor outside the repository to enumerate the relevant constructs across the complete production surface. Save a compact structural ledger in private scratch space and inspect its groups and failures rather than printing source bodies. Do not add a production dependency or permanent parser for the audit.
 
-The fallback must explicitly enumerate single-expression callables, branch constructs, collection traversals, dispatch defaults, and protocol declarations. Compare single-expression bodies for attribute access, constructor reapplication, and unchanged delegation. Compare branch bodies for equivalent alternatives and repeated structures over the same family. Group repeated iteration sources and consumer keys within each function or neighboring projection. Search closed dispatch for catch-alls, defaults, optional handlers, and inherited behavior. Use language-aware tools when already available, but do not add a parser dependency merely to perform the audit.
+The fallback must explicitly enumerate single-expression callables, every arm of every branch construct, collection traversals, dispatch defaults, and protocol declarations. For each category, its ledger records the extraction method, exact roots, eligible construct count, fingerprinted construct count, extraction failures, selectors, normalized structural fingerprint, and duplicate groups. Normalize formatting and comments while retaining calls, fields, literals, and control flow; record any stronger normalization performed by the chosen analyzer. Compare callable fingerprints for attribute access, constructor reapplication, and unchanged delegation. Group branch-arm fingerprints within one branch and complete-branch fingerprints across owners. Group repeated iteration sources and consumer keys within each function or neighboring projection.
+
+A fallback receipt is complete only when every eligible construct has a fingerprint and extraction failures are zero. Header enumeration, raw search-result counts, representative declaration reads, and semantic spot checks are candidate-generation aids, not evidence that bodies were compared. If the available tool or disposable extractor cannot classify a construct, record its selector as a coverage gap and do not claim a fixed point.
+
+Keep the artifact compact. A suitable `structural-fallback/v1` record has one summary per category and stores bodies only as hashes plus short normalized-shape labels:
+
+```text
+category | method | roots | eligible | fingerprinted | failures | duplicate selectors | disposition
+```
+
+Query only duplicate groups, unmatched selectors, and extraction failures into model context. Semantic inspection still decides whether equal fingerprints reveal ceremonial repetition or independently owned behavior.
 
 The analyzer path saves context and time; it does not grant stronger stopping evidence. The same semantic receipt and fixed-point conditions apply to both paths.
 
@@ -57,7 +67,7 @@ Before claiming a fixed point, include one separate receipt row for every catego
 | Base and composite protocol overlap | All production protocols and their concrete substitution consumers |
 | Archaeological names, defaults, versions, and capability labels | Production source, schema, presentation, documentation, and tooling |
 
-Each row must name the method or analyzer, exact scope, candidate count with selectors or an explicit zero, and disposition. A candidate mentioned elsewhere in the report does not satisfy the row unless this evidence is present.
+Each row must name the method or analyzer, exact scope, candidate count with selectors or an explicit zero, and disposition. A fallback row must also link its complete structural-ledger counts and zero-failure receipt. A candidate mentioned elsewhere in the report does not satisfy the row unless this evidence is present.
 
 The last signal needs extra care. Identical spelling does not prove identical product identity. Retain nominally separate vocabularies when they prevent cross-family assignment, have different transition rules or consumers, or may evolve independently as distinct product concepts. Collapse them only when they name the same fact and all current owners interpret that fact identically.
 
