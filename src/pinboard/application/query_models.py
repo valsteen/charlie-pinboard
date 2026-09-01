@@ -8,7 +8,7 @@ from pinboard.application import stored_state
 from pinboard.domain import work_models
 
 type ItemStatusSchema = Literal["pinboard-item-status/v1"]
-type ItemStatusAuthority = Literal["sqlite-v2"]
+type ItemStatusAuthority = Literal["sqlite-v3"]
 type DecimalRevision = Annotated[str, msgspec.Meta(pattern=r"^[0-9]+$")]
 type PreparationStatus = Literal["active", "expired", "released", "revoked"]
 
@@ -156,7 +156,7 @@ class WorkItemDefinitionView(msgspec.Struct, frozen=True, forbid_unknown_fields=
 
 class ItemDefinition(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     schema: Literal["pinboard-item-definition/v1"]
-    authority: Literal["sqlite-v2"]
+    authority: Literal["sqlite-v3"]
     project_revision: int
     item_id: str
     definition_revision: int
@@ -178,7 +178,7 @@ class ItemDefinitionHistoryRow(msgspec.Struct, frozen=True, forbid_unknown_field
 
 class ItemDefinitionHistory(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     schema: Literal["pinboard-item-definition-history/v1"]
-    authority: Literal["sqlite-v2"]
+    authority: Literal["sqlite-v3"]
     project_revision: int
     item_id: str
     revisions: tuple[ItemDefinitionHistoryRow, ...]

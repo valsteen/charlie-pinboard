@@ -1,10 +1,10 @@
--- SQLite authority schema version 2.
+-- SQLite authority schema version 3.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE project_meta (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     application TEXT NOT NULL CHECK (application = 'pinboard'),
-    schema_version INTEGER NOT NULL CHECK (schema_version = 2),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 3),
     revision INTEGER NOT NULL CHECK (revision >= 0),
     host_epoch INTEGER NOT NULL CHECK (host_epoch >= 1),
     created_at TEXT NOT NULL,
@@ -15,9 +15,7 @@ CREATE TABLE artifact_refs (
     artifact_ref_id INTEGER PRIMARY KEY,
     artifact_key TEXT NOT NULL,
     artifact_revision INTEGER NOT NULL CHECK (artifact_revision >= 1),
-    kind TEXT NOT NULL CHECK (kind IN (
-        'requirements', 'plan', 'design', 'brief', 'result', 'blocker', 'evidence'
-    )),
+    kind TEXT NOT NULL CHECK (kind IN ('requirements', 'brief', 'result', 'evidence')),
     relative_path TEXT NOT NULL UNIQUE,
     content_sha256 TEXT NOT NULL CHECK (length(content_sha256) = 64),
     size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
@@ -71,17 +69,6 @@ CREATE TABLE item_dependencies (
     PRIMARY KEY (item_id, dependency_id),
     UNIQUE (item_id, position),
     CHECK (item_id <> dependency_id)
-) STRICT;
-
-CREATE TABLE item_artifacts (
-    item_id TEXT NOT NULL REFERENCES work_items(item_id) ON DELETE CASCADE,
-    artifact_ref_id INTEGER NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('requirements', 'plan', 'design', 'evidence')),
-    position INTEGER NOT NULL CHECK (position >= 0),
-    PRIMARY KEY (item_id, artifact_ref_id),
-    UNIQUE (item_id, role, position),
-    FOREIGN KEY (artifact_ref_id, role)
-        REFERENCES artifact_refs(artifact_ref_id, kind)
 ) STRICT;
 
 CREATE TABLE attempts (

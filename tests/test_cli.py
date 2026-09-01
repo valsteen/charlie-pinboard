@@ -860,9 +860,9 @@ class CliTest(unittest.TestCase):
         self.assertFalse((work / "authority.json").exists())
         self.assertFalse((work / "queue.md").exists())
         self.assertTrue(self.run_json_cli(*common, "validate")["valid"])
-        self.assertEqual("sqlite-v2", self.run_json_cli(*common, "status")["authority"])
+        self.assertEqual("sqlite-v3", self.run_json_cli(*common, "status")["authority"])
         overview = self.run_json_cli(*common, "overview")
-        self.assertEqual("sqlite-v2", overview["authority"])
+        self.assertEqual("sqlite-v3", overview["authority"])
         self.assertEqual("pinboard-overview/v2", overview["schema"])
         actions = self.run_json_cli(*common, "actions", "--role", "observer")["actions"]
         self.assertIsInstance(actions, list)
@@ -1738,7 +1738,7 @@ class CliTest(unittest.TestCase):
         common = ("--project-root", str(project), "--work-root", str(work))
 
         status = self.run_json_cli(*common, "status")
-        self.assertEqual("sqlite-v2", status["authority"])
+        self.assertEqual("sqlite-v3", status["authority"])
         self.assertEqual(2, status["intake_item_count"])
         status_result, status_stdout, status_stderr = self.run_cli(*common, "status")
         self.assertEqual(0, status_result, status_stderr)
@@ -2178,7 +2178,6 @@ Not launchable:
                 dependencies=tuple(
                     value for value in state.lifecycle.dependencies if value.item_id != ItemId("work-a")
                 ),
-                item_artifacts=(),
             ),
             authority=replace(
                 state.authority,
@@ -3330,7 +3329,7 @@ Not launchable:
         self.assertEqual(
             {
                 "schema": "pinboard-item-status/v1",
-                "authority": "sqlite-v2",
+                "authority": "sqlite-v3",
                 "revision": "12",
                 "item_id": "work-b",
                 "label": "Work work-b",
@@ -3347,7 +3346,7 @@ Not launchable:
         self.assertEqual(
             {
                 "schema": "pinboard-item-status/v1",
-                "authority": "sqlite-v2",
+                "authority": "sqlite-v3",
                 "revision": "12",
                 "item_id": "work-a",
                 "label": "Work work-a",
@@ -3363,7 +3362,7 @@ Not launchable:
         )
         result, stdout, stderr = self.run_cli(*common, "item", "status", "--item-id", "work-b")
         self.assertEqual(0, result, stderr)
-        self.assertIn("OK ITEM_STATUS item=work-b state=done revision=12 authority=sqlite-v2", stdout)
+        self.assertIn("OK ITEM_STATUS item=work-b state=done revision=12 authority=sqlite-v3", stdout)
         self.assertIn("outcome_evidence=accepted completion", stdout)
         self.assertIn("attempt=work-b-1 state=done candidate=candidate-b", stdout)
 

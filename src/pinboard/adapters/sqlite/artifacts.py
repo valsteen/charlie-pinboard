@@ -16,7 +16,6 @@ from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.application import stored_state
 from pinboard.application.artifacts import (
     ArtifactRef,
-    ArtifactRelationship,
     EvidenceArtifactRef,
     ResultArtifactRef,
 )
@@ -93,8 +92,6 @@ def accept_artifact_reference(
     work_root: Path,
     published: ArtifactRef,
     accepted_at: datetime,
-    *,
-    relationship: ArtifactRelationship | None = None,
 ) -> DecisionResult[stored_state.ArtifactReference]:
     """Accept one verified reference; the caller owns transaction and readback."""
 
@@ -117,84 +114,38 @@ def accept_artifact_reference(
                 StorageErrorCode.INVARIANT_VIOLATION,
                 "An accepted artifact identity already names different bytes.",
             )
-        reference = existing
-    else:
-        reference = stored_state.ArtifactReference(
-            ArtifactRefId(1 + max((int(value.artifact_ref_id) for value in before.artifact_references), default=0)),
-            published.key,
-            published.revision,
-            published.kind,
-            published.selector,
-            published.content_sha256,
-            published.size_bytes,
-            before.lifecycle.project.revision + 1,
-            accepted_at,
-        )
-    relationship_exists = relationship is not None and any(
-        value.item_id == relationship.item_id
-        and value.artifact_ref_id == reference.artifact_ref_id
-        and value.role == relationship.role
-        for value in before.lifecycle.item_artifacts
-    )
-    if existing is not None and (relationship is None or relationship_exists):
         return existing
+    reference = stored_state.ArtifactReference(
+        ArtifactRefId(1 + max((int(value.artifact_ref_id) for value in before.artifact_references), default=0)),
+        published.key,
+        published.revision,
+        published.kind,
+        published.selector,
+        published.content_sha256,
+        published.size_bytes,
+        before.lifecycle.project.revision + 1,
+        accepted_at,
+    )
     revision = before.lifecycle.project.revision + 1
-    if existing is None:
-        connection.execute(
-            """
-            INSERT INTO artifact_refs (
-                artifact_ref_id, artifact_key, artifact_revision, kind, relative_path,
-                content_sha256, size_bytes, accepted_revision, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                reference.artifact_ref_id,
-                reference.key,
-                reference.revision,
-                reference.kind.value,
-                reference.selector,
-                reference.content_sha256,
-                reference.size_bytes,
-                reference.accepted_revision,
-                reference.created_at.isoformat(),
-            ),
-        )
-    if relationship is not None:
-        item = next(
-            (value for value in before.lifecycle.work_items if value.item_id == relationship.item_id),
-            None,
-        )
-        if item is None or published.kind.value != relationship.role.value:
-            raise StorageError(
-                StorageErrorCode.INVARIANT_VIOLATION,
-                "Artifact relationship does not match a current item and compatible role.",
-            )
-        position = sum(
-            1
-            for value in before.lifecycle.item_artifacts
-            if value.item_id == relationship.item_id and value.role == relationship.role
-        )
-        if (
-            failure := require_one_changed_row(
-                connection.execute(
-                    """
-                    UPDATE work_items
-                    SET subject_revision = ?, updated_at = ?
-                    WHERE item_id = ? AND subject_revision = ?
-                    """,
-                    (revision, accepted_at.isoformat(), relationship.item_id, item.subject_revision),
-                ),
-                "The artifact relationship item changed before persistence.",
-            )
-        ) is not None:
-            return failure
-        connection.execute(
-            """
-            INSERT INTO item_artifacts (item_id, artifact_ref_id, role, position)
-            VALUES (?, ?, ?, ?)
-            """,
-            (relationship.item_id, reference.artifact_ref_id, relationship.role.value, position),
-        )
+    connection.execute(
+        """
+        INSERT INTO artifact_refs (
+            artifact_ref_id, artifact_key, artifact_revision, kind, relative_path,
+            content_sha256, size_bytes, accepted_revision, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            reference.artifact_ref_id,
+            reference.key,
+            reference.revision,
+            reference.kind.value,
+            reference.selector,
+            reference.content_sha256,
+            reference.size_bytes,
+            reference.accepted_revision,
+            reference.created_at.isoformat(),
+        ),
+    )
     if (
         failure := require_one_changed_row(
             connection.execute(

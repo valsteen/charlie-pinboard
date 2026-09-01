@@ -273,13 +273,6 @@ class ArtifactRecord:
     kind: str
 
 
-class ArtifactRole(Enum):
-    REQUIREMENTS = "requirements"
-    PLAN = "plan"
-    DESIGN = "design"
-    EVIDENCE = "evidence"
-
-
 @dataclass(frozen=True, slots=True)
 class DefinitionAnchor:
     item: ItemId
