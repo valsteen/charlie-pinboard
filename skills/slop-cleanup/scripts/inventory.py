@@ -164,6 +164,37 @@ class AmbiguousDefinitionGroup:
 
 
 @dataclass(frozen=True)
+class TrivialCallableBody:
+    selector: str
+    path: str
+    line: int
+    kind: str
+    expression: str
+
+
+@dataclass(frozen=True)
+class EquivalentMatchArms:
+    selector: str
+    path: str
+    line: int
+    patterns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MatchSite:
+    selector: str
+    path: str
+    line: int
+    fingerprint: str
+
+
+@dataclass(frozen=True)
+class DuplicatedMatchStructure:
+    selectors: tuple[str, ...]
+    lines: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class ReferenceCounts:
     production: Counter[str]
     test: Counter[str]
@@ -549,6 +580,151 @@ def python_ast_inventory(source: SourceFile) -> tuple[list[Declaration], list[Cl
     return declarations, families
 
 
+class MatchCollector(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.matches: list[ast.Match] = []
+
+    def visit_Match(self, node: ast.Match) -> None:
+        self.matches.append(node)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        pass
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        pass
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        pass
+
+
+def function_parameters(node: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
+    arguments = node.args
+    names = {argument.arg for argument in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs)}
+    if arguments.vararg is not None:
+        names.add(arguments.vararg.arg)
+    if arguments.kwarg is not None:
+        names.add(arguments.kwarg.arg)
+    return frozenset(names)
+
+
+def trivial_callable_body(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    source: SourceFile,
+    qualified_name: str,
+) -> TrivialCallableBody | None:
+    if len(node.body) != 1 or not isinstance(statement := node.body[0], ast.Return) or statement.value is None:
+        return None
+    value = statement.value
+    if isinstance(value, ast.Attribute):
+        kind = "attribute"
+    elif isinstance(value, ast.Call):
+        parameters = function_parameters(node)
+        if not all(isinstance(argument, ast.Name) and argument.id in parameters for argument in value.args):
+            return None
+        if not all(
+            keyword.arg is not None and isinstance(keyword.value, ast.Name) and keyword.value.id in parameters
+            for keyword in value.keywords
+        ):
+            return None
+        kind = "direct-call"
+    else:
+        return None
+    return TrivialCallableBody(
+        selector=f"{source.path}::{qualified_name}",
+        path=source.path,
+        line=node.lineno,
+        kind=kind,
+        expression=ast.unparse(value),
+    )
+
+
+def match_candidates(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    source: SourceFile,
+    qualified_name: str,
+) -> tuple[list[EquivalentMatchArms], list[MatchSite]]:
+    collector = MatchCollector()
+    for statement in node.body:
+        collector.visit(statement)
+    equivalent: list[EquivalentMatchArms] = []
+    sites: list[MatchSite] = []
+    selector = f"{source.path}::{qualified_name}"
+    for match in collector.matches:
+        cases_by_body: dict[str, list[ast.match_case]] = {}
+        for case in match.cases:
+            fingerprint = ast.dump(ast.Module(body=case.body, type_ignores=[]), include_attributes=False)
+            cases_by_body.setdefault(fingerprint, []).append(case)
+        equivalent.extend(
+            EquivalentMatchArms(
+                selector=selector,
+                path=source.path,
+                line=match.lineno,
+                patterns=tuple(ast.unparse(case.pattern) for case in cases),
+            )
+            for cases in cases_by_body.values()
+            if len(cases) > 1
+        )
+        sites.append(
+            MatchSite(
+                selector=selector,
+                path=source.path,
+                line=match.lineno,
+                fingerprint=ast.dump(match, include_attributes=False),
+            )
+        )
+    return equivalent, sites
+
+
+def visit_python_structural_smells(
+    body: list[ast.stmt],
+    source: SourceFile,
+    trivial: list[TrivialCallableBody],
+    equivalent: list[EquivalentMatchArms],
+    matches: list[MatchSite],
+    owner: str | None = None,
+) -> None:
+    for node in body:
+        if isinstance(node, ast.ClassDef):
+            qualified_name = f"{owner}.{node.name}" if owner else node.name
+            visit_python_structural_smells(node.body, source, trivial, equivalent, matches, qualified_name)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            qualified_name = f"{owner}.{node.name}" if owner else node.name
+            if candidate := trivial_callable_body(node, source, qualified_name):
+                trivial.append(candidate)
+            function_equivalent, function_matches = match_candidates(node, source, qualified_name)
+            equivalent.extend(function_equivalent)
+            matches.extend(function_matches)
+            visit_python_structural_smells(node.body, source, trivial, equivalent, matches, qualified_name)
+
+
+def python_structural_smells(
+    source: SourceFile,
+) -> tuple[list[TrivialCallableBody], list[EquivalentMatchArms], list[MatchSite]]:
+    if source.text is None:
+        return [], [], []
+    tree = ast.parse(source.text, filename=source.path)
+    trivial: list[TrivialCallableBody] = []
+    equivalent: list[EquivalentMatchArms] = []
+    matches: list[MatchSite] = []
+    visit_python_structural_smells(tree.body, source, trivial, equivalent, matches)
+    return trivial, equivalent, matches
+
+
+def duplicated_match_structures(matches: list[MatchSite]) -> list[DuplicatedMatchStructure]:
+    grouped: dict[str, list[MatchSite]] = {}
+    for match in matches:
+        grouped.setdefault(match.fingerprint, []).append(match)
+    return [
+        DuplicatedMatchStructure(
+            selectors=tuple(match.selector for match in sorted(group, key=lambda item: (item.path, item.line))),
+            lines=tuple(match.line for match in sorted(group, key=lambda item: (item.path, item.line))),
+        )
+        for group in grouped.values()
+        if len(group) > 1
+    ]
+
+
 def union_atoms(node: ast.expr) -> tuple[str, ...]:
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
         return (*union_atoms(node.left), *union_atoms(node.right))
@@ -918,6 +1094,13 @@ def coverage(mode: str) -> tuple[Coverage, ...]:
             if mode == "python-ast"
             else "mode disabled",
         ),
+        Coverage(
+            "python-structural-smells",
+            "complete" if mode == "python-ast" else "unsupported",
+            "stdlib ast trivial callable bodies, equivalent match arms, and duplicated match structures"
+            if mode == "python-ast"
+            else "mode disabled; use the language-neutral structural sweep",
+        ),
         Coverage("semantic-producer-consumer", "unsupported", "requires product authority and code-path inspection"),
         Coverage(
             "dynamic-reachability", "unsupported", "requires repository-specific registration and runtime inspection"
@@ -937,6 +1120,9 @@ def main() -> None:
     sources = read_sources(repository, production_roots, test_roots)
     declarations: list[Declaration] = []
     families: list[ClosedFamily] = []
+    trivial_callables: list[TrivialCallableBody] = []
+    equivalent_matches: list[EquivalentMatchArms] = []
+    match_sites: list[MatchSite] = []
     for source in sources:
         if source.role != "production":
             continue
@@ -944,6 +1130,10 @@ def main() -> None:
             python_declarations, python_families = python_ast_inventory(source)
             declarations.extend(python_declarations)
             families.extend(python_families)
+            source_trivial, source_equivalent, source_matches = python_structural_smells(source)
+            trivial_callables.extend(source_trivial)
+            equivalent_matches.extend(source_equivalent)
+            match_sites.extend(source_matches)
         else:
             declarations.extend(generic_declarations(source))
             families.extend(generic_closed_families(source))
@@ -988,6 +1178,9 @@ def main() -> None:
         ],
         "implicit_protocol_definitions": [asdict(item) for item in declarations if is_implicit_protocol(item)],
         "unreferenced_assets": unreferenced_assets(sources),
+        "trivial_callable_bodies": [asdict(item) for item in trivial_callables],
+        "equivalent_match_arms": [asdict(item) for item in equivalent_matches],
+        "duplicated_match_structures": [asdict(item) for item in duplicated_match_structures(match_sites)],
     }
     report = {
         "schema": "slop-cleanup-inventory/v1",
