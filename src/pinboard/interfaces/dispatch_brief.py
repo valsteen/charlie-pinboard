@@ -378,7 +378,6 @@ def prepare_dispatch(
                 store,
                 artifacts,
                 attempt.attempt_id,
-                attempt.item_id,
                 checkpoint_sha256,
                 candidate,
                 review_id,

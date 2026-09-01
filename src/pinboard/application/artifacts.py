@@ -2,8 +2,6 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from pinboard.application import stored_state
-from pinboard.domain import work_models
-from pinboard.domain.identifiers import ItemId
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,12 +21,6 @@ class ArtifactRef:
     selector: str
     content_sha256: str
     size_bytes: int
-
-
-@dataclass(frozen=True, slots=True)
-class ArtifactRelationship:
-    item_id: ItemId
-    role: work_models.ArtifactRole
 
 
 @dataclass(frozen=True, slots=True)

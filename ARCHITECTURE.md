@@ -115,7 +115,7 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 
 ### Immutable artifacts
 
-Accepted requirements, briefs, results, reviews, and other evidence are immutable files below `.codex/pinboard/artifacts/`. Canonical v2 work briefs and independent brief reviews are strict JSON; SQLite stores their kind, selector, revision, digest, size, and semantic relationships. The installed brief-publication path validates and canonicalizes a candidate, publishes immutable bytes, and accepts their reference without changing scheduling. Activation and resume separately validate that selected v2 brief identity against the locked ledger snapshot. Readers resolve artifacts through accepted references and verify their bytes. The files do not independently own lifecycle state.
+Accepted requirements, briefs, results, reviews, and other evidence are immutable files below `.codex/pinboard/artifacts/`. Canonical v2 work briefs and independent brief reviews are strict JSON; SQLite stores each accepted artifact's kind, selector, revision, digest, and size. Attempts and history own the relationships they actually consume. The installed brief-publication path validates and canonicalizes a candidate, publishes immutable bytes, and accepts their reference without changing scheduling. Activation and resume separately validate that selected v2 brief identity against the locked ledger snapshot. Readers resolve artifacts through accepted references and verify their bytes. The files do not independently own lifecycle state.
 
 ### Generated views
 

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Protocol
 
 from pinboard.application import stored_state
-from pinboard.application.artifacts import ArtifactRef, ArtifactRelationship
+from pinboard.application.artifacts import ArtifactRef
 from pinboard.application.mutation_models import StoredStateMutation
 from pinboard.domain import decision_models
 from pinboard.domain.errors import DecisionResult
@@ -26,6 +26,4 @@ class WorkStore(Protocol):
         work_root: Path,
         published: ArtifactRef,
         accepted_at: datetime,
-        *,
-        relationship: ArtifactRelationship | None = None,
     ) -> DecisionResult[stored_state.ArtifactReference]: ...

@@ -13,7 +13,6 @@ TABLE_GROUPS: dict[str, str] = {
     "proposal_evidence": "discovery",
     "proposal_freshness": "discovery",
     "artifact_refs": "durable knowledge",
-    "item_artifacts": "durable knowledge",
     "coordination_lease": "authority",
     "attempt_lease_counters": "authority",
     "attempt_lease_generations": "authority",
@@ -39,8 +38,6 @@ RELATION_ROLES: dict[tuple[str, str], str] = {
     ("preparation_leases", "work_item_definition_revisions"): "preparation pins one accepted definition",
     ("current_focus", "attempts"): "focus may name the live attempt",
     ("current_focus", "work_items"): "focus names the work",
-    ("item_artifacts", "artifact_refs"): "item knowledge resolves to immutable bytes",
-    ("item_artifacts", "work_items"): "knowledge belongs to an item",
     ("item_dependencies", "work_items"): "items form a dependency graph",
     ("work_item_definition_revisions", "work_items"): "definition history belongs to an item",
     ("proposal_evidence", "proposals"): "discovery retains its evidence",
@@ -88,7 +85,7 @@ DIAGRAM = Diagram(
     slug="database",
     title="Six kinds of memory in one relational ledger",
     description=(
-        "Nineteen SQLite tables preserve work identity, definitions, proposals, artifacts, mutation ownership, and history. "
+        "Eighteen SQLite tables preserve work identity, definitions, proposals, artifacts, mutation ownership, and history. "
         "Relationship families are grouped for readability while the source seed accounts for every foreign key."
     ),
     width=1200,
@@ -121,7 +118,6 @@ DIAGRAM = Diagram(
         Connector(
             ((640, 270), (640, 240), (700, 240), (700, 200)), "focus", "attempts", "optional attempt", (700, 228)
         ),
-        Connector(((200, 640), (200, 610)), "item-artifacts", "artifact-refs", "resolves", (235, 628)),
         Connector(
             ((695, 620), (695, 650)), "attempt-authority", "preparation-authority", "same fencing pattern", (715, 638)
         ),
@@ -140,23 +136,12 @@ DIAGRAM = Diagram(
             "artifact-refs",
             "",
             "Accepted artifacts",
-            ("brief · ready review · result", "checkpoint review evidence"),
+            ("requirements · brief · result", "ready + checkpoint review evidence"),
             ("artifact_refs",),
             50,
             500,
             300,
-            110,
-        ),
-        Box(
-            "item-artifacts",
-            "",
-            "Item evidence link",
-            ("ready review → work item", "role + position"),
-            ("item_artifacts",),
-            50,
-            640,
-            300,
-            110,
+            150,
         ),
         Box(
             "coordination",
@@ -199,7 +184,7 @@ DIAGRAM = Diagram(
     notes=(
         Note("SELECTED RELATIONSHIPS SHOWN · EVERY FOREIGN KEY STILL CHECKED BY THE SEED", 28, 790, 11, meta=True),
         Note(
-            "Briefs and accepted results link to attempts. Ready-review evidence links to items. Accepted checkpoint review evidence links to history.",
+            "Briefs and accepted results link to attempts. Ready-review evidence is reused by exact identity. Accepted checkpoint review evidence links to history.",
             28,
             816,
             11,

@@ -45,7 +45,7 @@ from pinboard.adapters.sqlite.lifecycle import (
 from pinboard.adapters.sqlite.models import OpenMode
 from pinboard.adapters.sqlite.proposals import accept_proposal, create_proposal, set_proposal_disposition
 from pinboard.application import stored_state
-from pinboard.application.artifacts import ArtifactRef, ArtifactRelationship
+from pinboard.application.artifacts import ArtifactRef
 from pinboard.application.mutation_models import (
     AttemptAuthorityMutation,
     CheckpointAcceptanceMutation,
@@ -678,8 +678,6 @@ class SQLiteWorkStore:
         work_root: Path,
         published: ArtifactRef,
         accepted_at: datetime,
-        *,
-        relationship: ArtifactRelationship | None = None,
     ) -> DecisionResult[stored_state.ArtifactReference]:
         with _SQLiteWorkTransaction(self._path) as transaction:
             connection = transaction.connection
@@ -689,7 +687,6 @@ class SQLiteWorkStore:
                 work_root,
                 published,
                 accepted_at,
-                relationship=relationship,
             )
             if isinstance(result, DecisionFailure):
                 return transaction._select(result)

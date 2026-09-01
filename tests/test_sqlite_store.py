@@ -167,7 +167,7 @@ class SQLiteStoreTest(unittest.TestCase):
         for field, value, expected in (
             ("application", "wrong-application", StorageErrorCode.INVALID_STATE),
             ("schema_version", 0, StorageErrorCode.SCHEMA_UNSUPPORTED),
-            ("schema_version", 3, StorageErrorCode.SCHEMA_UNSUPPORTED),
+            ("schema_version", 4, StorageErrorCode.SCHEMA_UNSUPPORTED),
         ):
             tampered, _ = self._store(populated=False)
             connection = sqlite3.connect(tampered)
@@ -204,7 +204,7 @@ class SQLiteStoreTest(unittest.TestCase):
         try:
             self.assertEqual("wal", connection.execute("PRAGMA journal_mode = WAL").fetchone()[0])
             connection.execute("PRAGMA ignore_check_constraints = ON")
-            connection.execute("UPDATE project_meta SET schema_version = 3")
+            connection.execute("UPDATE project_meta SET schema_version = 4")
             connection.commit()
         finally:
             connection.close()
@@ -308,7 +308,7 @@ class SQLiteStoreTest(unittest.TestCase):
             connection.execute(
                 "CREATE TABLE project_meta (singleton INTEGER, application TEXT, schema_version INTEGER)"
             )
-            connection.execute("INSERT INTO project_meta VALUES (1, 'pinboard', 2)")
+            connection.execute("INSERT INTO project_meta VALUES (1, 'pinboard', 3)")
             connection.commit()
         finally:
             connection.close()
@@ -320,7 +320,7 @@ class SQLiteStoreTest(unittest.TestCase):
         invalid_types_connection = sqlite3.connect(invalid_types)
         try:
             invalid_types_connection.execute("CREATE TABLE project_meta (application, schema_version)")
-            invalid_types_connection.execute("INSERT INTO project_meta VALUES (7, 'sqlite-v2')")
+            invalid_types_connection.execute("INSERT INTO project_meta VALUES (7, 'sqlite-v3')")
             invalid_types_connection.commit()
         finally:
             invalid_types_connection.close()
@@ -584,19 +584,7 @@ class SQLiteStoreTest(unittest.TestCase):
             ).fetchone()[0]
         finally:
             connection.close()
-        self.assertEqual(19, table_count)
-
-        wrong_kind = replace(
-            state,
-            lifecycle=replace(
-                state.lifecycle,
-                item_artifacts=(
-                    replace(
-                        state.lifecycle.item_artifacts[0], artifact_ref_id=state.artifact_references[0].artifact_ref_id
-                    ),
-                ),
-            ),
-        )
+        self.assertEqual(18, table_count)
         review_items = list(state.lifecycle.work_items)
         review_items[1] = replace(review_items[1], state=stored_state.StoredWorkItemState.REVIEW)
         review_attempt = replace(state.lifecycle.attempts[0], state=work_models.AttemptState.REVIEW)
@@ -606,7 +594,6 @@ class SQLiteStoreTest(unittest.TestCase):
         )
         mismatched_focus = replace(state, focus=replace(state.focus, item_id=ItemId("work-c")))
         for name, candidate in (
-            ("artifact kind compatibility", wrong_kind),
             ("review candidate", review_without_candidate),
             ("focus ownership", mismatched_focus),
         ):
@@ -626,6 +613,9 @@ class SQLiteStoreTest(unittest.TestCase):
         try:
             for statement in (
                 "UPDATE attempts SET state = 'closed' WHERE attempt_id = 'work-a-1'",
+                "UPDATE artifact_refs SET kind = 'plan' WHERE artifact_ref_id = 2",
+                "UPDATE artifact_refs SET kind = 'design' WHERE artifact_ref_id = 2",
+                "UPDATE artifact_refs SET kind = 'blocker' WHERE artifact_ref_id = 2",
                 "UPDATE proposals SET relation_item_id = NULL WHERE proposal_id = 'zz-proposal-a'",
                 """
                 UPDATE proposals

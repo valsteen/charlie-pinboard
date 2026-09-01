@@ -268,12 +268,12 @@ class HowItWorksDocumentationTests(unittest.TestCase):
 
         database_edges = {(value.source, value.target) for value in database.DIAGRAM.connectors}
         self.assertIn(("work-items", "dependencies"), database_edges)
-        self.assertIn(("item-artifacts", "artifact-refs"), database_edges)
+        self.assertNotIn(("item-artifacts", "artifact-refs"), database_edges)
         self.assertIn(("meta", "history"), database_edges)
 
         database_boxes = {value.key: value for value in database.DIAGRAM.boxes}
         self.assertEqual("Accepted artifacts", database_boxes["artifact-refs"].title)
-        self.assertEqual("Item evidence link", database_boxes["item-artifacts"].title)
+        self.assertNotIn("item-artifacts", database_boxes)
         self.assertEqual("Shared authority", database_boxes["coordination"].title)
 
     def test_product_view_distinguishes_advisory_continue_from_review_acceptance(self) -> None:

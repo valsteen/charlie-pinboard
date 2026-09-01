@@ -226,12 +226,12 @@ def complete_sqlite_state() -> stored_state.StoredWorkState:
         3,
         SQLITE_NOW,
     )
-    design = stored_state.ArtifactReference(
+    requirements = stored_state.ArtifactReference(
         ArtifactRefId(2),
-        "work-a-design",
+        "work-a-requirements",
         1,
-        stored_state.ArtifactKind.DESIGN,
-        "artifacts/design.md",
+        stored_state.ArtifactKind.REQUIREMENTS,
+        "artifacts/requirements/work-a-requirements/1.md",
         SQLITE_DIGEST,
         200,
         3,
@@ -249,7 +249,7 @@ def complete_sqlite_state() -> stored_state.StoredWorkState:
         SQLITE_NOW,
     )
     lifecycle = stored_state.LifecycleRecords(
-        stored_state.ProjectRecord("pinboard", 2, 12, 2, SQLITE_NOW, SQLITE_NOW),
+        stored_state.ProjectRecord("pinboard", 3, 12, 2, SQLITE_NOW, SQLITE_NOW),
         (
             _stored_item(intake_item, stored_state.StoredWorkItemState.INTAKE, sparse=True, queue_position=1),
             _stored_item(item_a, stored_state.StoredWorkItemState.ACTIVE, queue_position=2),
@@ -269,7 +269,6 @@ def complete_sqlite_state() -> stored_state.StoredWorkState:
             ),
         ),
         (stored_state.ItemDependency(item_a, item_c, 0), stored_state.ItemDependency(proposal_item, item_c, 0)),
-        (stored_state.ItemArtifactLink(item_a, design.artifact_ref_id, work_models.ArtifactRole.DESIGN, 0),),
         (
             stored_state.StoredAttempt(
                 attempt_id,
@@ -366,7 +365,7 @@ def complete_sqlite_state() -> stored_state.StoredWorkState:
     return stored_state.StoredWorkState(
         lifecycle,
         proposals,
-        (brief, design, evidence),
+        (brief, requirements, evidence),
         authority,
         transition_receipts,
         stored_state.StoredFocus(item_a, attempt_id, "continue", 6),

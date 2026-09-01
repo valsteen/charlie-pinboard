@@ -17,7 +17,7 @@ def _dependency_key(value: stored_state.ItemDependency) -> tuple[str, int]:
 
 
 def _header(kind: str, revision: int) -> str:
-    return f"---\nkind: {kind}\ndatabase_revision: {revision}\nauthority: sqlite-v2\n---\n\n> {NOTICE}\n\n"
+    return f"---\nkind: {kind}\ndatabase_revision: {revision}\nauthority: sqlite-v3\n---\n\n> {NOTICE}\n\n"
 
 
 def _queue(state: stored_state.StoredWorkState, now: datetime) -> bytes:

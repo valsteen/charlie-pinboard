@@ -122,13 +122,13 @@ The layers do not repeat the same decision. Each contributes a different guarant
 
 ## The durable memory underneath
 
-The relational ledger groups nineteen tables into six kinds of memory: current work, accepted scope and dependencies, discoveries, immutable knowledge, changing mutation ownership, and the history that connects them.
+The relational ledger groups eighteen tables into six kinds of memory: current work, accepted scope and dependencies, discoveries, immutable knowledge, changing mutation ownership, and the history that connects them.
 
 {_picture("database", "Six groups of SQLite tables showing current work, scope, discovery, durable knowledge, mutation ownership, and history")}
 
 A work item survives attempts. Accepted versions preserve current scope and its revision history. Proposal evidence records why possible work was raised, while its freshness assumptions record which facts must be checked again.
 
-Pinboard publishes immutable artifacts along three current paths. A canonical work brief is published before an item is activated or resumed. The attempt selects that brief, and dispatch later resolves its accepted reference and verifies the exact bytes. Independent ready-review evidence can be published during dispatch preparation and linked to the work item, allowing the same review to be verified and reused.
+Pinboard publishes immutable artifacts along three current paths. A canonical work brief is published before an item is activated or resumed. The attempt selects that brief, and dispatch later resolves its accepted reference and verifies the exact bytes. Independent ready-review evidence can be published during dispatch preparation, then verified and reused by exact identity.
 
 Checkpoint acceptance publishes the exact result and independent review as immutable artifacts. It then atomically records the result on the attempt, the review on the accepted history receipt, the lifecycle change, and the single receipt. Publication alone does not change lifecycle state; a rejected or rolled-back acceptance leaves the prior ledger relationships intact.
 
