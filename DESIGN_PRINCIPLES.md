@@ -83,6 +83,8 @@ Stress-test navigation whenever a command or variant family crosses several prod
 
 Use that result to collapse same-meaning remaps and improve names and direct call paths. Do not introduce reflection, registries, callbacks, or polymorphism merely to reduce the number of exhaustive matches. The target is a navigable closed design: each necessary distinction is explicit once per owner, and a developer can predict the next owner without reconstructing a parallel routing system.
 
+Apply the same ownership test to read paths. When neighboring projections repeatedly scan one collection by the same key to reconstruct the same relationship, build one local explicit index and reuse it for that operation. Keep separate traversals when they answer different questions or when sharing the index would give it a broader lifetime or owner than the operation requires.
+
 ## Choose dispatch by ownership and failure mode
 
 The primary hazard is implicit fallback, not dynamic dispatch by itself. For every dispatch site, ask whether the alternatives are closed, whether this owner must distinguish them, where a new alternative should force an edit, and what happens for an unsupported value. Reject catch-all `else` branches, mapping `.get()` defaults, optional handlers, inherited default implementations, and generic registrations that silently accept an unknown alternative.
