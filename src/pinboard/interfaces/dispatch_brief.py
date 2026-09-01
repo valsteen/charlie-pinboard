@@ -148,11 +148,13 @@ def _canonical_prompt(
         f"Canonical brief: {attempt_path}\n\n"
         "Read and follow that canonical attempt brief. It is the sole semantic execution contract. "
         "Do not restate, narrow, defer, or add acceptance semantics in this launch.\n\n"
-        "Execution environment:\n"
+        "Execution environment declaration:\n"
         f"- Checkout: {environment.checkout}\n"
         f"- Branch: {environment.branch}\n"
         f"- Starting revision: {environment.starting_revision}\n"
-        f"- Permissions: {permissions}\n"
+        f"- Declared permissions: {permissions}\n\n"
+        "Pinboard validates the checkout and branch. The starting revision and permissions are coordinator "
+        "declarations for the worker; they neither grant authority nor enforce the environment.\n"
     )
 
 

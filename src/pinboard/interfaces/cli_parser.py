@@ -593,7 +593,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--environment",
         required=True,
         type=Path,
-        help="pinboard-dispatch/v1 JSON describing the checkout, branch, revision, and permissions.",
+        help="pinboard-dispatch/v1 JSON declaring the checkout, branch, revision, and already-authorized permissions.",
     )
     dispatch.add_argument(
         "--prompt",
