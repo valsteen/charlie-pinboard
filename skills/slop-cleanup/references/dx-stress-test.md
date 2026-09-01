@@ -1,25 +1,17 @@
 # Stress-test developer navigation
 
-Use this test when a command or closed-variant family crosses several production owners. It complements reachability and correctness checks by asking whether the surviving design can be followed and changed without reconstructing parallel routing systems.
+Use this test when a command or closed-variant family crosses several production owners. First apply the shared [developer-navigation lens](../../pinboard/references/developer-navigation.md). This cleanup-specific test extends that bounded prevention check across the complete production surface and adds fixed-point evidence.
 
 ## Trace one supported value
 
-Choose a representative command or variant with a real production entry point and effect. Follow it from input through validation, decisions, conversions, effects, and presentation. Repeat for another family only when it has a distinct routing shape, such as state mutation versus read projection or direct versus borrowed authority; stop adding traces when a new shape exposes no new owner category. Record each production site a developer must discover, in order, and classify why it exists:
-
-- boundary validation or conversion;
-- product or authorization decision;
-- effect or persistence;
-- presentation;
-- same-meaning pass-through or remap.
-
-Names, imports, and direct calls should make the next owner predictable. A pass-through site is a cleanup candidate when it introduces another discriminator, record, conversion table, or exhaustive branch without changing meaning or owning one of the first four responsibilities.
+Choose a representative command or variant with a real production entry point and effect and record the trace required by the shared lens. Repeat for another family only when it has a distinct routing shape, such as state mutation versus read projection or direct versus borrowed authority; stop adding traces when a new shape exposes no new owner category. In cleanup, every same-meaning pass-through or remap in those traces becomes a candidate whose semantic responsibility must be inspected and dispositioned.
 
 ## Generate candidates mechanically
 
 Choose the cheapest available path without changing the required coverage:
 
 - **Analyzer path:** Use a repository-declared syntax or semantic analyzer when it can enumerate a category completely. For Python, consume the AST inventory's `trivial_callable_bodies`, `equivalent_match_arms`, and `duplicated_match_structures` before semantic inspection.
-- **Language-neutral fallback:** For every category the available analyzers leave partial or unsupported, use an existing syntax tool or a disposable extractor outside the repository to enumerate the relevant constructs across the complete production surface. Save a compact structural ledger in private scratch space and inspect its groups and failures rather than printing source bodies. Do not add a production dependency or permanent parser for the audit.
+- **Language-portable fallback:** For every category the available analyzers leave partial or unsupported, use an existing syntax tool or a disposable extractor outside the repository to enumerate the relevant constructs across the complete production surface. The procedure is shared across languages, but the extractor must understand the concrete language's syntax. Save a compact structural ledger in private scratch space and inspect its groups and failures rather than printing source bodies. Do not add a production dependency or permanent parser for the audit.
 
 Before fingerprinting, build an independent construct-universe inventory for every production language and category in scope. Derive it from a language-aware parser or analyzer when available; otherwise use a separate lexical or token sweep from the fingerprint extractor. The fingerprint extractor may consume the resulting selectors, but it must not define its own denominator. Record the syntax families and branch-bearing keywords or operators the inventory recognizes. Include both statement and expression forms of branching, such as conditional expressions as well as `if`, `match`, `switch`, or `when`; include exception handlers, callable bodies, loops and comprehensions, dispatch defaults, and protocol, interface, or trait declarations. Language-specific spelling may differ, but an unrecognized construct is a coverage failure rather than evidence that the category is empty.
 
@@ -30,6 +22,8 @@ The fallback must explicitly fingerprint single-expression callables, every arm 
 Normalize formatting and comments while retaining identifiers that can change meaning, including call targets, fields, constructors, type names, and literals. Normalize locally bound names only when the extractor proves their corresponding bindings; report stronger normalization as a separate similarity lead rather than structural equality. Compare callable fingerprints for attribute access, constructor reapplication, and unchanged delegation. Group branch-arm fingerprints within one branch and complete-branch fingerprints across owners. Group repeated iteration sources and consumer keys within each function or neighboring projection.
 
 A fallback receipt is complete only when its independent universe and lexical-cue conservation reconcile, every non-excluded construct has a fingerprint, and extraction failures are zero. Before freezing the ledger, cross-check the universe with the independent parser, analyzer, lexical, or token count and report any construct family present in one method but absent from the other. When a richer analyzer becomes available after a deliberately blind fallback evaluation, compare its complete construct counts and selectors with the frozen universe category by category before accepting the fallback certificate; candidate-family agreement alone is insufficient. Header enumeration, raw search-result counts, representative declaration reads, and semantic spot checks are candidate-generation aids, not evidence that bodies were compared. If either method cannot classify a construct, record its selector as a coverage gap and do not claim a fixed point.
+
+Keep structural coverage and candidate precision separate. A reconciled universe proves that the constructs were visited, not that every smell predicate selected the same leads as a richer analyzer. Compare candidate families in both directions when an enrichment path exists, inspect every enrichment-only lead, and record whether the difference is a retained false positive, a fallback predicate gap, or a useful analyzer-dependent candidate. Without an enrichment path, close each required semantic row from the full fingerprint category rather than treating a narrow candidate query as proof of zero findings.
 
 Keep the artifact compact. A suitable `structural-fallback/v1` record has one summary per category and stores bodies only as hashes plus short normalized-shape labels:
 
@@ -79,22 +73,7 @@ The last signal needs extra care. Identical spelling does not prove identical pr
 
 ## Simulate one sibling change
 
-Choose a plausible sibling that has the same boundary and lifecycle shape as the representative value. Without implementing it, list the files and branches that would need edits. Separate sites that define new behavior from sites that merely repeat routing knowledge.
-
-Keep an exhaustive site when that owner must distinguish the sibling to validate it, decide differently, convert an independent external or persisted shape, apply a different effect, or present a different result. Fold a site when the sibling was already selected and the site only maps one name or same-shaped record to another.
-
-Do not optimize the edit count by replacing a legitimate closed decision with reflection, a registry, callbacks, inheritance, or open runtime dispatch. Dynamic dispatch is not itself residue when the caller should not distinguish implementations or the extension family is genuinely open. In that case, require one visible wiring owner, an explicit required surface, and explicit failure for unsupported implementations; inherited behavior, optional handlers, mapping defaults, and catch-all branches must not silently accept a missing case.
-
-Judge each surviving dispatch on four separate axes:
-
-- navigability: can a developer predict and reach the implementation from the call site;
-- refactoring resilience: does adding or renaming a closed alternative force every required owner to change without falling through a default;
-- boilerplate: how many sites merely restate the same selected fact;
-- runtime reliability: where invalid input, missing registration, and incomplete implementation fail.
-
-Prefer exhaustive matching at a closed boundary, product decision, effect, persistence conversion, or presentation owner. Prefer a direct call, required protocol, or callback inside a cohesive module or at a deliberately open library boundary when the caller has no alternative-specific decision. Prefer a plain mapping only for genuinely data-driven lookup, with missing keys failing explicitly; do not disguise behavior dispatch as data.
-
-This stress test produces cleanup candidates, not automatic deletion authority. Preserve a site when the trace exposes an independent observation, nominal distinction, boundary representation, policy, effect, or presentation responsibility that the superficial code shape concealed.
+Apply the shared lens's sibling simulation and dispatch test to every distinct routing shape found by the trace. In cleanup, those results produce candidates rather than automatic deletion authority. Preserve a site when semantic inspection exposes an independent observation, nominal distinction, boundary representation, policy, effect, or presentation responsibility that its superficial code shape concealed.
 
 ## Mock example: CLI leaf routing
 
