@@ -16,6 +16,15 @@ Names, imports, and direct calls should make the next owner predictable. A pass-
 
 ## Generate candidates mechanically
 
+Choose the cheapest available path without changing the required coverage:
+
+- **Analyzer path:** Use a repository-declared syntax or semantic analyzer when it can enumerate a category completely. For Python, consume the AST inventory's `trivial_callable_bodies`, `equivalent_match_arms`, and `duplicated_match_structures` before semantic inspection.
+- **Language-neutral fallback:** For every category the available analyzers leave partial or unsupported, enumerate the relevant constructs across the complete production surface with repository search and small read-only queries. Inspect declaration-sized slices rather than whole files. Record the search or query, exact scope, selectors or explicit zero, and disposition.
+
+The fallback must explicitly enumerate single-expression callables, branch constructs, collection traversals, dispatch defaults, and protocol declarations. Compare single-expression bodies for attribute access, constructor reapplication, and unchanged delegation. Compare branch bodies for equivalent alternatives and repeated structures over the same family. Group repeated iteration sources and consumer keys within each function or neighboring projection. Search closed dispatch for catch-alls, defaults, optional handlers, and inherited behavior. Use language-aware tools when already available, but do not add a parser dependency merely to perform the audit.
+
+The analyzer path saves context and time; it does not grant stronger stopping evidence. The same semantic receipt and fixed-point conditions apply to both paths.
+
 Search the complete production surface for these signals, then verify each with the trace and sibling simulation rather than treating the signal as proof:
 
 - a route, tag, or enum immediately remapped to a correspondingly named typed value;
