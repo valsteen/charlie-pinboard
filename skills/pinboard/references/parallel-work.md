@@ -10,7 +10,7 @@ Do not use it merely because more than one item exists. Ordinary next-work selec
 
 ## Build the preview
 
-1. Require authority `sqlite-v2`.
+1. Require authority `sqlite-v3`.
 2. Run `pinboard parallel preview --json` without a coordination lease.
 3. Present the result in two compact groups:
    - **Ready together:** the unambiguous all-safe set.
