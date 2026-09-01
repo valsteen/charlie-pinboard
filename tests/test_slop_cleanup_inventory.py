@@ -23,6 +23,9 @@ class SlopCleanupInventoryTest(unittest.TestCase):
         self.write(
             "src/models.py",
             """from enum import Enum
+from typing import Literal
+
+import msgspec
 
 
 class PythonMode(Enum):
@@ -39,6 +42,19 @@ class Closed:
 
 
 type Result = Opened | Closed
+
+type ArtifactRole = Literal["requirements", "plan", "design", "evidence"]
+
+
+class LocalBoundary(msgspec.Struct, tag="local", tag_field="kind"):
+    pass
+
+
+class RemoteBoundary(msgspec.Struct, tag="remote", tag_field="kind"):
+    pass
+
+
+type Boundary = LocalBoundary | RemoteBoundary
 
 
 def test_support_only() -> None:
@@ -62,6 +78,15 @@ class SecondFactory:
 
 
 EMBEDDED_SCHEMA = "CREATE VIEW current_items AS SELECT * FROM item_artifacts"
+""",
+        )
+        self.write(
+            "src/model.go",
+            """package sample
+
+type GoMode int
+
+func runGo() {}
 """,
         )
         self.write(
@@ -185,7 +210,7 @@ def test_helper() -> None:
         self.assertEqual("generic", report["mode"])
         summary = self.json_object(report["summary"])
         self.assertEqual(
-            {"kotlin", "python", "rust", "sql", "typescript"},
+            {"go", "kotlin", "python", "rust", "sql", "typescript"},
             set(self.json_strings(summary["languages"])),
         )
         declarations = self.json_objects(report["declarations"])
@@ -194,6 +219,8 @@ def test_helper() -> None:
             {
                 "PythonMode",
                 "test_support_only",
+                "GoMode",
+                "runGo",
                 "RustMode",
                 "run_rust",
                 "KotlinMode",
@@ -287,7 +314,26 @@ def test_helper() -> None:
             if self.json_string(family["language"]) == "python"
         }
         self.assertEqual({"LIVE", "LEGACY"}, ast_families["PythonMode"])
+        self.assertEqual({"live", "legacy"}, ast_families["PythonMode.value"])
         self.assertEqual({"Opened", "Closed"}, ast_families["Result"])
+        self.assertEqual(
+            {"requirements", "plan", "design", "evidence"},
+            ast_families["ArtifactRole"],
+        )
+        self.assertEqual({"local", "remote"}, ast_families["Boundary.kind"])
+        candidates = self.json_object(ast_report["candidates"])
+        declaration_only_atoms = {
+            (
+                self.json_string(candidate["family"]),
+                self.json_string(candidate["atom"]),
+            )
+            for candidate in self.json_objects(
+                candidates["closed_atoms_without_apparent_non_declaration_production_use"]
+            )
+        }
+        self.assertIn(("src/models.py::ArtifactRole", "plan"), declaration_only_atoms)
+        self.assertIn(("src/models.py::PythonMode.value", "legacy"), declaration_only_atoms)
+        self.assertIn(("src/models.py::Boundary.kind", "remote"), declaration_only_atoms)
         coverage = {
             self.json_string(item["category"]): self.json_string(item["status"])
             for item in self.json_objects(ast_report["coverage"])

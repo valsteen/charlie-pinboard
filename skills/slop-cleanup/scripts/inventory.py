@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
 LANGUAGE_BY_SUFFIX = {
     ".cjs": "typescript",
+    ".go": "go",
     ".js": "typescript",
     ".jsx": "typescript",
     ".kt": "kotlin",
@@ -29,6 +30,12 @@ LANGUAGE_BY_SUFFIX = {
 }
 ASSET_SUFFIXES = frozenset({".gif", ".ico", ".jpeg", ".jpg", ".png", ".svg", ".webp"})
 DECLARATION_PATTERNS = {
+    "go": (
+        (
+            "declaration",
+            re.compile(rf"^\s*(?:type|func|var|const)\s+(?:\([^\n]*\)\s+)?({IDENTIFIER})\b", re.MULTILINE),
+        ),
+    ),
     "python": (
         ("class", re.compile(rf"^[ \t]*class\s+({IDENTIFIER})\b", re.MULTILINE)),
         ("function", re.compile(rf"^[ \t]*(?:async\s+)?def\s+({IDENTIFIER})\b", re.MULTILINE)),
@@ -106,6 +113,8 @@ class Declaration:
 class AtomUse:
     atom: str
     production_uses: int
+    production_declaration_uses: int
+    production_non_declaration_uses: int
     test_uses: int
     support_uses: int
 
@@ -162,6 +171,9 @@ class ReferenceCounts:
     production_members: Counter[str]
     test_members: Counter[str]
     support_members: Counter[str]
+    production_literals: Counter[str]
+    test_literals: Counter[str]
+    support_literals: Counter[str]
     production_texts: tuple[str, ...]
     test_texts: tuple[str, ...]
     support_texts: tuple[str, ...]
@@ -188,6 +200,15 @@ class ReferenceCounts:
             return self.test_members[name]
         if role == "support":
             return self.support_members[name]
+        raise ValueError(f"unknown source role: {role}")
+
+    def literal_count(self, value: str, role: str) -> int:
+        if role == "production":
+            return self.production_literals[value]
+        if role == "test":
+            return self.test_literals[value]
+        if role == "support":
+            return self.support_literals[value]
         raise ValueError(f"unknown source role: {role}")
 
 
@@ -356,6 +377,34 @@ def python_enum_family(node: ast.ClassDef, source: SourceFile, qualified_name: s
     )
 
 
+def python_enum_value_family(node: ast.ClassDef, source: SourceFile, qualified_name: str) -> ClosedFamily | None:
+    if not is_enum_class(node):
+        return None
+    atoms = tuple(
+        str(value.value)
+        for member in node.body
+        for value in (
+            [member.value]
+            if isinstance(member, ast.Assign) and len(member.targets) == 1
+            else [member.value]
+            if isinstance(member, ast.AnnAssign) and isinstance(member.target, ast.Name)
+            else []
+        )
+        if isinstance(value, ast.Constant) and isinstance(value.value, (str, int))
+    )
+    if len(atoms) <= 1:
+        return None
+    return ClosedFamily(
+        selector=f"{source.path}::{qualified_name}.value",
+        path=source.path,
+        line=node.lineno,
+        language="python",
+        kind="enum-values",
+        name=f"{node.name}.value",
+        atoms=atoms,
+    )
+
+
 def python_union_family(node: ast.TypeAlias, source: SourceFile) -> ClosedFamily | None:
     if not isinstance(node.name, ast.Name):
         return None
@@ -373,26 +422,129 @@ def python_union_family(node: ast.TypeAlias, source: SourceFile) -> ClosedFamily
     )
 
 
+def literal_atoms(node: ast.expr) -> tuple[str, ...]:
+    if not (
+        isinstance(node, ast.Subscript)
+        and (
+            (isinstance(node.value, ast.Name) and node.value.id == "Literal")
+            or (isinstance(node.value, ast.Attribute) and node.value.attr == "Literal")
+        )
+    ):
+        return ()
+    values = node.slice.elts if isinstance(node.slice, ast.Tuple) else (node.slice,)
+    return tuple(str(value.value) if isinstance(value, ast.Constant) else ast.unparse(value) for value in values)
+
+
+def python_literal_family(
+    annotation: ast.expr, source: SourceFile, qualified_name: str, line: int
+) -> ClosedFamily | None:
+    atoms = literal_atoms(annotation)
+    if len(atoms) <= 1:
+        return None
+    return ClosedFamily(
+        selector=f"{source.path}::{qualified_name}",
+        path=source.path,
+        line=line,
+        language="python",
+        kind="literal",
+        name=qualified_name,
+        atoms=atoms,
+    )
+
+
+def msgspec_tag(node: ast.ClassDef) -> tuple[str, str] | None:
+    is_struct = any(
+        (isinstance(base, ast.Name) and base.id == "Struct")
+        or (isinstance(base, ast.Attribute) and base.attr == "Struct")
+        for base in node.bases
+    )
+    if not is_struct:
+        return None
+    keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg is not None}
+    tag = keywords.get("tag")
+    tag_field = keywords.get("tag_field")
+    if not isinstance(tag, ast.Constant) or not isinstance(tag.value, str):
+        return None
+    return (
+        tag.value,
+        tag_field.value if isinstance(tag_field, ast.Constant) and isinstance(tag_field.value, str) else "type",
+    )
+
+
+def python_type_alias_family(node: ast.TypeAlias, source: SourceFile) -> ClosedFamily | None:
+    return python_literal_family(node.value, source, node.name.id, node.lineno) or python_union_family(node, source)
+
+
+def visit_python_body(
+    body: list[ast.stmt],
+    source: SourceFile,
+    declarations: list[Declaration],
+    families: list[ClosedFamily],
+    tagged_structs: dict[str, tuple[str, str]],
+    owner: str | None = None,
+    *,
+    include_constants: bool = True,
+) -> None:
+    for node in body:
+        if declaration := python_declaration(node, source, owner, include_constants):
+            declarations.append(declaration)
+        if isinstance(node, ast.ClassDef):
+            qualified_name = f"{owner}.{node.name}" if owner else node.name
+            if tagged := msgspec_tag(node):
+                tagged_structs[qualified_name] = tagged
+            if family := python_enum_family(node, source, qualified_name):
+                families.append(family)
+            if family := python_enum_value_family(node, source, qualified_name):
+                families.append(family)
+            visit_python_body(
+                node.body,
+                source,
+                declarations,
+                families,
+                tagged_structs,
+                qualified_name,
+                include_constants=not is_enum_class(node),
+            )
+        elif isinstance(node, ast.TypeAlias) and (family := python_type_alias_family(node, source)):
+            families.append(family)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            qualified_name = f"{owner}.{node.target.id}" if owner else node.target.id
+            if family := python_literal_family(node.annotation, source, qualified_name, node.lineno):
+                families.append(family)
+
+
+def python_tagged_union_family(family: ClosedFamily, tagged_structs: dict[str, tuple[str, str]]) -> ClosedFamily | None:
+    if family.kind != "union" or not all(atom in tagged_structs for atom in family.atoms):
+        return None
+    tags = tuple(tagged_structs[atom] for atom in family.atoms)
+    tag_fields = {tag_field for _, tag_field in tags}
+    if len(tag_fields) != 1:
+        return None
+    tag_field = next(iter(tag_fields))
+    return ClosedFamily(
+        selector=f"{family.selector}.{tag_field}",
+        path=family.path,
+        line=family.line,
+        language="python",
+        kind="msgspec-tagged-union",
+        name=f"{family.name}.{tag_field}",
+        atoms=tuple(tag for tag, _ in tags),
+    )
+
+
 def python_ast_inventory(source: SourceFile) -> tuple[list[Declaration], list[ClosedFamily]]:
     if source.text is None:
         return [], []
     tree = ast.parse(source.text, filename=source.path)
-    declarations = []
-    families = []
-
-    def visit_body(body: list[ast.stmt], owner: str | None = None, *, include_constants: bool = True) -> None:
-        for node in body:
-            if declaration := python_declaration(node, source, owner, include_constants):
-                declarations.append(declaration)
-            if isinstance(node, ast.ClassDef):
-                qualified_name = f"{owner}.{node.name}" if owner else node.name
-                if family := python_enum_family(node, source, qualified_name):
-                    families.append(family)
-                visit_body(node.body, qualified_name, include_constants=not is_enum_class(node))
-            elif isinstance(node, ast.TypeAlias) and (family := python_union_family(node, source)):
-                families.append(family)
-
-    visit_body(tree.body)
+    declarations: list[Declaration] = []
+    families: list[ClosedFamily] = []
+    tagged_structs: dict[str, tuple[str, str]] = {}
+    visit_python_body(tree.body, source, declarations, families, tagged_structs)
+    families.extend(
+        tagged_family
+        for family in tuple(families)
+        if (tagged_family := python_tagged_union_family(family, tagged_structs)) is not None
+    )
     return declarations, families
 
 
@@ -534,6 +686,10 @@ def reference_counts(sources: tuple[SourceFile, ...]) -> ReferenceCounts:
         role: Counter(member for text in texts for member in MEMBER_TOKEN.findall(text))
         for role, texts in texts_by_role.items()
     }
+    literal_counters = {
+        role: Counter(first or second for text in texts for first, second in QUOTED_VALUE.findall(text))
+        for role, texts in texts_by_role.items()
+    }
     return ReferenceCounts(
         production=counters["production"],
         test=counters["test"],
@@ -541,6 +697,9 @@ def reference_counts(sources: tuple[SourceFile, ...]) -> ReferenceCounts:
         production_members=member_counters["production"],
         test_members=member_counters["test"],
         support_members=member_counters["support"],
+        production_literals=literal_counters["production"],
+        test_literals=literal_counters["test"],
+        support_literals=literal_counters["support"],
         production_texts=texts_by_role["production"],
         test_texts=texts_by_role["test"],
         support_texts=texts_by_role["support"],
@@ -553,6 +712,8 @@ def add_reference_counts(
     sources: tuple[SourceFile, ...],
 ) -> tuple[list[Declaration], list[ClosedFamily]]:
     references = reference_counts(sources)
+    declaration_atom_counts = Counter(atom for family in families for atom in family.atoms)
+    enum_value_members = linked_enum_value_members(families)
     declaration_counts = Counter(declaration.name for declaration in declarations if declaration.kind != "method")
     name_counts = Counter(declaration.name for declaration in declarations)
     counted_declarations = [
@@ -572,16 +733,66 @@ def add_reference_counts(
     counted_families = []
     for family in families:
         atom_uses = tuple(
-            AtomUse(
-                atom=atom,
-                production_uses=max(0, references.count(atom, "production") - 1),
-                test_uses=references.count(atom, "test"),
-                support_uses=references.count(atom, "support"),
+            counted_atom_use(
+                references,
+                family,
+                atom,
+                declaration_atom_counts[atom],
+                enum_value_members.get((family.selector, atom)),
             )
             for atom in family.atoms
         )
         counted_families.append(ClosedFamily(**{**asdict(family), "atom_uses": atom_uses}))
     return counted_declarations, counted_families
+
+
+def linked_enum_value_members(families: list[ClosedFamily]) -> dict[tuple[str, str], str]:
+    families_by_selector = {family.selector: family for family in families}
+    linked: dict[tuple[str, str], str] = {}
+    for family in families:
+        if family.kind != "enum-values":
+            continue
+        member_family = families_by_selector.get(family.selector.removesuffix(".value"))
+        if member_family is None or member_family.kind != "enum" or len(member_family.atoms) != len(family.atoms):
+            continue
+        linked.update(
+            ((family.selector, value), member) for value, member in zip(family.atoms, member_family.atoms, strict=True)
+        )
+    return linked
+
+
+def counted_atom_use(
+    references: ReferenceCounts,
+    family: ClosedFamily,
+    atom: str,
+    declared_uses: int,
+    linked_member: str | None,
+) -> AtomUse:
+    production_occurrences = atom_reference_count(references, family, atom, "production")
+    production_declaration_uses = min(production_occurrences, declared_uses)
+    production_non_declaration_uses = (
+        production_occurrences
+        - production_declaration_uses
+        + (references.member_count(linked_member, "production") if linked_member else 0)
+    )
+    return AtomUse(
+        atom=atom,
+        production_uses=production_non_declaration_uses,
+        production_declaration_uses=production_declaration_uses,
+        production_non_declaration_uses=production_non_declaration_uses,
+        test_uses=atom_reference_count(references, family, atom, "test")
+        + (references.member_count(linked_member, "test") if linked_member else 0),
+        support_uses=atom_reference_count(references, family, atom, "support")
+        + (references.member_count(linked_member, "support") if linked_member else 0),
+    )
+
+
+def atom_reference_count(references: ReferenceCounts, family: ClosedFamily, atom: str, role: str) -> int:
+    if family.kind in {"check-in", "enum-values", "msgspec-tagged-union"} or (
+        family.kind == "literal" and IDENTIFIER_TOKEN.fullmatch(atom)
+    ):
+        return references.literal_count(atom, role)
+    return references.count(atom, role)
 
 
 def reference_count(references: ReferenceCounts, declaration: Declaration, role: str, declarations: int) -> int:
@@ -683,20 +894,26 @@ def coverage(mode: str) -> tuple[Coverage, ...]:
             "tracked and untracked non-ignored working-tree files from git ls-files",
         ),
         Coverage(
-            "generic-declarations", "partial", "conservative line patterns for Python, Kotlin, Rust, and TypeScript"
+            "generic-declarations",
+            "partial",
+            "conservative line patterns for Go, Kotlin, Python, Rust, and TypeScript",
         ),
         Coverage(
             "lexical-references",
             "partial",
             "identifier and literal counts; imports, scopes, reflection, and generated use remain unresolved",
         ),
-        Coverage("closed-families", "partial", "enum-shaped declarations plus SQL CHECK IN vocabularies"),
+        Coverage(
+            "closed-families",
+            "partial",
+            "enum-shaped declarations plus SQL CHECK IN vocabularies; Go constant groups require another analyzer",
+        ),
         Coverage("sql-schema", "partial", "CREATE objects and literal CHECK IN vocabularies, including embedded SQL"),
         Coverage("assets", "partial", "tracked common asset paths and basenames referenced by tracked text"),
         Coverage(
             "python-ast",
             "complete" if mode == "python-ast" else "unsupported",
-            "stdlib ast definitions, Enum members, and explicit union aliases"
+            "stdlib ast definitions, Enum members, Literal vocabularies, explicit union aliases, and msgspec tags"
             if mode == "python-ast"
             else "mode disabled",
         ),
@@ -757,6 +974,12 @@ def main() -> None:
             for family in families
             for atom_use in family.atom_uses
             if atom_use.production_uses <= 1
+        ],
+        "closed_atoms_without_apparent_non_declaration_production_use": [
+            {"family": family.selector, **asdict(atom_use)}
+            for family in families
+            for atom_use in family.atom_uses
+            if atom_use.production_non_declaration_uses == 0
         ],
         "duplicated_closed_vocabularies": duplicated_closed_vocabularies(families),
         "ambiguous_zero_production_definitions": [
