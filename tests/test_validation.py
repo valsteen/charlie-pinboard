@@ -18,7 +18,7 @@ from pinboard.application.artifacts import NewArtifact
 from pinboard.interfaces.cli import main
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 from pinboard.interfaces.work_state import initialize_work_state, validate_work_state
-from tests.support import SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
 from tests.work_brief_support import work_a_brief
 
 
@@ -71,7 +71,7 @@ class SQLiteValidationTest(unittest.TestCase):
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
-        SQLiteWorkStore(roots.database_path).initialize_state(complete_sqlite_state())
+        initialize_store(SQLiteWorkStore(roots.database_path), complete_sqlite_state())
         invalid = validate_work_state(roots.work_root, now=SQLITE_NOW)
         self.assertFalse(invalid.valid)
         self.assertIn("STORAGE_INVARIANT_VIOLATION", invalid.render())
@@ -109,7 +109,7 @@ class SQLiteValidationTest(unittest.TestCase):
             content_sha256=published.content_sha256,
             size_bytes=published.size_bytes,
         )
-        store.initialize_state(replace(state, artifact_references=(reference, *state.artifact_references[1:])))
+        initialize_store(store, replace(state, artifact_references=(reference, *state.artifact_references[1:])))
         before = store.snapshot()
         staging = first.database_path.with_name(f".{first.database_path.name}.pinboard-stage")
         staging.hardlink_to(first.database_path)
@@ -225,8 +225,9 @@ class SQLiteValidationTest(unittest.TestCase):
                     content_sha256=published.content_sha256,
                     size_bytes=published.size_bytes,
                 )
-                SQLiteWorkStore(roots.database_path).initialize_state(
-                    replace(state, artifact_references=(reference, *state.artifact_references[1:]))
+                initialize_store(
+                    SQLiteWorkStore(roots.database_path),
+                    replace(state, artifact_references=(reference, *state.artifact_references[1:])),
                 )
 
                 result, stdout, stderr = self.run_cli(

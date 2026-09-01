@@ -43,7 +43,7 @@ from pinboard.domain.identifiers import (
 )
 from pinboard.domain.proposal_models import CreateProposalOperation, ProposalIntake
 from tests.domain_support import command, expect_success
-from tests.support import SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
 
 
 def _commit_same_pause(
@@ -330,7 +330,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
                 ),
             ),
         )
-        store.initialize_state(state)
+        initialize_store(store, state)
 
         context = multiprocessing.get_context("spawn")
         barrier = context.Barrier(2)
@@ -358,7 +358,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         before = store.snapshot()
 
         context = multiprocessing.get_context("spawn")
@@ -392,7 +392,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(complete_sqlite_state())
+        initialize_store(store, complete_sqlite_state())
         before = store.snapshot()
 
         context = multiprocessing.get_context("spawn")
@@ -424,7 +424,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
         state = complete_sqlite_state()
-        store.initialize_state(state)
+        initialize_store(store, state)
 
         context = multiprocessing.get_context("spawn")
         barrier = context.Barrier(2)
@@ -449,7 +449,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
         state = complete_sqlite_state()
-        store.initialize_state(state)
+        initialize_store(store, state)
         snapshot = project_decision_snapshot(store.snapshot(), SQLITE_NOW)
         authority = snapshot.command_attempt_authorities[0]
         actor = decision_models.ActorAuthority(
@@ -506,7 +506,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
         before = complete_sqlite_state()
-        store.initialize_state(before)
+        initialize_store(store, before)
 
         context = multiprocessing.get_context("spawn")
         barrier = context.Barrier(2)

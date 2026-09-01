@@ -1,4 +1,4 @@
-"""Read, initialize, and accept artifact records on a supplied connection.
+"""Read and accept artifact records on a supplied connection.
 
 Artifact acceptance verifies the supplied filesystem reference; no other
 operation reads files. This module never commits, rolls back, closes the
@@ -35,34 +35,6 @@ def read_artifacts(connection: sqlite3.Connection) -> tuple[stored_state.Artifac
             ORDER BY artifact_ref_id
             """
         ).fetchall()
-    )
-
-
-def insert_artifacts(
-    connection: sqlite3.Connection,
-    records: tuple[stored_state.ArtifactReference, ...],
-) -> None:
-    connection.executemany(
-        """
-        INSERT INTO artifact_refs (
-            artifact_ref_id, artifact_key, artifact_revision, kind, relative_path, content_sha256,
-            size_bytes, accepted_revision, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        tuple(
-            (
-                value.artifact_ref_id,
-                value.key,
-                value.revision,
-                value.kind.value,
-                value.selector,
-                value.content_sha256,
-                value.size_bytes,
-                value.accepted_revision,
-                value.created_at.isoformat(),
-            )
-            for value in records
-        ),
     )
 
 

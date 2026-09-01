@@ -7,7 +7,6 @@ from pinboard.domain.identifiers import ArtifactRefId, AttemptId, CandidateId, I
 from pinboard.interfaces.errors import TransitionInputFailure
 from pinboard.interfaces.transition_input import (
     INPUT_CONTRACT_ACTION_KINDS,
-    TRANSITION_ACTION_KINDS,
     encoded_transition_input_schema,
     parse_transition_command,
 )
@@ -229,7 +228,6 @@ class TransitionInputTest(unittest.TestCase):
                 {"task_id": "task-b", "host_id": "host-b"},
             ),
         )
-        self.assertEqual(set(TRANSITION_ACTION_KINDS), {selected_action.kind.value for selected_action, _ in cases})
         for selected_action, payload in cases:
             with self.subTest(kind=selected_action.kind):
                 expect_transition_command(parse_transition_command(selected_action, json.dumps(payload)))

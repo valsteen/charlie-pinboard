@@ -25,8 +25,9 @@ from pinboard.domain.identifiers import ReviewId
 from pinboard.interfaces.cli import main
 from pinboard.interfaces.dispatch_brief import (
     SuppliedDispatchReview,
+    _read_dispatch_brief,
+    _render_dispatch_prompt,
     prepare_dispatch,
-    prepare_dispatch_from_artifact,
     read_dispatch_environment,
 )
 from pinboard.interfaces.errors import DispatchErrorCode, DispatchFailure, DispatchResult
@@ -38,7 +39,7 @@ from pinboard.interfaces.work_brief_models import (
 )
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes, canonical_work_brief_review_bytes
 from tests.domain_support import expect_success
-from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state
+from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state, initialize_store
 from tests.work_brief_support import CHECKPOINT_ID, ready_review, work_a_brief
 
 
@@ -54,6 +55,36 @@ def expect_dispatch_failure[T](result: DispatchResult[T], code: DispatchErrorCod
     if result.code != code:
         raise AssertionError(f"Expected {code.value}, got {result.code.value}: {result.message}")
     return result
+
+
+def prepare_dispatch_from_artifact(
+    attempt_path: Path,
+    attempt_id: str,
+    attempt_branch: str,
+    source_checkout_root: Path,
+    checkpoint: str,
+    environment: DispatchEnvironment,
+    *,
+    accepted_item_id: str | None = None,
+    accepted_scope_revision: int | None = None,
+    accepted_scope_digest: str | None = None,
+    supplied_prompt: bytes | None = None,
+    accepted_review: bytes | None = None,
+) -> DispatchResult[str]:
+    brief = _read_dispatch_brief(
+        attempt_path,
+        attempt_id,
+        attempt_branch,
+        source_checkout_root,
+        checkpoint,
+        environment,
+        accepted_item_id,
+        accepted_scope_revision,
+        accepted_scope_digest,
+    )
+    if isinstance(brief, DispatchFailure):
+        return brief
+    return _render_dispatch_prompt(brief, attempt_path, checkpoint, environment, accepted_review, supplied_prompt)
 
 
 class DispatchTest(unittest.TestCase):
@@ -123,7 +154,7 @@ class DispatchTest(unittest.TestCase):
             authority=dataclass_replace(state.authority, coordination=coordination, attempt_leases=leases),
         )
         store = SQLiteWorkStore(roots.database_path)
-        store.initialize_state(state)
+        initialize_store(store, state)
 
         def action() -> decision_models.DispatchAction:
             actions = expect_success(

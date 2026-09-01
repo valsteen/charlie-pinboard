@@ -324,38 +324,6 @@ def _render_dispatch_prompt(
     return prompt
 
 
-def prepare_dispatch_from_artifact(
-    attempt_path: Path,
-    attempt_id: str,
-    attempt_branch: str,
-    source_checkout_root: Path,
-    checkpoint: str,
-    environment: DispatchEnvironment,
-    *,
-    accepted_item_id: str | None = None,
-    accepted_scope_revision: int | None = None,
-    accepted_scope_digest: str | None = None,
-    supplied_prompt: bytes | None = None,
-    accepted_review: bytes | None = None,
-) -> DispatchResult[str]:
-    """Validate boundary-owned dispatch bytes without performing publication."""
-
-    brief = _read_dispatch_brief(
-        attempt_path,
-        attempt_id,
-        attempt_branch,
-        source_checkout_root,
-        checkpoint,
-        environment,
-        accepted_item_id,
-        accepted_scope_revision,
-        accepted_scope_digest,
-    )
-    if isinstance(brief, DispatchFailure):
-        return brief
-    return _render_dispatch_prompt(brief, attempt_path, checkpoint, environment, accepted_review, supplied_prompt)
-
-
 def prepare_dispatch(
     store: WorkStore,
     artifacts: DispatchArtifactPort,

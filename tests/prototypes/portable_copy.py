@@ -6,6 +6,7 @@ brief supplies a real installed consumer.
 
 import os
 import shutil
+import sqlite3
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,11 +19,7 @@ from pinboard.adapters.files.artifacts import verify_reference, write_revision
 from pinboard.adapters.files.errors import ArtifactError, FileIOError
 from pinboard.adapters.files.file_io import DurableRoots
 from pinboard.adapters.files.views import rebuild_state
-from pinboard.adapters.sqlite.database import (
-    backup_database,
-    open_database,
-    write_transaction,
-)
+from pinboard.adapters.sqlite.database import open_database, write_transaction
 from pinboard.adapters.sqlite.errors import StorageError
 from pinboard.adapters.sqlite.models import OpenMode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
@@ -60,6 +57,16 @@ class PortableCopyReceipt:
 class _PortableMetadata(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     revision: int
     host_epoch: int
+
+
+def _backup_database(source: Path, destination: Path) -> None:
+    source_connection = open_database(source, OpenMode.READ_ONLY)
+    destination_connection = sqlite3.connect(destination)
+    try:
+        source_connection.backup(destination_connection)
+    finally:
+        destination_connection.close()
+        source_connection.close()
 
 
 def _quiescent_source(store: SQLiteWorkStore) -> None:
@@ -231,7 +238,7 @@ def create_portable_copy(source_work_root: Path, destination_work_root: Path) ->
     staging_roots = DurableRoots(parent, (staging.name,))
     published = False
     try:
-        backup_database(source / "state.sqlite3", staging_roots.database_path)
+        _backup_database(source / "state.sqlite3", staging_roots.database_path)
         artifacts_copied = _copy_artifacts(source, staging_roots)
         source_revision, destination_revision, source_host_epoch, destination_host_epoch = _neutralize(
             staging_roots.database_path,
@@ -260,7 +267,7 @@ def create_portable_copy(source_work_root: Path, destination_work_root: Path) ->
         raise PortableCopyError(PortableCopyErrorCode(error.code.value), str(error)) from error
     except StorageError as error:
         raise PortableCopyError(PortableCopyErrorCode(error.code.value), str(error)) from error
-    except (FileIOError, OSError) as error:
+    except (FileIOError, OSError, sqlite3.Error) as error:
         raise PortableCopyError(PortableCopyErrorCode.STORAGE_IO_ERROR, str(error)) from error
     finally:
         if not published:
