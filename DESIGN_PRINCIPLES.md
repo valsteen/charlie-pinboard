@@ -8,6 +8,8 @@ The primary reader is a person trying to answer: what can happen here, under whi
 
 File size is a signal, not the objective. A smaller orchestration file is useful when it concentrates the real alternatives. A lower total line count is useful when it removes repetition without hiding control flow. Measure those outcomes separately.
 
+Treat agent-facing schemas, values, and entry points as product surfaces when agents can adopt them to steer work. Unless a public API or CLI already makes the contract obvious, keep the intended consumer, semantic effect or deliberate non-effect, and owner locally discoverable from the definition or its direct entry point. Remove an unused or unclear surface rather than preserving a value that survives only because a schema can carry it.
+
 ## Separate decisions, conversions, and effects
 
 A decision determines whether an operation is legal and what accepted change it describes. It should not read files, issue SQL, obtain time, or depend on a concrete adapter.
