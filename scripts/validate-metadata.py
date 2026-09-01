@@ -1,7 +1,7 @@
 import re
 import tomllib
 from pathlib import Path
-from typing import Final, cast
+from typing import Final
 
 import msgspec
 import yaml
@@ -13,9 +13,6 @@ EXPECTED_SKILLS: Final = frozenset({"pinboard", "pinboard-deliver", "pinboard-in
 EXPECTED_ENTRY_POINTS: Final = {
     "pinboard": "pinboard.interfaces.cli:main",
 }
-
-type YamlScalar = str | int | float | bool | None
-type YamlValue = YamlScalar | list[YamlValue] | dict[str, YamlValue]
 
 
 class PluginAuthor(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -97,26 +94,17 @@ class SkillAgent(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     interface: SkillInterface
 
 
-def load_yaml(text: str, path: Path) -> YamlValue:
-    try:
-        return cast(YamlValue, yaml.safe_load(text))
-    except yaml.YAMLError as error:
-        raise ValueError(f"{path}: invalid YAML: {error}") from error
-
-
 def decode_skill_frontmatter(text: str, path: Path) -> SkillFrontmatter:
-    value = load_yaml(text, path)
     try:
-        return msgspec.convert(value, type=SkillFrontmatter, strict=True)
-    except msgspec.ValidationError as error:
+        return msgspec.convert(yaml.safe_load(text), type=SkillFrontmatter, strict=True)
+    except (msgspec.ValidationError, yaml.YAMLError) as error:
         raise ValueError(f"{path}: invalid metadata: {error}") from error
 
 
 def decode_skill_agent(text: str, path: Path) -> SkillAgent:
-    value = load_yaml(text, path)
     try:
-        return msgspec.convert(value, type=SkillAgent, strict=True)
-    except msgspec.ValidationError as error:
+        return msgspec.convert(yaml.safe_load(text), type=SkillAgent, strict=True)
+    except (msgspec.ValidationError, yaml.YAMLError) as error:
         raise ValueError(f"{path}: invalid metadata: {error}") from error
 
 

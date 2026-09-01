@@ -41,6 +41,8 @@ banned-from = [
 "enum.StrEnum".msg = "Use Enum so string behavior remains explicit."
 "src".msg = "Import the installed package as pinboard; src is only the source-tree layout."
 "typing.Any".msg = "Use a concrete type or a closed union."
+"typing.cast".msg = "Narrow values explicitly instead of overriding the type checker."
+"typing_extensions.cast".msg = "Narrow values explicitly instead of overriding the type checker."
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12

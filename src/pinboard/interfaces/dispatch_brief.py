@@ -440,10 +440,10 @@ def prepare_dispatch_command(
             supplied_review = None
         case _ as unreachable:
             assert_never(unreachable)
-    action = action_selection.action_from_command(command)
-    if isinstance(action, CommandFailure):
-        return action
-    action = action_selection.reselect_action(roots, action, decision_models.Role.COORDINATOR)
+    supplied_action = action_selection.parse_action_receipt(command)
+    if isinstance(supplied_action, CommandFailure):
+        return supplied_action
+    action = action_selection.select_current_action(roots, supplied_action)
     if isinstance(action, CommandFailure):
         return action
     prompt = prepare_dispatch(
