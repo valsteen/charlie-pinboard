@@ -77,6 +77,41 @@ class SecondFactory:
         return "second"
 
 
+class Command:
+    def __init__(self, action: object, value: object) -> None:
+        self.action = action
+        self.value = value
+
+
+class Action:
+    def command(self, value: object) -> Command:
+        return Command(self, value)
+
+
+def direct(value: Result) -> str:
+    match value:
+        case Opened():
+            return "opened"
+        case Closed():
+            return "closed"
+
+
+def borrowed(value: Result) -> str:
+    match value:
+        case Opened():
+            return "opened"
+        case Closed():
+            return "closed"
+
+
+def equivalent(value: Result) -> str:
+    match value:
+        case Opened():
+            return "same"
+        case Closed():
+            return "same"
+
+
 EMBEDDED_SCHEMA = "CREATE VIEW current_items AS SELECT * FROM item_artifacts"
 """,
         )
@@ -326,6 +361,9 @@ def test_helper() -> None:
         self.assertEqual("partial", coverage["generic-declarations"])
         self.assertEqual("unsupported", coverage["python-ast"])
         self.assertEqual("unsupported", coverage["semantic-producer-consumer"])
+        self.assertEqual([], candidates["trivial_callable_bodies"])
+        self.assertEqual([], candidates["equivalent_match_arms"])
+        self.assertEqual([], candidates["duplicated_match_structures"])
 
     def test_python_ast_mode_adds_exact_python_evidence_without_dropping_generic_evidence(self) -> None:
         generic_report = self.inventory("generic")
@@ -358,11 +396,30 @@ def test_helper() -> None:
         self.assertIn(("src/models.py::ArtifactRole", "plan"), declaration_only_atoms)
         self.assertIn(("src/models.py::PythonMode.value", "legacy"), declaration_only_atoms)
         self.assertIn(("src/models.py::Boundary.kind", "remote"), declaration_only_atoms)
+        trivial_callables = self.json_objects(candidates["trivial_callable_bodies"])
+        self.assertIn(
+            ("src/models.py::Action.command", "Command(self, value)"),
+            {
+                (self.json_string(candidate["selector"]), self.json_string(candidate["expression"]))
+                for candidate in trivial_callables
+            },
+        )
+        equivalent_matches = self.json_objects(candidates["equivalent_match_arms"])
+        self.assertIn(
+            {"Opened()", "Closed()"},
+            [set(self.json_strings(candidate["patterns"])) for candidate in equivalent_matches],
+        )
+        duplicated_matches = self.json_objects(candidates["duplicated_match_structures"])
+        self.assertIn(
+            {"src/models.py::direct", "src/models.py::borrowed"},
+            [set(self.json_strings(candidate["selectors"])) for candidate in duplicated_matches],
+        )
         coverage = {
             self.json_string(item["category"]): self.json_string(item["status"])
             for item in self.json_objects(ast_report["coverage"])
         }
         self.assertEqual("complete", coverage["python-ast"])
+        self.assertEqual("complete", coverage["python-structural-smells"])
         self.assertEqual("partial", coverage["generic-declarations"])
         self.assertEqual("unsupported", coverage["semantic-producer-consumer"])
 
