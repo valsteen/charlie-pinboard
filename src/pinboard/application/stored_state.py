@@ -21,11 +21,8 @@ from pinboard.domain.identifiers import (
 
 class ArtifactKind(Enum):
     REQUIREMENTS = "requirements"
-    PLAN = "plan"
-    DESIGN = "design"
     BRIEF = "brief"
     RESULT = "result"
-    BLOCKER = "blocker"
     EVIDENCE = "evidence"
 
 
@@ -127,7 +124,7 @@ class TransitionHistoryAuthorizationKind(Enum):
 @dataclass(frozen=True, slots=True)
 class ProjectRecord:
     application: Literal["pinboard"]
-    schema_version: Literal[2]
+    schema_version: Literal[3]
     revision: int
     host_epoch: int
     created_at: datetime
@@ -180,14 +177,6 @@ class ItemDefinitionRevision:
 class ItemDependency:
     item_id: ItemId
     dependency_id: ItemId
-    position: int
-
-
-@dataclass(frozen=True, slots=True)
-class ItemArtifactLink:
-    item_id: ItemId
-    artifact_ref_id: ArtifactRefId
-    role: work_models.ArtifactRole
     position: int
 
 
@@ -333,7 +322,6 @@ class LifecycleRecords:
     project: ProjectRecord
     work_items: tuple[StoredWorkItem, ...] = ()
     dependencies: tuple[ItemDependency, ...] = ()
-    item_artifacts: tuple[ItemArtifactLink, ...] = ()
     attempts: tuple[StoredAttempt, ...] = ()
     definition_revisions: tuple[ItemDefinitionRevision, ...] = ()
 

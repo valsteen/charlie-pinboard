@@ -14,49 +14,16 @@ from pinboard.adapters.files.errors import (
 )
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database, open_database
-from pinboard.adapters.sqlite.errors import StorageError
 from pinboard.adapters.sqlite.models import OpenMode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
-from pinboard.application.artifacts import ArtifactRelationship, NewArtifact
-from pinboard.domain import work_models
+from pinboard.application.artifacts import NewArtifact
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
-from pinboard.domain.identifiers import ItemId
 from tests.domain_support import expect_success
-from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store, reject_table_deletes
+from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
 
 
 class ArtifactPersistenceTest(unittest.TestCase):
-    def test_accepting_relationship_preserves_canonical_global_link_order(self) -> None:
-        project = Path(tempfile.mkdtemp()).resolve()
-        roots = resolve_durable_roots(project)
-        initialize_database(roots, SQLITE_NOW)
-        store = SQLiteWorkStore(roots.database_path)
-        initialize_store(store, complete_sqlite_state())
-        published = write_revision(
-            roots,
-            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "intake-work-review", 1, ".md", b"ready\n"),
-        )
-        before = store.snapshot()
-
-        with reject_table_deletes("work_items"):
-            accepted = expect_success(
-                store.accept_artifact_reference(
-                    roots.work_root,
-                    published,
-                    SQLITE_NOW,
-                    relationship=ArtifactRelationship(ItemId("intake-work"), work_models.ArtifactRole.EVIDENCE),
-                )
-            )
-
-        reloaded = SQLiteWorkStore(roots.database_path).snapshot()
-        self.assertIn(accepted, reloaded.artifact_references)
-        self.assertEqual(before.transition_receipts, reloaded.transition_receipts)
-        self.assertEqual(
-            ["intake-work", "work-a"],
-            [str(value.item_id) for value in reloaded.lifecycle.item_artifacts],
-        )
-
     def test_accepting_transaction_verifies_bytes_and_fresh_reload_contains_reference(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
@@ -73,16 +40,12 @@ class ArtifactPersistenceTest(unittest.TestCase):
                 roots.work_root,
                 published,
                 SQLITE_NOW,
-                relationship=ArtifactRelationship(ItemId("work-a"), work_models.ArtifactRole.EVIDENCE),
             )
         )
 
         reloaded = SQLiteWorkStore(roots.database_path).snapshot()
         self.assertIn(accepted, reloaded.artifact_references)
         self.assertEqual(13, reloaded.lifecycle.project.revision)
-        self.assertTrue(
-            any(link.artifact_ref_id == accepted.artifact_ref_id for link in reloaded.lifecycle.item_artifacts)
-        )
 
     def test_revision_is_published_immutably_and_identical_retry_is_reused(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
@@ -149,7 +112,7 @@ class ArtifactPersistenceTest(unittest.TestCase):
             write_revision(failing_roots, NewArtifact(stored_state.ArtifactKind.RESULT, "result", 1, ".md", b"x"))
         self.assertEqual(ArtifactErrorCode.STORAGE_IO_ERROR, io_error.exception.code)
 
-    def test_artifact_acceptance_reuse_and_relationship_failures_do_not_mutate(self) -> None:
+    def test_artifact_acceptance_reuses_identical_reference_without_mutation(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
@@ -164,56 +127,14 @@ class ArtifactPersistenceTest(unittest.TestCase):
                 roots.work_root,
                 published,
                 SQLITE_NOW,
-                relationship=ArtifactRelationship(ItemId("work-a"), work_models.ArtifactRole.EVIDENCE),
             )
         )
+        before_retry = store.snapshot()
         self.assertEqual(
             accepted,
             expect_success(store.accept_artifact_reference(roots.work_root, published, SQLITE_NOW)),
         )
-
-        later_link = write_revision(
-            roots,
-            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "review-linked-later", 1, ".md", b"ready\n"),
-        )
-        initially_unlinked = expect_success(store.accept_artifact_reference(roots.work_root, later_link, SQLITE_NOW))
-        before_link = store.snapshot()
-        linked = expect_success(
-            store.accept_artifact_reference(
-                roots.work_root,
-                later_link,
-                SQLITE_NOW,
-                relationship=ArtifactRelationship(ItemId("work-a"), work_models.ArtifactRole.EVIDENCE),
-            )
-        )
-        after_link = store.snapshot()
-        self.assertEqual(initially_unlinked, linked)
-        self.assertEqual(before_link.lifecycle.project.revision + 1, after_link.lifecycle.project.revision)
-        self.assertTrue(
-            any(
-                value.item_id == ItemId("work-a")
-                and value.artifact_ref_id == linked.artifact_ref_id
-                and value.role == work_models.ArtifactRole.EVIDENCE
-                for value in after_link.lifecycle.item_artifacts
-            )
-        )
-        for item_id, role in (
-            (ItemId("missing"), work_models.ArtifactRole.EVIDENCE),
-            (ItemId("work-a"), work_models.ArtifactRole.DESIGN),
-        ):
-            candidate = write_revision(
-                roots,
-                NewArtifact(stored_state.ArtifactKind.EVIDENCE, f"failure-{item_id}-{role}", 1, ".md", b"x"),
-            )
-            before = store.snapshot()
-            with self.subTest(item_id=item_id, role=role), self.assertRaises(StorageError):
-                store.accept_artifact_reference(
-                    roots.work_root,
-                    candidate,
-                    SQLITE_NOW,
-                    relationship=ArtifactRelationship(item_id, role),
-                )
-            self.assertEqual(before, store.snapshot())
+        self.assertEqual(before_retry, store.snapshot())
 
     def test_expected_stale_artifact_acceptance_returns_failure_and_rolls_back(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
@@ -221,50 +142,30 @@ class ArtifactPersistenceTest(unittest.TestCase):
         initialize_database(roots, SQLITE_NOW)
         store = SQLiteWorkStore(roots.database_path)
         initialize_store(store, complete_sqlite_state())
-        for relationship in (False, True):
-            published = write_revision(
-                roots,
-                NewArtifact(
-                    stored_state.ArtifactKind.EVIDENCE,
-                    f"stale-artifact-{relationship}",
-                    1,
-                    ".md",
-                    b"ready\n",
-                ),
-            )
-            before = store.snapshot()
-            connection = open_database(roots.database_path, OpenMode.READ_WRITE)
-            target = (
-                "UPDATE work_items SET subject_revision = subject_revision + 1 WHERE item_id = 'work-a'"
-                if relationship
-                else "UPDATE project_meta SET revision = revision + 1 WHERE singleton = 1"
-            )
-            connection.execute(
-                f"""
-                CREATE TEMP TRIGGER arrange_real_artifact_staleness
-                BEFORE INSERT ON artifact_refs
-                BEGIN
-                    {target};
-                END
-                """
-            )
-            with patch("pinboard.adapters.sqlite.store.open_database", return_value=connection):
-                if relationship:
-                    result = store.accept_artifact_reference(
-                        roots.work_root,
-                        published,
-                        SQLITE_NOW,
-                        relationship=ArtifactRelationship(ItemId("work-a"), work_models.ArtifactRole.EVIDENCE),
-                    )
-                else:
-                    result = store.accept_artifact_reference(roots.work_root, published, SQLITE_NOW)
+        published = write_revision(
+            roots,
+            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "stale-artifact", 1, ".md", b"ready\n"),
+        )
+        before = store.snapshot()
+        connection = open_database(roots.database_path, OpenMode.READ_WRITE)
+        connection.execute(
+            """
+            CREATE TEMP TRIGGER arrange_real_artifact_staleness
+            BEFORE INSERT ON artifact_refs
+            BEGIN
+                UPDATE project_meta SET revision = revision + 1 WHERE singleton = 1;
+            END
+            """
+        )
+        with patch("pinboard.adapters.sqlite.store.open_database", return_value=connection):
+            result = store.accept_artifact_reference(roots.work_root, published, SQLITE_NOW)
 
-            self.assertIsInstance(result, DecisionFailure)
-            assert isinstance(result, DecisionFailure)
-            self.assertEqual(DecisionFailureCode.ACTION_NOT_AVAILABLE, result.code)
-            with self.assertRaises(sqlite3.ProgrammingError):
-                connection.execute("SELECT 1")
-            self.assertEqual(before, store.snapshot())
+        self.assertIsInstance(result, DecisionFailure)
+        assert isinstance(result, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ACTION_NOT_AVAILABLE, result.code)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+        self.assertEqual(before, store.snapshot())
 
 
 if __name__ == "__main__":

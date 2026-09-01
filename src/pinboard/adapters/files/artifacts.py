@@ -15,11 +15,8 @@ from pinboard.application.artifacts import ArtifactRef, NewArtifact
 
 _DIRECTORIES: dict[stored_state.ArtifactKind, str] = {
     stored_state.ArtifactKind.REQUIREMENTS: "requirements",
-    stored_state.ArtifactKind.PLAN: "plans",
-    stored_state.ArtifactKind.DESIGN: "designs",
     stored_state.ArtifactKind.BRIEF: "briefs",
     stored_state.ArtifactKind.RESULT: "results",
-    stored_state.ArtifactKind.BLOCKER: "blockers",
     stored_state.ArtifactKind.EVIDENCE: "evidence",
 }
 

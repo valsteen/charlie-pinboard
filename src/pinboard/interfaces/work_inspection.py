@@ -201,7 +201,7 @@ def status_view(
             if coordinator is not None
             else None
         ),
-        authority="sqlite-v2",
+        authority="sqlite-v3",
     )
 
 

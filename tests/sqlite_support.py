@@ -79,12 +79,6 @@ def _insert_lifecycle(connection: sqlite3.Connection, records: stored_state.Life
         tuple(_definition_revision_values(value) for value in records.definition_revisions),
     )
     connection.executemany(
-        "INSERT INTO item_artifacts (item_id, artifact_ref_id, role, position) VALUES (?, ?, ?, ?)",
-        tuple(
-            (value.item_id, value.artifact_ref_id, value.role.value, value.position) for value in records.item_artifacts
-        ),
-    )
-    connection.executemany(
         """
         INSERT INTO attempts (
             attempt_id, item_id, state, branch, base_revision, provenance,
@@ -264,7 +258,6 @@ def insert_initial_state(connection: sqlite3.Connection, state: stored_state.Sto
             "artifact_refs",
             "work_items",
             "item_dependencies",
-            "item_artifacts",
             "attempts",
             "proposals",
             "proposal_evidence",

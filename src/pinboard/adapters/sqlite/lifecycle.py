@@ -90,12 +90,6 @@ def read_lifecycle(
             "SELECT item_id, dependency_id, position FROM item_dependencies ORDER BY item_id, position"
         ).fetchall()
     )
-    item_artifacts = tuple(
-        decode_row(row, stored_state.ItemArtifactLink)
-        for row in connection.execute(
-            "SELECT item_id, artifact_ref_id, role, position FROM item_artifacts ORDER BY item_id, role, position"
-        ).fetchall()
-    )
     attempts = tuple(
         decode_row(row, stored_state.StoredAttempt)
         for row in connection.execute(
@@ -120,7 +114,7 @@ def read_lifecycle(
             """
         ).fetchall()
     )
-    return stored_state.LifecycleRecords(project, items, dependencies, item_artifacts, attempts, definitions)
+    return stored_state.LifecycleRecords(project, items, dependencies, attempts, definitions)
 
 
 def read_focus(connection: sqlite3.Connection) -> stored_state.StoredFocus:

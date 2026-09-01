@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pinboard.application import stored_state
 from pinboard.application.actions import discover_actions
-from pinboard.application.artifacts import ArtifactRelationship, NewArtifact
+from pinboard.application.artifacts import NewArtifact
 from pinboard.application.dispatch_models import (
     DispatchArtifactPort,
     DispatchFailure,
@@ -13,7 +13,7 @@ from pinboard.application.dispatch_models import (
 from pinboard.application.ports import WorkStore
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionFailure
-from pinboard.domain.identifiers import AttemptId, ItemId, ReviewId
+from pinboard.domain.identifiers import AttemptId, ReviewId
 
 
 def _current_dispatch_action(
@@ -114,7 +114,6 @@ def publish_dispatch_review(
     store: WorkStore,
     artifacts: DispatchArtifactPort,
     attempt_id: AttemptId,
-    item_id: ItemId,
     checkpoint_sha256: str,
     candidate: bytes,
     review_id: ReviewId,
@@ -139,7 +138,6 @@ def publish_dispatch_review(
             artifacts.work_root,
             rejected,
             accepted_at,
-            relationship=ArtifactRelationship(item_id, work_models.ArtifactRole.EVIDENCE),
         )
         if isinstance(rejected_acceptance, DecisionFailure):
             return DispatchFailure(DispatchRejectionCode.STALE_ACTION, rejected_acceptance.message)
@@ -152,7 +150,6 @@ def publish_dispatch_review(
         artifacts.work_root,
         published,
         accepted_at,
-        relationship=ArtifactRelationship(item_id, work_models.ArtifactRole.EVIDENCE),
     )
     if isinstance(accepted, DecisionFailure):
         return DispatchFailure(DispatchRejectionCode.STALE_ACTION, accepted.message)

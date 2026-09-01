@@ -47,7 +47,7 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertIsInstance(preview, query_models.ParallelPreview)
         assert isinstance(preview, query_models.ParallelPreview)
 
-        self.assertEqual("sqlite-v2", overview.authority)
+        self.assertEqual("sqlite-v3", overview.authority)
         self.assertEqual("12", overview.revision)
         self.assertEqual(("work-a-1",), overview.active_attempts)
         self.assertEqual(
@@ -142,7 +142,7 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertEqual(
             query_models.ItemStatus(
                 "pinboard-item-status/v1",
-                "sqlite-v2",
+                "sqlite-v3",
                 "12",
                 "work-a",
                 "Work work-a",
@@ -158,7 +158,7 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertEqual(
             query_models.ItemStatus(
                 "pinboard-item-status/v1",
-                "sqlite-v2",
+                "sqlite-v3",
                 "12",
                 "work-b",
                 "Work work-b",
