@@ -35,6 +35,21 @@ Before closing this pass, sweep the complete production surface for several shap
 
 For each shape, record the search or analyzer, scope, candidate selectors or zero result, and disposition in the compact ledger. A representative trace can validate a design, but one trace is not evidence that these other shapes were searched.
 
+Before claiming a fixed point, include one separate receipt row for every category below. Do not combine categories under an umbrella claim even when one search contributes evidence to several rows.
+
+| Category | Required scope |
+| --- | --- |
+| Same-meaning remaps and pass-through delegation | Complete production surface and every traced route |
+| Repeated traversal and projection scans | Neighboring consumers of each production collection |
+| Duplicated mode, route, effect, or presentation selection | Complete production surface for each closed family |
+| Equivalent closed-family branches | Every branch over each inventoried closed family |
+| Defaults, fallbacks, optional handlers, and inherited behavior | Every closed dispatch mechanism and protocol implementation |
+| Test-only public roots and their private helper chains | Production definitions referenced from tests and their transitive callees |
+| Base and composite protocol overlap | All production protocols and their concrete substitution consumers |
+| Archaeological names, defaults, versions, and capability labels | Production source, schema, presentation, documentation, and tooling |
+
+Each row must name the method or analyzer, exact scope, candidate count with selectors or an explicit zero, and disposition. A candidate mentioned elsewhere in the report does not satisfy the row unless this evidence is present.
+
 The last signal needs extra care. Identical spelling does not prove identical product identity. Retain nominally separate vocabularies when they prevent cross-family assignment, have different transition rules or consumers, or may evolve independently as distinct product concepts. Collapse them only when they name the same fact and all current owners interpret that fact identically.
 
 ## Simulate one sibling change
