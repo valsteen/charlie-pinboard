@@ -1099,7 +1099,7 @@ def coverage(mode: str) -> tuple[Coverage, ...]:
             "complete" if mode == "python-ast" else "unsupported",
             "stdlib ast trivial callable bodies, equivalent match arms, and duplicated match structures"
             if mode == "python-ast"
-            else "mode disabled; use the language-neutral structural sweep",
+            else "mode disabled; use the language-portable structural sweep",
         ),
         Coverage("semantic-producer-consumer", "unsupported", "requires product authority and code-path inspection"),
         Coverage(
