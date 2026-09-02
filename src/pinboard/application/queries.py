@@ -394,10 +394,10 @@ def preview_parallel(
         if (live_state := stored_state.live_work_state(item.state)) is not None
     )
     by_id = {str(item.item_id): (item, live_state) for item, live_state in live}
-    if len(selected) != len(set(selected)) or any(item_id not in by_id for item_id in selected):
+    if any(item_id not in by_id for item_id in selected):
         return query_models.QueryFailure(
             query_models.QueryRejectionCode.PARALLEL_SELECTION_INVALID,
-            "Selected item identities must be unique current items.",
+            "Selected item identities must be current items.",
         )
     candidates = tuple(by_id[item_id] for item_id in selected) if selected else live
     definitions = {value.item_id: value.definition for value in state.lifecycle.definition_revisions}

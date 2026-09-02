@@ -3498,6 +3498,7 @@ Not launchable:
                 ("item", "definition-history", "--item-id", "work-a", "--before-revision", "0"),
                 "pinboard item definition-history",
             ),
+            (("parallel", "preview", "--item", "work-a", "--item", "work-a"), "pinboard parallel preview"),
         )
         for arguments, route in cases:
             with self.subTest(arguments=arguments):

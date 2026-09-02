@@ -401,6 +401,10 @@ class ParallelPreviewCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=
     item: list[StableItemId] = []
     json: bool = False
 
+    def __post_init__(self) -> None:
+        if len(set(self.item)) != len(self.item):
+            raise ValueError("--item values must be unique")
+
 
 class RebuildViewsCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     pass
