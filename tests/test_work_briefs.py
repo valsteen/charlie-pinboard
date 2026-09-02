@@ -97,6 +97,15 @@ class WorkBriefBoundaryTest(unittest.TestCase):
         with self.assertRaises(WorkBriefError) as unknown:
             decode_work_brief(candidate[:-1] + b',"unknown":true}')
         self.assertEqual(WorkBriefErrorCode.BRIEF_INVALID, unknown.exception.code)
+        for field, invalid in (("attempt_id", f"{value.attempt_id}\n"), ("title", f"{value.title}\n")):
+            with self.subTest(field=field):
+                with self.assertRaises(WorkBriefError) as newline:
+                    payload = msgspec.json.decode(candidate)
+                    if not isinstance(payload, dict):
+                        self.fail("work brief JSON must be an object")
+                    payload[field] = invalid
+                    decode_work_brief(msgspec.json.encode(payload))
+                self.assertEqual(WorkBriefErrorCode.BRIEF_INVALID, newline.exception.code)
 
     def test_cross_references_are_rejected_at_the_typed_boundary(self) -> None:
         value = example_work_brief()
@@ -260,6 +269,13 @@ class WorkBriefBoundaryTest(unittest.TestCase):
 
         decoded = decode_work_brief_review(msgspec.json.encode(review))
         validate_work_brief_review(decoded, value, reviewer_task_id=value.owner_task_id)
+        with self.assertRaises(WorkBriefError) as newline:
+            payload = msgspec.json.decode(msgspec.json.encode(review))
+            if not isinstance(payload, dict):
+                self.fail("work brief review JSON must be an object")
+            payload["checkpoint_sha256"] = f"{review.checkpoint_sha256}\n"
+            decode_work_brief_review(msgspec.json.encode(payload))
+        self.assertEqual(WorkBriefErrorCode.REVIEW_INVALID, newline.exception.code)
         with self.assertRaises(WorkBriefError) as same_owner:
             validate_work_brief_review(replace(review, reviewer_task_id=value.owner_task_id), value)
         self.assertEqual(WorkBriefErrorCode.REVIEW_NOT_INDEPENDENT, same_owner.exception.code)

@@ -4,9 +4,9 @@ from typing import Annotated, Literal
 import msgspec
 
 type NonEmptyText = Annotated[str, msgspec.Meta(min_length=1)]
-type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^\S(?:[^\n]*\S)?$")]
-type KebabId = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
-type Sha256 = Annotated[str, msgspec.Meta(pattern=r"^[0-9a-f]{64}$")]
+type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"\A\S(?:[^\n]*\S)?\z")]
+type KebabId = Annotated[str, msgspec.Meta(pattern=r"\A[a-z0-9]+(?:-[a-z0-9]+)*\z")]
+type Sha256 = Annotated[str, msgspec.Meta(pattern=r"\A[0-9a-f]{64}\z")]
 type PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
 type NonEmptyTexts = Annotated[tuple[NonEmptyText, ...], msgspec.Meta(min_length=1)]
 
