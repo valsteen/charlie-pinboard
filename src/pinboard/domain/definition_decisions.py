@@ -65,11 +65,6 @@ def decide_definition_revision(
             DecisionFailureCode.ITEM_DEFINITION_STALE,
             "The expected definition revision and digest are stale.",
         )
-    if not value.source_task or not value.reason:
-        return DecisionFailure(
-            DecisionFailureCode.ITEM_DEFINITION_INVALID,
-            "source_task and reason must be nonempty.",
-        )
     digest = work_item_definition_digest(value.definition)
     if isinstance(digest, DecisionFailure):
         return digest

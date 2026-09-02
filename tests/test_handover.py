@@ -319,6 +319,11 @@ class HandoverTest(unittest.TestCase):
             [1, 2],
             [value.revision for value in handover.definition_revisions if value.item_id == "work-a"],
         )
+        latest_definition = next(
+            value for value in handover.definition_revisions if value.item_id == "work-a" and value.revision == 2
+        )
+        self.assertEqual("Clarified the export objective.", latest_definition.reason)
+        self.assertEqual("definition-owner", latest_definition.source_task_id)
         self.assertEqual(
             {
                 "IndependentProposalRelation",

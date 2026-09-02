@@ -44,6 +44,8 @@ class GeneratedViewsTest(unittest.TestCase):
             text = (work_root / selector).read_text(encoding="utf-8")
             self.assertIn("database_revision: 12", text)
             self.assertIn("Generated projection; SQLite is authoritative.", text)
+        history = (work_root / "views" / "history.md").read_text(encoding="utf-8")
+        self.assertIn("| Accepted test definition. | test-source |", history)
 
     def test_post_commit_refresh_failure_is_a_repairable_warning(self) -> None:
         work_root, store = self._state()

@@ -120,6 +120,7 @@ After deletion changes the graph, search for structures that used to distinguish
 - pass-through wrappers, single-use indirections, one-attribute accessors, and no-op conversions;
 - parallel tuples, dictionaries, projections, or field-by-field comparisons that reproduce an existing canonical typed value without owning a distinct external representation;
 - hand-written primitive validators or mapping walkers where one declarative boundary record can own conversion, constraints, unknown-field rejection, and error paths;
+- downstream validation that repeats a field-local or same-record invariant already guaranteed by the deserialization model; keep a later check only when it combines independent sources or current external state, and challenge direct construction or internal-DTO use of boundary records that bypasses the decode contract;
 - identical aliases, redundant alternative sets, and a discriminator that duplicates the variant hierarchy;
 - conditions whose alternatives now do the same thing, impossible branches, and commands that can only reject;
 - fields copied through layers without a current producer and consumer;

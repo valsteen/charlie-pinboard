@@ -67,6 +67,10 @@ Supported typed code must not represent impossible states through exceptions, re
 
 A clean strict type check is evidence for invariants expressed by those types. Do not add runtime guards or malformed-object tests solely to execute a state that supported typed code cannot construct. Runtime validation and failure surfaces remain necessary where the fact is genuinely runtime-owned: deserialization and other external input, `Any` or cast boundaries, persisted relational state, filesystem and database effects, concurrency and staleness, and infrastructure failure.
 
+Validate structured input once, in the boundary record that deserializes or converts it. Put field-local and shape constraints in its annotations, and put invariants among fields of that record in its post-init validation when they cannot be expressed declaratively. After successful conversion, consumers trust those facts instead of repeating them. Later validation is justified when it combines independent sources or current external state, such as database identity or revision, time, filesystem state, or agreement between artifacts.
+
+Production code decodes or converts strict boundary records; it does not manually instantiate them as internal data-transfer objects. Decoder constraints are part of the boundary contract, so direct construction can create a value without proving the same facts. Use plain domain or application records for internal values after the boundary conversion.
+
 Apply this rule to signatures as well as implementations. Removing a defensive branch is incomplete while an optional parameter, broad input union, general authorization value, or fabricated test helper still admits the invalid combination. Preserve product distinctions with separate closed variants when their required data differs; do not recover the same distinction later with nullable fields or repeated validation.
 
 ## Prefer closed, direct Python

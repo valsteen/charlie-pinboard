@@ -80,6 +80,31 @@ class WorkItemDefinitionContractTest(unittest.TestCase):
 
 
 class WorkItemDefinitionRevisionDecisionTest(unittest.TestCase):
+    def test_revise_rejects_missing_item_and_missing_current_definition(self) -> None:
+        current = definition()
+        digest = expect_success(work_item_definition_digest(current))
+        item = work_models.WorkItem(
+            ItemId("build-map"), work_models.WorkState.READY, None, (), None, "source", "continue", "", 1
+        )
+        value = work_models.ReviseItemDefinitionInput(
+            item.item,
+            1,
+            digest,
+            TaskId("owner-task"),
+            "Clarify the route.",
+            current,
+        )
+        cases = (
+            (LedgerSnapshot("ledger-revision", 1, ()), DecisionFailureCode.ITEM_NOT_FOUND),
+            (LedgerSnapshot("ledger-revision", 1, (item,)), DecisionFailureCode.ITEM_DEFINITION_INVALID),
+        )
+
+        for snapshot, code in cases:
+            with self.subTest(code=code):
+                rejected = decide_definition_revision(snapshot, item.item, value, NOW)
+                self.assertIsInstance(rejected, DecisionFailure)
+                self.assertEqual(code, rejected.code)
+
     def test_revise_uses_exact_compare_and_swap_and_preserves_lifecycle(self) -> None:
         current = definition()
         current_digest = expect_success(work_item_definition_digest(current))

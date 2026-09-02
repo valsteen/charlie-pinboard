@@ -145,6 +145,37 @@ class TransitionInputTest(unittest.TestCase):
         assert isinstance(advisory, TransitionInputFailure)
         self.assertEqual(DecisionFailureCode.ACTION_NOT_MUTATING, advisory.code)
 
+    def test_revise_item_rejects_each_empty_boundary_field(self) -> None:
+        selected_action = action(decision_models.ReviseItemAction, ItemId("work-a"))
+        payload: JsonObject = {
+            "schema": "pinboard-item-revision/v1",
+            "item_id": "work-a",
+            "expected_revision": 1,
+            "expected_digest": "a" * 64,
+            "source_task": "owner-task",
+            "reason": "Clarify the accepted outcome.",
+            "definition": {
+                "schema": "pinboard-work-item-definition/v1",
+                "title": "Work A",
+                "objective": "Make the outcome explicit.",
+                "hypothesis": "Explicit outcomes reduce coordination mistakes.",
+                "evidence": [],
+                "scope": ["Record the outcome."],
+                "non_scope": [],
+                "acceptance_criteria": ["The outcome is queryable."],
+                "dependencies": [],
+                "effect": "The outcome is explicit.",
+                "unlock": "Coordination can continue.",
+            },
+        }
+
+        for field in ("source_task", "reason"):
+            with self.subTest(field=field):
+                rejected = parse_transition_command(selected_action, json.dumps(payload | {field: ""}))
+                self.assertIsInstance(rejected, TransitionInputFailure)
+                assert isinstance(rejected, TransitionInputFailure)
+                self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
+
     def test_every_current_kind_decodes_and_has_a_schema(self) -> None:
         cases: tuple[tuple[decision_models.Action, JsonObject], ...] = (
             (
