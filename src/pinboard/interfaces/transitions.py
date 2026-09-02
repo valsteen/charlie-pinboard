@@ -1,4 +1,5 @@
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import assert_never
 from uuid import uuid4
@@ -36,6 +37,20 @@ from pinboard.interfaces.transition_models import CloseView, CoordinatedTransiti
 from pinboard.interfaces.work_briefs import read_transition_work_brief_identity
 
 
+@dataclass(frozen=True, slots=True)
+class _RawBorrowedTransition:
+    action_id: ActionId
+    payload: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedItemRevision:
+    value: work_models.ReviseItemDefinitionInput
+
+
+type _BorrowedTransition = _RawBorrowedTransition | _ParsedItemRevision
+
+
 def close(roots: cli_commands.ResolvedRoots, command: cli_commands.CloseCommand) -> CommandResult[int]:
     payload = msgspec.json.encode({"outcome": command.outcome.value, "reason": command.reason}, order="sorted")
     revision = execute_borrowed_coordination(
@@ -43,8 +58,7 @@ def close(roots: cli_commands.ResolvedRoots, command: cli_commands.CloseCommand)
         command.task_id,
         command.host_id,
         command.ttl_seconds,
-        ActionId(f"close:{command.item_id}"),
-        payload,
+        _RawBorrowedTransition(ActionId(f"close:{command.item_id}"), payload),
     )
     if isinstance(revision, CommandFailure):
         return revision
@@ -72,8 +86,7 @@ def revise_item(roots: cli_commands.ResolvedRoots, command: cli_commands.ItemRev
         command.task_id,
         command.host_id,
         command.ttl_seconds,
-        ActionId(f"revise-item:{parsed.item_id}"),
-        payload,
+        _ParsedItemRevision(parsed),
     )
     if isinstance(project_revision, CommandFailure):
         return project_revision
@@ -242,8 +255,7 @@ def coordinated_transition(
         command.task_id,
         command.host_id,
         command.ttl_seconds,
-        command.action_id,
-        payload,
+        _RawBorrowedTransition(command.action_id, payload),
     )
     if isinstance(transition_revision, CommandFailure):
         return transition_revision
@@ -260,8 +272,7 @@ def execute_borrowed_coordination(
     task_id: TaskId,
     host_id: HostId,
     ttl_seconds: int,
-    selected_action_id: ActionId,
-    payload: bytes,
+    request: _BorrowedTransition,
 ) -> CommandResult[str]:
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
     artifacts = ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work))
@@ -288,7 +299,7 @@ def execute_borrowed_coordination(
         acquire.expires_at,
     )
     try:
-        transition_result = apply_borrowed_transition(roots, store, artifacts, selected_action_id, payload)
+        transition_result = apply_borrowed_transition(roots, store, artifacts, request)
     except Exception as transition_error:
         try:
             released = change_coordination_authority(
@@ -337,12 +348,42 @@ def execute_borrowed_coordination(
     return transition_result
 
 
+def _borrowed_action_id(request: _BorrowedTransition) -> ActionId:
+    match request:
+        case _RawBorrowedTransition(action_id=action_id):
+            return action_id
+        case _ParsedItemRevision(value=value):
+            return ActionId(f"revise-item:{value.item_id}")
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def _borrowed_command(
+    action: decision_models.Action,
+    request: _BorrowedTransition,
+) -> CommandResult[decision_models.TransitionCommand]:
+    match request:
+        case _RawBorrowedTransition(payload=payload):
+            command = parse_transition_command(action, payload)
+            if isinstance(command, TransitionInputFailure):
+                return CommandFailure(command.code, command.message)
+            return command
+        case _ParsedItemRevision(value=value):
+            if not isinstance(action, decision_models.ReviseItemAction):
+                return CommandFailure(
+                    DecisionFailureCode.ACTION_NOT_AVAILABLE,
+                    f"Action '{_borrowed_action_id(request)}' is not an item-revision action.",
+                )
+            return action.command(value)
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
 def apply_borrowed_transition(
     roots: cli_commands.ResolvedRoots,
     store: SQLiteWorkStore,
     artifacts: ArtifactRepository,
-    selected_action_id: ActionId,
-    payload: bytes,
+    request: _BorrowedTransition,
 ) -> CommandResult[str]:
     coordination = coordination_authority.retained_coordination(store.snapshot())
     if isinstance(coordination, CommandFailure):
@@ -356,6 +397,7 @@ def apply_borrowed_transition(
     )
     if isinstance(available, DecisionFailure):
         return CommandFailure(available.code, available.message)
+    selected_action_id = _borrowed_action_id(request)
     action = next(
         (candidate for candidate in available if decision_models.action_id(candidate) == selected_action_id),
         None,
@@ -370,9 +412,9 @@ def apply_borrowed_transition(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             "Borrowed coordination cannot transfer retained authority.",
         )
-    command = parse_transition_command(action, payload)
-    if isinstance(command, TransitionInputFailure):
-        return CommandFailure(command.code, command.message)
+    command = _borrowed_command(action, request)
+    if isinstance(command, CommandFailure):
+        return command
     result = _execute_transition_command(roots, store, artifacts, command)
     if isinstance(result, CommandFailure):
         return result
