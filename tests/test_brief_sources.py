@@ -40,6 +40,8 @@ class BriefSourcesTest(unittest.TestCase):
             b'{"schema":"pinboard-brief-sources/v1","sources":[{"authority_id":"a","selector":"a.md","families":["contract"]},{"authority_id":"a","selector":"b.md","families":["acceptance"]}]}',
             b'{"schema":"pinboard-brief-sources/v1","sources":[{"authority_id":"a","selector":"../a.md","families":["contract"]}]}',
             b'{"schema":"pinboard-brief-sources/v1","sources":[{"authority_id":"a","selector":"a.md","families":[]}]}',
+            b'{"schema":"pinboard-brief-sources/v1","sources":[{"authority_id":"a\\n","selector":"a.md","families":["contract"]}]}',
+            b'{"schema":"pinboard-brief-sources/v1","sources":[{"authority_id":"a","selector":"a.md\\n","families":["contract"]}]}',
         )
 
         for raw in cases:

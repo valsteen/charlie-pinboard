@@ -6,8 +6,8 @@ import msgspec
 
 type BriefSourceManifestSchema = Literal["pinboard-brief-sources/v1"]
 type BriefSourcePlanSchema = Literal["pinboard-brief-source-plan/v1"]
-type BriefSourceIdentity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
-type BriefSourceSelector = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
+type BriefSourceIdentity = Annotated[str, msgspec.Meta(pattern=r"\A[a-z0-9]+(?:-[a-z0-9]+)*\z")]
+type BriefSourceSelector = Annotated[str, msgspec.Meta(min_length=1, pattern=r"\A[^\n]+\z")]
 
 
 class BriefSourceRequest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
