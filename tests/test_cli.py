@@ -3183,7 +3183,7 @@ Not launchable:
                 {
                     "schema": "pinboard-proposal/v1",
                     "proposal_id": "cli-sqlite-proposal",
-                    "created_at": (SQLITE_NOW + timedelta(seconds=1)).isoformat(),
+                    "created_at": "2026-08-25T12:00:00+02:00",
                     "source_task_id": "discovering-task",
                     "user_label": "SQLite CLI proposal",
                     "trigger": "The public proposal command must use current authority.",
@@ -3206,9 +3206,50 @@ Not launchable:
 
         self.assertEqual(0, result, stderr)
         self.assertIn("OK PROPOSAL_CREATED cli-sqlite-proposal", stdout)
-        after = store.snapshot()
+        after = SQLiteWorkStore(work / "state.sqlite3").snapshot()
         self.assertEqual(before_revision + 1, after.lifecycle.project.revision)
+        persisted_proposal = next(
+            value for value in after.proposals.proposals if str(value.proposal_id) == "cli-sqlite-proposal"
+        )
         intake_item = next(value for value in after.lifecycle.work_items if str(value.item_id) == "cli-sqlite-proposal")
+        self.assertEqual(
+            (
+                datetime(2026, 8, 25, 10, tzinfo=UTC),
+                TaskId("discovering-task"),
+                "SQLite CLI proposal",
+                "The public proposal command must use current authority.",
+                "A filesystem writer cannot persist to SQLite authority.",
+                "The proposal appears once as an intake item.",
+                "Use the application proposal service.",
+                "The installed command must remain current.",
+            ),
+            (
+                persisted_proposal.created_at,
+                persisted_proposal.source_task_id,
+                persisted_proposal.user_label,
+                persisted_proposal.trigger,
+                persisted_proposal.why_it_matters,
+                persisted_proposal.effect,
+                persisted_proposal.unlock,
+                persisted_proposal.urgency_evidence,
+            ),
+        )
+        self.assertEqual(
+            ("source:cli",),
+            tuple(
+                value.selector
+                for value in after.proposals.evidence
+                if value.proposal_id == persisted_proposal.proposal_id
+            ),
+        )
+        self.assertEqual(
+            ("SQLite remains authoritative.",),
+            tuple(
+                value.assumption
+                for value in after.proposals.freshness
+                if value.proposal_id == persisted_proposal.proposal_id
+            ),
+        )
         self.assertEqual(
             (stored_state.StoredWorkItemState.INTAKE, 5),
             (intake_item.state, intake_item.queue_position),
@@ -3225,41 +3266,9 @@ Not launchable:
         self.assertEqual(13, duplicate_result)
         self.assertIn("PROPOSAL_ALREADY_EXISTS", duplicate_stderr)
 
-    def test_proposal_timestamp_and_file_failures_are_stable(self) -> None:
+    def test_proposal_file_failure_is_stable(self) -> None:
         project, work, _store = self.initialized_state(complete_sqlite_state())
         common = ("--project-root", str(project), "--work-root", str(work))
-        path = project / "proposal.json"
-        value: JsonObject = {
-            "schema": "pinboard-proposal/v1",
-            "proposal_id": "date-only-proposal",
-            "created_at": "2026-08-25",
-            "source_task_id": "task",
-            "user_label": "Date-only proposal",
-            "trigger": "A timestamp boundary needs coverage.",
-            "evidence": ["source:test"],
-            "why_it_matters": "The boundary remains deterministic.",
-            "relation": {"kind": "independent", "item": None},
-            "effect": "The proposal persists.",
-            "unlock": "Timestamp normalization is explicit.",
-            "urgency_evidence": "This is current intake behavior.",
-            "freshness_assumptions": ["SQLite remains authoritative."],
-        }
-        path.write_text(json.dumps(value), encoding="utf-8")
-        result, _stdout, stderr = self.run_cli(*common, "proposal", "--file", str(path))
-        self.assertEqual(0, result, stderr)
-
-        for proposal_id, created_at in (
-            ("naive-proposal", "2026-08-25T12:00:00"),
-            ("invalid-date-proposal", "not-a-date"),
-        ):
-            value["proposal_id"] = proposal_id
-            value["created_at"] = created_at
-            path.write_text(json.dumps(value), encoding="utf-8")
-            with self.subTest(created_at=created_at):
-                invalid, _invalid_stdout, invalid_stderr = self.run_cli(*common, "proposal", "--file", str(path))
-                self.assertEqual(2, invalid)
-                self.assertIn("PROPOSAL_INVALID", invalid_stderr)
-
         missing, _missing_stdout, missing_stderr = self.run_cli(
             *common, "proposal", "--file", str(project / "missing.json")
         )

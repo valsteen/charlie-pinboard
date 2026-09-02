@@ -51,21 +51,9 @@ def create_proposal(
     proposal = proposals.parse_proposal(data)
     if isinstance(proposal, ProposalFailure):
         return proposal
-    try:
-        created_at = datetime.fromisoformat(proposal.created_at.replace("Z", "+00:00"))
-    except ValueError:
-        return ProposalFailure(DecisionFailureCode.PROPOSAL_INVALID, "Proposal created_at must be an ISO timestamp.")
-    if created_at.tzinfo is None:
-        if len(proposal.created_at) == 10:
-            created_at = created_at.replace(tzinfo=UTC)
-        else:
-            return ProposalFailure(
-                DecisionFailureCode.PROPOSAL_INVALID,
-                "Proposal created_at must include a timezone.",
-            )
     intake = domain_proposal_models.ProposalIntake(
         ProposalId(proposal.proposal_id),
-        created_at.astimezone(UTC),
+        proposal.created_at_utc(),
         TaskId(proposal.source_task_id),
         proposal.user_label,
         proposal.trigger,

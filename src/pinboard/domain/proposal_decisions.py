@@ -1,5 +1,3 @@
-import re
-
 from pinboard.domain import work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.history import work_item_definition_digest
@@ -13,14 +11,8 @@ from pinboard.domain.proposal_models import (
     ProposalCreationDecision,
 )
 
-_PROPOSAL_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
-
-def _proposal_text(value: str) -> bool:
-    return bool(value) and value.strip() == value and "|" not in value and "\n" not in value
-
-
-def decide_proposal_creation(  # noqa: C901, PLR0912
+def decide_proposal_creation(
     authority: LocalIntakeAuthority,
     current_project_revision: int,
     current_host_epoch: int,
@@ -30,32 +22,11 @@ def decide_proposal_creation(  # noqa: C901, PLR0912
     intake = operation.intake
     if authority != LocalIntakeAuthority(current_project_revision, current_host_epoch):
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Local intake authority is stale.")
-    if not _PROPOSAL_ID.fullmatch(str(intake.proposal_id)):
-        return DecisionFailure(
-            DecisionFailureCode.PROPOSAL_IDENTITY_INVALID,
-            "Proposal identity must be a canonical lowercase hyphenated identifier.",
-        )
     if snapshot.proposal(intake.proposal_id) is not None:
         return DecisionFailure(DecisionFailureCode.PROPOSAL_ALREADY_EXISTS, "Proposal identity already exists.")
     item_id = ItemId(intake.proposal_id)
     if snapshot.item(item_id) is not None or item_id in snapshot.history_items:
         return DecisionFailure(DecisionFailureCode.ITEM_ALREADY_EXISTS, "Proposal identity already names a work item.")
-    text = (
-        intake.user_label,
-        intake.trigger,
-        intake.why_it_matters,
-        intake.effect,
-        intake.unlock,
-        intake.urgency_evidence,
-        *intake.evidence,
-        *intake.freshness_assumptions,
-    )
-    if not all(_proposal_text(value) for value in text):
-        return DecisionFailure(DecisionFailureCode.PROPOSAL_INVALID, "Proposal text must be canonical and nonempty.")
-    if len(intake.evidence) != len(set(intake.evidence)) or len(intake.freshness_assumptions) != len(
-        set(intake.freshness_assumptions)
-    ):
-        return DecisionFailure(DecisionFailureCode.PROPOSAL_INVALID, "Proposal evidence must be ordered and unique.")
     if (
         intake.relation.item is not None
         and snapshot.item(intake.relation.item) is None
@@ -64,7 +35,7 @@ def decide_proposal_creation(  # noqa: C901, PLR0912
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, "The related work item does not exist.")
     live_count = len(snapshot.items)
     position = intake.position if intake.position is not None else live_count + 1
-    if position < 1 or position > live_count + 1:
+    if position > live_count + 1:
         return DecisionFailure(
             DecisionFailureCode.PROPOSAL_INVALID,
             f"Proposal position must be between 1 and {live_count + 1}.",
