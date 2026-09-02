@@ -445,12 +445,10 @@ def _block_dependencies(
             DecisionFailureCode.ITEM_DEFINITION_INVALID,
             "The blocked item has no current definition.",
         )
-    if len(value.depends_on) != len(set(value.depends_on)) or any(
-        dependency not in definition.definition.dependencies for dependency in value.depends_on
-    ):
+    if any(dependency not in definition.definition.dependencies for dependency in value.depends_on):
         return DecisionFailure(
             DecisionFailureCode.DEPENDENCY_NOT_SATISFIED,
-            "Blocker dependencies must be ordered unique identities from the current definition.",
+            "Blocker dependencies must be identities from the current definition.",
         )
     return item.depends_on
 
@@ -934,17 +932,12 @@ def _accept_proposal(
             "Only the proposal's current intake item can be accepted.",
         )
     dependencies = tuple(dict.fromkeys((*current_item.depends_on, *value.depends_on)))
-    if (
-        len(value.depends_on) != len(set(value.depends_on))
-        or value.item in dependencies
-        or any(
-            snapshot.item(dependency) is None and dependency not in snapshot.history_items
-            for dependency in dependencies
-        )
+    if any(
+        snapshot.item(dependency) is None and dependency not in snapshot.history_items for dependency in dependencies
     ):
         return DecisionFailure(
             DecisionFailureCode.DEPENDENCY_NOT_SATISFIED,
-            "Accepted proposal dependencies must be ordered unique existing identities other than their owner.",
+            "Accepted proposal dependencies must be existing identities.",
         )
     if introduces_dependency_cycle(snapshot, value.item, dependencies):
         return DecisionFailure(

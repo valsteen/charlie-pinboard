@@ -190,6 +190,28 @@ class TransitionInputTest(unittest.TestCase):
                 revise,
                 revise_item_payload_with_definition(dependencies=["Bad Identity"]),
             ),
+            (
+                action(decision_models.BlockItemAction, ItemId("work-a")),
+                {"reason": "blocked", "depends_on": ["work-b", "work-b"]},
+            ),
+            (
+                action(decision_models.AcceptProposalAction, ProposalId("proposal-a")),
+                {
+                    "item": "work-a",
+                    "state": "intake",
+                    "next_action": "review",
+                    "depends_on": ["work-b", "work-b"],
+                },
+            ),
+            (
+                action(decision_models.AcceptProposalAction, ProposalId("proposal-a")),
+                {
+                    "item": "work-a",
+                    "state": "intake",
+                    "next_action": "review",
+                    "depends_on": ["work-a"],
+                },
+            ),
         )
         for selected_action, value in cases:
             with self.subTest(kind=selected_action.kind):

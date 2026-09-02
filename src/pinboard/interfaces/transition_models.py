@@ -36,6 +36,10 @@ class BlockInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True)
     reason: NonEmptyLine
     depends_on: tuple[Identity, ...] = ()
 
+    def __post_init__(self) -> None:
+        if len(set(self.depends_on)) != len(self.depends_on):
+            raise ValueError("depends_on must contain unique identities")
+
 
 class EvidenceInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     evidence: NonEmptyLine
@@ -68,6 +72,12 @@ class AcceptProposalInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fie
     next_action: NonEmptyLine
     timing: TimingPayload | None = None
     depends_on: tuple[Identity, ...] = ()
+
+    def __post_init__(self) -> None:
+        if len(set(self.depends_on)) != len(self.depends_on):
+            raise ValueError("depends_on must contain unique identities")
+        if self.item in self.depends_on:
+            raise ValueError("depends_on must not contain the accepted item")
 
 
 class MergeProposalInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
