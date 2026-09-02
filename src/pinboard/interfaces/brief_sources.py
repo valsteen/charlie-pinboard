@@ -214,8 +214,6 @@ def plan_brief_sources(
     manifest: BriefSourceManifest,
     max_batch_bytes: int,
 ) -> BriefSourcePlan:
-    if max_batch_bytes < 1:
-        raise BriefSourceError(BriefSourceErrorCode.MANIFEST_INVALID, "The maximum batch size must be positive.")
     selected = tuple(
         (
             request,

@@ -272,11 +272,6 @@ def item_definition_history(
     limit: int = 20,
     before_revision: int | None = None,
 ) -> DecisionResult[query_models.ItemDefinitionHistory]:
-    if limit < 1 or limit > 100 or (before_revision is not None and before_revision < 1):
-        return DecisionFailure(
-            DecisionFailureCode.ITEM_DEFINITION_HISTORY_INVALID,
-            "Definition history limit must be 1 through 100 and before_revision must be positive.",
-        )
     state = store.snapshot()
     if not any(item.item_id == item_id for item in state.lifecycle.work_items):
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")

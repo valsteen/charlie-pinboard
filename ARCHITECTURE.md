@@ -94,7 +94,7 @@ Interfaces own user-facing boundaries. They may depend on application use cases,
 
 | Owner group | Responsibility |
 | --- | --- |
-| `cli_commands.py`, `cli_parser.py` | Exact leaf command records, complete command grammar, inert leaf command metadata, and the few coupled-option decoders needed to construct the closed command union |
+| `cli_commands.py`, `cli_parser.py` | Exact leaf command records, complete command grammar, field-local constraints on exact leaves and coupled option records, and the few coupled-option decoders needed to construct the closed command union |
 | `cli.py`, `cli_output.py` | Sole exhaustive command-family route, final typed-result-to-exit policy, and canonical JSON output effect |
 | `work_inspection_models.py`, `work_inspection.py` | Read-only status, overview, item, action, input-contract, and parallel-preview composition and presentation |
 | `action_selection.py`, `transition_models.py`, `transition_input.py`, `transitions.py` | Current-action selection from an opaque CLI capability receipt, strict payload decoding directly into the exact command owned by that action variant, complete definition-replacement conversion, checkpoint identity checks, coordination lifetime, and transition presentation |

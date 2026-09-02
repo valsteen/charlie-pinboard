@@ -44,7 +44,7 @@ class DispatchArgumentError(Exception):
 
 class _BriefSourcesArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     file: Path
-    max_batch_bytes: int
+    max_batch_bytes: cli_commands.PositiveInt
     json: bool
     emit_batch: int | None
 

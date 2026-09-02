@@ -8,6 +8,8 @@ from pinboard.domain import decision_models, work_models
 from pinboard.domain.identifiers import ActionId, AttemptId, HostId, ItemId, LeaseId, ReviewId, TaskId
 
 _PATH_COMPONENT_ID = msgspec.Meta(min_length=1, pattern=r"\A(?!\.{1,2}\z)[^/\r\n\x00]+\z")
+type PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
+type ItemDefinitionHistoryLimit = Annotated[int, msgspec.Meta(ge=1, le=100)]
 type StableActionId = Annotated[ActionId, _PATH_COMPONENT_ID]
 type StableAttemptId = Annotated[AttemptId, _PATH_COMPONENT_ID]
 type StableHostId = Annotated[HostId, _PATH_COMPONENT_ID]
@@ -65,8 +67,8 @@ class ItemDefinitionCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=T
 
 class ItemDefinitionHistoryCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     item_id: StableItemId
-    limit: int = 20
-    before_revision: int | None = None
+    limit: ItemDefinitionHistoryLimit = 20
+    before_revision: PositiveInt | None = None
     json: bool = False
 
 
@@ -104,13 +106,13 @@ class InputContractCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=Tr
 
 class BriefSourcesPlanCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     file: Path
-    max_batch_bytes: int = 24_000
+    max_batch_bytes: PositiveInt = 24_000
 
 
 class BriefSourcesEmitCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     file: Path
     emit_batch: int
-    max_batch_bytes: int = 24_000
+    max_batch_bytes: PositiveInt = 24_000
 
 
 class BriefPublishCommand(msgspec.Struct, frozen=True, forbid_unknown_fields=True):

@@ -3393,7 +3393,7 @@ Not launchable:
             self.assertIn("pinboard item status", malformed_stderr)
             self.assertIn("$.item_id", malformed_stderr)
 
-    def test_relational_cli_inputs_are_rejected_at_the_selected_leaf(self) -> None:
+    def test_relational_and_bounded_cli_inputs_are_rejected_at_the_selected_leaf(self) -> None:
         cases = (
             (("actions", "--role", "worker", "--lease-id", "lease-a"), "pinboard actions"),
             (
@@ -3446,6 +3446,19 @@ Not launchable:
                     "review-a",
                 ),
                 "pinboard dispatch",
+            ),
+            (
+                ("brief-sources", "--file", "manifest.json", "--max-batch-bytes", "0", "--json"),
+                "pinboard brief-sources",
+            ),
+            (("item", "definition-history", "--item-id", "work-a", "--limit", "0"), "pinboard item definition-history"),
+            (
+                ("item", "definition-history", "--item-id", "work-a", "--limit", "101"),
+                "pinboard item definition-history",
+            ),
+            (
+                ("item", "definition-history", "--item-id", "work-a", "--before-revision", "0"),
+                "pinboard item definition-history",
             ),
         )
         for arguments, route in cases:
