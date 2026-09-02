@@ -7,13 +7,13 @@ import msgspec
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.identifiers import ActionId, AttemptId, HostId, ItemId, LeaseId, ReviewId, TaskId
 
-_STABLE_ID = msgspec.Meta(min_length=1, pattern=r"^(?!\.{1,2}$)[^/\x00]+$")
-type StableActionId = Annotated[ActionId, _STABLE_ID]
-type StableAttemptId = Annotated[AttemptId, _STABLE_ID]
-type StableHostId = Annotated[HostId, _STABLE_ID]
-type StableItemId = Annotated[ItemId, _STABLE_ID]
-type StableLeaseId = Annotated[LeaseId, _STABLE_ID]
-type StableTaskId = Annotated[TaskId, _STABLE_ID]
+_PATH_COMPONENT_ID = msgspec.Meta(min_length=1, pattern=r"\A(?!\.{1,2}\z)[^/\r\n\x00]+\z")
+type StableActionId = Annotated[ActionId, _PATH_COMPONENT_ID]
+type StableAttemptId = Annotated[AttemptId, _PATH_COMPONENT_ID]
+type StableHostId = Annotated[HostId, _PATH_COMPONENT_ID]
+type StableItemId = Annotated[ItemId, _PATH_COMPONENT_ID]
+type StableLeaseId = Annotated[LeaseId, _PATH_COMPONENT_ID]
+type StableTaskId = Annotated[TaskId, _PATH_COMPONENT_ID]
 
 
 class RootSelection(msgspec.Struct, frozen=True, forbid_unknown_fields=True):

@@ -3382,12 +3382,16 @@ Not launchable:
         common = ("--project-root", str(project), "--work-root", str(work))
 
         missing, _missing_stdout, missing_stderr = self.run_cli(*common, "item", "status", "--item-id", "missing-item")
-        malformed_stderr = self.run_cli_parse_error(*common, "item", "status", "--item-id", "bad/item")
+        malformed_errors = (
+            self.run_cli_parse_error(*common, "item", "status", "--item-id", "bad/item"),
+            self.run_cli_parse_error(*common, "item", "status", "--item-id", "bad\n"),
+        )
 
         self.assertEqual(11, missing)
         self.assertIn("ITEM_NOT_FOUND", missing_stderr)
-        self.assertIn("pinboard item status", malformed_stderr)
-        self.assertIn("$.item_id", malformed_stderr)
+        for malformed_stderr in malformed_errors:
+            self.assertIn("pinboard item status", malformed_stderr)
+            self.assertIn("$.item_id", malformed_stderr)
 
     def test_relational_cli_inputs_are_rejected_at_the_selected_leaf(self) -> None:
         cases = (
@@ -3452,6 +3456,7 @@ Not launchable:
     def test_custom_command_decoders_preserve_identifier_constraints(self) -> None:
         cases = (
             (("actions", "--role", "observer", "--action-id", "bad/id"), "$.action_id"),
+            (("actions", "--role", "observer", "--action-id", "bad\n"), "$.action_id"),
             (
                 (
                     "attempt",
