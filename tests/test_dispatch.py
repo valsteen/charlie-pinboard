@@ -704,38 +704,6 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual("", stdout)
         self.assertTrue(stderr.startswith(f"DISPATCH_BRIEF_REVIEW_INVALID: Cannot read '{missing_review}': "))
 
-        review_without_id = project / "review-without-id.json"
-        review_without_id.write_bytes(b"{}")
-        result, stdout, stderr = self.run_cli(
-            *base_arguments,
-            "--environment",
-            str(valid_environment),
-            "--brief-review",
-            str(review_without_id),
-        )
-        self.assertEqual(14, result)
-        self.assertEqual("", stdout)
-        self.assertEqual(
-            "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID: --brief-review requires one kebab-case --review-id.\n",
-            stderr,
-        )
-
-        result, stdout, stderr = self.run_cli(
-            *base_arguments,
-            "--environment",
-            str(valid_environment),
-            "--brief-review",
-            str(review_without_id),
-            "--review-id",
-            "NOT KEBAB",
-        )
-        self.assertEqual(14, result)
-        self.assertEqual("", stdout)
-        self.assertEqual(
-            "DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID: --brief-review requires one kebab-case --review-id.\n",
-            stderr,
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

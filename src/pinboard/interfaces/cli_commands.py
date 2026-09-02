@@ -10,6 +10,7 @@ from pinboard.domain.identifiers import ActionId, AttemptId, HostId, ItemId, Lea
 _PATH_COMPONENT_ID = msgspec.Meta(min_length=1, pattern=r"\A(?!\.{1,2}\z)[^/\r\n\x00]+\z")
 type PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
 type ItemDefinitionHistoryLimit = Annotated[int, msgspec.Meta(ge=1, le=100)]
+type KebabReviewId = Annotated[ReviewId, msgspec.Meta(pattern=r"\A[a-z0-9]+(?:-[a-z0-9]+)*\z")]
 type StableActionId = Annotated[ActionId, _PATH_COMPONENT_ID]
 type StableAttemptId = Annotated[AttemptId, _PATH_COMPONENT_ID]
 type StableHostId = Annotated[HostId, _PATH_COMPONENT_ID]
@@ -195,7 +196,7 @@ class CoordinatorReviewedDispatchCommand(msgspec.Struct, frozen=True, forbid_unk
     checkpoint: str
     environment: Path
     brief_review: Path
-    review_id: ReviewId
+    review_id: KebabReviewId
     prompt: Path | None = None
 
 
@@ -217,7 +218,7 @@ class CoordinationReviewedDispatchCommand(msgspec.Struct, frozen=True, forbid_un
     checkpoint: str
     environment: Path
     brief_review: Path
-    review_id: ReviewId
+    review_id: KebabReviewId
     prompt: Path | None = None
 
 

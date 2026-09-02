@@ -16,7 +16,6 @@ import msgspec
 
 from pinboard import __version__
 from pinboard.domain import decision_models, work_models
-from pinboard.domain.identifiers import ReviewId
 from pinboard.interfaces import cli_commands, transition_input
 
 
@@ -36,10 +35,6 @@ class _RawCliArguments(argparse.Namespace):
         super().__init__()
         self.command_selection = None
         self.selected_parser = None
-
-
-class DispatchArgumentError(Exception):
-    """A dispatch argument combination rejected before a command is constructed."""
 
 
 class _BriefSourcesArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -130,21 +125,11 @@ class _DispatchArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=True
     lease_id: cli_commands.StableLeaseId | None
     prompt: Path | None
     brief_review: Path | None
-    review_id: str | None
+    review_id: cli_commands.KebabReviewId | None
 
     def __post_init__(self) -> None:
-        if self.brief_review is None and self.review_id is not None:
-            raise ValueError("--review-id is only valid with --brief-review")
-
-
-def _required_dispatch_review_id(review_id: str | None) -> ReviewId:
-    if (
-        review_id is None
-        or not review_id
-        or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in review_id)
-    ):
-        raise DispatchArgumentError("--brief-review requires one kebab-case --review-id.")
-    return ReviewId(review_id)
+        if (self.brief_review is None) != (self.review_id is None):
+            raise ValueError("--brief-review and --review-id must be supplied together")
 
 
 class _AttemptAcquireArguments(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -241,6 +226,7 @@ def _decode_dispatch[RawT](values: dict[str, RawT]) -> cli_commands.DispatchComm
                 environment=arguments.environment,
                 prompt=arguments.prompt,
             )
+        assert arguments.review_id is not None
         return cli_commands.CoordinatorReviewedDispatchCommand(
             action_id=arguments.action_id,
             expected_revision=arguments.expected_revision,
@@ -249,7 +235,7 @@ def _decode_dispatch[RawT](values: dict[str, RawT]) -> cli_commands.DispatchComm
             environment=arguments.environment,
             brief_review=arguments.brief_review,
             prompt=arguments.prompt,
-            review_id=_required_dispatch_review_id(arguments.review_id),
+            review_id=arguments.review_id,
         )
     if arguments.brief_review is None:
         return cli_commands.CoordinationDispatchCommand(
@@ -261,6 +247,7 @@ def _decode_dispatch[RawT](values: dict[str, RawT]) -> cli_commands.DispatchComm
             environment=arguments.environment,
             prompt=arguments.prompt,
         )
+    assert arguments.review_id is not None
     return cli_commands.CoordinationReviewedDispatchCommand(
         action_id=arguments.action_id,
         expected_revision=arguments.expected_revision,
@@ -270,7 +257,7 @@ def _decode_dispatch[RawT](values: dict[str, RawT]) -> cli_commands.DispatchComm
         environment=arguments.environment,
         brief_review=arguments.brief_review,
         prompt=arguments.prompt,
-        review_id=_required_dispatch_review_id(arguments.review_id),
+        review_id=arguments.review_id,
     )
 
 

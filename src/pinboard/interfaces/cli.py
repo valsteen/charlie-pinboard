@@ -158,8 +158,3 @@ def main(argv: Sequence[str] | None = None) -> int:
     except WorkBriefError as error:
         print(str(error), file=sys.stderr)
         return 16
-    except cli_parser.DispatchArgumentError as error:
-        print(
-            f"{dispatch_brief.DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID.value}: {error}", file=sys.stderr
-        )
-        return 14
