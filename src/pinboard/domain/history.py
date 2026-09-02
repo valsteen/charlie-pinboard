@@ -12,25 +12,37 @@ from pinboard.domain.errors import (
 )
 from pinboard.domain.identifiers import ItemId
 
-type NonEmptyString = Annotated[str, msgspec.Meta(min_length=1)]
+type CanonicalLine = Annotated[str, msgspec.Meta(pattern=r"\A\S(?:[^\r\n]*\S)?\z")]
+type Identity = Annotated[str, msgspec.Meta(pattern=r"\A[a-z0-9]+(?:-[a-z0-9]+)*\z")]
 
 
 def _encoded_record(value: msgspec.Struct) -> bytes:
     return msgspec.json.encode(value, order="sorted") + b"\n"
 
 
-class WorkItemDefinitionRecord(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    acceptance_criteria: tuple[NonEmptyString, ...]
-    dependencies: tuple[NonEmptyString, ...]
-    effect: NonEmptyString
-    evidence: tuple[NonEmptyString, ...]
-    hypothesis: NonEmptyString
-    non_scope: tuple[NonEmptyString, ...]
-    objective: NonEmptyString
+class WorkItemDefinitionPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+    acceptance_criteria: Annotated[tuple[CanonicalLine, ...], msgspec.Meta(min_length=1)]
+    dependencies: tuple[Identity, ...]
+    effect: CanonicalLine
+    evidence: tuple[CanonicalLine, ...]
+    hypothesis: CanonicalLine
+    non_scope: tuple[CanonicalLine, ...]
+    objective: CanonicalLine
     schema: Literal["pinboard-work-item-definition/v1"]
-    scope: tuple[NonEmptyString, ...]
-    title: NonEmptyString
-    unlock: NonEmptyString
+    scope: Annotated[tuple[CanonicalLine, ...], msgspec.Meta(min_length=1)]
+    title: CanonicalLine
+    unlock: CanonicalLine
+
+    def __post_init__(self) -> None:
+        for field, values in (
+            ("acceptance_criteria", self.acceptance_criteria),
+            ("dependencies", self.dependencies),
+            ("evidence", self.evidence),
+            ("non_scope", self.non_scope),
+            ("scope", self.scope),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"{field} entries must be ordered and unique.")
 
 
 class TransitionReceiptOutcome(msgspec.Struct, frozen=True, forbid_unknown_fields=True, omit_defaults=True):
@@ -59,66 +71,36 @@ def encode_transition_receipt_outcome(
     )
 
 
-def _ordered_unique(values: tuple[str, ...], field: str, *, required: bool = False) -> DecisionFailure | None:
-    if required and not values:
-        return DecisionFailure(DecisionFailureCode.ITEM_DEFINITION_INVALID, f"{field} must be nonempty.")
-    if any(not value or value.strip() != value or "\n" in value or "\r" in value for value in values):
-        return DecisionFailure(
-            DecisionFailureCode.ITEM_DEFINITION_INVALID,
-            f"{field} entries must be nonempty canonical single-line values.",
-        )
-    if len(values) != len(set(values)):
-        return DecisionFailure(
-            DecisionFailureCode.ITEM_DEFINITION_INVALID,
-            f"{field} entries must be ordered and unique.",
-        )
-    return None
-
-
-def work_item_definition_record(
+def _work_item_definition_payload(
     definition: work_models.WorkItemDefinition,
-) -> DecisionResult[WorkItemDefinitionRecord]:
-    for field, value in (
-        ("title", definition.title),
-        ("objective", definition.objective),
-        ("hypothesis", definition.hypothesis),
-        ("effect", definition.effect),
-        ("unlock", definition.unlock),
-    ):
-        if not value or value.strip() != value or "\n" in value or "\r" in value:
-            return DecisionFailure(
-                DecisionFailureCode.ITEM_DEFINITION_INVALID,
-                f"{field} must be a nonempty canonical single-line value.",
-            )
-    for field, values, required in (
-        ("evidence", definition.evidence, False),
-        ("scope", definition.scope, True),
-        ("non_scope", definition.non_scope, False),
-        ("acceptance_criteria", definition.acceptance_criteria, True),
-        ("dependencies", tuple(definition.dependencies), False),
-    ):
-        if (failure := _ordered_unique(values, field, required=required)) is not None:
-            return failure
-    return WorkItemDefinitionRecord(
-        definition.acceptance_criteria,
-        tuple(definition.dependencies),
-        definition.effect,
-        definition.evidence,
-        definition.hypothesis,
-        definition.non_scope,
-        definition.objective,
-        "pinboard-work-item-definition/v1",
-        definition.scope,
-        definition.title,
-        definition.unlock,
-    )
+) -> DecisionResult[WorkItemDefinitionPayload]:
+    try:
+        return msgspec.convert(
+            {
+                "acceptance_criteria": definition.acceptance_criteria,
+                "dependencies": definition.dependencies,
+                "effect": definition.effect,
+                "evidence": definition.evidence,
+                "hypothesis": definition.hypothesis,
+                "non_scope": definition.non_scope,
+                "objective": definition.objective,
+                "schema": "pinboard-work-item-definition/v1",
+                "scope": definition.scope,
+                "title": definition.title,
+                "unlock": definition.unlock,
+            },
+            type=WorkItemDefinitionPayload,
+            strict=True,
+        )
+    except msgspec.ValidationError as error:
+        return DecisionFailure(DecisionFailureCode.ITEM_DEFINITION_INVALID, f"Definition is invalid: {error}")
 
 
 def work_item_definition_bytes(definition: work_models.WorkItemDefinition) -> DecisionResult[bytes]:
-    record = work_item_definition_record(definition)
-    if isinstance(record, DecisionFailure):
-        return record
-    return _encoded_record(record)
+    payload = _work_item_definition_payload(definition)
+    if isinstance(payload, DecisionFailure):
+        return payload
+    return _encoded_record(payload)
 
 
 def work_item_definition_digest(definition: work_models.WorkItemDefinition) -> DecisionResult[str]:
@@ -130,7 +112,7 @@ def work_item_definition_digest(definition: work_models.WorkItemDefinition) -> D
 
 def decode_work_item_definition(payload: bytes) -> DecisionResult[work_models.WorkItemDefinition]:
     try:
-        record = msgspec.json.decode(payload, type=WorkItemDefinitionRecord, strict=True)
+        record = msgspec.json.decode(payload, type=WorkItemDefinitionPayload, strict=True)
     except msgspec.DecodeError as error:
         return DecisionFailure(DecisionFailureCode.ITEM_DEFINITION_INVALID, f"Definition JSON is invalid: {error}")
     if _encoded_record(record) != payload:
@@ -138,7 +120,7 @@ def decode_work_item_definition(payload: bytes) -> DecisionResult[work_models.Wo
             DecisionFailureCode.ITEM_DEFINITION_INVALID,
             "Definition JSON must use the canonical encoding.",
         )
-    definition = work_models.WorkItemDefinition(
+    return work_models.WorkItemDefinition(
         record.title,
         record.objective,
         record.hypothesis,
@@ -150,7 +132,3 @@ def decode_work_item_definition(payload: bytes) -> DecisionResult[work_models.Wo
         record.effect,
         record.unlock,
     )
-    validated = work_item_definition_record(definition)
-    if isinstance(validated, DecisionFailure):
-        return validated
-    return definition

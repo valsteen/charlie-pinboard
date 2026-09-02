@@ -52,6 +52,17 @@ def revise_item_payload() -> JsonObject:
     }
 
 
+def revise_item_payload_with_definition(*, omit_schema: bool = False, **changes: JsonValue) -> JsonObject:
+    payload = revise_item_payload()
+    definition = payload["definition"]
+    assert isinstance(definition, dict)
+    changed_definition: JsonObject = {**definition, **changes}
+    if omit_schema:
+        del changed_definition["schema"]
+    payload["definition"] = changed_definition
+    return payload
+
+
 class TransitionInputTest(unittest.TestCase):
     def test_selected_action_decodes_directly_to_its_exact_command(self) -> None:
         submit = action(decision_models.SubmitReviewAction, AttemptId("attempt-1"))
@@ -159,6 +170,17 @@ class TransitionInputTest(unittest.TestCase):
             (action(decision_models.SubmitReviewAction, AttemptId("attempt-1")), {"candidate": 1}),
             (revise, revise_item_payload() | {"source_task": ""}),
             (revise, revise_item_payload() | {"reason": ""}),
+            (revise, revise_item_payload_with_definition(omit_schema=True)),
+            (revise, revise_item_payload_with_definition(title="Work A\n")),
+            (revise, revise_item_payload_with_definition(scope=[])),
+            (
+                revise,
+                revise_item_payload_with_definition(evidence=["same", "same"]),
+            ),
+            (
+                revise,
+                revise_item_payload_with_definition(dependencies=["Bad Identity"]),
+            ),
         )
         for selected_action, value in cases:
             with self.subTest(kind=selected_action.kind):

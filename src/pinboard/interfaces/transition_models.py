@@ -3,6 +3,7 @@ from typing import Annotated, Literal
 import msgspec
 
 from pinboard.domain import work_models
+from pinboard.domain.history import WorkItemDefinitionPayload
 
 type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
 type Identity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
@@ -76,20 +77,6 @@ class MergeProposalInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fiel
 class TransferCoordinatorInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     task_id: NonEmptyLine
     host_id: NonEmptyLine
-
-
-class WorkItemDefinitionPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    schema: Literal["pinboard-work-item-definition/v1"]
-    title: NonEmptyLine
-    objective: NonEmptyLine
-    hypothesis: NonEmptyLine
-    evidence: tuple[NonEmptyLine, ...]
-    scope: Annotated[tuple[NonEmptyLine, ...], msgspec.Meta(min_length=1)]
-    non_scope: tuple[NonEmptyLine, ...]
-    acceptance_criteria: Annotated[tuple[NonEmptyLine, ...], msgspec.Meta(min_length=1)]
-    dependencies: tuple[Identity, ...]
-    effect: NonEmptyLine
-    unlock: NonEmptyLine
 
 
 class ReviseItemInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):

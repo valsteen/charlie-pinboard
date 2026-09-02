@@ -2,6 +2,9 @@ import hashlib
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
+from unittest.mock import patch
+
+import msgspec
 
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.decisions import available_actions, decide
@@ -52,26 +55,13 @@ class WorkItemDefinitionContractTest(unittest.TestCase):
             expect_success(work_item_definition_digest(definition())),
         )
 
-    def test_definition_rejects_empty_required_and_duplicate_ordered_fields(self) -> None:
-        cases = (
-            (replace(definition(), title=""), "title must be a nonempty canonical single-line value."),
-            (replace(definition(), scope=()), "scope must be nonempty."),
-            (
-                replace(definition(), evidence=("same", "same")),
-                "evidence entries must be ordered and unique.",
-            ),
-            (
-                replace(definition(), dependencies=(ItemId("same"), ItemId("same"))),
-                "dependencies entries must be ordered and unique.",
-            ),
-        )
-        for candidate, message in cases:
-            with self.subTest(message=message):
-                result = work_item_definition_bytes(candidate)
-                self.assertEqual(
-                    DecisionFailure(DecisionFailureCode.ITEM_DEFINITION_INVALID, message),
-                    result,
-                )
+    def test_outbound_conversion_failure_maps_to_definition_invalid(self) -> None:
+        with patch("pinboard.domain.history.msgspec.convert", side_effect=msgspec.ValidationError("invalid")):
+            result = work_item_definition_bytes(definition())
+
+        self.assertIsInstance(result, DecisionFailure)
+        assert isinstance(result, DecisionFailure)
+        self.assertEqual(DecisionFailureCode.ITEM_DEFINITION_INVALID, result.code)
 
     def test_empty_evidence_non_scope_and_dependencies_are_explicitly_valid(self) -> None:
         sparse = replace(definition(), evidence=(), non_scope=(), dependencies=())
