@@ -71,18 +71,21 @@ class QueryFailure:
 type QueryResult[Value] = Value | QueryFailure
 
 
-class DependencyReason(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+@dataclass(frozen=True, slots=True)
+class DependencyReason:
     item_id: str
     reason: str
 
 
-class ReviewFlag(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+@dataclass(frozen=True, slots=True)
+class ReviewFlag:
     kind: work_models.ProposalRelationKind
     related_item: str | None
     reason: str
 
 
-class OverviewItem(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+@dataclass(frozen=True, slots=True)
+class OverviewItem:
     item_id: str
     label: str
     state: work_models.WorkState
@@ -98,7 +101,8 @@ class OverviewItem(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     preparation: PreparationStatusView | None = None
 
 
-class WorkOverview(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
+@dataclass(frozen=True, slots=True)
+class WorkOverview:
     schema: str
     authority: str
     revision: str
@@ -109,30 +113,34 @@ class WorkOverview(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     immediate_options: tuple[str, ...]
 
 
-class ParallelReason(msgspec.Struct, frozen=True):
+@dataclass(frozen=True, slots=True)
+class ParallelReason:
     code: ParallelReasonCode
     message: str
 
 
-class LaunchableParallelItem(msgspec.Struct, frozen=True):
+@dataclass(frozen=True, slots=True)
+class LaunchableParallelItem:
     item_id: str
     label: str
     state: work_models.WorkState
     attempt_id: str | None
 
 
-class ExcludedParallelItem(msgspec.Struct, frozen=True):
+@dataclass(frozen=True, slots=True)
+class ExcludedParallelItem:
     item_id: str
     label: str
     state: work_models.WorkState
     attempt_id: str | None
-    reasons: Annotated[tuple[ParallelReason, ...], msgspec.Meta(min_length=1)]
+    reasons: tuple[ParallelReason, ...]
 
 
 type ParallelItem = LaunchableParallelItem | ExcludedParallelItem
 
 
-class ParallelPreview(msgspec.Struct, frozen=True):
+@dataclass(frozen=True, slots=True)
+class ParallelPreview:
     schema: str
     revision: str
     selection: ParallelSelection
