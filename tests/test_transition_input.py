@@ -28,6 +28,30 @@ def expect_schema(value: bytes | TransitionInputFailure) -> bytes:
     return value
 
 
+def revise_item_payload() -> JsonObject:
+    return {
+        "schema": "pinboard-item-revision/v1",
+        "item_id": "work-a",
+        "expected_revision": 1,
+        "expected_digest": "a" * 64,
+        "source_task": "owner-task",
+        "reason": "Clarify the accepted outcome.",
+        "definition": {
+            "schema": "pinboard-work-item-definition/v1",
+            "title": "Work A",
+            "objective": "Make the outcome explicit.",
+            "hypothesis": "Explicit outcomes reduce coordination mistakes.",
+            "evidence": [],
+            "scope": ["Record the outcome."],
+            "non_scope": [],
+            "acceptance_criteria": ["The outcome is queryable."],
+            "dependencies": [],
+            "effect": "The outcome is explicit.",
+            "unlock": "Coordination can continue.",
+        },
+    }
+
+
 class TransitionInputTest(unittest.TestCase):
     def test_selected_action_decodes_directly_to_its_exact_command(self) -> None:
         submit = action(decision_models.SubmitReviewAction, AttemptId("attempt-1"))
@@ -108,6 +132,7 @@ class TransitionInputTest(unittest.TestCase):
         )
 
     def test_invalid_closed_choices_report_native_paths(self) -> None:
+        revise = action(decision_models.ReviseItemAction, ItemId("work-a"))
         cases: tuple[tuple[decision_models.Action, JsonObject], ...] = (
             (
                 action(decision_models.ActivateAction, ItemId("item-1")),
@@ -132,6 +157,8 @@ class TransitionInputTest(unittest.TestCase):
                 {"candidate": "candidate", "evidence": "accepted", "unexpected": True},
             ),
             (action(decision_models.SubmitReviewAction, AttemptId("attempt-1")), {"candidate": 1}),
+            (revise, revise_item_payload() | {"source_task": ""}),
+            (revise, revise_item_payload() | {"reason": ""}),
         )
         for selected_action, value in cases:
             with self.subTest(kind=selected_action.kind):
@@ -144,37 +171,6 @@ class TransitionInputTest(unittest.TestCase):
         self.assertIsInstance(advisory, TransitionInputFailure)
         assert isinstance(advisory, TransitionInputFailure)
         self.assertEqual(DecisionFailureCode.ACTION_NOT_MUTATING, advisory.code)
-
-    def test_revise_item_rejects_each_empty_boundary_field(self) -> None:
-        selected_action = action(decision_models.ReviseItemAction, ItemId("work-a"))
-        payload: JsonObject = {
-            "schema": "pinboard-item-revision/v1",
-            "item_id": "work-a",
-            "expected_revision": 1,
-            "expected_digest": "a" * 64,
-            "source_task": "owner-task",
-            "reason": "Clarify the accepted outcome.",
-            "definition": {
-                "schema": "pinboard-work-item-definition/v1",
-                "title": "Work A",
-                "objective": "Make the outcome explicit.",
-                "hypothesis": "Explicit outcomes reduce coordination mistakes.",
-                "evidence": [],
-                "scope": ["Record the outcome."],
-                "non_scope": [],
-                "acceptance_criteria": ["The outcome is queryable."],
-                "dependencies": [],
-                "effect": "The outcome is explicit.",
-                "unlock": "Coordination can continue.",
-            },
-        }
-
-        for field in ("source_task", "reason"):
-            with self.subTest(field=field):
-                rejected = parse_transition_command(selected_action, json.dumps(payload | {field: ""}))
-                self.assertIsInstance(rejected, TransitionInputFailure)
-                assert isinstance(rejected, TransitionInputFailure)
-                self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
     def test_every_current_kind_decodes_and_has_a_schema(self) -> None:
         cases: tuple[tuple[decision_models.Action, JsonObject], ...] = (
@@ -231,27 +227,7 @@ class TransitionInputTest(unittest.TestCase):
             (action(decision_models.ReturnProposalAction, ProposalId("proposal-1")), {"reason": "more evidence"}),
             (
                 action(decision_models.ReviseItemAction, ItemId("work-a")),
-                {
-                    "schema": "pinboard-item-revision/v1",
-                    "item_id": "work-a",
-                    "expected_revision": 1,
-                    "expected_digest": "a" * 64,
-                    "source_task": "owner-task",
-                    "reason": "Clarify the accepted outcome.",
-                    "definition": {
-                        "schema": "pinboard-work-item-definition/v1",
-                        "title": "Work A",
-                        "objective": "Make the outcome explicit.",
-                        "hypothesis": "Explicit outcomes reduce coordination mistakes.",
-                        "evidence": [],
-                        "scope": ["Record the outcome."],
-                        "non_scope": [],
-                        "acceptance_criteria": ["The outcome is queryable."],
-                        "dependencies": [],
-                        "effect": "The outcome is explicit.",
-                        "unlock": "Coordination can continue.",
-                    },
-                },
+                revise_item_payload(),
             ),
             (action(decision_models.SubmitReviewAction, AttemptId("attempt-1")), {"candidate": "candidate"}),
             (

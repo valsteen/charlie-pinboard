@@ -362,8 +362,6 @@ class CliTest(unittest.TestCase):
         *,
         objective: str | None = None,
         dependencies: tuple[ItemId, ...] | None = None,
-        source_task: str = "owner-task",
-        reason: str = "Clarify the observable outcome.",
     ) -> Path:
         path.write_text(
             json.dumps(
@@ -372,8 +370,8 @@ class CliTest(unittest.TestCase):
                     "item_id": item_id,
                     "expected_revision": revision,
                     "expected_digest": digest,
-                    "source_task": source_task,
-                    "reason": reason,
+                    "source_task": "owner-task",
+                    "reason": "Clarify the observable outcome.",
                     "definition": {
                         "schema": "pinboard-work-item-definition/v1",
                         "title": definition.title,
@@ -544,7 +542,6 @@ class CliTest(unittest.TestCase):
             objective="Make the state explicit and observable.",
             dependencies=(ItemId("intake-work"),),
         )
-
         value = self.run_json_cli(
             "--project-root",
             str(project),
@@ -623,61 +620,6 @@ class CliTest(unittest.TestCase):
         )
         self.assertIsNone(second_page["next_before_revision"])
         self.assertEqual(1, self.json_object(self.json_list(second_page["revisions"])[0])["revision"])
-
-    def test_item_revise_rejects_empty_audit_fields_without_mutation(self) -> None:
-        project, work, store = self.initialized_state(complete_sqlite_state())
-        common = ("--project-root", str(project), "--work-root", str(work))
-        rebuild_result, _rebuild_stdout, rebuild_stderr = self.run_cli(*common, "views", "rebuild")
-        self.assertEqual(0, rebuild_result, rebuild_stderr)
-        definition, digest = test_definition(ItemId("work-a"))
-        before = store.snapshot()
-        views_root = work / "views"
-        before_views = tuple(
-            (path.relative_to(views_root), path.read_bytes())
-            for path in sorted(views_root.rglob("*"))
-            if path.is_file()
-        )
-
-        cases = (
-            ("source_task", "", "Clarify the observable outcome."),
-            ("reason", "owner-task", ""),
-        )
-        for field, source_task, reason in cases:
-            payload = self.write_item_revision(
-                project / f"empty-{field}.json",
-                ItemId("work-a"),
-                1,
-                digest,
-                definition,
-                source_task=source_task,
-                reason=reason,
-            )
-
-            result, stdout, stderr = self.run_cli(
-                *common,
-                "item",
-                "revise",
-                "--file",
-                str(payload),
-                "--task-id",
-                "owner-task",
-                "--host-id",
-                "local",
-            )
-
-            with self.subTest(field=field):
-                self.assertEqual(11, result)
-                self.assertEqual("", stdout)
-                self.assertIn("TRANSITION_INPUT_INVALID", stderr)
-                self.assertEqual(before, store.snapshot())
-                self.assertEqual(
-                    before_views,
-                    tuple(
-                        (path.relative_to(views_root), path.read_bytes())
-                        for path in sorted(views_root.rglob("*"))
-                        if path.is_file()
-                    ),
-                )
 
     def test_item_revise_rejections_preserve_sqlite_and_generated_views(self) -> None:
         project, work, store = self.initialized_state(complete_sqlite_state())

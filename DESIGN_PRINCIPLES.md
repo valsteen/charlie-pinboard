@@ -71,6 +71,8 @@ Validate structured input once, in the boundary record that deserializes or conv
 
 Production code decodes or converts strict boundary records; it does not manually instantiate them as internal data-transfer objects. Decoder constraints are part of the boundary contract, so direct construction can create a value without proving the same facts. Use plain domain or application records for internal values after the boundary conversion.
 
+Test an invariant at the cheapest owner whose failure can disprove it. Do not mirror the same fact through unit, command, persistence, and presentation tests merely because a value crosses those layers. Another test earns its cost only when it proves distinct integration wiring, representation, effects, failure handling, concurrency, or compatibility; rely on existing coverage for unchanged downstream behavior.
+
 Apply this rule to signatures as well as implementations. Removing a defensive branch is incomplete while an optional parameter, broad input union, general authorization value, or fabricated test helper still admits the invalid combination. Preserve product distinctions with separate closed variants when their required data differs; do not recover the same distinction later with nullable fields or repeated validation.
 
 ## Prefer closed, direct Python

@@ -121,6 +121,7 @@ After deletion changes the graph, search for structures that used to distinguish
 - parallel tuples, dictionaries, projections, or field-by-field comparisons that reproduce an existing canonical typed value without owning a distinct external representation;
 - hand-written primitive validators or mapping walkers where one declarative boundary record can own conversion, constraints, unknown-field rejection, and error paths;
 - downstream validation that repeats a field-local or same-record invariant already guaranteed by the deserialization model; keep a later check only when it combines independent sources or current external state, and challenge direct construction or internal-DTO use of boundary records that bypasses the decode contract;
+- tests that repeat one fact at every layer without proving distinct wiring, representation, effects, failure handling, concurrency, or compatibility; keep the cheapest owning proof and rely on existing coverage for unchanged behavior instead of compensating for deleted code with test copies;
 - identical aliases, redundant alternative sets, and a discriminator that duplicates the variant hierarchy;
 - conditions whose alternatives now do the same thing, impossible branches, and commands that can only reject;
 - fields copied through layers without a current producer and consumer;
