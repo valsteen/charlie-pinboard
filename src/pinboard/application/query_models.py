@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Literal
 
 import msgspec
 
@@ -9,7 +9,6 @@ from pinboard.domain import work_models
 
 type ItemStatusSchema = Literal["pinboard-item-status/v1"]
 type ItemStatusAuthority = Literal["sqlite-v3"]
-type DecimalRevision = Annotated[str, msgspec.Meta(pattern=r"^[0-9]+$")]
 type PreparationStatus = Literal["active", "expired", "released", "revoked"]
 
 
@@ -33,7 +32,7 @@ class PreparationStatusView(msgspec.Struct, frozen=True, forbid_unknown_fields=T
 class ItemStatus(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     schema: ItemStatusSchema
     authority: ItemStatusAuthority
-    revision: DecimalRevision
+    revision: str
     item_id: str
     label: str
     state: stored_state.StoredWorkItemState
