@@ -4,10 +4,41 @@ from typing import Annotated, Literal
 
 import msgspec
 
+from pinboard.interfaces.errors import BriefSourceError, BriefSourceErrorCode
+
 type BriefSourceManifestSchema = Literal["pinboard-brief-sources/v1"]
 type BriefSourcePlanSchema = Literal["pinboard-brief-source-plan/v1"]
 type BriefSourceIdentity = Annotated[str, msgspec.Meta(pattern=r"\A[a-z0-9]+(?:-[a-z0-9]+)*\z")]
 type BriefSourceSelector = Annotated[str, msgspec.Meta(min_length=1, pattern=r"\A[^\n]+\z")]
+
+
+@dataclass(frozen=True, slots=True)
+class AuthoritySelector:
+    relative_path: PurePosixPath
+    heading: str | None
+
+
+def parse_authority_selector(value: str) -> AuthoritySelector:
+    relative, separator, heading = value.partition("#")
+    relative_path = PurePosixPath(relative)
+    if (
+        not relative
+        or "\x00" in value
+        or relative_path.is_absolute()
+        or ".." in relative_path.parts
+        or not relative_path.parts
+        or (separator and not heading)
+    ):
+        raise BriefSourceError(
+            BriefSourceErrorCode.MANIFEST_INVALID,
+            f"Authority selector '{value}' must name one project-relative file and optional literal heading.",
+        )
+    return AuthoritySelector(relative_path, heading if separator else None)
+
+
+def authority_selector(value: BriefSourceSelector) -> AuthoritySelector:
+    relative, separator, heading = value.partition("#")
+    return AuthoritySelector(PurePosixPath(relative), heading if separator else None)
 
 
 class BriefSourceRequest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -16,6 +47,7 @@ class BriefSourceRequest(msgspec.Struct, frozen=True, forbid_unknown_fields=True
     families: tuple[BriefSourceIdentity, ...]
 
     def __post_init__(self) -> None:
+        parse_authority_selector(self.selector)
         if not self.families or len(set(self.families)) != len(self.families):
             raise ValueError("families must contain one or more unique kebab-case values")
 
@@ -28,12 +60,6 @@ class BriefSourceManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=Tru
         authority_ids = tuple(source.authority_id for source in self.sources)
         if not authority_ids or len(set(authority_ids)) != len(authority_ids):
             raise ValueError("sources must contain one or more uniquely identified authorities")
-
-
-@dataclass(frozen=True, slots=True)
-class AuthoritySelector:
-    relative_path: PurePosixPath
-    heading: str | None
 
 
 @dataclass(frozen=True, slots=True)

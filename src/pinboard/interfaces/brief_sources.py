@@ -1,6 +1,6 @@
 import hashlib
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Final
 
 import msgspec
@@ -15,28 +15,11 @@ from pinboard.interfaces.brief_source_models import (
     BriefSourceSegment,
     PlannedBriefSource,
     SelectedBriefSource,
+    authority_selector,
 )
 from pinboard.interfaces.errors import BriefSourceError, BriefSourceErrorCode
 
 MARKDOWN_HEADING: Final = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
-
-
-def parse_authority_selector(value: str) -> AuthoritySelector:
-    relative, separator, heading = value.partition("#")
-    relative_path = PurePosixPath(relative)
-    if (
-        not relative
-        or "\x00" in value
-        or relative_path.is_absolute()
-        or ".." in relative_path.parts
-        or not relative_path.parts
-        or (separator and not heading)
-    ):
-        raise BriefSourceError(
-            BriefSourceErrorCode.MANIFEST_INVALID,
-            f"Authority selector '{value}' must name one project-relative file and optional literal heading.",
-        )
-    return AuthoritySelector(relative_path, heading if separator else None)
 
 
 def decode_brief_source_manifest(raw: bytes) -> BriefSourceManifest:
@@ -47,8 +30,6 @@ def decode_brief_source_manifest(raw: bytes) -> BriefSourceManifest:
             BriefSourceErrorCode.MANIFEST_INVALID,
             f"Cannot decode brief source manifest: {error}",
         ) from error
-    for source in manifest.sources:
-        parse_authority_selector(source.selector)
     return manifest
 
 
@@ -240,7 +221,7 @@ def plan_brief_sources(
             request,
             select_brief_source(
                 source_checkout_root,
-                parse_authority_selector(request.selector),
+                authority_selector(request.selector),
                 require_utf8=True,
             ),
         )

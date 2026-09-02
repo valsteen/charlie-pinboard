@@ -11,7 +11,8 @@ from pinboard.application.artifacts import WorkBriefIdentity
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId
-from pinboard.interfaces.brief_sources import parse_authority_selector, select_brief_source
+from pinboard.interfaces.brief_source_models import parse_authority_selector
+from pinboard.interfaces.brief_sources import select_brief_source
 from pinboard.interfaces.errors import BriefSourceError, WorkBriefError, WorkBriefErrorCode
 from pinboard.interfaces.work_brief_models import (
     AcceptanceCoverageOwner,
