@@ -5,10 +5,10 @@ import msgspec
 from pinboard.domain import work_models
 from pinboard.domain.history import WorkItemDefinitionPayload
 
-type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
-type Identity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
+type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"\A[^\n]+\z")]
+type Identity = Annotated[str, msgspec.Meta(pattern=r"\A[a-z0-9]+(?:-[a-z0-9]+)*\z")]
 type TimingPayload = Literal["must-now", "cheaper-now", "safe-to-defer"]
-type Sha256 = Annotated[str, msgspec.Meta(pattern=r"^[0-9a-f]{64}$")]
+type Sha256 = Annotated[str, msgspec.Meta(pattern=r"\A[0-9a-f]{64}\z")]
 type PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
 
 

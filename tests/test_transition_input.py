@@ -160,6 +160,14 @@ class TransitionInputTest(unittest.TestCase):
                 {"checkpoint": "Bad Checkpoint", "candidate": "candidate", "evidence": "accepted"},
             ),
             (
+                action(decision_models.AcceptCheckpointAction, AttemptId("attempt-1")),
+                {"checkpoint": "checkpoint-a\n", "candidate": "candidate", "evidence": "accepted"},
+            ),
+            (
+                action(decision_models.SubmitReviewAction, AttemptId("attempt-1")),
+                {"candidate": "candidate\n"},
+            ),
+            (
                 action(decision_models.AcceptReviewAndContinueAction, AttemptId("attempt-1")),
                 {"candidate": "candidate", "evidence": ""},
             ),
@@ -170,6 +178,7 @@ class TransitionInputTest(unittest.TestCase):
             (action(decision_models.SubmitReviewAction, AttemptId("attempt-1")), {"candidate": 1}),
             (revise, revise_item_payload() | {"source_task": ""}),
             (revise, revise_item_payload() | {"reason": ""}),
+            (revise, revise_item_payload() | {"expected_digest": "a" * 64 + "\n"}),
             (revise, revise_item_payload_with_definition(omit_schema=True)),
             (revise, revise_item_payload_with_definition(title="Work A\n")),
             (revise, revise_item_payload_with_definition(scope=[])),
