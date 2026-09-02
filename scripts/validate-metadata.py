@@ -1,18 +1,26 @@
-import re
 import tomllib
 from pathlib import Path
-from typing import Final
+from typing import Annotated, Final
 
 import msgspec
 import yaml
 
 ROOT: Final = Path(__file__).resolve().parent.parent
-SKILL_NAME: Final = re.compile(r"^name: ([a-z0-9]+(?:-[a-z0-9]+)*)$")
 PLUGIN_NAME: Final = "pinboard"
 EXPECTED_SKILLS: Final = frozenset({"pinboard", "pinboard-deliver", "pinboard-intake", "slop-cleanup"})
 EXPECTED_ENTRY_POINTS: Final = {
     "pinboard": "pinboard.interfaces.cli:main",
 }
+
+type SkillName = Annotated[
+    str,
+    msgspec.Meta(max_length=64, pattern=r"\A[a-z0-9]+(?:-[a-z0-9]+)*\z"),
+]
+type SkillDescription = Annotated[
+    str,
+    msgspec.Meta(max_length=1024, pattern=r"\A[^<>]*[^<>\s][^<>]*\z"),
+]
+type NonBlankText = Annotated[str, msgspec.Meta(pattern=r"\A[\s\S]*\S[\s\S]*\z")]
 
 
 class PluginAuthor(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -77,17 +85,17 @@ class MarketplaceManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=Tru
 
 
 class SkillFrontmatter(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    name: str
-    description: str
+    name: SkillName
+    description: SkillDescription
     license: str | None = None
     allowed_tools: str | tuple[str, ...] | None = msgspec.field(name="allowed-tools", default=None)
     metadata: dict[str, str | int | float | bool | tuple[str, ...] | None] | None = None
 
 
 class SkillInterface(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    display_name: str
-    short_description: str
-    default_prompt: str
+    display_name: NonBlankText
+    short_description: NonBlankText
+    default_prompt: NonBlankText
 
 
 class SkillAgent(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -133,19 +141,19 @@ def validate_project_metadata() -> None:
 def validate_marketplace() -> None:
     path = ROOT / ".agents" / "plugins" / "marketplace.json"
     value = msgspec.json.decode(path.read_bytes(), type=MarketplaceManifest)
-    expected = MarketplaceManifest(
-        name=PLUGIN_NAME,
-        interface=MarketplaceInterface(display_name="Pinboard"),
-        plugins=(
-            MarketplacePlugin(
-                name=PLUGIN_NAME,
-                source=PluginSource(source="local", path="."),
-                policy=PluginPolicy(installation="AVAILABLE", authentication="ON_INSTALL"),
-                category="Productivity",
-            ),
-        ),
-    )
-    if value != expected:
+    if len(value.plugins) != 1:
+        raise ValueError("marketplace metadata must install the repository-root plugin")
+    plugin = value.plugins[0]
+    if (
+        value.name,
+        value.interface.display_name,
+        plugin.name,
+        plugin.source.source,
+        plugin.source.path,
+        plugin.policy.installation,
+        plugin.policy.authentication,
+        plugin.category,
+    ) != (PLUGIN_NAME, "Pinboard", PLUGIN_NAME, "local", ".", "AVAILABLE", "ON_INSTALL", "Productivity"):
         raise ValueError("marketplace metadata must install the repository-root plugin")
 
 
@@ -156,24 +164,10 @@ def validate_skill(path: Path) -> None:
         raise ValueError(f"{path}: skill frontmatter is missing")
     end = lines.index("---", 1)
     frontmatter = decode_skill_frontmatter("\n".join(lines[1:end]), path)
-    match = SKILL_NAME.fullmatch(f"name: {frontmatter.name}")
-    if match is None or match.group(1) != path.parent.name or len(frontmatter.name) > 64:
+    if frontmatter.name != path.parent.name:
         raise ValueError(f"{path}: skill name must match its directory")
-    if not frontmatter.description.strip():
-        raise ValueError(f"{path}: skill description is empty")
-    if "<" in frontmatter.description or ">" in frontmatter.description or len(frontmatter.description) > 1024:
-        raise ValueError(f"{path}: skill description violates platform constraints")
     agent = path.parent / "agents" / "openai.yaml"
-    agent_value = decode_skill_agent(agent.read_text(encoding="utf-8"), agent)
-    if not all(
-        value.strip()
-        for value in (
-            agent_value.interface.display_name,
-            agent_value.interface.short_description,
-            agent_value.interface.default_prompt,
-        )
-    ):
-        raise ValueError(f"{agent}: interface fields must be non-empty")
+    decode_skill_agent(agent.read_text(encoding="utf-8"), agent)
 
 
 def main() -> None:
