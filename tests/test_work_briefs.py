@@ -109,23 +109,19 @@ class WorkBriefBoundaryTest(unittest.TestCase):
 
     def test_cross_references_are_rejected_at_the_typed_boundary(self) -> None:
         value = example_work_brief()
-        checkpoint = value.checkpoint
-        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
-        changed = replace(
-            value,
-            checkpoint=replace(
-                checkpoint,
-                coverage=(
-                    replace(
-                        checkpoint.coverage[0],
-                        owner=AcceptanceCoverageOwner(criterion=99),
-                    ),
-                ),
-            ),
-        )
+        payload = msgspec.json.decode(msgspec.json.encode(value))
+        if not isinstance(payload, dict):
+            self.fail("work brief JSON must be an object")
+        checkpoint = payload["checkpoint"]
+        if not isinstance(checkpoint, dict):
+            self.fail("work brief checkpoint JSON must be an object")
+        coverage = checkpoint["coverage"]
+        if not isinstance(coverage, list) or not isinstance(coverage[0], dict):
+            self.fail("work brief coverage JSON must be a non-empty array of objects")
+        coverage[0]["owner"] = {"disposition": "acceptance", "criterion": 99}
 
         with self.assertRaises(WorkBriefError) as raised:
-            canonical_work_brief_bytes(changed)
+            decode_work_brief(msgspec.json.encode(payload))
 
         self.assertEqual(WorkBriefErrorCode.BRIEF_INVALID, raised.exception.code)
 
@@ -269,6 +265,16 @@ class WorkBriefBoundaryTest(unittest.TestCase):
 
         decoded = decode_work_brief_review(msgspec.json.encode(review))
         validate_work_brief_review(decoded, value, reviewer_task_id=value.owner_task_id)
+        with self.assertRaises(WorkBriefError) as duplicate:
+            payload = msgspec.json.decode(msgspec.json.encode(review))
+            if not isinstance(payload, dict):
+                self.fail("work brief review JSON must be an object")
+            coverage_payload = payload["coverage"]
+            if not isinstance(coverage_payload, list):
+                self.fail("work brief review coverage JSON must be an array")
+            coverage_payload.append(coverage_payload[0])
+            decode_work_brief_review(msgspec.json.encode(payload))
+        self.assertEqual(WorkBriefErrorCode.REVIEW_INVALID, duplicate.exception.code)
         with self.assertRaises(WorkBriefError) as newline:
             payload = msgspec.json.decode(msgspec.json.encode(review))
             if not isinstance(payload, dict):
