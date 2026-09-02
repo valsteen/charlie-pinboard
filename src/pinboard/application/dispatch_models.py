@@ -7,7 +7,7 @@ import msgspec
 from pinboard.application.artifact_publication import ArtifactPublisher, ArtifactReader
 from pinboard.domain.errors import DecisionFailureCode
 
-type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"^[^\n]+$")]
+type NonEmptyLine = Annotated[str, msgspec.Meta(min_length=1, pattern=r"\A[^\n]+\z")]
 
 type DispatchSchema = Literal["pinboard-dispatch/v1"]
 

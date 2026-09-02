@@ -628,6 +628,14 @@ class DispatchTest(unittest.TestCase):
             read_dispatch_environment(path),
             DispatchErrorCode.DISPATCH_ENVIRONMENT_INVALID,
         )
+        path.write_text(
+            '{"schema":"pinboard-dispatch/v1","checkout":"x","branch":"b\\n","starting_revision":"r","permissions":[]}',
+            encoding="utf-8",
+        )
+        expect_dispatch_failure(
+            read_dispatch_environment(path),
+            DispatchErrorCode.DISPATCH_ENVIRONMENT_INVALID,
+        )
         missing_environment = project / "missing-environment.json"
         unreadable = expect_dispatch_failure(
             read_dispatch_environment(missing_environment),
