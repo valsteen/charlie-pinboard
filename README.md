@@ -103,6 +103,7 @@ The package targets Python 3.14 only. msgspec provides immutable records and str
 
 ```sh
 uv sync --locked
+uv run --locked python -m docs.how_it_works.render --check
 uv run --locked ruff format --check .
 uv run --locked ruff check .
 uv run --locked pyrefly check
@@ -110,7 +111,6 @@ uv run --locked pyrefly coverage check src --strict --fail-under 100
 uv run --locked coverage run -m unittest discover -v
 uv run --locked coverage report
 uv run --locked python scripts/validate-metadata.py
-uv run --locked python -m docs.how_it_works.render --check
 uv build --no-sources
 scripts/pinboard --help
 ```
