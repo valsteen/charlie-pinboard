@@ -4,8 +4,8 @@ from typing import Annotated, Literal
 import msgspec
 
 type ProposalSchema = Literal["pinboard-proposal/v1"]
-type ProposalIdentity = Annotated[str, msgspec.Meta(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")]
-type ProposalText = Annotated[str, msgspec.Meta(pattern=r"^[^\s|\n](?:[^|\n]*[^\s|\n])?$")]
+type ProposalIdentity = Annotated[str, msgspec.Meta(pattern=r"\A[a-z0-9]+(?:-[a-z0-9]+)*\z")]
+type ProposalText = Annotated[str, msgspec.Meta(pattern=r"\A[^\s|\n](?:[^|\n]*[^\s|\n])?\z")]
 
 
 def _proposal_datetime(value: str) -> datetime:
