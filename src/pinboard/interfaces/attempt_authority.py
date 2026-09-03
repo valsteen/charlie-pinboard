@@ -120,21 +120,32 @@ def _attempt_acquire_operation(
     )
 
 
-def _attempt_renew_operation(
+def _active_attempt_authority(
     state: stored_state.StoredWorkState,
-    command: cli_commands.AttemptRenewCommand,
+    attempt_id: AttemptId,
     now: datetime,
-) -> CommandResult[authority_models.RenewAttemptAuthority]:
+) -> CommandResult[work_models.CommandAttemptAuthority]:
     retained = next(
         (
             value
             for value in project_decision_snapshot(state, now).command_attempt_authorities
-            if value.attempt == command.attempt_id
+            if value.attempt == attempt_id
         ),
         None,
     )
     if retained is None:
         return CommandFailure(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
+    return retained
+
+
+def _attempt_renew_operation(
+    state: stored_state.StoredWorkState,
+    command: cli_commands.AttemptRenewCommand,
+    now: datetime,
+) -> CommandResult[authority_models.RenewAttemptAuthority]:
+    retained = _active_attempt_authority(state, command.attempt_id, now)
+    if isinstance(retained, CommandFailure):
+        return retained
     return authority_models.RenewAttemptAuthority(
         replace(retained, lease_id=command.lease_id, generation=command.generation),
         now,
@@ -147,16 +158,9 @@ def _attempt_release_operation(
     command: cli_commands.AttemptReleaseCommand,
     now: datetime,
 ) -> CommandResult[authority_models.ReleaseAttemptAuthority]:
-    retained = next(
-        (
-            value
-            for value in project_decision_snapshot(state, now).command_attempt_authorities
-            if value.attempt == command.attempt_id
-        ),
-        None,
-    )
-    if retained is None:
-        return CommandFailure(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
+    retained = _active_attempt_authority(state, command.attempt_id, now)
+    if isinstance(retained, CommandFailure):
+        return retained
     return authority_models.ReleaseAttemptAuthority(
         replace(retained, lease_id=command.lease_id, generation=command.generation),
         now,
