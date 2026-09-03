@@ -127,7 +127,8 @@ Use a reversible pilot before applying a new decomposition broadly:
 5. Stop if the extraction duplicates legality, adds dynamic indirection, or makes the effect contract harder to see.
 6. If it succeeds, apply the same ownership rule to every matching family.
 7. Recompute imports, callers, dead variants, tests, and documentation after each collapse.
-8. Repeat until a fresh pass finds no matching residue.
+8. Recount every affected closed family. Treat a one-member vocabulary or variant hierarchy as a cleanup candidate: replace it with the concrete value or result it now represents unless an independently owned external or persisted contract requires that exact singleton shape.
+9. Repeat until a fresh pass finds no matching residue.
 
 Stop when another fold would erase a product distinction, scatter one exhaustive decision, create a generic dumping ground, or add more conversion machinery than repeated ownership it removes.
 

@@ -33,6 +33,10 @@ class PythonMode(Enum):
     LEGACY = "legacy"
 
 
+class SingletonMode(Enum):
+    ONLY = "only"
+
+
 class Opened:
     pass
 
@@ -331,6 +335,13 @@ def test_helper() -> None:
             },
             duplicated_vocabularies,
         )
+        self.assertEqual(
+            ["src/models.py::SingletonMode"],
+            [
+                self.json_string(candidate["selector"])
+                for candidate in self.json_objects(candidates["singleton_closed_families"])
+            ],
+        )
         ambiguous_groups = {
             self.json_string(candidate["name"]): candidate
             for candidate in self.json_objects(candidates["ambiguous_zero_production_definitions"])
@@ -384,6 +395,13 @@ def test_helper() -> None:
         )
         self.assertEqual({"local", "remote"}, ast_families["Boundary.kind"])
         candidates = self.json_object(ast_report["candidates"])
+        self.assertEqual(
+            ["src/models.py::SingletonMode"],
+            [
+                self.json_string(candidate["selector"])
+                for candidate in self.json_objects(candidates["singleton_closed_families"])
+            ],
+        )
         declaration_only_atoms = {
             (
                 self.json_string(candidate["family"]),
