@@ -45,6 +45,10 @@ from pinboard.domain.proposal_models import (
 )
 
 
+def _next_history_id(state: stored_state.StoredWorkState) -> HistoryId:
+    return HistoryId(1 + max((int(value.history_id) for value in state.transition_receipts), default=0))
+
+
 def change_coordination_authority(
     store: WorkStore,
     operation: authority_models.CoordinationAuthorityOperation,
@@ -93,7 +97,7 @@ def change_coordination_authority(
         )
         receipt = MutationReceipt(
             transition,
-            HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
+            _next_history_id(before),
             before.lifecycle.project.revision + 1,
             stored_state.TransitionHistoryActionKind.CONTINUE,
             HistorySubjectId("ledger"),
@@ -220,7 +224,7 @@ def change_attempt_authority(
         )
         receipt = MutationReceipt(
             transition,
-            HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
+            _next_history_id(before),
             before.lifecycle.project.revision + 1,
             stored_state.TransitionHistoryActionKind.CONTINUE,
             HistorySubjectId(attempt_id),
@@ -316,7 +320,7 @@ def change_preparation_authority(
         )
         receipt = MutationReceipt(
             transition,
-            HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
+            _next_history_id(before),
             before.lifecycle.project.revision + 1,
             stored_state.TransitionHistoryActionKind.CONTINUE,
             HistorySubjectId(item_id),
@@ -360,7 +364,7 @@ def create_proposal(
         )
         receipt = MutationReceipt(
             transition,
-            HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
+            _next_history_id(before),
             project.revision + 1,
             stored_state.TransitionHistoryActionKind.INSPECT,
             HistorySubjectId(intake.proposal_id),
