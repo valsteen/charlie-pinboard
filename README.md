@@ -106,10 +106,10 @@ The package targets Python 3.14 only. msgspec provides immutable records and str
 jscpd is the sole non-Python development tool. It requires Node.js 18 or newer and npm, but no global package installation. Install the pinned native binary into this repository's ignored `node_modules/` directory:
 
 ```sh
-npm ci
+npm ci --prefer-offline --no-audit --no-fund
 ```
 
-The checked-in `package-lock.json` makes that installation repeatable. `npm run duplication` performs an aggressive local scan at four lines and 40 tokens; its matches are prompts for judgment, not failures to eliminate mechanically. CI uses calmer eight-line and 60-token limits, rejects every clone that is new relative to `origin/main`, and also enforces a 0.7% ceiling set just above the accepted 0.656% baseline. Lower the ceiling when later cleanup reduces that result rather than raising it to accommodate new duplication.
+The checked-in `package-lock.json` makes that installation repeatable. The install prefers npm's local cache and skips registry audit and funding requests that are unrelated to this development-only binary. `npm run duplication` performs an aggressive local scan at four lines and 40 tokens; its matches are prompts for judgment, not failures to eliminate mechanically. CI uses calmer eight-line and 60-token limits, rejects every clone that is new relative to `origin/main`, and also enforces a 0.7% ceiling set just above the accepted 0.6% baseline. Lower the ceiling when later cleanup reduces that result rather than raising it to accommodate new duplication.
 
 ```sh
 uv sync --locked
