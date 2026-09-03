@@ -20,12 +20,11 @@ from pinboard.application.artifacts import (
     WorkBriefIdentity,
 )
 from pinboard.application.service import change_coordination_authority, execute, execute_checkpoint_acceptance
-from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import AcquireCoordinationAuthority, ReleaseCoordinationAuthority
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import ActionId, HostId, LeaseId, TaskId
-from pinboard.interfaces import action_selection, cli_commands, coordination_authority, work_views
+from pinboard.interfaces import action_selection, cli_commands, coordination_authority, transition_models, work_views
 from pinboard.interfaces.cli_output import write_json
 from pinboard.interfaces.errors import (
     CommandFailure,
@@ -33,7 +32,6 @@ from pinboard.interfaces.errors import (
     TransitionInputFailure,
 )
 from pinboard.interfaces.transition_input import parse_item_revision_input, parse_transition_command
-from pinboard.interfaces.transition_models import CloseView, CoordinatedTransitionView, ItemRevisionView
 from pinboard.interfaces.work_briefs import read_transition_work_brief_identity
 
 
@@ -62,7 +60,7 @@ def close(roots: cli_commands.ResolvedRoots, command: cli_commands.CloseCommand)
     )
     if isinstance(revision, CommandFailure):
         return revision
-    value = CloseView(command.item_id, command.outcome.value, command.reason, revision)
+    value = transition_models.CloseView(command.item_id, command.outcome.value, command.reason, revision)
     if command.json:
         write_json(value)
     else:
@@ -90,7 +88,9 @@ def revise_item(roots: cli_commands.ResolvedRoots, command: cli_commands.ItemRev
     )
     if isinstance(project_revision, CommandFailure):
         return project_revision
-    value = ItemRevisionView(str(parsed.item_id), parsed.expected_revision + 1, digest, project_revision)
+    value = transition_models.ItemRevisionView(
+        str(parsed.item_id), parsed.expected_revision + 1, digest, project_revision
+    )
     if command.json:
         write_json(value)
     else:
@@ -259,7 +259,7 @@ def coordinated_transition(
     )
     if isinstance(transition_revision, CommandFailure):
         return transition_revision
-    value = CoordinatedTransitionView(command.action_id, transition_revision)
+    value = transition_models.CoordinatedTransitionView(command.action_id, transition_revision)
     if command.json:
         write_json(value)
     else:
@@ -278,7 +278,7 @@ def execute_borrowed_coordination(
     artifacts = ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work))
     state = store.snapshot()
     now = datetime.now(UTC)
-    acquire = AcquireCoordinationAuthority(
+    acquire = authority_models.AcquireCoordinationAuthority(
         state.lifecycle.project.host_epoch,
         task_id,
         host_id,
@@ -304,7 +304,7 @@ def execute_borrowed_coordination(
         try:
             released = change_coordination_authority(
                 store,
-                ReleaseCoordinationAuthority(borrowed, datetime.now(UTC)),
+                authority_models.ReleaseCoordinationAuthority(borrowed, datetime.now(UTC)),
             )
         except Exception as cleanup_error:  # noqa: BLE001 - cleanup must preserve any primary infrastructure failure
             transition_error.add_note(
@@ -319,7 +319,7 @@ def execute_borrowed_coordination(
     try:
         released = change_coordination_authority(
             store,
-            ReleaseCoordinationAuthority(borrowed, datetime.now(UTC)),
+            authority_models.ReleaseCoordinationAuthority(borrowed, datetime.now(UTC)),
         )
     except Exception as cleanup_error:
         if isinstance(transition_result, CommandFailure):

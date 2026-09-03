@@ -3,8 +3,7 @@ from typing import assert_never
 
 from pinboard.application import query_models, stored_state
 from pinboard.application.ports import WorkStore
-from pinboard.domain import work_models
-from pinboard.domain.authority_models import AttemptLeaseStatus, PreparationLeaseStatus
+from pinboard.domain import authority_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import ItemId
 
@@ -46,13 +45,13 @@ def _preparation_status(
     if anchor is None:
         return None
     match lease.state:
-        case PreparationLeaseStatus.ACTIVE:
+        case authority_models.PreparationLeaseStatus.ACTIVE:
             status: query_models.PreparationStatus = "expired" if lease.expires_at <= now else "active"
-        case PreparationLeaseStatus.EXPIRED:
+        case authority_models.PreparationLeaseStatus.EXPIRED:
             status = "expired"
-        case PreparationLeaseStatus.RELEASED:
+        case authority_models.PreparationLeaseStatus.RELEASED:
             status = "released"
-        case PreparationLeaseStatus.REVOKED:
+        case authority_models.PreparationLeaseStatus.REVOKED:
             status = "revoked"
         case _ as unreachable:
             assert_never(unreachable)
@@ -334,7 +333,7 @@ def _parallel_reasons(
     )
     if (
         preparation is not None
-        and preparation.state == PreparationLeaseStatus.ACTIVE
+        and preparation.state == authority_models.PreparationLeaseStatus.ACTIVE
         and preparation.expires_at > current
     ):
         return (
@@ -368,7 +367,11 @@ def _parallel_reasons(
             (candidate for candidate in state.authority.attempt_leases if candidate.attempt_id == attempt.attempt_id),
             None,
         )
-        if lease is not None and lease.state == AttemptLeaseStatus.ACTIVE and current < lease.expires_at:
+        if (
+            lease is not None
+            and lease.state == authority_models.AttemptLeaseStatus.ACTIVE
+            and current < lease.expires_at
+        ):
             return (
                 query_models.ParallelReason(
                     query_models.ParallelReasonCode.ATTEMPT_OWNED,

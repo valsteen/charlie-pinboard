@@ -11,8 +11,7 @@ from datetime import datetime
 from pinboard.adapters.sqlite.database import decode_row, require_one_changed_row, stale_write
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.application import stored_state
-from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import AttemptAuthorityDecision, PreparationAuthorityDecision
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.errors import DecisionFailure
 
 
@@ -233,7 +232,7 @@ def write_coordination_authority(
 
 
 def write_attempt_authority(
-    connection: sqlite3.Connection, decision: AttemptAuthorityDecision
+    connection: sqlite3.Connection, decision: authority_models.AttemptAuthorityDecision
 ) -> DecisionFailure | None:
     after = decision.current_after
     retained_counter = connection.execute(
@@ -333,7 +332,7 @@ def write_attempt_authority(
 
 
 def write_preparation_authority(
-    connection: sqlite3.Connection, decision: PreparationAuthorityDecision
+    connection: sqlite3.Connection, decision: authority_models.PreparationAuthorityDecision
 ) -> DecisionFailure | None:
     after = decision.current_after
     retained_counter = connection.execute(

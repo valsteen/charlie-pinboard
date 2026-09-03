@@ -2,12 +2,7 @@ from dataclasses import dataclass
 
 from pinboard.application import stored_state
 from pinboard.application.artifacts import EvidenceArtifactRef, ResultArtifactRef
-from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import (
-    AttemptAuthorityDecision,
-    CoordinationAuthorityDecision,
-    PreparationAuthorityDecision,
-)
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.identifiers import ArtifactRefId, HistoryId, HistorySubjectId, HostId, TaskId
 from pinboard.domain.proposal_models import ProposalCreationDecision
 
@@ -71,7 +66,7 @@ class CoordinationAuthorityMutation:
     """Persists an authorized coordination change without deciding its legality."""
 
     receipt: MutationReceipt
-    decision: CoordinationAuthorityDecision
+    decision: authority_models.CoordinationAuthorityDecision
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +74,7 @@ class AttemptAuthorityMutation:
     """Persists an authorized attempt-authority change without deciding its legality."""
 
     receipt: MutationReceipt
-    decision: AttemptAuthorityDecision
+    decision: authority_models.AttemptAuthorityDecision
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +82,7 @@ class PreparationAuthorityMutation:
     """Persists an authorized preparation-authority change without deciding its legality."""
 
     receipt: MutationReceipt
-    decision: PreparationAuthorityDecision
+    decision: authority_models.PreparationAuthorityDecision
 
 
 type StoredStateMutation = (

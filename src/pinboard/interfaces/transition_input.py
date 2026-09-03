@@ -13,45 +13,28 @@ from pinboard.domain.identifiers import (
     ItemId,
     TaskId,
 )
+from pinboard.interfaces import transition_models
 from pinboard.interfaces.errors import TransitionInputFailure, TransitionInputResult
-from pinboard.interfaces.transition_models import (
-    AcceptCheckpointInputPayload,
-    AcceptProposalInputPayload,
-    AcceptReviewAndContinueInputPayload,
-    BlockInputPayload,
-    CloseInputPayload,
-    DeferInputPayload,
-    EvidenceInputPayload,
-    InputModel,
-    InputPayload,
-    MergeProposalInputPayload,
-    ReasonInputPayload,
-    ResumeInputPayload,
-    ReviseItemInputPayload,
-    StoredActivateInputPayload,
-    SubmitReviewInputPayload,
-    TransferCoordinatorInputPayload,
-)
 
 
-def _input_model_or_none(kind: decision_models.ActionKind) -> InputModel | None:  # noqa: C901, PLR0912
+def _input_model_or_none(kind: decision_models.ActionKind) -> transition_models.InputModel | None:  # noqa: C901, PLR0912
     match kind:
         case decision_models.ActionKind.ACCEPT_CHECKPOINT:
-            return AcceptCheckpointInputPayload
+            return transition_models.AcceptCheckpointInputPayload
         case decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE:
-            return AcceptReviewAndContinueInputPayload
+            return transition_models.AcceptReviewAndContinueInputPayload
         case decision_models.ActionKind.ACCEPT_PROPOSAL:
-            return AcceptProposalInputPayload
+            return transition_models.AcceptProposalInputPayload
         case decision_models.ActionKind.ACTIVATE:
-            return StoredActivateInputPayload
+            return transition_models.StoredActivateInputPayload
         case decision_models.ActionKind.BLOCK | decision_models.ActionKind.BLOCK_ITEM:
-            return BlockInputPayload
+            return transition_models.BlockInputPayload
         case decision_models.ActionKind.CLOSE:
-            return CloseInputPayload
+            return transition_models.CloseInputPayload
         case decision_models.ActionKind.COMPLETE | decision_models.ActionKind.REOPEN:
-            return EvidenceInputPayload
+            return transition_models.EvidenceInputPayload
         case decision_models.ActionKind.DEFER:
-            return DeferInputPayload
+            return transition_models.DeferInputPayload
         case (
             decision_models.ActionKind.MARK_READY
             | decision_models.ActionKind.PAUSE
@@ -59,17 +42,17 @@ def _input_model_or_none(kind: decision_models.ActionKind) -> InputModel | None:
             | decision_models.ActionKind.RETURN_FOR_CORRECTION
             | decision_models.ActionKind.RETURN_PROPOSAL
         ):
-            return ReasonInputPayload
+            return transition_models.ReasonInputPayload
         case decision_models.ActionKind.MERGE_PROPOSAL:
-            return MergeProposalInputPayload
+            return transition_models.MergeProposalInputPayload
         case decision_models.ActionKind.RESUME:
-            return ResumeInputPayload
+            return transition_models.ResumeInputPayload
         case decision_models.ActionKind.REVISE_ITEM:
-            return ReviseItemInputPayload
+            return transition_models.ReviseItemInputPayload
         case decision_models.ActionKind.SUBMIT_REVIEW:
-            return SubmitReviewInputPayload
+            return transition_models.SubmitReviewInputPayload
         case decision_models.ActionKind.TRANSFER_COORDINATOR:
-            return TransferCoordinatorInputPayload
+            return transition_models.TransferCoordinatorInputPayload
         case (
             decision_models.ActionKind.CONTINUE
             | decision_models.ActionKind.DISPATCH
@@ -84,7 +67,7 @@ def _input_model_or_none(kind: decision_models.ActionKind) -> InputModel | None:
 INPUT_CONTRACT_ACTION_KINDS: Final = tuple(kind.value for kind in decision_models.ActionKind)
 
 
-def _input_model(kind: decision_models.ActionKind) -> TransitionInputResult[InputModel]:
+def _input_model(kind: decision_models.ActionKind) -> TransitionInputResult[transition_models.InputModel]:
     model = _input_model_or_none(kind)
     if model is None:
         return TransitionInputFailure(
@@ -94,7 +77,7 @@ def _input_model(kind: decision_models.ActionKind) -> TransitionInputResult[Inpu
     return model
 
 
-def _decode[PayloadT: InputPayload](
+def _decode[PayloadT: transition_models.InputPayload](
     data: bytes | str,
     model: type[PayloadT],
 ) -> TransitionInputResult[PayloadT]:
@@ -107,7 +90,7 @@ def _decode[PayloadT: InputPayload](
         )
 
 
-def _revise_item_input(payload: ReviseItemInputPayload) -> work_models.ReviseItemDefinitionInput:
+def _revise_item_input(payload: transition_models.ReviseItemInputPayload) -> work_models.ReviseItemDefinitionInput:
     definition = payload.definition
     return work_models.ReviseItemDefinitionInput(
         ItemId(payload.item_id),
@@ -131,7 +114,7 @@ def _revise_item_input(payload: ReviseItemInputPayload) -> work_models.ReviseIte
 
 
 def parse_item_revision_input(data: bytes | str) -> TransitionInputResult[work_models.ReviseItemDefinitionInput]:
-    if isinstance(payload := _decode(data, ReviseItemInputPayload), TransitionInputFailure):
+    if isinstance(payload := _decode(data, transition_models.ReviseItemInputPayload), TransitionInputFailure):
         return payload
     return _revise_item_input(payload)
 
@@ -142,7 +125,9 @@ def parse_transition_command(  # noqa: C901, PLR0912
 ) -> TransitionInputResult[decision_models.TransitionCommand]:
     match action:
         case decision_models.AcceptCheckpointAction():
-            if isinstance(payload := _decode(data, AcceptCheckpointInputPayload), TransitionInputFailure):
+            if isinstance(
+                payload := _decode(data, transition_models.AcceptCheckpointInputPayload), TransitionInputFailure
+            ):
                 return payload
             return action.command(
                 work_models.AcceptCheckpointInput(
@@ -150,13 +135,17 @@ def parse_transition_command(  # noqa: C901, PLR0912
                 )
             )
         case decision_models.AcceptReviewAndContinueAction():
-            if isinstance(payload := _decode(data, AcceptReviewAndContinueInputPayload), TransitionInputFailure):
+            if isinstance(
+                payload := _decode(data, transition_models.AcceptReviewAndContinueInputPayload), TransitionInputFailure
+            ):
                 return payload
             return action.command(
                 work_models.AcceptReviewAndContinueInput(CandidateId(payload.candidate), payload.evidence)
             )
         case decision_models.AcceptProposalAction():
-            if isinstance(payload := _decode(data, AcceptProposalInputPayload), TransitionInputFailure):
+            if isinstance(
+                payload := _decode(data, transition_models.AcceptProposalInputPayload), TransitionInputFailure
+            ):
                 return payload
             return action.command(
                 work_models.AcceptProposalInput(
@@ -168,7 +157,9 @@ def parse_transition_command(  # noqa: C901, PLR0912
                 )
             )
         case decision_models.ActivateAction():
-            if isinstance(payload := _decode(data, StoredActivateInputPayload), TransitionInputFailure):
+            if isinstance(
+                payload := _decode(data, transition_models.StoredActivateInputPayload), TransitionInputFailure
+            ):
                 return payload
             return action.command(
                 work_models.ActivateInput(
@@ -180,21 +171,21 @@ def parse_transition_command(  # noqa: C901, PLR0912
                 )
             )
         case decision_models.BlockAttemptAction() | decision_models.BlockItemAction():
-            if isinstance(payload := _decode(data, BlockInputPayload), TransitionInputFailure):
+            if isinstance(payload := _decode(data, transition_models.BlockInputPayload), TransitionInputFailure):
                 return payload
             return action.command(
                 work_models.BlockInput(payload.reason, tuple(ItemId(value) for value in payload.depends_on))
             )
         case decision_models.CloseAction():
-            if isinstance(payload := _decode(data, CloseInputPayload), TransitionInputFailure):
+            if isinstance(payload := _decode(data, transition_models.CloseInputPayload), TransitionInputFailure):
                 return payload
             return action.command(work_models.CloseInput(payload.outcome, payload.reason))
         case decision_models.CompleteAction() | decision_models.ReopenAction():
-            if isinstance(payload := _decode(data, EvidenceInputPayload), TransitionInputFailure):
+            if isinstance(payload := _decode(data, transition_models.EvidenceInputPayload), TransitionInputFailure):
                 return payload
             return action.command(work_models.EvidenceInput(payload.evidence))
         case decision_models.DeferAction():
-            if isinstance(payload := _decode(data, DeferInputPayload), TransitionInputFailure):
+            if isinstance(payload := _decode(data, transition_models.DeferInputPayload), TransitionInputFailure):
                 return payload
             return action.command(work_models.DeferInput(work_models.Timing(payload.timing), payload.reopen_condition))
         case (
@@ -204,15 +195,17 @@ def parse_transition_command(  # noqa: C901, PLR0912
             | decision_models.ReturnForCorrectionAction()
             | decision_models.ReturnProposalAction()
         ):
-            if isinstance(payload := _decode(data, ReasonInputPayload), TransitionInputFailure):
+            if isinstance(payload := _decode(data, transition_models.ReasonInputPayload), TransitionInputFailure):
                 return payload
             return action.command(work_models.ReasonInput(payload.reason))
         case decision_models.MergeProposalAction():
-            if isinstance(payload := _decode(data, MergeProposalInputPayload), TransitionInputFailure):
+            if isinstance(
+                payload := _decode(data, transition_models.MergeProposalInputPayload), TransitionInputFailure
+            ):
                 return payload
             return action.command(work_models.MergeProposalInput(ItemId(payload.target)))
         case decision_models.ResumeAction():
-            if isinstance(payload := _decode(data, ResumeInputPayload), TransitionInputFailure):
+            if isinstance(payload := _decode(data, transition_models.ResumeInputPayload), TransitionInputFailure):
                 return payload
             return action.command(
                 work_models.ResumeInput(
@@ -220,15 +213,17 @@ def parse_transition_command(  # noqa: C901, PLR0912
                 )
             )
         case decision_models.ReviseItemAction():
-            if isinstance(payload := _decode(data, ReviseItemInputPayload), TransitionInputFailure):
+            if isinstance(payload := _decode(data, transition_models.ReviseItemInputPayload), TransitionInputFailure):
                 return payload
             return action.command(_revise_item_input(payload))
         case decision_models.SubmitReviewAction():
-            if isinstance(payload := _decode(data, SubmitReviewInputPayload), TransitionInputFailure):
+            if isinstance(payload := _decode(data, transition_models.SubmitReviewInputPayload), TransitionInputFailure):
                 return payload
             return action.command(work_models.SubmitReviewInput(CandidateId(payload.candidate)))
         case decision_models.TransferCoordinatorAction():
-            if isinstance(payload := _decode(data, TransferCoordinatorInputPayload), TransitionInputFailure):
+            if isinstance(
+                payload := _decode(data, transition_models.TransferCoordinatorInputPayload), TransitionInputFailure
+            ):
                 return payload
             return action.command(
                 work_models.TransferCoordinatorInput(TaskId(payload.task_id), HostId(payload.host_id))

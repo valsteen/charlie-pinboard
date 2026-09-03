@@ -26,8 +26,7 @@ from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.mutations import project_transition_mutation
-from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import AttemptLeaseStatus, PreparationLeaseStatus
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.decisions import available_actions as available_actions_outcome
 from pinboard.domain.decisions import decide as decision_outcome
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
@@ -96,7 +95,7 @@ class SQLiteStoreTest(unittest.TestCase):
             definition.digest,
             SQLITE_NOW,
             SQLITE_NOW + timedelta(minutes=5),
-            PreparationLeaseStatus.ACTIVE,
+            authority_models.PreparationLeaseStatus.ACTIVE,
         )
         authority = replace_dataclass(
             state.authority,
@@ -143,7 +142,7 @@ class SQLiteStoreTest(unittest.TestCase):
         )
         self._assert_state_rejected("active preparation for stale definition", revised_state)
 
-        inactive = replace_dataclass(lease, state=PreparationLeaseStatus.RELEASED)
+        inactive = replace_dataclass(lease, state=authority_models.PreparationLeaseStatus.RELEASED)
         _path, store = self._store(populated=False)
         initialize_store(
             store,
@@ -152,7 +151,9 @@ class SQLiteStoreTest(unittest.TestCase):
                 authority=replace_dataclass(authority, preparation_leases=(inactive,)),
             ),
         )
-        self.assertEqual(PreparationLeaseStatus.RELEASED, store.snapshot().authority.preparation_leases[0].state)
+        self.assertEqual(
+            authority_models.PreparationLeaseStatus.RELEASED, store.snapshot().authority.preparation_leases[0].state
+        )
 
     def test_schema_identity_initialization_and_reopen_contract(self) -> None:
         path, store = self._store()
@@ -881,7 +882,7 @@ class SQLiteStoreTest(unittest.TestCase):
             (attempt.state, attempt.candidate_revision, attempt.candidate_recorded_at),
         )
         self.assertEqual(4, completed.authority.attempt_counters[0].generation_high_water)
-        self.assertEqual(AttemptLeaseStatus.REVOKED, completed.authority.attempt_leases[0].state)
+        self.assertEqual(authority_models.AttemptLeaseStatus.REVOKED, completed.authority.attempt_leases[0].state)
         self.assertIsNone(completed.focus.item_id)
         self.assertIsNone(completed.focus.attempt_id)
 

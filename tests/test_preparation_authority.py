@@ -15,18 +15,8 @@ from pinboard.application import query_models, stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.queries import overview_from_state, preview_parallel
 from pinboard.application.service import change_preparation_authority, create_proposal
-from pinboard.domain import decision_models, work_models
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.authority_decisions import decide_preparation_authority
-from pinboard.domain.authority_models import (
-    AcquireInitialPreparationAuthority,
-    InactivePreparationAuthority,
-    PreparationLeaseAuthority,
-    PreparationLeaseStatus,
-    ReleasePreparationAuthority,
-    RenewPreparationAuthority,
-    RevokePreparationAuthority,
-    TransferPreparationAuthority,
-)
 from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.identifiers import HostId, ItemId, LeaseId, ProposalId, TaskId
 from pinboard.domain.proposal_models import CreateProposalOperation, ProposalIntake
@@ -47,7 +37,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         state: stored_state.StoredWorkState,
         *,
         expires_at: datetime = SQLITE_NOW + timedelta(minutes=1),
-    ) -> AcquireInitialPreparationAuthority:
+    ) -> authority_models.AcquireInitialPreparationAuthority:
         snapshot = project_decision_snapshot(state, SQLITE_NOW)
         item = snapshot.item(ItemId("work-c"))
         definition = snapshot.definition(ItemId("work-c"))
@@ -55,7 +45,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         assert item is not None
         assert definition is not None
         assert coordination is not None
-        return AcquireInitialPreparationAuthority(
+        return authority_models.AcquireInitialPreparationAuthority(
             snapshot.host_epoch,
             item.item,
             snapshot.revision,
@@ -82,7 +72,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         decision = decide_preparation_authority(
             None,
             0,
-            AcquireInitialPreparationAuthority(
+            authority_models.AcquireInitialPreparationAuthority(
                 snapshot.host_epoch,
                 item.item,
                 snapshot.revision,
@@ -109,10 +99,10 @@ class PreparationAuthorityTest(unittest.TestCase):
             (definition.revision, definition.digest),
             (decision.current_after.definition_revision, decision.current_after.definition_digest),
         )
-        self.assertEqual(PreparationLeaseStatus.ACTIVE, decision.current_after.state)
+        self.assertEqual(authority_models.PreparationLeaseStatus.ACTIVE, decision.current_after.state)
 
     def test_renew_and_release_require_the_exact_live_token(self) -> None:
-        current = PreparationLeaseAuthority(
+        current = authority_models.PreparationLeaseAuthority(
             2,
             ItemId("work-c"),
             1,
@@ -123,7 +113,7 @@ class PreparationAuthorityTest(unittest.TestCase):
             3,
             SQLITE_NOW,
             SQLITE_NOW + timedelta(minutes=5),
-            PreparationLeaseStatus.ACTIVE,
+            authority_models.PreparationLeaseStatus.ACTIVE,
         )
         token = work_models.PreparationCommandAuthority(
             current.host_epoch,
@@ -140,21 +130,23 @@ class PreparationAuthorityTest(unittest.TestCase):
         renewed = decide_preparation_authority(
             current,
             3,
-            RenewPreparationAuthority(token, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)),
+            authority_models.RenewPreparationAuthority(
+                token, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)
+            ),
             None,
             SQLITE_NOW + timedelta(seconds=1),
         )
         released = decide_preparation_authority(
             current,
             3,
-            ReleasePreparationAuthority(token, SQLITE_NOW + timedelta(seconds=1)),
+            authority_models.ReleasePreparationAuthority(token, SQLITE_NOW + timedelta(seconds=1)),
             None,
             SQLITE_NOW + timedelta(seconds=1),
         )
         stale = decide_preparation_authority(
             current,
             3,
-            RenewPreparationAuthority(
+            authority_models.RenewPreparationAuthority(
                 replace(token, generation=4),
                 SQLITE_NOW + timedelta(seconds=1),
                 SQLITE_NOW + timedelta(minutes=6),
@@ -309,7 +301,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         definition = snapshot.definition(ItemId("work-c"))
         assert coordination is not None
         assert definition is not None
-        retained = PreparationLeaseAuthority(
+        retained = authority_models.PreparationLeaseAuthority(
             snapshot.host_epoch,
             ItemId("work-c"),
             definition.revision,
@@ -320,9 +312,9 @@ class PreparationAuthorityTest(unittest.TestCase):
             2,
             SQLITE_NOW - timedelta(minutes=2),
             SQLITE_NOW - timedelta(minutes=1),
-            PreparationLeaseStatus.RELEASED,
+            authority_models.PreparationLeaseStatus.RELEASED,
         )
-        inactive = InactivePreparationAuthority(
+        inactive = authority_models.InactivePreparationAuthority(
             retained.host_epoch,
             retained.item,
             retained.definition_revision,
@@ -337,7 +329,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         transferred = decide_preparation_authority(
             retained,
             2,
-            TransferPreparationAuthority(
+            authority_models.TransferPreparationAuthority(
                 inactive,
                 coordination,
                 TaskId("preparer-b"),
@@ -354,7 +346,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         revoked = decide_preparation_authority(
             transferred.current_after,
             transferred.counter_after,
-            RevokePreparationAuthority(
+            authority_models.RevokePreparationAuthority(
                 transferred.item,
                 transferred.current_after.lease_id,
                 transferred.current_after.generation,
@@ -366,7 +358,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         )
         self.assertNotIsInstance(revoked, DecisionFailure)
         assert not isinstance(revoked, DecisionFailure)
-        self.assertEqual(PreparationLeaseStatus.REVOKED, revoked.current_after.state)
+        self.assertEqual(authority_models.PreparationLeaseStatus.REVOKED, revoked.current_after.state)
         self.assertGreater(revoked.current_after.generation, transferred.current_after.generation)
 
     def test_operation_start_time_remains_authoritative_while_write_lock_crosses_expiry(self) -> None:
@@ -396,7 +388,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         expires_at = acquired_at + timedelta(seconds=1)
         acquired = change_preparation_authority(
             store,
-            AcquireInitialPreparationAuthority(
+            authority_models.AcquireInitialPreparationAuthority(
                 snapshot.host_epoch,
                 item.item,
                 snapshot.revision,
@@ -428,7 +420,7 @@ class PreparationAuthorityTest(unittest.TestCase):
 
         released = change_preparation_authority(
             store,
-            ReleasePreparationAuthority(command_authority, operation_start),
+            authority_models.ReleasePreparationAuthority(command_authority, operation_start),
         )
 
         holder.join(timeout=2)
@@ -436,10 +428,12 @@ class PreparationAuthorityTest(unittest.TestCase):
         next_operation_start = datetime.now(expires_at.tzinfo)
         self.assertGreaterEqual(next_operation_start, expires_at)
         self.assertNotIsInstance(released, DecisionFailure)
-        self.assertEqual(PreparationLeaseStatus.RELEASED, store.snapshot().authority.preparation_leases[0].state)
+        self.assertEqual(
+            authority_models.PreparationLeaseStatus.RELEASED, store.snapshot().authority.preparation_leases[0].state
+        )
         rejected = change_preparation_authority(
             store,
-            RenewPreparationAuthority(
+            authority_models.RenewPreparationAuthority(
                 command_authority,
                 next_operation_start,
                 next_operation_start + timedelta(minutes=1),

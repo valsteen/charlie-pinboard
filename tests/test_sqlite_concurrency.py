@@ -23,8 +23,7 @@ from pinboard.application.artifacts import (
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.mutations import project_checkpoint_acceptance_mutation, project_transition_mutation
 from pinboard.application.service import change_preparation_authority, create_proposal, execute
-from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import AcquireInitialPreparationAuthority, PreparationLeaseStatus
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.decisions import (
     available_actions,
     decide,
@@ -178,7 +177,7 @@ def _acquire_same_preparation(
     assert item is not None
     assert definition is not None
     assert coordination is not None
-    operation = AcquireInitialPreparationAuthority(
+    operation = authority_models.AcquireInitialPreparationAuthority(
         snapshot.host_epoch,
         item.item,
         snapshot.revision,
@@ -212,7 +211,7 @@ def _race_preparation_and_prerequisite_proposal(
         assert item is not None
         assert definition is not None
         assert coordination is not None
-        operation = AcquireInitialPreparationAuthority(
+        operation = authority_models.AcquireInitialPreparationAuthority(
             snapshot.host_epoch,
             item.item,
             snapshot.revision,
@@ -325,7 +324,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
                         definition.digest,
                         SQLITE_NOW,
                         SQLITE_NOW + timedelta(minutes=1),
-                        PreparationLeaseStatus.ACTIVE,
+                        authority_models.PreparationLeaseStatus.ACTIVE,
                     ),
                 ),
             ),
@@ -350,7 +349,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         self.assertEqual(1, sum(value.startswith("committed:") for value in observed))
         self.assertIn("ACTION_NOT_AVAILABLE", observed)
         after = SQLiteWorkStore(roots.database_path).snapshot()
-        self.assertEqual(PreparationLeaseStatus.REVOKED, after.authority.preparation_leases[0].state)
+        self.assertEqual(authority_models.PreparationLeaseStatus.REVOKED, after.authority.preparation_leases[0].state)
         self.assertEqual(1, sum(value.attempt_id == AttemptId("work-c-1") for value in after.lifecycle.attempts))
 
     def test_preparation_acquisition_and_prerequisite_proposal_serialize_to_one_winner(self) -> None:

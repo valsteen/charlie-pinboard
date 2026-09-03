@@ -19,8 +19,7 @@ from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.adapters.sqlite.lifecycle import read_focus, read_lifecycle
 from pinboard.adapters.sqlite.proposals import read_proposals
 from pinboard.application import stored_state
-from pinboard.domain import work_models
-from pinboard.domain.authority_models import PreparationLeaseStatus
+from pinboard.domain import authority_models, work_models
 from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import (
     ActionId,
@@ -178,7 +177,10 @@ def _validate_current_state(state: stored_state.StoredWorkState, error_code: Sto
     current_definitions = _current_definitions(state, item_ids, error_code)
     item_states = {value.item_id: value.state for value in state.lifecycle.work_items}
     for lease in state.authority.preparation_leases:
-        if lease.state != PreparationLeaseStatus.ACTIVE or lease.expires_at <= state.lifecycle.project.updated_at:
+        if (
+            lease.state != authority_models.PreparationLeaseStatus.ACTIVE
+            or lease.expires_at <= state.lifecycle.project.updated_at
+        ):
             continue
         current = current_definitions.get(lease.item_id)
         if item_states.get(lease.item_id) != stored_state.StoredWorkItemState.READY:

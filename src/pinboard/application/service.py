@@ -19,32 +19,11 @@ from pinboard.application.mutations import (
     project_transition_mutation,
 )
 from pinboard.application.ports import WorkStore
-from pinboard.domain import decision_models, work_models
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.authority_decisions import (
     decide_attempt_authority,
     decide_coordination_authority,
     decide_preparation_authority,
-)
-from pinboard.domain.authority_models import (
-    AcquireCoordinationAuthority,
-    AcquireInitialAttemptAuthority,
-    AcquireInitialPreparationAuthority,
-    AttemptAuthorityOperation,
-    AttemptLeaseAuthority,
-    CoordinationAuthorityOperation,
-    PreparationAuthorityOperation,
-    PreparationLeaseAuthority,
-    ReleaseAttemptAuthority,
-    ReleaseCoordinationAuthority,
-    ReleasePreparationAuthority,
-    RenewAttemptAuthority,
-    RenewCoordinationAuthority,
-    RenewPreparationAuthority,
-    RevokeAttemptAuthority,
-    RevokeCoordinationAuthority,
-    RevokePreparationAuthority,
-    TransferAttemptAuthority,
-    TransferPreparationAuthority,
 )
 from pinboard.domain.decisions import decide, validate_supplied_action
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
@@ -68,18 +47,18 @@ from pinboard.domain.proposal_models import (
 
 def change_coordination_authority(
     store: WorkStore,
-    operation: CoordinationAuthorityOperation,
+    operation: authority_models.CoordinationAuthorityOperation,
 ) -> DecisionResult[decision_models.TransitionReceipt]:
     """Decide and persist one exact coordination-authority mutation."""
 
     match operation:
-        case AcquireCoordinationAuthority(acquired_at=operation_time):
+        case authority_models.AcquireCoordinationAuthority(acquired_at=operation_time):
             pass
-        case RenewCoordinationAuthority(renewed_at=operation_time):
+        case authority_models.RenewCoordinationAuthority(renewed_at=operation_time):
             pass
-        case ReleaseCoordinationAuthority(released_at=operation_time):
+        case authority_models.ReleaseCoordinationAuthority(released_at=operation_time):
             pass
-        case RevokeCoordinationAuthority(revoked_at=operation_time):
+        case authority_models.RevokeCoordinationAuthority(revoked_at=operation_time):
             pass
         case _ as unreachable:
             assert_never(unreachable)
@@ -91,16 +70,16 @@ def change_coordination_authority(
             return decision
         after_authority = decision.after
         match operation:
-            case AcquireCoordinationAuthority(acquired_at=decided_at):
+            case authority_models.AcquireCoordinationAuthority(acquired_at=decided_at):
                 outcome = "acquire-coordination-authority"
                 authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
-            case RenewCoordinationAuthority(renewed_at=decided_at):
+            case authority_models.RenewCoordinationAuthority(renewed_at=decided_at):
                 outcome = "renew-coordination-authority"
                 authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
-            case ReleaseCoordinationAuthority(released_at=decided_at):
+            case authority_models.ReleaseCoordinationAuthority(released_at=decided_at):
                 outcome = "release-coordination-authority"
                 authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
-            case RevokeCoordinationAuthority(revoked_at=decided_at):
+            case authority_models.RevokeCoordinationAuthority(revoked_at=decided_at):
                 outcome = "revoke-coordination-authority"
                 authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
             case _ as unreachable:
@@ -131,7 +110,7 @@ def change_coordination_authority(
 def _retained_attempt_authority(
     state: stored_state.StoredWorkState,
     attempt_id: AttemptId,
-) -> AttemptLeaseAuthority | None:
+) -> authority_models.AttemptLeaseAuthority | None:
     lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
     if lease is None or attempt is None:
@@ -154,7 +133,7 @@ def _retained_attempt_authority(
         lease_id = anchor.lease_id
         task_id = anchor.task_id
         host_id = anchor.host_id
-    return AttemptLeaseAuthority(
+    return authority_models.AttemptLeaseAuthority(
         state.lifecycle.project.host_epoch,
         attempt_id,
         attempt.item_id,
@@ -170,27 +149,27 @@ def _retained_attempt_authority(
 
 def change_attempt_authority(
     store: WorkStore,
-    operation: AttemptAuthorityOperation,
+    operation: authority_models.AttemptAuthorityOperation,
 ) -> DecisionResult[decision_models.TransitionReceipt]:
     """Decide and persist one exact attempt-authority mutation."""
 
     match operation:
-        case AcquireInitialAttemptAuthority(attempt=attempt_id, acquired_at=decided_at):
+        case authority_models.AcquireInitialAttemptAuthority(attempt=attempt_id, acquired_at=decided_at):
             outcome = "acquire-initial-attempt-authority"
             authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
-        case TransferAttemptAuthority(current=current, acquired_at=decided_at):
+        case authority_models.TransferAttemptAuthority(current=current, acquired_at=decided_at):
             attempt_id = current.attempt
             outcome = "transfer-attempt-authority"
             authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
-        case RenewAttemptAuthority(current=current, renewed_at=decided_at):
+        case authority_models.RenewAttemptAuthority(current=current, renewed_at=decided_at):
             attempt_id = current.attempt
             outcome = "renew-attempt-authority"
             authorization = stored_state.TransitionHistoryAuthorizationKind.ATTEMPT
-        case ReleaseAttemptAuthority(current=current, released_at=decided_at):
+        case authority_models.ReleaseAttemptAuthority(current=current, released_at=decided_at):
             attempt_id = current.attempt
             outcome = "release-attempt-authority"
             authorization = stored_state.TransitionHistoryAuthorizationKind.ATTEMPT
-        case RevokeAttemptAuthority(attempt=attempt_id, revoked_at=decided_at):
+        case authority_models.RevokeAttemptAuthority(attempt=attempt_id, revoked_at=decided_at):
             outcome = "revoke-attempt-authority"
             authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
         case _ as unreachable:
@@ -258,7 +237,7 @@ def change_attempt_authority(
 def _retained_preparation_authority(
     state: stored_state.StoredWorkState,
     item_id: ItemId,
-) -> PreparationLeaseAuthority | None:
+) -> authority_models.PreparationLeaseAuthority | None:
     lease = next((value for value in state.authority.preparation_leases if value.item_id == item_id), None)
     if lease is None:
         return None
@@ -272,7 +251,7 @@ def _retained_preparation_authority(
     )
     if anchor is None:
         return None
-    return PreparationLeaseAuthority(
+    return authority_models.PreparationLeaseAuthority(
         state.lifecycle.project.host_epoch,
         item_id,
         lease.definition_revision,
@@ -289,27 +268,27 @@ def _retained_preparation_authority(
 
 def change_preparation_authority(
     store: WorkStore,
-    operation: PreparationAuthorityOperation,
+    operation: authority_models.PreparationAuthorityOperation,
 ) -> DecisionResult[decision_models.TransitionReceipt]:
     """Decide and persist one exact ready-item preparation mutation."""
 
     match operation:
-        case AcquireInitialPreparationAuthority(item=item_id, acquired_at=decided_at):
+        case authority_models.AcquireInitialPreparationAuthority(item=item_id, acquired_at=decided_at):
             outcome = "acquire-initial-preparation-authority"
             authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
-        case TransferPreparationAuthority(current=current, acquired_at=decided_at):
+        case authority_models.TransferPreparationAuthority(current=current, acquired_at=decided_at):
             item_id = current.item
             outcome = "transfer-preparation-authority"
             authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
-        case RenewPreparationAuthority(current=current, renewed_at=decided_at):
+        case authority_models.RenewPreparationAuthority(current=current, renewed_at=decided_at):
             item_id = current.item
             outcome = "renew-preparation-authority"
             authorization = stored_state.TransitionHistoryAuthorizationKind.PREPARATION
-        case ReleasePreparationAuthority(current=current, released_at=decided_at):
+        case authority_models.ReleasePreparationAuthority(current=current, released_at=decided_at):
             item_id = current.item
             outcome = "release-preparation-authority"
             authorization = stored_state.TransitionHistoryAuthorizationKind.PREPARATION
-        case RevokePreparationAuthority(item=item_id, revoked_at=decided_at):
+        case authority_models.RevokePreparationAuthority(item=item_id, revoked_at=decided_at):
             outcome = "revoke-preparation-authority"
             authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
         case _ as unreachable:

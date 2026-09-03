@@ -7,13 +7,7 @@ from pinboard.adapters.files.models import AffectedViews
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.service import change_coordination_authority as apply_coordination_authority_change
-from pinboard.domain import work_models
-from pinboard.domain.authority_models import (
-    AcquireCoordinationAuthority,
-    ReleaseCoordinationAuthority,
-    RenewCoordinationAuthority,
-    RevokeCoordinationAuthority,
-)
+from pinboard.domain import authority_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import LeaseId
 from pinboard.interfaces import cli_commands, work_views
@@ -92,7 +86,7 @@ def change_coordination_authority(
     now = datetime.now(UTC)
     match command:
         case cli_commands.CoordinationAcquireCommand(task_id=task_id, host_id=host_id, ttl_seconds=ttl_seconds):
-            authority_operation = AcquireCoordinationAuthority(
+            authority_operation = authority_models.AcquireCoordinationAuthority(
                 state.lifecycle.project.host_epoch,
                 task_id,
                 host_id,
@@ -104,7 +98,7 @@ def change_coordination_authority(
             current = retained_coordination(state)
             if isinstance(current, CommandFailure):
                 return current
-            authority_operation = RenewCoordinationAuthority(
+            authority_operation = authority_models.RenewCoordinationAuthority(
                 _supplied_coordination_authority(state, current, lease_id, generation),
                 now,
                 now + timedelta(seconds=ttl_seconds),
@@ -113,14 +107,16 @@ def change_coordination_authority(
             current = retained_coordination(state)
             if isinstance(current, CommandFailure):
                 return current
-            authority_operation = ReleaseCoordinationAuthority(
+            authority_operation = authority_models.ReleaseCoordinationAuthority(
                 _supplied_coordination_authority(state, current, lease_id, generation), now
             )
         case cli_commands.CoordinationRevokeCommand():
             current = retained_coordination(state)
             if isinstance(current, CommandFailure):
                 return current
-            authority_operation = RevokeCoordinationAuthority(current.lease_id, current.generation, now)
+            authority_operation = authority_models.RevokeCoordinationAuthority(
+                current.lease_id, current.generation, now
+            )
         case _ as unreachable:
             assert_never(unreachable)
     result = apply_coordination_authority_change(store, authority_operation)

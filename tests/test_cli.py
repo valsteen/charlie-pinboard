@@ -27,14 +27,9 @@ from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, Decisio
 from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import AttemptId, HostId, ItemId, LeaseId, TaskId
 from pinboard.interfaces import transitions as transition_interface
+from pinboard.interfaces import work_brief_models
 from pinboard.interfaces.cli import build_parser, main
 from pinboard.interfaces.errors import CommandFailure, WorkBriefError, WorkBriefErrorCode
-from pinboard.interfaces.work_brief_models import (
-    AcceptedScope,
-    AcceptedScopeAuthorization,
-    CrossBoundaryCheckpoint,
-    LocalCheckpoint,
-)
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 
 from .domain_support import expect_success
@@ -250,14 +245,16 @@ class CliTest(unittest.TestCase):
 
         candidate = work_c_brief()
         checkpoint = candidate.checkpoint
-        assert isinstance(checkpoint, CrossBoundaryCheckpoint | LocalCheckpoint)
+        assert isinstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint | work_brief_models.LocalCheckpoint)
         verification = checkpoint.verification[0]
         wrong_item_checkpoint = replace_struct(
             checkpoint,
             verification=(
                 replace_struct(
                     verification,
-                    authorization_basis=AcceptedScopeAuthorization("work-b", candidate.accepted_scope.revision),
+                    authorization_basis=work_brief_models.AcceptedScopeAuthorization(
+                        "work-b", candidate.accepted_scope.revision
+                    ),
                 ),
             ),
         )
@@ -276,7 +273,7 @@ class CliTest(unittest.TestCase):
                 replace_struct(
                     candidate,
                     attempt_id="work-c-wrong-definition",
-                    accepted_scope=AcceptedScope(candidate.accepted_scope.revision, "f" * 64),
+                    accepted_scope=work_brief_models.AcceptedScope(candidate.accepted_scope.revision, "f" * 64),
                 ),
             ),
         )
@@ -406,7 +403,7 @@ class CliTest(unittest.TestCase):
                 attempt = state.lifecycle.attempts[0]
                 value = replace_struct(
                     value,
-                    accepted_scope=AcceptedScope(
+                    accepted_scope=work_brief_models.AcceptedScope(
                         attempt.accepted_scope_revision,
                         attempt.accepted_scope_digest,
                     ),
@@ -2252,9 +2249,9 @@ Not launchable:
         )
         brief = work_a_brief(project)
         checkpoint = brief.checkpoint
-        self.assertIsInstance(checkpoint, CrossBoundaryCheckpoint)
-        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
-        authorization = AcceptedScopeAuthorization("work-a", revised_definition.revision)
+        self.assertIsInstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint)
+        assert isinstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint)
+        authorization = work_brief_models.AcceptedScopeAuthorization("work-a", revised_definition.revision)
         checkpoint = replace_struct(
             checkpoint,
             contracts=(replace_struct(checkpoint.contracts[0], authorization_basis=authorization),),
@@ -2263,7 +2260,7 @@ Not launchable:
         brief = replace_struct(
             brief,
             artifact_revision=2,
-            accepted_scope=AcceptedScope(revised_definition.revision, revised_definition.digest),
+            accepted_scope=work_brief_models.AcceptedScope(revised_definition.revision, revised_definition.digest),
             checkpoint=checkpoint,
         )
         brief_path = project / "work-a-brief-2.json"
@@ -2325,11 +2322,11 @@ Not launchable:
     def test_revised_brief_identity_mismatches_reject_at_command_boundary_without_effects(self) -> None:
         base_brief = replace_struct(work_a_brief(Path(tempfile.mkdtemp()).resolve()), artifact_revision=2)
         checkpoint = base_brief.checkpoint
-        self.assertIsInstance(checkpoint, CrossBoundaryCheckpoint)
-        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
+        self.assertIsInstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint)
+        assert isinstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint)
 
-        def with_scope_identity(item_id: str, revision: int) -> CrossBoundaryCheckpoint:
-            authorization = AcceptedScopeAuthorization(item_id, revision)
+        def with_scope_identity(item_id: str, revision: int) -> work_brief_models.CrossBoundaryCheckpoint:
+            authorization = work_brief_models.AcceptedScopeAuthorization(item_id, revision)
             return replace_struct(
                 checkpoint,
                 contracts=(replace_struct(checkpoint.contracts[0], authorization_basis=authorization),),
@@ -2352,13 +2349,13 @@ Not launchable:
                 "scope-revision",
                 replace_struct(
                     base_brief,
-                    accepted_scope=AcceptedScope(2, base_brief.accepted_scope.digest),
+                    accepted_scope=work_brief_models.AcceptedScope(2, base_brief.accepted_scope.digest),
                     checkpoint=with_scope_identity(base_brief.item_id, 2),
                 ),
             ),
             (
                 "scope-digest",
-                replace_struct(base_brief, accepted_scope=AcceptedScope(1, "f" * 64)),
+                replace_struct(base_brief, accepted_scope=work_brief_models.AcceptedScope(1, "f" * 64)),
             ),
         )
 

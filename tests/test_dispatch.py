@@ -22,6 +22,7 @@ from pinboard.application.artifacts import NewArtifact
 from pinboard.application.dispatch_models import DispatchEnvironment, DispatchPermission
 from pinboard.domain import decision_models
 from pinboard.domain.identifiers import ReviewId
+from pinboard.interfaces import work_brief_models
 from pinboard.interfaces.cli import main
 from pinboard.interfaces.dispatch_brief import (
     SuppliedDispatchReview,
@@ -31,12 +32,6 @@ from pinboard.interfaces.dispatch_brief import (
     read_dispatch_environment,
 )
 from pinboard.interfaces.errors import DispatchErrorCode, DispatchFailure, DispatchResult
-from pinboard.interfaces.work_brief_models import (
-    CrossBoundaryCheckpoint,
-    LocalCheckpoint,
-    WorkBrief,
-    WorkBriefReview,
-)
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes, canonical_work_brief_review_bytes
 from tests.domain_support import expect_success
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state, initialize_store
@@ -115,7 +110,7 @@ class DispatchTest(unittest.TestCase):
         Path,
         DurableRoots,
         SQLiteWorkStore,
-        WorkBrief,
+        work_brief_models.WorkBrief,
         Callable[[], decision_models.DispatchAction],
         DispatchEnvironment,
     ]:
@@ -365,7 +360,7 @@ class DispatchTest(unittest.TestCase):
             with self.subTest(name=_name):
                 expect_dispatch_failure(prepare_dispatch_from_artifact(**arguments), code)
 
-        review = msgspec.json.decode(ready_review(value), type=WorkBriefReview)
+        review = msgspec.json.decode(ready_review(value), type=work_brief_models.WorkBriefReview)
         for changed, code in (
             ({"reviewer_task_id": value.owner_task_id}, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_NOT_INDEPENDENT),
             ({"checkpoint_sha256": "f" * 64}, DispatchErrorCode.DISPATCH_BRIEF_REVIEW_STALE),
@@ -390,8 +385,8 @@ class DispatchTest(unittest.TestCase):
         project = Path(tempfile.mkdtemp()).resolve()
         value = work_a_brief(project)
         cross = value.checkpoint
-        assert isinstance(cross, CrossBoundaryCheckpoint)
-        local = LocalCheckpoint(
+        assert isinstance(cross, work_brief_models.CrossBoundaryCheckpoint)
+        local = work_brief_models.LocalCheckpoint(
             "local-cutover",
             "Local cutover",
             cross.architecture_impact,

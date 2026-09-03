@@ -29,19 +29,7 @@ from pinboard.application.service import (
     execute,
     execute_checkpoint_acceptance,
 )
-from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import (
-    AcquireCoordinationAuthority,
-    AcquireInitialAttemptAuthority,
-    AttemptLeaseStatus,
-    ReleaseAttemptAuthority,
-    ReleaseCoordinationAuthority,
-    RenewAttemptAuthority,
-    RenewCoordinationAuthority,
-    RevokeAttemptAuthority,
-    RevokeCoordinationAuthority,
-    TransferAttemptAuthority,
-)
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.decisions import (
     available_actions,
 )
@@ -399,7 +387,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(stored_state.StoredWorkItemState.PAUSED, item.state)
         self.assertEqual(work_models.AttemptState.PAUSED, attempt.state)
         self.assertIsNone(attempt.candidate_revision)
-        self.assertEqual(AttemptLeaseStatus.REVOKED, authority.state)
+        self.assertEqual(authority_models.AttemptLeaseStatus.REVOKED, authority.state)
         self.assertEqual(4, authority.generation)
         self.assertEqual(before_acceptance.lifecycle.project.revision + 1, reloaded.lifecycle.project.revision)
         self.assertEqual(len(before_acceptance.transition_receipts) + 1, len(reloaded.transition_receipts))
@@ -458,7 +446,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(work_models.AttemptState.ACTIVE, attempt.state)
         self.assertIsNone(attempt.candidate_revision)
         self.assertIsNone(attempt.candidate_recorded_at)
-        self.assertEqual(AttemptLeaseStatus.REVOKED, authority.state)
+        self.assertEqual(authority_models.AttemptLeaseStatus.REVOKED, authority.state)
         self.assertEqual(4, authority.generation)
         self.assertEqual("continue", reloaded.focus.next_action)
         receipt = reloaded.transition_receipts[-1]
@@ -509,7 +497,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(stored_state.StoredWorkItemState.DROPPED, item.state)
         self.assertEqual("The retained attempt is no longer needed.", item.outcome_evidence)
         self.assertEqual(work_models.AttemptState.DONE, attempt.state)
-        self.assertEqual(AttemptLeaseStatus.REVOKED, authority.state)
+        self.assertEqual(authority_models.AttemptLeaseStatus.REVOKED, authority.state)
         self.assertEqual(4, authority.generation)
         self.assertIsNone(reloaded.focus.attempt_id)
 
@@ -524,7 +512,7 @@ class ServiceTest(unittest.TestCase):
         with reject_table_deletes("work_items"):
             acquired = change_coordination_authority(
                 store,
-                AcquireCoordinationAuthority(
+                authority_models.AcquireCoordinationAuthority(
                     state.lifecycle.project.host_epoch,
                     TaskId("coordinator-a"),
                     HostId("host-a"),
@@ -539,7 +527,7 @@ class ServiceTest(unittest.TestCase):
 
         renewed = change_coordination_authority(
             store,
-            RenewCoordinationAuthority(
+            authority_models.RenewCoordinationAuthority(
                 current,
                 acquired_at + timedelta(seconds=1),
                 acquired_at + timedelta(minutes=3),
@@ -556,7 +544,7 @@ class ServiceTest(unittest.TestCase):
         assert renewed_authority is not None
         released = change_coordination_authority(
             store,
-            ReleaseCoordinationAuthority(renewed_authority, acquired_at + timedelta(seconds=2)),
+            authority_models.ReleaseCoordinationAuthority(renewed_authority, acquired_at + timedelta(seconds=2)),
         )
         self.assertNotIsInstance(released, DecisionFailure)
         released_authority = store.snapshot().authority.coordination
@@ -566,7 +554,7 @@ class ServiceTest(unittest.TestCase):
         revoke_store, _database_path = self._store_with_state(state)
         acquired = change_coordination_authority(
             revoke_store,
-            AcquireCoordinationAuthority(
+            authority_models.AcquireCoordinationAuthority(
                 state.lifecycle.project.host_epoch,
                 TaskId("coordinator-b"),
                 HostId("host-a"),
@@ -580,7 +568,7 @@ class ServiceTest(unittest.TestCase):
         assert revoke_authority is not None
         revoked = change_coordination_authority(
             revoke_store,
-            RevokeCoordinationAuthority(
+            authority_models.RevokeCoordinationAuthority(
                 revoke_authority.lease_id,
                 revoke_authority.generation,
                 acquired_at + timedelta(seconds=2),
@@ -597,7 +585,7 @@ class ServiceTest(unittest.TestCase):
         current = project_decision_snapshot(store.snapshot(), SQLITE_NOW).command_attempt_authorities[0]
         renewed = change_attempt_authority(
             store,
-            RenewAttemptAuthority(
+            authority_models.RenewAttemptAuthority(
                 current,
                 SQLITE_NOW + timedelta(seconds=1),
                 current.expires_at + timedelta(minutes=1),
@@ -609,13 +597,13 @@ class ServiceTest(unittest.TestCase):
         with reject_table_deletes("work_items"):
             released = change_attempt_authority(
                 store,
-                ReleaseAttemptAuthority(current, SQLITE_NOW + timedelta(seconds=2)),
+                authority_models.ReleaseAttemptAuthority(current, SQLITE_NOW + timedelta(seconds=2)),
             )
 
         self.assertNotIsInstance(released, DecisionFailure)
         after = store.snapshot()
         self.assertEqual(4, after.authority.attempt_counters[0].generation_high_water)
-        self.assertEqual(AttemptLeaseStatus.RELEASED, after.authority.attempt_leases[0].state)
+        self.assertEqual(authority_models.AttemptLeaseStatus.RELEASED, after.authority.attempt_leases[0].state)
 
     def test_attempt_authority_initial_acquire_transfer_and_revoke_persist_exact_generations(self) -> None:
         state = complete_sqlite_state()
@@ -632,7 +620,7 @@ class ServiceTest(unittest.TestCase):
         attempt = state.lifecycle.attempts[0]
         acquired = change_attempt_authority(
             store,
-            AcquireInitialAttemptAuthority(
+            authority_models.AcquireInitialAttemptAuthority(
                 state.lifecycle.project.host_epoch,
                 attempt.attempt_id,
                 attempt.item_id,
@@ -653,7 +641,7 @@ class ServiceTest(unittest.TestCase):
         assert coordination is not None
         released = change_attempt_authority(
             normal_store,
-            ReleaseAttemptAuthority(current, SQLITE_NOW + timedelta(seconds=1)),
+            authority_models.ReleaseAttemptAuthority(current, SQLITE_NOW + timedelta(seconds=1)),
         )
         self.assertNotIsInstance(released, DecisionFailure)
         proof = project_inactive_attempt_authority(
@@ -665,7 +653,7 @@ class ServiceTest(unittest.TestCase):
         assert not isinstance(proof, DecisionFailure)
         transferred = change_attempt_authority(
             normal_store,
-            TransferAttemptAuthority(
+            authority_models.TransferAttemptAuthority(
                 proof,
                 coordination,
                 TaskId("worker-next"),
@@ -679,7 +667,7 @@ class ServiceTest(unittest.TestCase):
         next_authority = project_decision_snapshot(normal_store.snapshot(), SQLITE_NOW).command_attempt_authorities[0]
         revoked = change_attempt_authority(
             normal_store,
-            RevokeAttemptAuthority(
+            authority_models.RevokeAttemptAuthority(
                 next_authority.attempt,
                 next_authority.lease_id,
                 next_authority.generation,
@@ -688,7 +676,9 @@ class ServiceTest(unittest.TestCase):
             ),
         )
         self.assertNotIsInstance(revoked, DecisionFailure)
-        self.assertEqual(AttemptLeaseStatus.REVOKED, normal_store.snapshot().authority.attempt_leases[0].state)
+        self.assertEqual(
+            authority_models.AttemptLeaseStatus.REVOKED, normal_store.snapshot().authority.attempt_leases[0].state
+        )
 
     def test_execute_rejects_a_stale_action_before_decision_or_commit(self) -> None:
         store = self._store()
@@ -741,7 +731,7 @@ class ServiceTest(unittest.TestCase):
         after = store.snapshot()
         current_attempt = after.authority.attempt_leases[0]
         self.assertEqual(prior_attempt.generation + 1, current_attempt.generation)
-        self.assertEqual(AttemptLeaseStatus.REVOKED, current_attempt.state)
+        self.assertEqual(authority_models.AttemptLeaseStatus.REVOKED, current_attempt.state)
 
     def test_sqlite_proposal_intake_is_placed_at_the_back_without_changing_current_work(self) -> None:
         state = complete_sqlite_state()
@@ -956,7 +946,7 @@ class ServiceTest(unittest.TestCase):
 
         rejected = change_attempt_authority(
             store,
-            TransferAttemptAuthority(
+            authority_models.TransferAttemptAuthority(
                 proof,
                 coordination,
                 TaskId("terminal-worker"),

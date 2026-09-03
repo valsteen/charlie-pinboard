@@ -21,8 +21,7 @@ from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.artifacts import EvidenceArtifactRef
 from pinboard.application.decision_projection import project_decision_snapshot
-from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import AttemptAuthorityDecision, AttemptLeaseAuthority, AttemptLeaseStatus
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.identifiers import ArtifactRefId, AttemptId, ItemId, ProposalId
 from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
@@ -304,7 +303,7 @@ class SQLiteEffectContractTest(unittest.TestCase):
 
             retained = before.authority.attempt_leases[0]
             command = project_decision_snapshot(before, SQLITE_NOW).command_attempt_authorities[0]
-            current = AttemptLeaseAuthority(
+            current = authority_models.AttemptLeaseAuthority(
                 command.host_epoch,
                 command.attempt,
                 command.item,
@@ -314,9 +313,9 @@ class SQLiteEffectContractTest(unittest.TestCase):
                 command.generation,
                 retained.acquired_at,
                 command.expires_at,
-                AttemptLeaseStatus.ACTIVE,
+                authority_models.AttemptLeaseStatus.ACTIVE,
             )
-            duplicate_current = AttemptAuthorityDecision(
+            duplicate_current = authority_models.AttemptAuthorityDecision(
                 command.attempt,
                 command.generation,
                 command.generation,
@@ -328,7 +327,7 @@ class SQLiteEffectContractTest(unittest.TestCase):
             self.assertIsInstance(stale_current, DecisionFailure)
 
             missing_attempt = AttemptId("missing-attempt")
-            invalid_counter = AttemptAuthorityDecision(
+            invalid_counter = authority_models.AttemptAuthorityDecision(
                 missing_attempt,
                 0,
                 -1,

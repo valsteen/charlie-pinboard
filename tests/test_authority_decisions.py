@@ -6,23 +6,10 @@ from pinboard.application.decision_projection import (
     project_decision_snapshot,
     project_inactive_attempt_authority,
 )
+from pinboard.domain import authority_models
 from pinboard.domain.authority_decisions import (
     decide_attempt_authority,
     decide_coordination_authority,
-)
-from pinboard.domain.authority_models import (
-    AcquireCoordinationAuthority,
-    AcquireInitialAttemptAuthority,
-    AttemptLeaseAuthority,
-    AttemptLeaseStatus,
-    InactiveAttemptAuthority,
-    ReleaseAttemptAuthority,
-    ReleaseCoordinationAuthority,
-    RenewAttemptAuthority,
-    RenewCoordinationAuthority,
-    RevokeAttemptAuthority,
-    RevokeCoordinationAuthority,
-    TransferAttemptAuthority,
 )
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import HostId, LeaseId, TaskId
@@ -45,7 +32,8 @@ class AuthorityDecisionTest(unittest.TestCase):
             authority=replace(
                 state.authority,
                 attempt_leases=tuple(
-                    replace(value, state=AttemptLeaseStatus.RELEASED) for value in state.authority.attempt_leases
+                    replace(value, state=authority_models.AttemptLeaseStatus.RELEASED)
+                    for value in state.authority.attempt_leases
                 ),
             ),
         )
@@ -56,7 +44,7 @@ class AuthorityDecisionTest(unittest.TestCase):
             authority=replace(
                 recovered.authority,
                 attempt_leases=tuple(
-                    replace(value, state=AttemptLeaseStatus.ACTIVE, expires_at=SQLITE_NOW)
+                    replace(value, state=authority_models.AttemptLeaseStatus.ACTIVE, expires_at=SQLITE_NOW)
                     for value in recovered.authority.attempt_leases
                 ),
             ),
@@ -69,7 +57,7 @@ class AuthorityDecisionTest(unittest.TestCase):
     def test_coordination_authority_lifecycle_is_closed_and_fenced(self) -> None:
         acquired = decide_coordination_authority(
             None,
-            AcquireCoordinationAuthority(
+            authority_models.AcquireCoordinationAuthority(
                 2,
                 TaskId("coordinator-new"),
                 HostId("host-a"),
@@ -91,7 +79,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         )
         renewed = decide_coordination_authority(
             acquired.after,
-            RenewCoordinationAuthority(
+            authority_models.RenewCoordinationAuthority(
                 token,
                 SQLITE_NOW + timedelta(seconds=10),
                 SQLITE_NOW + timedelta(minutes=3),
@@ -100,17 +88,19 @@ class AuthorityDecisionTest(unittest.TestCase):
         self.assertNotIsInstance(renewed, DecisionFailure)
         released = decide_coordination_authority(
             acquired.after,
-            ReleaseCoordinationAuthority(token, SQLITE_NOW + timedelta(seconds=20)),
+            authority_models.ReleaseCoordinationAuthority(token, SQLITE_NOW + timedelta(seconds=20)),
         )
         self.assertNotIsInstance(released, DecisionFailure)
         revoked = decide_coordination_authority(
             released.after,
-            RevokeCoordinationAuthority(token.lease_id, token.generation, SQLITE_NOW + timedelta(seconds=20)),
+            authority_models.RevokeCoordinationAuthority(
+                token.lease_id, token.generation, SQLITE_NOW + timedelta(seconds=20)
+            ),
         )
         self.assertNotIsInstance(revoked, DecisionFailure)
         stale = decide_coordination_authority(
             acquired.after,
-            RenewCoordinationAuthority(
+            authority_models.RenewCoordinationAuthority(
                 replace(token, generation=token.generation + 1),
                 SQLITE_NOW + timedelta(seconds=10),
                 SQLITE_NOW + timedelta(minutes=3),
@@ -124,7 +114,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         token = snapshot.coordination_authority
         assert retained is not None
         assert token is not None
-        acquire = AcquireCoordinationAuthority(
+        acquire = authority_models.AcquireCoordinationAuthority(
             retained.host_epoch,
             TaskId("coordinator-next"),
             retained.host_id,
@@ -137,26 +127,26 @@ class AuthorityDecisionTest(unittest.TestCase):
         self.assert_failure(
             decide_coordination_authority(
                 None,
-                RenewCoordinationAuthority(token, SQLITE_NOW, SQLITE_NOW + timedelta(minutes=2)),
+                authority_models.RenewCoordinationAuthority(token, SQLITE_NOW, SQLITE_NOW + timedelta(minutes=2)),
             )
         )
         self.assert_failure(
             decide_coordination_authority(
                 None,
-                ReleaseCoordinationAuthority(token, SQLITE_NOW),
+                authority_models.ReleaseCoordinationAuthority(token, SQLITE_NOW),
             )
         )
         self.assert_failure(
             decide_coordination_authority(
                 None,
-                RevokeCoordinationAuthority(token.lease_id, token.generation, SQLITE_NOW),
+                authority_models.RevokeCoordinationAuthority(token.lease_id, token.generation, SQLITE_NOW),
             )
         )
         expired = replace(retained, expires_at=SQLITE_NOW)
         self.assert_failure(
             decide_coordination_authority(
                 expired,
-                RenewCoordinationAuthority(
+                authority_models.RenewCoordinationAuthority(
                     replace(token, expires_at=SQLITE_NOW), SQLITE_NOW, SQLITE_NOW + timedelta(minutes=2)
                 ),
             )
@@ -164,19 +154,19 @@ class AuthorityDecisionTest(unittest.TestCase):
         self.assert_failure(
             decide_coordination_authority(
                 retained,
-                RenewCoordinationAuthority(token, SQLITE_NOW, retained.expires_at),
+                authority_models.RenewCoordinationAuthority(token, SQLITE_NOW, retained.expires_at),
             )
         )
         self.assert_failure(
             decide_coordination_authority(
                 expired,
-                ReleaseCoordinationAuthority(replace(token, expires_at=SQLITE_NOW), SQLITE_NOW),
+                authority_models.ReleaseCoordinationAuthority(replace(token, expires_at=SQLITE_NOW), SQLITE_NOW),
             )
         )
         self.assert_failure(
             decide_coordination_authority(
                 retained,
-                RevokeCoordinationAuthority(token.lease_id, token.generation + 1, SQLITE_NOW),
+                authority_models.RevokeCoordinationAuthority(token.lease_id, token.generation + 1, SQLITE_NOW),
             )
         )
 
@@ -185,7 +175,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         command = snapshot.command_attempt_authorities[0]
         coordination = snapshot.coordination_authority
         assert coordination is not None
-        retained = AttemptLeaseAuthority(
+        retained = authority_models.AttemptLeaseAuthority(
             command.host_epoch,
             command.attempt,
             command.item,
@@ -195,12 +185,12 @@ class AuthorityDecisionTest(unittest.TestCase):
             command.generation,
             SQLITE_NOW,
             command.expires_at,
-            AttemptLeaseStatus.ACTIVE,
+            authority_models.AttemptLeaseStatus.ACTIVE,
         )
         initial = decide_attempt_authority(
             None,
             0,
-            AcquireInitialAttemptAuthority(
+            authority_models.AcquireInitialAttemptAuthority(
                 command.host_epoch,
                 command.attempt,
                 command.item,
@@ -217,10 +207,10 @@ class AuthorityDecisionTest(unittest.TestCase):
         self.assertNotIsInstance(initial, DecisionFailure)
         released_retained = replace(
             retained,
-            state=AttemptLeaseStatus.RELEASED,
+            state=authority_models.AttemptLeaseStatus.RELEASED,
             expires_at=SQLITE_NOW + timedelta(seconds=1),
         )
-        inactive = InactiveAttemptAuthority(
+        inactive = authority_models.InactiveAttemptAuthority(
             released_retained.host_epoch,
             released_retained.attempt,
             released_retained.item,
@@ -229,12 +219,12 @@ class AuthorityDecisionTest(unittest.TestCase):
             released_retained.lease_id,
             released_retained.generation,
             released_retained.expires_at,
-            AttemptLeaseStatus.RELEASED,
+            authority_models.AttemptLeaseStatus.RELEASED,
         )
         transfer = decide_attempt_authority(
             released_retained,
             command.generation,
-            TransferAttemptAuthority(
+            authority_models.TransferAttemptAuthority(
                 inactive,
                 coordination,
                 TaskId("worker-next"),
@@ -250,21 +240,23 @@ class AuthorityDecisionTest(unittest.TestCase):
         renewed = decide_attempt_authority(
             retained,
             command.generation,
-            RenewAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)),
+            authority_models.RenewAttemptAuthority(
+                command, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)
+            ),
             snapshot.coordination_lease,
         )
         self.assertNotIsInstance(renewed, DecisionFailure)
         released = decide_attempt_authority(
             retained,
             command.generation,
-            ReleaseAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1)),
+            authority_models.ReleaseAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1)),
             snapshot.coordination_lease,
         )
         self.assertNotIsInstance(released, DecisionFailure)
         revoked = decide_attempt_authority(
             retained,
             command.generation,
-            RevokeAttemptAuthority(
+            authority_models.RevokeAttemptAuthority(
                 command.attempt,
                 command.lease_id,
                 command.generation,
@@ -282,7 +274,7 @@ class AuthorityDecisionTest(unittest.TestCase):
         retained_coordination = snapshot.coordination_lease
         assert coordination is not None
         assert retained_coordination is not None
-        retained = AttemptLeaseAuthority(
+        retained = authority_models.AttemptLeaseAuthority(
             command.host_epoch,
             command.attempt,
             command.item,
@@ -292,9 +284,9 @@ class AuthorityDecisionTest(unittest.TestCase):
             command.generation,
             SQLITE_NOW,
             command.expires_at,
-            AttemptLeaseStatus.ACTIVE,
+            authority_models.AttemptLeaseStatus.ACTIVE,
         )
-        initial = AcquireInitialAttemptAuthority(
+        initial = authority_models.AcquireInitialAttemptAuthority(
             command.host_epoch,
             command.attempt,
             command.item,
@@ -308,8 +300,8 @@ class AuthorityDecisionTest(unittest.TestCase):
         self.assert_failure(
             decide_attempt_authority(None, 0, replace(initial, expires_at=SQLITE_NOW), retained_coordination)
         )
-        transfer = TransferAttemptAuthority(
-            InactiveAttemptAuthority(
+        transfer = authority_models.TransferAttemptAuthority(
+            authority_models.InactiveAttemptAuthority(
                 retained.host_epoch,
                 retained.attempt,
                 retained.item,
@@ -318,7 +310,7 @@ class AuthorityDecisionTest(unittest.TestCase):
                 retained.lease_id,
                 retained.generation,
                 retained.expires_at,
-                AttemptLeaseStatus.EXPIRED,
+                authority_models.AttemptLeaseStatus.EXPIRED,
             ),
             coordination,
             TaskId("worker-next"),
@@ -349,15 +341,19 @@ class AuthorityDecisionTest(unittest.TestCase):
             decide_attempt_authority(
                 None,
                 command.generation,
-                RenewAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)),
+                authority_models.RenewAttemptAuthority(
+                    command, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)
+                ),
                 retained_coordination,
             )
         )
         self.assert_failure(
             decide_attempt_authority(
-                replace(retained, state=AttemptLeaseStatus.RELEASED),
+                replace(retained, state=authority_models.AttemptLeaseStatus.RELEASED),
                 command.generation,
-                RenewAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)),
+                authority_models.RenewAttemptAuthority(
+                    command, SQLITE_NOW + timedelta(seconds=1), SQLITE_NOW + timedelta(minutes=6)
+                ),
                 retained_coordination,
             )
         )
@@ -366,7 +362,7 @@ class AuthorityDecisionTest(unittest.TestCase):
             decide_attempt_authority(
                 expired,
                 command.generation,
-                RenewAttemptAuthority(
+                authority_models.RenewAttemptAuthority(
                     replace(command, expires_at=SQLITE_NOW), SQLITE_NOW, SQLITE_NOW + timedelta(minutes=6)
                 ),
                 retained_coordination,
@@ -376,11 +372,11 @@ class AuthorityDecisionTest(unittest.TestCase):
             decide_attempt_authority(
                 retained,
                 command.generation,
-                RenewAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1), command.expires_at),
+                authority_models.RenewAttemptAuthority(command, SQLITE_NOW + timedelta(seconds=1), command.expires_at),
                 retained_coordination,
             )
         )
-        revoke = RevokeAttemptAuthority(
+        revoke = authority_models.RevokeAttemptAuthority(
             command.attempt,
             command.lease_id,
             command.generation,

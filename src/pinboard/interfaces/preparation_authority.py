@@ -9,17 +9,7 @@ from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.service import change_preparation_authority as apply_preparation_authority_change
-from pinboard.domain import work_models
-from pinboard.domain.authority_models import (
-    AcquireInitialPreparationAuthority,
-    InactivePreparationAuthority,
-    PreparationAuthorityOperation,
-    PreparationLeaseStatus,
-    ReleasePreparationAuthority,
-    RenewPreparationAuthority,
-    RevokePreparationAuthority,
-    TransferPreparationAuthority,
-)
+from pinboard.domain import authority_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import ItemId, LeaseId
 from pinboard.interfaces import cli_commands, work_views
@@ -43,8 +33,8 @@ def _retained(
     )
     if anchor is None:
         return CommandFailure(CommandErrorCode.WORK_STATE_INVALID, "Preparation authority has no identity anchor.")
-    if lease.state == PreparationLeaseStatus.ACTIVE and lease.expires_at <= now:
-        lease = replace(lease, state=PreparationLeaseStatus.EXPIRED)
+    if lease.state == authority_models.PreparationLeaseStatus.ACTIVE and lease.expires_at <= now:
+        lease = replace(lease, state=authority_models.PreparationLeaseStatus.EXPIRED)
     return lease, anchor
 
 
@@ -134,13 +124,13 @@ def _operation(  # noqa: C901, PLR0912
         | cli_commands.PreparationRevokeCommand
     ),
     now: datetime,
-) -> CommandResult[PreparationAuthorityOperation]:
+) -> CommandResult[authority_models.PreparationAuthorityOperation]:
     match command:
         case cli_commands.CoordinatorPreparationAcquireCommand():
             coordination = _coordination(state, command.coordination_lease_id, command.coordination_generation)
             if isinstance(coordination, CommandFailure):
                 return coordination
-            return AcquireInitialPreparationAuthority(
+            return authority_models.AcquireInitialPreparationAuthority(
                 state.lifecycle.project.host_epoch,
                 command.item_id,
                 command.expected_project_revision,
@@ -159,13 +149,13 @@ def _operation(  # noqa: C901, PLR0912
             if isinstance(retained, CommandFailure):
                 return retained
             lease, anchor = retained
-            if lease.state == PreparationLeaseStatus.ACTIVE:
+            if lease.state == authority_models.PreparationLeaseStatus.ACTIVE:
                 return CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation authority remains live.")
             coordination = _coordination(state, command.coordination_lease_id, command.coordination_generation)
             if isinstance(coordination, CommandFailure):
                 return coordination
-            return TransferPreparationAuthority(
-                InactivePreparationAuthority(
+            return authority_models.TransferPreparationAuthority(
+                authority_models.InactivePreparationAuthority(
                     state.lifecycle.project.host_epoch,
                     lease.item_id,
                     lease.definition_revision,
@@ -188,17 +178,19 @@ def _operation(  # noqa: C901, PLR0912
             current = _current_token(state, command.item_id, command.lease_id, command.generation, now)
             if isinstance(current, CommandFailure):
                 return current
-            return RenewPreparationAuthority(current, now, now + timedelta(seconds=command.ttl_seconds))
+            return authority_models.RenewPreparationAuthority(
+                current, now, now + timedelta(seconds=command.ttl_seconds)
+            )
         case cli_commands.PreparationReleaseCommand():
             current = _current_token(state, command.item_id, command.lease_id, command.generation, now)
             if isinstance(current, CommandFailure):
                 return current
-            return ReleasePreparationAuthority(current, now)
+            return authority_models.ReleasePreparationAuthority(current, now)
         case cli_commands.PreparationRevokeCommand():
             coordination = _coordination(state, command.coordination_lease_id, command.coordination_generation)
             if isinstance(coordination, CommandFailure):
                 return coordination
-            return RevokePreparationAuthority(
+            return authority_models.RevokePreparationAuthority(
                 command.item_id,
                 command.lease_id,
                 command.generation,

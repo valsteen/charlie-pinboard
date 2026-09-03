@@ -3,8 +3,7 @@ from datetime import datetime
 from pinboard.application import stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.ports import WorkStore
-from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import AttemptLeaseStatus, PreparationLeaseStatus
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.decisions import available_actions
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId, LeaseId
@@ -23,7 +22,7 @@ def _worker_attempts(
         lease.attempt_id
         for lease in store_state.authority.attempt_leases
         if lease.generation == generation
-        and lease.state == AttemptLeaseStatus.ACTIVE
+        and lease.state == authority_models.AttemptLeaseStatus.ACTIVE
         and lease.expires_at > now
         and (anchor := anchors.get((lease.attempt_id, lease.generation))) is not None
         and anchor.lease_id == lease_id
@@ -86,7 +85,7 @@ def discover_actions(
                     lease.item_id
                     for lease in state.authority.preparation_leases
                     if lease.generation == selected_generation
-                    and lease.state == PreparationLeaseStatus.ACTIVE
+                    and lease.state == authority_models.PreparationLeaseStatus.ACTIVE
                     and lease.expires_at > current
                     and (anchor := anchors.get((lease.item_id, lease.generation))) is not None
                     and anchor.lease_id == lease_id

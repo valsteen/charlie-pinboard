@@ -32,9 +32,12 @@ select = ["ANN", "ARG", "B", "BLE", "C4", "C90", "E4", "E7", "E9", "F", "I", "PE
 banned-from = [
     "pinboard.application.query_models",
     "pinboard.application.stored_state",
+    "pinboard.domain.authority_models",
     "pinboard.domain.decision_models",
     "pinboard.domain.work_models",
     "pinboard.interfaces.cli_commands",
+    "pinboard.interfaces.transition_models",
+    "pinboard.interfaces.work_brief_models",
 ]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]

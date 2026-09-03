@@ -10,8 +10,7 @@ from pinboard.adapters.sqlite import store as sqlite_store
 from pinboard.adapters.sqlite.models import OpenMode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
-from pinboard.domain import work_models
-from pinboard.domain.authority_models import AttemptLeaseStatus
+from pinboard.domain import authority_models, work_models
 from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import (
     ActionId,
@@ -340,7 +339,7 @@ def complete_sqlite_state() -> stored_state.StoredWorkState:
         (stored_state.AttemptLeaseGeneration(attempt_id, 3, attempt_lease_id, TaskId("worker"), HostId("host-a")),),
         (
             stored_state.StoredAttemptLease(
-                attempt_id, 3, SQLITE_NOW, SQLITE_NOW + timedelta(minutes=5), AttemptLeaseStatus.ACTIVE
+                attempt_id, 3, SQLITE_NOW, SQLITE_NOW + timedelta(minutes=5), authority_models.AttemptLeaseStatus.ACTIVE
             ),
         ),
     )

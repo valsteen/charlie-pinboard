@@ -10,34 +10,10 @@ from pinboard.application.artifacts import WorkBriefIdentity
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId
+from pinboard.interfaces import work_brief_models
 from pinboard.interfaces.brief_source_models import authority_selector
 from pinboard.interfaces.brief_sources import select_brief_source
 from pinboard.interfaces.errors import BriefSourceError, WorkBriefError, WorkBriefErrorCode
-from pinboard.interfaces.work_brief_models import (
-    AcceptanceCoverageOwner,
-    AcceptedScopeAuthorization,
-    ArchitectureImpact,
-    AuthorityAuthorization,
-    ContractCoverageOwner,
-    CoverageOwner,
-    CrossBoundaryCheckpoint,
-    DeferredCoverageOwner,
-    ExistingConsumerAuthorization,
-    NoArchitectureImpact,
-    NoLifecyclePartition,
-    NotApplicableCoverageOwner,
-    ReadOnlyArchitecture,
-    RepositoryPolicyAuthorization,
-    RequiredLifecyclePartition,
-    ReviewedAuthority,
-    ReviewedAuthorityDigestMismatch,
-    ReviewedAuthoritySelectionFailure,
-    ReviewedAuthorityValidationFailure,
-    UpdateRequiredArchitecture,
-    WorkBrief,
-    WorkBriefCheckpoint,
-    WorkBriefReview,
-)
 
 
 def _invalid(message: str) -> WorkBriefError:
@@ -48,32 +24,32 @@ def _canonical_bytes[T](value: T) -> bytes:
     return msgspec.json.encode(value, order="sorted")
 
 
-def _owner_key(owner: CoverageOwner) -> tuple[str, str | int]:
+def _owner_key(owner: work_brief_models.CoverageOwner) -> tuple[str, str | int]:
     match owner:
-        case ContractCoverageOwner(contract_invariant=invariant):
+        case work_brief_models.ContractCoverageOwner(contract_invariant=invariant):
             return "contract", invariant
-        case AcceptanceCoverageOwner(criterion=criterion):
+        case work_brief_models.AcceptanceCoverageOwner(criterion=criterion):
             return "acceptance", criterion
-        case DeferredCoverageOwner(deferral_id=deferral_id):
+        case work_brief_models.DeferredCoverageOwner(deferral_id=deferral_id):
             return "deferred", deferral_id
-        case NotApplicableCoverageOwner(reason=reason):
+        case work_brief_models.NotApplicableCoverageOwner(reason=reason):
             return "not-applicable", reason
         case _ as unreachable:
             assert_never(unreachable)
 
 
-def decode_work_brief(data: bytes) -> WorkBrief:
+def decode_work_brief(data: bytes) -> work_brief_models.WorkBrief:
     try:
-        return msgspec.json.decode(data, type=WorkBrief)
+        return msgspec.json.decode(data, type=work_brief_models.WorkBrief)
     except msgspec.DecodeError as error:
         raise _invalid(f"Cannot decode canonical work brief: {error}") from error
 
 
-def canonical_work_brief_bytes(brief: WorkBrief) -> bytes:
+def canonical_work_brief_bytes(brief: work_brief_models.WorkBrief) -> bytes:
     return _canonical_bytes(brief) + b"\n"
 
 
-def decode_canonical_work_brief(data: bytes) -> WorkBrief:
+def decode_canonical_work_brief(data: bytes) -> work_brief_models.WorkBrief:
     brief = decode_work_brief(data)
     if data != canonical_work_brief_bytes(brief):
         raise WorkBriefError(
@@ -83,18 +59,18 @@ def decode_canonical_work_brief(data: bytes) -> WorkBrief:
     return brief
 
 
-def canonical_checkpoint_bytes(checkpoint: WorkBriefCheckpoint) -> bytes:
+def canonical_checkpoint_bytes(checkpoint: work_brief_models.WorkBriefCheckpoint) -> bytes:
     return _canonical_bytes(checkpoint)
 
 
-def canonical_reviewed_authority_set_bytes(authorities: tuple[ReviewedAuthority, ...]) -> bytes:
+def canonical_reviewed_authority_set_bytes(authorities: tuple[work_brief_models.ReviewedAuthority, ...]) -> bytes:
     return _canonical_bytes(authorities)
 
 
 def validate_reviewed_authority_digests(
     source_checkout_root: Path,
-    authorities: tuple[ReviewedAuthority, ...],
-) -> ReviewedAuthorityValidationFailure | None:
+    authorities: tuple[work_brief_models.ReviewedAuthority, ...],
+) -> work_brief_models.ReviewedAuthorityValidationFailure | None:
     for authority in authorities:
         try:
             selected = select_brief_source(
@@ -103,10 +79,10 @@ def validate_reviewed_authority_digests(
                 require_utf8=True,
             )
         except BriefSourceError as error:
-            return ReviewedAuthoritySelectionFailure(authority.authority_id, error.message)
+            return work_brief_models.ReviewedAuthoritySelectionFailure(authority.authority_id, error.message)
         observed_sha256 = hashlib.sha256(selected.content).hexdigest()
         if observed_sha256 != authority.reviewed_sha256:
-            return ReviewedAuthorityDigestMismatch(
+            return work_brief_models.ReviewedAuthorityDigestMismatch(
                 authority.authority_id,
                 authority.reviewed_sha256,
                 observed_sha256,
@@ -114,9 +90,9 @@ def validate_reviewed_authority_digests(
     return None
 
 
-def decode_work_brief_review(data: bytes) -> WorkBriefReview:
+def decode_work_brief_review(data: bytes) -> work_brief_models.WorkBriefReview:
     try:
-        return msgspec.json.decode(data, type=WorkBriefReview)
+        return msgspec.json.decode(data, type=work_brief_models.WorkBriefReview)
     except msgspec.DecodeError as error:
         raise WorkBriefError(
             WorkBriefErrorCode.REVIEW_INVALID,
@@ -124,11 +100,11 @@ def decode_work_brief_review(data: bytes) -> WorkBriefReview:
         ) from error
 
 
-def canonical_work_brief_review_bytes(review: WorkBriefReview) -> bytes:
+def canonical_work_brief_review_bytes(review: work_brief_models.WorkBriefReview) -> bytes:
     return _canonical_bytes(review) + b"\n"
 
 
-def decode_canonical_work_brief_review(data: bytes) -> WorkBriefReview:
+def decode_canonical_work_brief_review(data: bytes) -> work_brief_models.WorkBriefReview:
     review = decode_work_brief_review(data)
     if data != canonical_work_brief_review_bytes(review):
         raise WorkBriefError(
@@ -139,12 +115,12 @@ def decode_canonical_work_brief_review(data: bytes) -> WorkBriefReview:
 
 
 def validate_work_brief_review(
-    review: WorkBriefReview,
-    brief: WorkBrief,
+    review: work_brief_models.WorkBriefReview,
+    brief: work_brief_models.WorkBrief,
     reviewer_task_id: str | None = None,
 ) -> None:
     checkpoint = brief.checkpoint
-    if not isinstance(checkpoint, CrossBoundaryCheckpoint):
+    if not isinstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint):
         raise WorkBriefError(WorkBriefErrorCode.REVIEW_INVALID, "Local checkpoints do not use brief reviews.")
     if review.attempt_id != brief.attempt_id or review.checkpoint_id != checkpoint.checkpoint_id:
         raise WorkBriefError(
@@ -175,31 +151,31 @@ def validate_work_brief_review(
 
 
 def _authorization_text(
-    basis: AcceptedScopeAuthorization
-    | AuthorityAuthorization
-    | RepositoryPolicyAuthorization
-    | ExistingConsumerAuthorization,
+    basis: work_brief_models.AcceptedScopeAuthorization
+    | work_brief_models.AuthorityAuthorization
+    | work_brief_models.RepositoryPolicyAuthorization
+    | work_brief_models.ExistingConsumerAuthorization,
 ) -> str:
     match basis:
-        case AcceptedScopeAuthorization(item_id=item_id, scope_revision=revision):
+        case work_brief_models.AcceptedScopeAuthorization(item_id=item_id, scope_revision=revision):
             return f"accepted-scope:{item_id}@{revision}"
-        case AuthorityAuthorization(authority_id=authority_id, family=family):
+        case work_brief_models.AuthorityAuthorization(authority_id=authority_id, family=family):
             return f"authority:{authority_id}#{family}"
-        case RepositoryPolicyAuthorization(authority_id=authority_id, family=family):
+        case work_brief_models.RepositoryPolicyAuthorization(authority_id=authority_id, family=family):
             return f"repository-policy:{authority_id}#{family}"
-        case ExistingConsumerAuthorization(authority_id=authority_id, family=family):
+        case work_brief_models.ExistingConsumerAuthorization(authority_id=authority_id, family=family):
             return f"existing-consumer:{authority_id}#{family}"
         case _ as unreachable:
             assert_never(unreachable)
 
 
-def _architecture_text(impact: ArchitectureImpact) -> str:
+def _architecture_text(impact: work_brief_models.ArchitectureImpact) -> str:
     match impact:
-        case NoArchitectureImpact(reason=reason):
+        case work_brief_models.NoArchitectureImpact(reason=reason):
             return f"none — {reason}"
-        case ReadOnlyArchitecture(selector=selector, reason=reason):
+        case work_brief_models.ReadOnlyArchitecture(selector=selector, reason=reason):
             return f"read-only — `{selector}` — {reason}"
-        case UpdateRequiredArchitecture(selector=selector, reason=reason):
+        case work_brief_models.UpdateRequiredArchitecture(selector=selector, reason=reason):
             return f"update-required — `{selector}` — {reason}"
         case _ as unreachable:
             assert_never(unreachable)
@@ -211,7 +187,7 @@ def _section(lines: list[str], heading: str, values: tuple[str, ...]) -> None:
     lines.append("")
 
 
-def render_work_brief_markdown(brief: WorkBrief, database_revision: int | None = None) -> bytes:
+def render_work_brief_markdown(brief: work_brief_models.WorkBrief, database_revision: int | None = None) -> bytes:
     checkpoint = brief.checkpoint
     lines = [
         "---",
@@ -237,7 +213,7 @@ def render_work_brief_markdown(brief: WorkBrief, database_revision: int | None =
         f"## Checkpoint: {checkpoint.title}",
         "",
         f"- Checkpoint ID: `{checkpoint.checkpoint_id}`",
-        f"- Boundary: `{('cross-boundary' if isinstance(checkpoint, CrossBoundaryCheckpoint) else 'local')}`",
+        f"- Boundary: `{('cross-boundary' if isinstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint) else 'local')}`",
         f"- Architecture impact: {_architecture_text(checkpoint.architecture_impact)}",
         "",
         checkpoint.outcome_description,
@@ -250,7 +226,7 @@ def render_work_brief_markdown(brief: WorkBrief, database_revision: int | None =
     _section(lines, "Non-goals", brief.non_goals)
     lines.extend(("## Product decision and provenance", "", brief.product_decision_and_provenance, ""))
     lines.extend(("## Testing strategy", "", brief.testing_strategy, ""))
-    if isinstance(checkpoint, CrossBoundaryCheckpoint):
+    if isinstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint):
         lines.extend(("## Contract", ""))
         for record in checkpoint.contracts:
             lines.extend(
@@ -288,9 +264,9 @@ def render_work_brief_markdown(brief: WorkBrief, database_revision: int | None =
                 )
             )
         match checkpoint.lifecycle_partition:
-            case NoLifecyclePartition(reason=reason):
+            case work_brief_models.NoLifecyclePartition(reason=reason):
                 lines.extend(("## Lifecycle partition", "", f"Not applicable — {reason}", ""))
-            case RequiredLifecyclePartition(operations=operations):
+            case work_brief_models.RequiredLifecyclePartition(operations=operations):
                 lines.extend(("## Lifecycle partition", ""))
                 for operation in operations:
                     lines.extend(
@@ -322,7 +298,7 @@ def render_work_brief_markdown(brief: WorkBrief, database_revision: int | None =
     return "\n".join(lines).encode()
 
 
-def read_work_brief(path: Path, *, canonical: bool = True) -> WorkBrief:
+def read_work_brief(path: Path, *, canonical: bool = True) -> work_brief_models.WorkBrief:
     try:
         data = path.read_bytes()
     except OSError as error:

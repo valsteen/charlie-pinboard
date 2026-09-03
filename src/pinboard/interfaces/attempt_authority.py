@@ -9,15 +9,7 @@ from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.decision_projection import project_decision_snapshot, project_inactive_attempt_authority
 from pinboard.application.service import change_attempt_authority as apply_attempt_authority_change
-from pinboard.domain import work_models
-from pinboard.domain.authority_models import (
-    AcquireInitialAttemptAuthority,
-    AttemptAuthorityOperation,
-    ReleaseAttemptAuthority,
-    RenewAttemptAuthority,
-    RevokeAttemptAuthority,
-    TransferAttemptAuthority,
-)
+from pinboard.domain import authority_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import AttemptId, LeaseId
 from pinboard.interfaces import cli_commands, work_views
@@ -79,7 +71,7 @@ def _attempt_acquire_operation(
     attempt: stored_state.StoredAttempt,
     command: cli_commands.AttemptAcquireCommand | cli_commands.CoordinatedAttemptAcquireCommand,
     now: datetime,
-) -> CommandResult[AttemptAuthorityOperation]:
+) -> CommandResult[authority_models.AttemptAuthorityOperation]:
     attempt_id = command.attempt_id
     retained_record = next(
         (value for value in state.authority.attempt_leases if value.attempt_id == attempt_id),
@@ -87,7 +79,7 @@ def _attempt_acquire_operation(
     )
     lease_id = LeaseId(uuid4().hex)
     if retained_record is None:
-        return AcquireInitialAttemptAuthority(
+        return authority_models.AcquireInitialAttemptAuthority(
             state.lifecycle.project.host_epoch,
             attempt_id,
             attempt.item_id,
@@ -110,7 +102,7 @@ def _attempt_acquire_operation(
             DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
             "Attempt reacquisition requires the exact coordination lease and generation.",
         )
-    return TransferAttemptAuthority(
+    return authority_models.TransferAttemptAuthority(
         inactive,
         work_models.CoordinationCommandAuthority(
             state.lifecycle.project.host_epoch,
@@ -132,7 +124,7 @@ def _attempt_renew_operation(
     state: stored_state.StoredWorkState,
     command: cli_commands.AttemptRenewCommand,
     now: datetime,
-) -> CommandResult[RenewAttemptAuthority]:
+) -> CommandResult[authority_models.RenewAttemptAuthority]:
     retained = next(
         (
             value
@@ -143,7 +135,7 @@ def _attempt_renew_operation(
     )
     if retained is None:
         return CommandFailure(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
-    return RenewAttemptAuthority(
+    return authority_models.RenewAttemptAuthority(
         replace(retained, lease_id=command.lease_id, generation=command.generation),
         now,
         now + timedelta(seconds=command.ttl_seconds),
@@ -154,7 +146,7 @@ def _attempt_release_operation(
     state: stored_state.StoredWorkState,
     command: cli_commands.AttemptReleaseCommand,
     now: datetime,
-) -> CommandResult[ReleaseAttemptAuthority]:
+) -> CommandResult[authority_models.ReleaseAttemptAuthority]:
     retained = next(
         (
             value
@@ -165,7 +157,7 @@ def _attempt_release_operation(
     )
     if retained is None:
         return CommandFailure(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not active.")
-    return ReleaseAttemptAuthority(
+    return authority_models.ReleaseAttemptAuthority(
         replace(retained, lease_id=command.lease_id, generation=command.generation),
         now,
     )
@@ -175,11 +167,11 @@ def _attempt_revoke_operation(
     state: stored_state.StoredWorkState,
     command: cli_commands.AttemptRevokeCommand,
     now: datetime,
-) -> CommandResult[RevokeAttemptAuthority]:
+) -> CommandResult[authority_models.RevokeAttemptAuthority]:
     coordination = state.authority.coordination
     if coordination is None:
         return CommandFailure(DecisionFailureCode.COORDINATION_LEASE_REQUIRED, "Coordination authority is absent.")
-    return RevokeAttemptAuthority(
+    return authority_models.RevokeAttemptAuthority(
         command.attempt_id,
         command.lease_id,
         command.generation,

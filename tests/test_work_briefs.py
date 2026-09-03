@@ -20,24 +20,9 @@ from pinboard.application.artifacts import NewArtifact
 from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import ArtifactRefId, AttemptId, HostId, ItemId, LeaseId, TaskId
+from pinboard.interfaces import work_brief_models
 from pinboard.interfaces.cli import main
 from pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
-from pinboard.interfaces.work_brief_models import (
-    AcceptanceCoverageOwner,
-    AuthorityAuthorization,
-    CrossBoundaryCheckpoint,
-    DeferredCoverageOwner,
-    ExistingConsumerAuthorization,
-    LifecycleRecord,
-    NoArchitectureImpact,
-    NotApplicableCoverageOwner,
-    ReadOnlyArchitecture,
-    RequiredLifecyclePartition,
-    ReviewCoverageResult,
-    ReviewedAuthorityDigestMismatch,
-    ReviewedAuthoritySelectionFailure,
-    WorkBriefReview,
-)
 from pinboard.interfaces.work_briefs import (
     canonical_checkpoint_bytes,
     canonical_reviewed_authority_set_bytes,
@@ -65,22 +50,22 @@ class WorkBriefBoundaryTest(unittest.TestCase):
         project = Path(tempfile.mkdtemp()).resolve()
         brief = work_a_brief(project)
         checkpoint = brief.checkpoint
-        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
+        assert isinstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint)
 
         self.assertIsNone(validate_reviewed_authority_digests(project, checkpoint.reviewed_authorities))
 
         source = project / "architecture.md"
         source.write_text("# Architecture\n\n## Contract\n\nChanged.\n", encoding="utf-8")
         stale = validate_reviewed_authority_digests(project, checkpoint.reviewed_authorities)
-        self.assertIsInstance(stale, ReviewedAuthorityDigestMismatch)
-        assert isinstance(stale, ReviewedAuthorityDigestMismatch)
+        self.assertIsInstance(stale, work_brief_models.ReviewedAuthorityDigestMismatch)
+        assert isinstance(stale, work_brief_models.ReviewedAuthorityDigestMismatch)
         self.assertEqual("architecture", stale.authority_id)
         self.assertNotEqual(stale.expected_sha256, stale.observed_sha256)
 
         source.unlink()
         unreadable = validate_reviewed_authority_digests(project, checkpoint.reviewed_authorities)
-        self.assertIsInstance(unreadable, ReviewedAuthoritySelectionFailure)
-        assert isinstance(unreadable, ReviewedAuthoritySelectionFailure)
+        self.assertIsInstance(unreadable, work_brief_models.ReviewedAuthoritySelectionFailure)
+        assert isinstance(unreadable, work_brief_models.ReviewedAuthoritySelectionFailure)
         self.assertEqual("architecture", unreadable.authority_id)
         self.assertIn("Cannot read authority", unreadable.reason)
 
@@ -137,14 +122,22 @@ class WorkBriefBoundaryTest(unittest.TestCase):
     def test_every_tagged_variant_decodes_through_the_strict_boundary(self) -> None:
         value = example_work_brief()
         checkpoint = value.checkpoint
-        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
-        authority_basis = AuthorityAuthorization("repository-guidance", "repository-practice")
-        existing_consumer_basis = ExistingConsumerAuthorization("repository-guidance", "repository-practice")
+        assert isinstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint)
+        authority_basis = work_brief_models.AuthorityAuthorization("repository-guidance", "repository-practice")
+        existing_consumer_basis = work_brief_models.ExistingConsumerAuthorization(
+            "repository-guidance", "repository-practice"
+        )
         for name, changed in (
-            ("architecture-none", replace(checkpoint, architecture_impact=NoArchitectureImpact("No change."))),
+            (
+                "architecture-none",
+                replace(checkpoint, architecture_impact=work_brief_models.NoArchitectureImpact("No change.")),
+            ),
             (
                 "architecture-read-only",
-                replace(checkpoint, architecture_impact=ReadOnlyArchitecture("ARCHITECTURE.md", "Conform.")),
+                replace(
+                    checkpoint,
+                    architecture_impact=work_brief_models.ReadOnlyArchitecture("ARCHITECTURE.md", "Conform."),
+                ),
             ),
             (
                 "authority-authorization",
@@ -164,14 +157,16 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                 "acceptance-owner",
                 replace(
                     checkpoint,
-                    coverage=(replace(checkpoint.coverage[0], owner=AcceptanceCoverageOwner(1)),),
+                    coverage=(replace(checkpoint.coverage[0], owner=work_brief_models.AcceptanceCoverageOwner(1)),),
                 ),
             ),
             (
                 "deferred-owner",
                 replace(
                     checkpoint,
-                    coverage=(replace(checkpoint.coverage[0], owner=DeferredCoverageOwner("later-work")),),
+                    coverage=(
+                        replace(checkpoint.coverage[0], owner=work_brief_models.DeferredCoverageOwner("later-work")),
+                    ),
                 ),
             ),
             (
@@ -181,7 +176,7 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                     coverage=(
                         replace(
                             checkpoint.coverage[0],
-                            owner=NotApplicableCoverageOwner("No effect."),
+                            owner=work_brief_models.NotApplicableCoverageOwner("No effect."),
                         ),
                     ),
                 ),
@@ -190,8 +185,12 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                 "required-lifecycle",
                 replace(
                     checkpoint,
-                    lifecycle_partition=RequiredLifecyclePartition(
-                        (LifecycleRecord("publish", "candidate", "application", "receipt", "accepted", "overwrite"),)
+                    lifecycle_partition=work_brief_models.RequiredLifecyclePartition(
+                        (
+                            work_brief_models.LifecycleRecord(
+                                "publish", "candidate", "application", "receipt", "accepted", "overwrite"
+                            ),
+                        )
                     ),
                 ),
             ),
@@ -208,7 +207,7 @@ class WorkBriefBoundaryTest(unittest.TestCase):
     def test_checkpoint_and_authority_digests_use_canonical_records(self) -> None:
         value = example_work_brief()
         checkpoint = value.checkpoint
-        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
+        assert isinstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint)
 
         self.assertEqual(
             "a2941d05f3c61a40ca5014af48a095ee919e2cad2fe2d78a09a74a8835693f1f",
@@ -239,9 +238,9 @@ class WorkBriefBoundaryTest(unittest.TestCase):
     def test_review_is_strict_digest_bound_and_independent(self) -> None:
         value = example_work_brief()
         checkpoint = value.checkpoint
-        assert isinstance(checkpoint, CrossBoundaryCheckpoint)
+        assert isinstance(checkpoint, work_brief_models.CrossBoundaryCheckpoint)
         coverage = checkpoint.coverage[0]
-        review = WorkBriefReview(
+        review = work_brief_models.WorkBriefReview(
             schema="pinboard-work-brief-review/v2",
             attempt_id=value.attempt_id,
             checkpoint_id=checkpoint.checkpoint_id,
@@ -253,7 +252,7 @@ class WorkBriefBoundaryTest(unittest.TestCase):
             status="complete",
             verdict="ready",
             coverage=(
-                ReviewCoverageResult(
+                work_brief_models.ReviewCoverageResult(
                     authority_id=coverage.authority_id,
                     family=coverage.family,
                     owner=coverage.owner,

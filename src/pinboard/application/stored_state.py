@@ -3,8 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal, assert_never
 
-from pinboard.domain import work_models
-from pinboard.domain.authority_models import AttemptLeaseStatus, PreparationLeaseStatus
+from pinboard.domain import authority_models, work_models
 from pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -262,7 +261,7 @@ class StoredAttemptLease:
     generation: int
     acquired_at: datetime
     expires_at: datetime
-    state: AttemptLeaseStatus
+    state: authority_models.AttemptLeaseStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,7 +287,7 @@ class StoredPreparationLease:
     definition_digest: str
     acquired_at: datetime
     expires_at: datetime
-    state: PreparationLeaseStatus
+    state: authority_models.PreparationLeaseStatus
 
 
 @dataclass(frozen=True, slots=True)

@@ -25,7 +25,7 @@ from pinboard.application.ports import WorkStore
 from pinboard.domain import decision_models
 from pinboard.domain.errors import DecisionFailureCode
 from pinboard.domain.identifiers import ReviewId
-from pinboard.interfaces import action_selection, cli_commands
+from pinboard.interfaces import action_selection, cli_commands, work_brief_models
 from pinboard.interfaces.errors import (
     CliResult,
     CommandFailure,
@@ -34,13 +34,6 @@ from pinboard.interfaces.errors import (
     DispatchResult,
     WorkBriefError,
     WorkBriefErrorCode,
-)
-from pinboard.interfaces.work_brief_models import (
-    CrossBoundaryCheckpoint,
-    LocalCheckpoint,
-    ReviewedAuthorityDigestMismatch,
-    ReviewedAuthoritySelectionFailure,
-    WorkBrief,
 )
 from pinboard.interfaces.work_briefs import (
     canonical_checkpoint_bytes,
@@ -159,7 +152,7 @@ def _canonical_prompt(
 
 
 def _validate_dispatch_identity(
-    brief: WorkBrief,
+    brief: work_brief_models.WorkBrief,
     attempt_id: str,
     attempt_branch: str,
     checkpoint_id: str,
@@ -218,7 +211,7 @@ def _read_dispatch_brief(
     accepted_item_id: str | None,
     accepted_scope_revision: int | None,
     accepted_scope_digest: str | None,
-) -> DispatchResult[WorkBrief]:
+) -> DispatchResult[work_brief_models.WorkBrief]:
     try:
         brief = read_work_brief(attempt_path)
     except WorkBriefError as error:
@@ -237,17 +230,17 @@ def _read_dispatch_brief(
         )
     ) is not None:
         return failure
-    if isinstance(brief.checkpoint, CrossBoundaryCheckpoint):
+    if isinstance(brief.checkpoint, work_brief_models.CrossBoundaryCheckpoint):
         failure = validate_reviewed_authority_digests(source_checkout_root, brief.checkpoint.reviewed_authorities)
         match failure:
             case None:
                 pass
-            case ReviewedAuthoritySelectionFailure(authority_id=authority_id, reason=reason):
+            case work_brief_models.ReviewedAuthoritySelectionFailure(authority_id=authority_id, reason=reason):
                 return DispatchFailure(
                     DispatchErrorCode.DISPATCH_AUTHORITY_UNREADABLE,
                     f"Cannot read reviewed authority '{authority_id}': {reason}",
                 )
-            case ReviewedAuthorityDigestMismatch(authority_id=authority_id):
+            case work_brief_models.ReviewedAuthorityDigestMismatch(authority_id=authority_id):
                 return DispatchFailure(
                     DispatchErrorCode.DISPATCH_AUTHORITY_STALE,
                     f"Reviewed authority '{authority_id}' changed after review.",
@@ -258,18 +251,18 @@ def _read_dispatch_brief(
 
 
 def _review_candidate(
-    brief: WorkBrief,
+    brief: work_brief_models.WorkBrief,
     supplied_review: SuppliedDispatchReview | None,
 ) -> DispatchResult[DispatchReview | None]:
     match brief.checkpoint:
-        case LocalCheckpoint():
+        case work_brief_models.LocalCheckpoint():
             if supplied_review is not None:
                 return DispatchFailure(
                     DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID,
                     "Local checkpoints do not publish cross-boundary brief reviews.",
                 )
             return None
-        case CrossBoundaryCheckpoint() as checkpoint:
+        case work_brief_models.CrossBoundaryCheckpoint() as checkpoint:
             if supplied_review is None:
                 return ExistingDispatchReview(hashlib.sha256(canonical_checkpoint_bytes(checkpoint)).hexdigest())
             try:
@@ -283,15 +276,17 @@ def _review_candidate(
             assert_never(unreachable)
 
 
-def _validate_accepted_review(brief: WorkBrief, accepted_review: bytes | None) -> DispatchFailure | None:
+def _validate_accepted_review(
+    brief: work_brief_models.WorkBrief, accepted_review: bytes | None
+) -> DispatchFailure | None:
     match brief.checkpoint:
-        case LocalCheckpoint():
+        case work_brief_models.LocalCheckpoint():
             if accepted_review is not None:
                 return DispatchFailure(
                     DispatchErrorCode.DISPATCH_BRIEF_REVIEW_ARGUMENT_INVALID,
                     "Local checkpoints do not use cross-boundary brief reviews.",
                 )
-        case CrossBoundaryCheckpoint():
+        case work_brief_models.CrossBoundaryCheckpoint():
             if accepted_review is None:
                 return DispatchFailure(
                     DispatchErrorCode.DISPATCH_BRIEF_REVIEW_MISSING,
@@ -308,7 +303,7 @@ def _validate_accepted_review(brief: WorkBrief, accepted_review: bytes | None) -
 
 
 def _render_dispatch_prompt(
-    brief: WorkBrief,
+    brief: work_brief_models.WorkBrief,
     attempt_path: Path,
     checkpoint: str,
     environment: DispatchEnvironment,

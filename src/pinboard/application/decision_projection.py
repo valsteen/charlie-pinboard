@@ -1,12 +1,7 @@
 from datetime import datetime
 
 from pinboard.application import stored_state
-from pinboard.domain import work_models
-from pinboard.domain.authority_models import (
-    AttemptLeaseStatus,
-    InactiveAttemptAuthority,
-    PreparationLeaseStatus,
-)
+from pinboard.domain import authority_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import AttemptId, CandidateId, ItemId, ProposalId
 from pinboard.domain.ledger import LedgerSnapshot
@@ -16,7 +11,7 @@ def project_inactive_attempt_authority(
     state: stored_state.StoredWorkState,
     attempt_id: AttemptId,
     now: datetime,
-) -> DecisionResult[InactiveAttemptAuthority]:
+) -> DecisionResult[authority_models.InactiveAttemptAuthority]:
     """Select exact retained inactive authority after ordinary interruption recovery."""
 
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
@@ -36,15 +31,15 @@ def project_inactive_attempt_authority(
             DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
             "The retained attempt generation has no exact identity anchor.",
         )
-    if lease.state == AttemptLeaseStatus.ACTIVE:
+    if lease.state == authority_models.AttemptLeaseStatus.ACTIVE:
         if lease.expires_at > now:
             return DecisionFailure(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "Attempt authority remains live.")
-        status = AttemptLeaseStatus.EXPIRED
-    elif lease.state in {AttemptLeaseStatus.RELEASED, AttemptLeaseStatus.REVOKED}:
+        status = authority_models.AttemptLeaseStatus.EXPIRED
+    elif lease.state in {authority_models.AttemptLeaseStatus.RELEASED, authority_models.AttemptLeaseStatus.REVOKED}:
         status = lease.state
     else:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "Attempt authority is not inactive.")
-    return InactiveAttemptAuthority(
+    return authority_models.InactiveAttemptAuthority(
         state.lifecycle.project.host_epoch,
         attempt_id,
         attempt.item_id,
@@ -134,7 +129,7 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
             lease.attempt_id,
             attempt_by_id[lease.attempt_id].item_id,
             attempt_anchors[(lease.attempt_id, lease.generation)].lease_id
-            if lease.state == AttemptLeaseStatus.ACTIVE
+            if lease.state == authority_models.AttemptLeaseStatus.ACTIVE
             else None,
             lease.generation,
         )
@@ -154,7 +149,7 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
             lease.expires_at,
         )
         for lease in state.authority.attempt_leases
-        if lease.state == AttemptLeaseStatus.ACTIVE and lease.expires_at > now
+        if lease.state == authority_models.AttemptLeaseStatus.ACTIVE and lease.expires_at > now
         for anchor in (attempt_anchors[(lease.attempt_id, lease.generation)],)
     )
     preparation_anchors = {
@@ -166,7 +161,7 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
             lease.definition_revision,
             lease.definition_digest,
             preparation_anchors[(lease.item_id, lease.generation)].lease_id
-            if lease.state == PreparationLeaseStatus.ACTIVE and lease.expires_at > now
+            if lease.state == authority_models.PreparationLeaseStatus.ACTIVE and lease.expires_at > now
             else None,
             lease.generation,
         )
@@ -185,7 +180,7 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
             lease.expires_at,
         )
         for lease in state.authority.preparation_leases
-        if lease.state == PreparationLeaseStatus.ACTIVE and lease.expires_at > now
+        if lease.state == authority_models.PreparationLeaseStatus.ACTIVE and lease.expires_at > now
         for anchor in (preparation_anchors[(lease.item_id, lease.generation)],)
     )
     coordination_authority = (

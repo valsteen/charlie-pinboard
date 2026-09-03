@@ -19,14 +19,7 @@ from pinboard.application.mutation_models import (
     MutationReceipt,
 )
 from pinboard.application.mutations import project_transition_mutation
-from pinboard.domain import decision_models, work_models
-from pinboard.domain.authority_models import (
-    AttemptAuthorityDecision,
-    AttemptLeaseAuthority,
-    AttemptLeaseStatus,
-    CoordinationAuthorityDecision,
-    PreparationLeaseStatus,
-)
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.decisions import available_actions as available_actions_outcome
 from pinboard.domain.decisions import decide as decision_outcome
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
@@ -100,16 +93,20 @@ class MutationPersistenceTest(unittest.TestCase):
         before: stored_state.StoredWorkState,
         *,
         extension: timedelta = timedelta(minutes=1),
-    ) -> CoordinationAuthorityDecision:
+    ) -> authority_models.CoordinationAuthorityDecision:
         retained = project_decision_snapshot(before, SQLITE_NOW).coordination_lease
         assert retained is not None
-        return CoordinationAuthorityDecision(retained, replace(retained, expires_at=retained.expires_at + extension))
+        return authority_models.CoordinationAuthorityDecision(
+            retained, replace(retained, expires_at=retained.expires_at + extension)
+        )
 
-    def _attempt_renewal_decision(self, before: stored_state.StoredWorkState) -> AttemptAuthorityDecision:
+    def _attempt_renewal_decision(
+        self, before: stored_state.StoredWorkState
+    ) -> authority_models.AttemptAuthorityDecision:
         snapshot = project_decision_snapshot(before, SQLITE_NOW)
         command = snapshot.command_attempt_authorities[0]
         stored = before.authority.attempt_leases[0]
-        retained = AttemptLeaseAuthority(
+        retained = authority_models.AttemptLeaseAuthority(
             command.host_epoch,
             command.attempt,
             command.item,
@@ -119,9 +116,9 @@ class MutationPersistenceTest(unittest.TestCase):
             command.generation,
             stored.acquired_at,
             command.expires_at,
-            AttemptLeaseStatus.ACTIVE,
+            authority_models.AttemptLeaseStatus.ACTIVE,
         )
-        return AttemptAuthorityDecision(
+        return authority_models.AttemptAuthorityDecision(
             command.attempt,
             command.generation,
             command.generation,
@@ -212,7 +209,7 @@ class MutationPersistenceTest(unittest.TestCase):
                         definition.digest,
                         SQLITE_NOW,
                         SQLITE_NOW + timedelta(minutes=5),
-                        PreparationLeaseStatus.ACTIVE,
+                        authority_models.PreparationLeaseStatus.ACTIVE,
                     ),
                 ),
             ),
@@ -275,7 +272,9 @@ class MutationPersistenceTest(unittest.TestCase):
         self.assertEqual("transition-receipt/v1", reopened.transition_receipts[-1].outcome_schema)
         self.assertEqual(TaskId("preparer-c"), reopened.transition_receipts[-1].actor_task_id)
         self.assertEqual(HostId("host-a"), reopened.transition_receipts[-1].actor_host_id)
-        self.assertEqual(PreparationLeaseStatus.REVOKED, reopened.authority.preparation_leases[0].state)
+        self.assertEqual(
+            authority_models.PreparationLeaseStatus.REVOKED, reopened.authority.preparation_leases[0].state
+        )
 
     def test_definition_revision_persists_atomically_and_reloads_every_audit_fact(self) -> None:
         state = complete_sqlite_state()
