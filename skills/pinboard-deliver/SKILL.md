@@ -28,7 +28,7 @@ When reacquiring an attempt returned from review, read the durable correction re
 - Treat a stale instruction as an instruction defect before reshaping working code around it.
 - Do not edit generated views, SQLite authority, coordination leases, or another item's lifecycle state outside the executable workflow.
 - Do not accept or complete your own item.
-- Prepare the stable candidate for independent review, then follow the current-responsibility and confirmed-delivery rules below. No permanent coordinator chat is required.
+- Prepare the stable candidate for independent review, then follow the current ownership and review-return rules below. No permanent coordinator task is required.
 
 Worker diff inspection, requirement mapping, and fresh verification are pre-review evidence. They do not replace independent review.
 
@@ -93,9 +93,9 @@ When the accepted checkpoint is one of several recorded for the item, report its
 
 `result.md` makes the candidate durably ready for review. It does not by itself notify another task.
 
-Apply the [current-responsibility review route](../pinboard/SKILL.md#coordinate-review-responsibility-and-checkout-use). By default, the task carrying this attempt commissions one fresh-context, candidate-read-only review subagent and processes its complete verdict. In user-facing updates, call this `review by a separate Codex reviewer`; reserve `ready for your review` for an actual human review request. An exact `source_thread_id`, prior dispatch, scope clarification, earlier message, or former coordination is not sufficient reason to wake another visible task.
+Apply the [current-responsibility review route](../pinboard/SKILL.md#coordinate-review-responsibility-and-checkout-use). By default, the user-facing task that owns this outcome commissions one fresh-context, candidate-read-only review subagent and processes its complete verdict. The review result returns automatically to the owning task. In user-facing updates, call this `review by a separate Codex reviewer`; reserve `ready for your review` for an actual human review request. An exact `source_thread_id`, prior dispatch, scope clarification, earlier message, or former coordination is not sufficient reason to wake another visible task.
 
-Send a concise review request containing the attempt ID, candidate identity, and absolute `result.md` path to another visible task only when the user explicitly selected it or it remains the active user-facing coordinator for the same live workflow. Treat delivery as successful only after task messaging confirms it. Name that task and its expected review action after confirmed delivery; otherwise say `ready for review by a separate Codex reviewer` and state plainly that no visible task was notified. The durable receipt remains sufficient if reviewer creation or permitted delivery is unavailable.
+Do not send a task-to-task completion or review message for subordinate work. If this attempt belongs to a separate visible task because it is a genuinely independent outcome, report its result and request decisions in that task's own conversation. The durable receipt remains sufficient if reviewer creation is unavailable.
 
 Do not claim canonical completion until a current coordination lease authorizes the completion transition.
 

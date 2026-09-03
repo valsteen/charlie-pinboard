@@ -13,6 +13,8 @@ Pinboard gives one repository a durable work ledger. Proposed work, priorities, 
 
 Pinboard does not decide the product, choose priorities, or create Codex tasks. It records project decisions, rejects changes that no longer fit the current state, and keeps current ownership explicit. A short isolated change probably does not need it. Work that spans tasks, interruptions, dependencies, or independent review often does.
 
+For the most reliable Codex workflow, use one user-facing task per outcome from selection through the final repository decision. Let that task delegate bounded research, implementation, and review to subagents, whose results return automatically. Open a separate visible task only for an independent outcome you intend to follow there; it reports in its own conversation and is not a child expected to message results back.
+
 ## A campaign that survives the conversation
 
 Imagine you are building *Ashfall Keep*, a small action RPG. One Codex task is working on the dragon boss's second phase. Two scouts return with useful but distracting discoveries: save games capture temporary animation state, and controller mappings identify abilities by inventory position.
@@ -45,7 +47,7 @@ The code, branch, and conversation remain ordinary repository work. Pinboard kee
 - **Execution:** give each accepted attempt an exact brief and independent renewable ownership.
 - **Interruption and recovery:** block, pause, resume, or recover work without rebuilding its context from chat history.
 - **Parallel work:** preview independent items and recheck the group as each attempt starts, without creating tasks on the user's behalf.
-- **Review:** keep the submitted candidate and its evidence exact, then require a separate task to accept it or return it for correction.
+- **Review:** keep the submitted candidate and its evidence exact, then use a separate Codex reviewer—normally a subagent that returns to the owning task—to accept it or return it for correction.
 - **Handover:** export one complete revision-stamped JSON package containing admitted work, pending proposals, relationships, decisions, and verified review evidence without choosing a team-tool vendor.
 - **Recursive cleanup:** use `$slop-cleanup` to trace residue from revised or abandoned features, remove an approved family, and repeat until a fresh pass finds nothing new.
 

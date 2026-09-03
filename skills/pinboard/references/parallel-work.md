@@ -16,9 +16,9 @@ Do not use it merely because more than one item exists. Ordinary next-work selec
    - **Ready together:** the unambiguous all-safe set.
    - **Not ready:** excluded items with the command's exact reason translated into ordinary language.
 4. Add one execution-form recommendation to every launchable item:
-   - **Visible task** when the item is ready but has no accepted attempt, its brief is incomplete, or design, refinement, new authority, live-application work, external writes, or likely user input remain.
-   - **Subagent** only when an active attempt has a complete accepted brief, an independently buildable checkpoint, already-authorized permissions, and no expected user decision or input.
-5. Explain the recommendation in one short phrase. Do not infer that structurally independent means semantically autonomous.
+   - Use a **Subagent** for bounded work that belongs to the current outcome and should return to its owning task. Keep design, refinement, new-authority, live-application, external-write, and likely user-input decisions in the owning task until the work has a complete accepted brief, an independently buildable checkpoint, and already-authorized permissions.
+   - Use a **Visible task** only for a genuinely independent outcome that the human intends to follow in that task's own conversation. It is not a subordinate worker and does not return its result to the current task.
+5. Explain the recommendation in one short phrase and identify the task the human should follow. Do not recommend a visible task merely because work is incomplete, interactive, approval-sensitive, or structurally independent.
 
 If the request was only to list or preview, stop after presenting the groups. A read-only preview is not launch permission.
 
@@ -47,13 +47,14 @@ For a **Visible task**:
 
 1. Use the environment's native user-visible task creation capability. This is authorized by the user's exact batch request.
 2. Give it the repository root, item identity, fresh preview revision, and an instruction to use the pinboard to inspect the item and borrow coordination only for its own legal transition.
-3. Keep design and authorization questions in that visible task. Do not replace it with a subagent when visible-task creation is unavailable.
+3. Tell the human to follow that independent outcome in the new task. It reports and requests decisions there; do not use task-to-task messaging to return its result to the current task.
+4. Do not replace it with a subagent when visible-task creation is unavailable, because the human selected a separate outcome and conversation.
 
 For a **Subagent**:
 
-1. Follow the main skill's delegated-attempt procedure, including the canonical attempt brief and exact dispatch prompt.
-2. Launch it through the environment's subagent capability only after the dispatch check succeeds.
-3. Do not convert an incomplete, ambiguous, or interactive item into a bounded prompt merely to include it in the batch.
+1. Keep the current user-facing task as the outcome owner and resolve incomplete, ambiguous, or interactive decisions there.
+2. Follow the main skill's delegated-attempt procedure, including the canonical attempt brief and exact dispatch prompt.
+3. Launch it through the environment's subagent capability only after the dispatch check succeeds; its result returns automatically to the owning task.
 
 Task creation is an external effect, not a ledger transaction. Do not claim atomic launch or try to roll back a successfully created task because a later creation failed.
 
