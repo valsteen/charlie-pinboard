@@ -20,6 +20,16 @@ def _item_key(value: stored_state.StoredWorkItem) -> tuple[int, str]:
     return value.queue_position or 0, str(value.item_id)
 
 
+def _live_items(
+    state: stored_state.StoredWorkState,
+) -> tuple[tuple[stored_state.StoredWorkItem, work_models.WorkState], ...]:
+    return tuple(
+        (item, live_state)
+        for item in sorted(state.lifecycle.work_items, key=_item_key)
+        if (live_state := stored_state.live_work_state(item.state)) is not None
+    )
+
+
 def _attempt_key(value: stored_state.StoredAttempt) -> str:
     return str(value.attempt_id)
 
@@ -78,11 +88,7 @@ def overview_from_state(state: stored_state.StoredWorkState, now: datetime) -> q
         for item in state.lifecycle.work_items
     }
     proposals = {ItemId(proposal.proposal_id): proposal for proposal in state.proposals.proposals}
-    live_items = tuple(
-        (item, live_state)
-        for item in sorted(state.lifecycle.work_items, key=_item_key)
-        if (live_state := stored_state.live_work_state(item.state)) is not None
-    )
+    live_items = _live_items(state)
     live_ids = frozenset(item.item_id for item, _live_state in live_items)
 
     def dependency_reason(item_id: ItemId, link: stored_state.ItemDependency) -> query_models.DependencyReason:
@@ -372,11 +378,7 @@ def preview_parallel(
     now: datetime,
 ) -> query_models.ParallelPreview | query_models.ParallelSelectionInvalid:
     state = store.snapshot()
-    live = tuple(
-        (item, live_state)
-        for item in sorted(state.lifecycle.work_items, key=_item_key)
-        if (live_state := stored_state.live_work_state(item.state)) is not None
-    )
+    live = _live_items(state)
     by_id = {str(item.item_id): (item, live_state) for item, live_state in live}
     if any(item_id not in by_id for item_id in selected):
         return query_models.ParallelSelectionInvalid("Selected item identities must be current items.")
