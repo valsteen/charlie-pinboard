@@ -19,7 +19,27 @@ def _coordination_token(value: work_models.CoordinationLeaseAuthority) -> work_m
     )
 
 
-def decide_coordination_authority(  # noqa: C901, PLR0912
+def _current_coordination_authority(
+    retained: work_models.CoordinationLeaseAuthority | None,
+    authority: work_models.CoordinationCommandAuthority,
+    observed_at: datetime,
+) -> DecisionResult[work_models.CoordinationLeaseAuthority]:
+    if retained is None:
+        return DecisionFailure(
+            DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
+            "Coordination authority does not exist.",
+        )
+    if retained.state != work_models.CoordinationLeaseStatus.ACTIVE or _coordination_token(retained) != authority:
+        return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Coordination authority is fenced.")
+    if retained.expires_at <= observed_at:
+        return DecisionFailure(
+            DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
+            "Coordination authority has expired.",
+        )
+    return retained
+
+
+def decide_coordination_authority(
     retained: work_models.CoordinationLeaseAuthority | None,
     operation: authority_models.CoordinationAuthorityOperation,
 ) -> DecisionResult[authority_models.CoordinationAuthorityDecision]:
@@ -63,46 +83,22 @@ def decide_coordination_authority(  # noqa: C901, PLR0912
         case authority_models.RenewCoordinationAuthority(
             authority=authority, renewed_at=renewed_at, expires_at=expires_at
         ):
-            if retained is None:
-                return DecisionFailure(
-                    DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
-                    "Coordination authority does not exist.",
-                )
-            if (
-                retained.state != work_models.CoordinationLeaseStatus.ACTIVE
-                or _coordination_token(retained) != authority
-            ):
-                return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Coordination authority is fenced.")
-            if retained.expires_at <= renewed_at:
-                return DecisionFailure(
-                    DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
-                    "Coordination authority has expired.",
-                )
-            if expires_at <= renewed_at or expires_at <= retained.expires_at:
+            current = _current_coordination_authority(retained, authority, renewed_at)
+            if isinstance(current, DecisionFailure):
+                return current
+            if expires_at <= renewed_at or expires_at <= current.expires_at:
                 return DecisionFailure(
                     DecisionFailureCode.TRANSITION_INPUT_INVALID,
                     "Coordination renewal must extend its bounded expiry.",
                 )
-            return authority_models.CoordinationAuthorityDecision(retained, replace(retained, expires_at=expires_at))
+            return authority_models.CoordinationAuthorityDecision(current, replace(current, expires_at=expires_at))
         case authority_models.ReleaseCoordinationAuthority(authority=authority, released_at=released_at):
-            if retained is None:
-                return DecisionFailure(
-                    DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
-                    "Coordination authority does not exist.",
-                )
-            if (
-                retained.state != work_models.CoordinationLeaseStatus.ACTIVE
-                or _coordination_token(retained) != authority
-            ):
-                return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Coordination authority is fenced.")
-            if retained.expires_at <= released_at:
-                return DecisionFailure(
-                    DecisionFailureCode.COORDINATION_LEASE_REQUIRED,
-                    "Coordination authority has expired.",
-                )
+            current = _current_coordination_authority(retained, authority, released_at)
+            if isinstance(current, DecisionFailure):
+                return current
             return authority_models.CoordinationAuthorityDecision(
-                retained,
-                replace(retained, expires_at=released_at, state=work_models.CoordinationLeaseStatus.RELEASED),
+                current,
+                replace(current, expires_at=released_at, state=work_models.CoordinationLeaseStatus.RELEASED),
             )
         case authority_models.RevokeCoordinationAuthority(
             lease_id=lease_id, generation=generation, revoked_at=revoked_at
