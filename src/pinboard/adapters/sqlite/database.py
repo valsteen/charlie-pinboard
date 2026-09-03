@@ -179,6 +179,14 @@ def schema_bytes() -> bytes:
         raise StorageError(StorageErrorCode.IO_ERROR, "The installed SQLite schema could not be read.") from error
 
 
+def _sync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _sync_database(path: Path) -> None:
     try:
         descriptor = os.open(path, os.O_RDONLY)
@@ -186,11 +194,7 @@ def _sync_database(path: Path) -> None:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        _sync_directory(path.parent)
     except OSError as error:
         raise StorageError(StorageErrorCode.IO_ERROR, "The initialized database could not be synchronized.") from error
 
@@ -223,11 +227,7 @@ def _cleanup_database_files(path: Path) -> bool:
             succeeded = False
     if removed:
         try:
-            directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+            _sync_directory(path.parent)
         except OSError:
             succeeded = False
     return succeeded
