@@ -20,19 +20,12 @@ from pinboard.interfaces.errors import CommandErrorCode, CommandFailure, Command
 def _emit_attempt_authority(
     state: stored_state.StoredWorkState, attempt_id: AttemptId, *, json: bool
 ) -> CommandResult[int]:
-    lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
-    if lease is None:
+    retained = stored_state.retained_attempt(state, attempt_id)
+    if retained is None:
         return CommandFailure(
             DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, f"Attempt '{attempt_id}' has no retained authority."
         )
-    anchor = next(
-        (
-            value
-            for value in state.authority.attempt_generations
-            if value.attempt_id == attempt_id and value.generation == lease.generation
-        ),
-        None,
-    )
+    lease, anchor = retained
     if anchor is None:
         return CommandFailure(CommandErrorCode.WORK_STATE_INVALID, "Attempt authority has no exact identity anchor.")
     values: dict[str, str | int] = {

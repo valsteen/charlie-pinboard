@@ -15,17 +15,10 @@ def project_inactive_attempt_authority(
     """Select exact retained inactive authority after ordinary interruption recovery."""
 
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
-    lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
-    if attempt is None or lease is None:
+    retained = stored_state.retained_attempt(state, attempt_id)
+    if attempt is None or retained is None:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "No retained attempt authority exists.")
-    anchor = next(
-        (
-            value
-            for value in state.authority.attempt_generations
-            if value.attempt_id == attempt_id and value.generation == lease.generation
-        ),
-        None,
-    )
+    lease, anchor = retained
     if anchor is None:
         return DecisionFailure(
             DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED,
