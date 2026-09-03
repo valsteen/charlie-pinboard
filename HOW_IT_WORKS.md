@@ -4,7 +4,7 @@
 
 Pinboard keeps repository work coherent across tasks and interruptions. It preserves what the project decided, which execution is acting on it, who may change it now, and what evidence another task can trust later.
 
-The four views move from the work-item lifecycle to package responsibilities, then follow one change and show the durable relationships underneath.
+The five views move from the work-item lifecycle to package responsibilities, then follow one change, show the durable relationships underneath, and carry one complete project snapshot across a read-only handover boundary.
 
 ## What moves
 
@@ -53,6 +53,17 @@ Submitting work for review is one visible action, but it strengthens meaning at 
 </picture>
 
 The layers do not repeat the same decision. Each contributes a different guarantee, then hands a narrower value to the next owner. Generated views refresh after the authoritative commit and can be rebuilt from the ledger if that refresh is interrupted.
+
+## Carry the project into another tool
+
+Local continuity and external handover are different jobs. `pinboard handover --json` reads one complete ledger snapshot, verifies every accepted artifact against its recorded identity and bytes, and emits one revision-stamped portable JSON package only after the full package is ready.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/handover-dark.svg">
+  <img src="assets/how-it-works/handover.svg" alt="A complete Pinboard snapshot and its verified artifacts becoming one portable JSON package for a user-selected downstream tool">
+</picture>
+
+The package carries admitted work, pending proposals, relationships, decisions, and accepted evidence without choosing how another system represents them. Handover changes no Pinboard state and does not choose or write to the receiving tool; a human or another tool owns that mapping.
 
 ## The durable memory underneath
 
