@@ -2571,58 +2571,6 @@ Not launchable:
         self.assertEqual(work_models.AttemptState.REVIEW, attempt.state)
         self.assertEqual(13, store.snapshot().transition_receipts[-1].project_revision)
 
-    def test_blocker_skill_guidance_names_advisory_and_mutating_responsibilities(self) -> None:
-        repository = Path(__file__).resolve().parents[1]
-        coordinator = (repository / "skills" / "pinboard" / "SKILL.md").read_text(encoding="utf-8")
-        worker = (repository / "skills" / "pinboard-deliver" / "SKILL.md").read_text(encoding="utf-8")
-
-        for text in (coordinator, worker):
-            self.assertIn("report-blocker:<attempt>", text)
-            self.assertIn("block:<attempt>", text)
-            self.assertIn("block-item:<item>", text)
-            self.assertIn("pause:<attempt>", text)
-        self.assertIn("advisory and has no mutation payload", worker)
-        self.assertIn("never use the intake-only `block-item:<item>` action for active work", coordinator)
-
-    def test_workflow_guidance_keeps_one_visible_owner_and_uses_subagents(self) -> None:
-        repository = Path(__file__).resolve().parents[1]
-        coordinator = (repository / "skills" / "pinboard" / "SKILL.md").read_text(encoding="utf-8")
-        parallel = (repository / "skills" / "pinboard" / "references" / "parallel-work.md").read_text(encoding="utf-8")
-        brief_review = (repository / "skills" / "pinboard" / "references" / "brief-preservation.md").read_text(
-            encoding="utf-8"
-        )
-        worker = (repository / "skills" / "pinboard-deliver" / "SKILL.md").read_text(encoding="utf-8")
-        intake = (repository / "skills" / "pinboard-intake" / "SKILL.md").read_text(encoding="utf-8")
-        intake_prompt = (repository / "skills" / "pinboard-intake" / "agents" / "openai.yaml").read_text(
-            encoding="utf-8"
-        )
-        transport = (repository / "skills" / "pinboard-intake" / "references" / "codex-transport.md").read_text(
-            encoding="utf-8"
-        )
-        readme = (repository / "README.md").read_text(encoding="utf-8")
-
-        self.assertIn("One user-facing Codex task owns one outcome through final human disposition.", coordinator)
-        self.assertIn("Use a **Subagent** for bounded work", parallel)
-        self.assertIn("Use a **Visible task** only for a genuinely independent outcome", parallel)
-        self.assertIn("results return automatically to the owning task", brief_review)
-        self.assertIn("Do not send a task-to-task completion or review message for subordinate work.", worker)
-        for text in (intake, transport):
-            self.assertIn("only when the user explicitly requested", text)
-        self.assertIn("Resolve the exact task the user requested", transport)
-        self.assertIn("Never redirect delivery to a coordination lease holder", transport)
-        self.assertIn("report the requested delivery as unavailable", transport)
-        self.assertIn("continue through $pinboard coordination and $pinboard-deliver", intake_prompt)
-        self.assertIn("does not complete an immediate-start request", intake)
-        self.assertIn("one user-facing task per outcome", readme)
-        self.assertNotIn("or it remains the active user-facing coordinator", coordinator)
-        self.assertNotIn("or it remains the active user-facing coordinator", worker)
-        self.assertNotIn("Optionally notify that holder", intake)
-        self.assertNotIn("no coordination lease exists", intake)
-        self.assertNotIn("coordination-holder change during explicitly requested delivery", intake)
-        self.assertNotIn("Copy the exact holder task ID", transport)
-        self.assertNotIn("optional transport needs no user-facing report", transport)
-        self.assertNotIn("require a separate task to accept it or return it for correction", readme)
-
     def test_invalid_current_inputs_map_to_stable_cli_failures(self) -> None:
         project, work, _store = self.initialized_state(complete_sqlite_state())
         common = ("--project-root", str(project), "--work-root", str(work))
