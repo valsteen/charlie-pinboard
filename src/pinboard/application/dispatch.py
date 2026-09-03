@@ -16,11 +16,11 @@ from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.identifiers import AttemptId, ReviewId
 
 
-def _current_dispatch_action(
+def _rediscover_dispatch_action(
     store: WorkStore,
     supplied: decision_models.DispatchAction,
     now: datetime,
-) -> DispatchResult[decision_models.DispatchAction]:
+) -> DispatchResult[decision_models.Action | None]:
     capability = supplied.capability
     actions = discover_actions(
         store,
@@ -31,16 +31,26 @@ def _current_dispatch_action(
     )
     if isinstance(actions, DecisionFailure):
         return DispatchFailure(actions.code, actions.message)
-    current = next(
+    return next(
         (value for value in actions if decision_models.action_id(value) == decision_models.action_id(supplied)), None
     )
+
+
+def _current_dispatch_action(
+    store: WorkStore,
+    supplied: decision_models.DispatchAction,
+    now: datetime,
+) -> DispatchResult[decision_models.DispatchAction]:
+    current = _rediscover_dispatch_action(store, supplied, now)
+    if isinstance(current, DispatchFailure):
+        return current
     if not isinstance(current, decision_models.DispatchAction):
         return DispatchFailure(
             DispatchRejectionCode.ACTION_UNAVAILABLE,
             f"Action '{decision_models.action_id(supplied)}' is not available.",
         )
     if current != supplied:
-        if current.capability.expected_revision != capability.expected_revision:
+        if current.capability.expected_revision != supplied.capability.expected_revision:
             return DispatchFailure(
                 DispatchRejectionCode.STALE_ACTION,
                 "The work ledger changed after this dispatch action was selected.",
@@ -163,18 +173,9 @@ def confirm_dispatch_authority(
     now: datetime,
 ) -> DispatchFailure | None:
     capability = supplied.capability
-    actions = discover_actions(
-        store,
-        decision_models.Role.COORDINATOR,
-        lease_id=capability.lease_id,
-        generation=capability.coordinator_generation,
-        now=now,
-    )
-    if isinstance(actions, DecisionFailure):
-        return DispatchFailure(actions.code, actions.message)
-    rediscovered = next(
-        (value for value in actions if decision_models.action_id(value) == decision_models.action_id(supplied)), None
-    )
+    rediscovered = _rediscover_dispatch_action(store, supplied, now)
+    if isinstance(rediscovered, DispatchFailure):
+        return rediscovered
     current = rediscovered if isinstance(rediscovered, decision_models.DispatchAction) else None
     current_matches = current == supplied
     if current is not None and publication_revision is not None:
