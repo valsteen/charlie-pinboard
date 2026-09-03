@@ -2,7 +2,7 @@ import argparse
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from . import database, journey, layers, product
+from . import database, handover, journey, layers, product
 from .model import DAY_PALETTE, NIGHT_PALETTE, Diagram, render_svg
 
 OUTPUT_PATHS = {
@@ -11,6 +11,7 @@ OUTPUT_PATHS = {
     "layers": Path("assets/how-it-works/layers.svg"),
     "journey": Path("assets/how-it-works/journey.svg"),
     "database": Path("assets/how-it-works/database.svg"),
+    "handover": Path("assets/how-it-works/handover.svg"),
 }
 
 DARK_OUTPUT_PATHS = {
@@ -34,7 +35,7 @@ def _guide() -> str:
 
 Pinboard keeps repository work coherent across tasks and interruptions. It preserves what the project decided, which execution is acting on it, who may change it now, and what evidence another task can trust later.
 
-The four views move from the work-item lifecycle to package responsibilities, then follow one change and show the durable relationships underneath.
+The five views move from the work-item lifecycle to package responsibilities, then follow one change, show the durable relationships underneath, and carry one complete project snapshot across a read-only handover boundary.
 
 ## What moves
 
@@ -75,6 +76,14 @@ Submitting work for review is one visible action, but it strengthens meaning at 
 
 The layers do not repeat the same decision. Each contributes a different guarantee, then hands a narrower value to the next owner. Generated views refresh after the authoritative commit and can be rebuilt from the ledger if that refresh is interrupted.
 
+## Carry the project into another tool
+
+Local continuity and external handover are different jobs. `pinboard handover --json` reads one complete ledger snapshot, verifies every accepted artifact against its recorded identity and bytes, and emits one revision-stamped portable JSON package only after the full package is ready.
+
+{_picture("handover", "A complete Pinboard snapshot and its verified artifacts becoming one portable JSON package for a user-selected downstream tool")}
+
+The package carries admitted work, pending proposals, relationships, decisions, and accepted evidence without choosing how another system represents them. Handover changes no Pinboard state and does not choose or write to the receiving tool; a human or another tool owns that mapping.
+
 ## The durable memory underneath
 
 The relational ledger groups eighteen tables into six kinds of memory: current work, accepted scope and dependencies, discoveries, immutable knowledge, changing mutation ownership, and the history that connects them.
@@ -106,7 +115,14 @@ def build_outputs(root: Path) -> dict[Path, str]:
     layers.validate(root)
     journey.validate()
     database.validate(root)
-    diagrams: tuple[Diagram, ...] = (product.DIAGRAM, layers.DIAGRAM, journey.DIAGRAM, database.DIAGRAM)
+    handover.validate()
+    diagrams: tuple[Diagram, ...] = (
+        product.DIAGRAM,
+        layers.DIAGRAM,
+        journey.DIAGRAM,
+        database.DIAGRAM,
+        handover.DIAGRAM,
+    )
     outputs: dict[Path, str] = {}
     for diagram in diagrams:
         outputs[OUTPUT_PATHS[diagram.slug]] = render_svg(diagram, DAY_PALETTE)

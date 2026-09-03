@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 from xml.etree import ElementTree
 
-from docs.how_it_works import database, journey, layers, product, render
+from docs.how_it_works import database, handover, journey, layers, product, render
 from docs.how_it_works.model import DAY_PALETTE, NIGHT_PALETTE, Box, Connector, Diagram, Palette, render_svg
 
 from pinboard.domain import decision_models
@@ -27,10 +27,12 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                 Path("assets/how-it-works/layers.svg"),
                 Path("assets/how-it-works/journey.svg"),
                 Path("assets/how-it-works/database.svg"),
+                Path("assets/how-it-works/handover.svg"),
                 Path("assets/how-it-works/product-dark.svg"),
                 Path("assets/how-it-works/layers-dark.svg"),
                 Path("assets/how-it-works/journey-dark.svg"),
                 Path("assets/how-it-works/database-dark.svg"),
+                Path("assets/how-it-works/handover-dark.svg"),
             },
             outputs.keys(),
         )
@@ -42,6 +44,11 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         self.assertIn("## Where responsibilities live", guide)
         self.assertIn("## Follow one change", guide)
         self.assertIn("## The durable memory underneath", guide)
+        self.assertIn("## Carry the project into another tool", guide)
+        self.assertIn("reads one complete ledger snapshot", guide)
+        self.assertIn("verifies every accepted artifact", guide)
+        self.assertIn("changes no Pinboard state", guide)
+        self.assertIn("does not choose or write to the receiving tool", guide)
         self.assertIn("A canonical work brief is published before an item is activated or resumed", guide)
         self.assertIn("ready-review evidence can be published during dispatch preparation", guide)
         self.assertIn("Resume restores paused or blocked work", guide)
@@ -56,9 +63,9 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         self.assertIn("activation consumes that claim atomically", guide)
         self.assertIn("An attempt lease records which task session", guide)
         self.assertNotIn("requirements, plans, designs, briefs, results, blockers", guide)
-        self.assertEqual(4, guide.count("<picture>"))
-        self.assertEqual(4, guide.count('media="(prefers-color-scheme: dark)"'))
-        for slug in ("product", "layers", "journey", "database"):
+        self.assertEqual(5, guide.count("<picture>"))
+        self.assertEqual(5, guide.count('media="(prefers-color-scheme: dark)"'))
+        for slug in ("product", "layers", "journey", "database", "handover"):
             self.assertIn(f'srcset="assets/how-it-works/{slug}-dark.svg"', guide)
             self.assertIn(f'src="assets/how-it-works/{slug}.svg"', guide)
 
@@ -80,7 +87,7 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                 self.assertNotIn("linearGradient", svg)
                 self.assertNotIn("feDropShadow", svg)
 
-        for slug in ("product", "layers", "journey", "database"):
+        for slug in ("product", "layers", "journey", "database", "handover"):
             day = outputs[Path(f"assets/how-it-works/{slug}.svg")]
             night = outputs[Path(f"assets/how-it-works/{slug}-dark.svg")]
             with self.subTest(slug=slug):
@@ -275,6 +282,17 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         self.assertEqual("Accepted artifacts", database_boxes["artifact-refs"].title)
         self.assertNotIn("item-artifacts", database_boxes)
         self.assertEqual("Shared authority", database_boxes["coordination"].title)
+
+        handover_edges = {(value.source, value.target) for value in handover.DIAGRAM.connectors}
+        self.assertEqual(
+            {
+                ("ledger", "validation"),
+                ("artifacts", "validation"),
+                ("validation", "package"),
+                ("package", "consumer"),
+            },
+            handover_edges,
+        )
 
     def test_product_view_distinguishes_advisory_continue_from_review_acceptance(self) -> None:
         advisory = decision_models.action_semantics(decision_models.ActionKind.CONTINUE)
