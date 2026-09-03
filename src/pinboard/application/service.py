@@ -115,18 +115,11 @@ def _retained_attempt_authority(
     state: stored_state.StoredWorkState,
     attempt_id: AttemptId,
 ) -> authority_models.AttemptLeaseAuthority | None:
-    lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
+    retained = stored_state.retained_attempt(state, attempt_id)
     attempt = next((value for value in state.lifecycle.attempts if value.attempt_id == attempt_id), None)
-    if lease is None or attempt is None:
+    if retained is None or attempt is None:
         return None
-    anchor = next(
-        (
-            value
-            for value in state.authority.attempt_generations
-            if value.attempt_id == attempt_id and value.generation == lease.generation
-        ),
-        None,
-    )
+    lease, anchor = retained
     if anchor is None:
         if lease.generation != 0:
             return None

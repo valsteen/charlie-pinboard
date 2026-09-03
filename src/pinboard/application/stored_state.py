@@ -353,6 +353,23 @@ class StoredWorkState:
     focus: StoredFocus
 
 
+def retained_attempt(
+    state: StoredWorkState, attempt_id: AttemptId
+) -> tuple[StoredAttemptLease, AttemptLeaseGeneration | None] | None:
+    lease = next((value for value in state.authority.attempt_leases if value.attempt_id == attempt_id), None)
+    if lease is None:
+        return None
+    anchor = next(
+        (
+            value
+            for value in state.authority.attempt_generations
+            if value.attempt_id == attempt_id and value.generation == lease.generation
+        ),
+        None,
+    )
+    return lease, anchor
+
+
 def retained_preparation(
     state: StoredWorkState, item_id: ItemId
 ) -> tuple[StoredPreparationLease, PreparationLeaseGeneration | None] | None:
