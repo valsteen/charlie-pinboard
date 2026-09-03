@@ -7,13 +7,15 @@ description: Preserve one newly proposed piece of project work as an intake item
 
 Convert one explicit concern into immutable proposal facts and a same-identity intake item. Do not claim that intake made it ready, active, or current work.
 
-Intake may be standalone or embedded in ongoing Pinboard coordination. Standalone intake may end after its persistence receipt only when the user did not also ask to begin the new work. Before embedded intake, retain a compact continuation anchor containing the pre-intake objective, the next promised action, and the exact durable owner selector. Intake changes queue state but preserves focus and active attempts, so return control to that anchor after persistence and optional notification handling.
+Intake may be standalone or embedded in ongoing Pinboard coordination. Standalone intake may end after its persistence receipt only when the user did not also ask to begin the new work. Before embedded intake, retain a compact continuation anchor containing the pre-intake objective, the next promised action, and the exact durable owner selector. Intake changes queue state but preserves focus and active attempts, so return control to that anchor after persistence and any explicitly requested notification handling.
 
 ## Preserve immediate-start intent
 
 When the same request says `start`, `begin`, `work on`, `implement`, `fix now`, or otherwise clearly asks for immediate execution, treat intake as the first atomic step rather than the requested outcome. After persistence, continue through `$pinboard` to admit, prepare, and activate the same-identity item, then use `$pinboard-deliver` to complete its accepted work. Do not end with a save-for-later receipt merely because the user explicitly named `$pinboard-intake`.
 
 Ask one quick confirmation only when the human phrasing leaves a material choice between queueing for later and beginning now. An explicit immediate-work verb is sufficient and needs no confirmation. Intake remains standalone when the request only asks to add, queue, preserve, or save work for later.
+
+An explicitly requested notification remains subordinate to this continuation. Sending or reporting it does not complete an immediate-start request or move ownership of that outcome to the notified task.
 
 ## Preconditions
 
@@ -54,13 +56,13 @@ Before creating a proposal, distinguish exact prior coverage from a merely relat
 1. Write the proposal to a temporary file outside canonical work state.
 2. Run `pinboard proposal --file <path>`.
 3. Treat `OK PROPOSAL_CREATED <proposal-id> position=<n> state=intake` as proof that both the proposal facts and intake item persisted.
-4. Read `references/codex-transport.md` only when Codex task messaging is available and a useful active coordination holder exists.
-5. Optionally notify that holder with the proposal ID and shared work root. Repository persistence, not messaging, is the correctness boundary.
-6. Report delivery only when the user requested it or when its outcome changes confidence, current work, or the next action.
+4. Read `references/codex-transport.md` only when the user explicitly requested delivery to another visible task and Codex task messaging is available.
+5. Notify the requested eligible task with the proposal ID and shared work root. Repository persistence, not messaging, is the correctness boundary.
+6. Report delivery only when the user requested it or when its outcome materially changes confidence, current work, or the next action.
 
 For embedded intake, resume the invoking coordinator before the surrounding turn ends. If context compaction obscured the conversation, re-read the anchor's active or paused item, attempt, proposal, or exact selector rather than inventing continuation state. Complete the promised action when it remains in scope; otherwise surface its exact blocker or durably defer it at an exact owner.
 
-If transport is unavailable, no coordination lease exists, or delivery fails, retain the intake item. Keep optional delivery state silent by default. Any later chat can discover it through overview or status, so never ask the human to relay it or authorize lease revocation merely to reduce notification latency.
+When delivery was explicitly requested but transport or the requested target is unavailable, or delivery fails, retain the intake item and report the requested delivery outcome. Without an explicit delivery request, do not inspect transport, send, retry, or report notification state. Any later task can discover the item through overview or status, so never ask the human to relay it or authorize lease revocation merely to reduce notification latency.
 
 ## Result language
 
@@ -81,7 +83,7 @@ When proposal creation fails, `not recorded` is an unresolved state, not a termi
 - `Current work`: blocked or continuing;
 - `Next owner`: this task for a safe retry, or the human for one named decision.
 
-Treat a stale proposal view or a coordination-holder change during optional delivery as expected concurrency. Retry once when doing so needs no new authority. If delivery remains unavailable after persistence, stop notification work with no human action because the ledger is authoritative; this does not end an embedded caller's surrounding turn. If retry needs new authority, changes scope, or overrides another owner, ask exactly one concrete approval question. If persistence was never authorized, ask whether to preserve or dismiss the concern. Never tell the human to contact or notify the coordinating chat.
+Treat a stale proposal view or a change in the requested target's identity or availability during explicitly requested delivery as expected concurrency. Re-resolve that same requested target and retry once when doing so needs no new authority. If requested delivery remains unavailable after persistence, stop notification work with no human action because the ledger is authoritative; this does not end an embedded caller's surrounding turn. If retry needs new authority, changes scope, or overrides another owner, ask exactly one concrete approval question. If persistence was never authorized, ask whether to preserve or dismiss the concern. Never tell the human to contact or notify the requested task.
 
 When transport detail is material, distinguish these precise lifecycle outcomes:
 

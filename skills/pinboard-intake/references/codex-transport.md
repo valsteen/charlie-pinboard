@@ -1,15 +1,16 @@
 # Pinboard Task Transport
 
-Use this adapter only when the current Codex environment exposes task discovery and task-to-task messaging.
+Use this adapter only when the user explicitly requested delivery to another visible task and the current Codex environment exposes task discovery and task-to-task messaging. Task existence, project match, or lease ownership never substitutes for that request.
 
-1. Read the current authority root's coordination lease. If no active unexpired lease exists, skip delivery; the intake item remains sufficient.
-2. Copy the exact holder task ID and host ID from the lease. Check that the target task exists and belongs to the same project root or project identity.
-3. Reject mismatches as `COORDINATION_HOLDER_NOT_FOUND` or `COORDINATION_PROJECT_MISMATCH`.
-4. Send one compact notification containing the proposal ID, source task ID, shared work root, and the instruction to inspect it at the next safe boundary. Do not send commands or make the holder chat a permanent user-facing coordinator.
-5. If the holder changes or expires between discovery and send, classify it as expected coordination concurrency. Re-read the lease once and retry delivery to the new active matching holder. This retry does not need human approval.
-6. If no eligible holder remains, the retry fails, or messaging is unavailable, stop delivery. Keep unavailable optional transport out of the receipt unless the user requested delivery or its absence changes confidence, current work, or the next action. Do not ask the human to relay it, revoke a lease, or select a new coordinator merely to reduce notification latency.
-7. Treat a successful send as transport delivery only.
+1. Confirm that the explicit request identifies the intended visible task.
+2. Resolve the exact task the user requested through native task discovery and verify that it belongs to the same project root or project identity. If the target is ambiguous, absent, or belongs elsewhere, stop instead of selecting an alternative.
+3. Send one compact notification containing the proposal ID, source task ID, shared work root, and the instruction to inspect it at the next safe boundary. Do not send commands or make the notified task a permanent user-facing coordinator.
+4. If the requested task's identifier or availability changes between discovery and send, re-resolve that same requested target once. Never redirect delivery to a coordination lease holder or another plausible task. This retry does not need human approval.
+5. If the target remains unavailable, the retry fails, or messaging is unavailable, stop delivery and report the requested delivery as unavailable while confirming that the proposal remains saved in the ledger. Do not ask the human to relay it, revoke a lease, or select a replacement merely to reduce notification latency.
+6. Treat a successful send as transport delivery only.
 
-Messaging is optional latency reduction only. It does not replace repository persistence, grant coordination authority, or make a chat the master session. A delivery problem must never be phrased as though the saved proposal itself was lost.
+Messaging is optional latency reduction only. It does not replace repository persistence, grant coordination authority, or make the notified task the outcome owner. A delivery problem must never be phrased as though the saved proposal itself was lost.
 
-If task messaging is unavailable, do not reconstruct it with shell commands, issue comments, commits, or public files. Leave the candidate visible in the ledger; optional transport needs no user-facing report by default.
+Never use this intake adapter to return subordinate implementation, completion, or review results. Subagent results return automatically to their owning task, while an independent visible task reports in its own conversation.
+
+If task messaging is unavailable, do not reconstruct it with shell commands, issue comments, commits, or public files. Leave the proposal visible in the ledger and report the requested delivery as unavailable.
