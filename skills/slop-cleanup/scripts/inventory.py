@@ -1172,6 +1172,7 @@ def main() -> None:
             for atom_use in family.atom_uses
             if atom_use.production_non_declaration_uses == 0
         ],
+        "singleton_closed_families": [asdict(family) for family in families if len(family.atoms) == 1],
         "duplicated_closed_vocabularies": duplicated_closed_vocabularies(families),
         "ambiguous_zero_production_definitions": [
             asdict(item) for item in ambiguous_zero_production_definitions(declarations)

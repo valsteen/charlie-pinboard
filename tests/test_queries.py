@@ -259,9 +259,9 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertEqual(state, store.snapshot())
 
         invalid_selection = preview_parallel(store, selected=("missing",), now=SQLITE_NOW)
-        self.assertIsInstance(invalid_selection, query_models.QueryFailure)
-        assert isinstance(invalid_selection, query_models.QueryFailure)
-        self.assertEqual(query_models.QueryRejectionCode.PARALLEL_SELECTION_INVALID, invalid_selection.code)
+        self.assertIsInstance(invalid_selection, query_models.ParallelSelectionInvalid)
+        assert isinstance(invalid_selection, query_models.ParallelSelectionInvalid)
+        self.assertEqual("Selected item identities must be current items.", invalid_selection.message)
 
 
 if __name__ == "__main__":

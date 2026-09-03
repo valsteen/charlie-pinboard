@@ -356,8 +356,8 @@ def parallel(
         selected=tuple(command.item),
         now=datetime.now(UTC),
     )
-    if isinstance(preview, query_models.QueryFailure):
-        return errors.CommandFailure(preview.code, preview.message)
+    if isinstance(preview, query_models.ParallelSelectionInvalid):
+        return errors.CommandFailure(errors.CommandErrorCode.PARALLEL_SELECTION_INVALID, preview.message)
     view = parallel_preview_view(preview)
     if command.json:
         write_json(view)

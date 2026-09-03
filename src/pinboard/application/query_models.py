@@ -56,17 +56,9 @@ class ParallelReasonCode(Enum):
     PREPARATION_OWNED = "preparation-owned"
 
 
-class QueryRejectionCode(Enum):
-    PARALLEL_SELECTION_INVALID = "PARALLEL_SELECTION_INVALID"
-
-
 @dataclass(frozen=True, slots=True)
-class QueryFailure:
-    code: QueryRejectionCode
+class ParallelSelectionInvalid:
     message: str
-
-
-type QueryResult[Value] = Value | QueryFailure
 
 
 @dataclass(frozen=True, slots=True)
