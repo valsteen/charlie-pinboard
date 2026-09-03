@@ -12,6 +12,22 @@ permissions:
   contents: read
 
 jobs:
+  duplication:
+    name: Duplication limit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Install duplication detector
+        run: npm ci
+      - name: Enforce production duplication ceiling
+        run: npm run duplication:ci
+
   checks:
     name: Checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -1,0 +1,14 @@
+{
+  "name": "pinboard-development-tools",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "duplication": "jscpd --config .jscpd.json --min-lines 5 --min-tokens 50 --reporters ai --no-tips src/pinboard",
+    "duplication:ci": "jscpd --config .jscpd.json --min-lines 8 --min-tokens 60 --threshold 0.7 --reporters ai --no-tips src/pinboard"
+  },
+  "devDependencies": {
+    "jscpd": "5.1.2"
+  }
+}

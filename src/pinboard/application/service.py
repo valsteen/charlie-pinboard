@@ -238,17 +238,10 @@ def _retained_preparation_authority(
     state: stored_state.StoredWorkState,
     item_id: ItemId,
 ) -> authority_models.PreparationLeaseAuthority | None:
-    lease = next((value for value in state.authority.preparation_leases if value.item_id == item_id), None)
-    if lease is None:
+    retained = stored_state.retained_preparation(state, item_id)
+    if retained is None:
         return None
-    anchor = next(
-        (
-            value
-            for value in state.authority.preparation_generations
-            if value.item_id == item_id and value.generation == lease.generation
-        ),
-        None,
-    )
+    lease, anchor = retained
     if anchor is None:
         return None
     return authority_models.PreparationLeaseAuthority(

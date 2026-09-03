@@ -20,17 +20,10 @@ from pinboard.interfaces.errors import CommandErrorCode, CommandFailure, Command
 def _retained(
     state: stored_state.StoredWorkState, item_id: ItemId, now: datetime
 ) -> CommandResult[tuple[stored_state.StoredPreparationLease, stored_state.PreparationLeaseGeneration]]:
-    lease = next((value for value in state.authority.preparation_leases if value.item_id == item_id), None)
-    if lease is None:
+    retained = stored_state.retained_preparation(state, item_id)
+    if retained is None:
         return CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item_id}' has no preparation claim.")
-    anchor = next(
-        (
-            value
-            for value in state.authority.preparation_generations
-            if value.item_id == item_id and value.generation == lease.generation
-        ),
-        None,
-    )
+    lease, anchor = retained
     if anchor is None:
         return CommandFailure(CommandErrorCode.WORK_STATE_INVALID, "Preparation authority has no identity anchor.")
     if lease.state == authority_models.PreparationLeaseStatus.ACTIVE and lease.expires_at <= now:
