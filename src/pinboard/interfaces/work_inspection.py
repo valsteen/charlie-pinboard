@@ -22,70 +22,6 @@ from pinboard.interfaces import cli_commands, errors, transition_input, work_ins
 from pinboard.interfaces.cli_output import write_json
 
 
-def overview_item_view(item: query_models.OverviewItem) -> work_inspection_models.OverviewItemView:
-    preparation = item.preparation
-    return work_inspection_models.OverviewItemView(
-        item.item_id,
-        item.label,
-        item.state.value,
-        item.position,
-        item.eligible,
-        item.timing,
-        item.depends_on,
-        tuple(
-            work_inspection_models.DependencyReasonView(value.item_id, value.reason)
-            for value in item.dependency_reasons
-        ),
-        tuple(
-            work_inspection_models.ReviewFlagView(value.kind.value, value.related_item, value.reason)
-            for value in item.review_flags
-        ),
-        item.attempt_id,
-        item.next_action,
-        item.notes,
-        (
-            None
-            if preparation is None
-            else work_inspection_models.PreparationView(
-                preparation.definition_revision,
-                preparation.definition_digest,
-                preparation.task_id,
-                preparation.host_id,
-                preparation.lease_id,
-                preparation.generation,
-                preparation.expires_at,
-                preparation.status,
-            )
-        ),
-    )
-
-
-def overview_view(overview: query_models.WorkOverview) -> work_inspection_models.OverviewView:
-    return work_inspection_models.OverviewView(
-        overview.schema,
-        overview.authority,
-        overview.revision,
-        overview.focus_item,
-        overview.focus_attempt,
-        overview.active_attempts,
-        tuple(overview_item_view(item) for item in overview.items),
-        overview.immediate_options,
-    )
-
-
-def action_semantics_view(
-    semantics: decision_models.ActionSemantics,
-) -> work_inspection_models.ActionSemanticsView:
-    return work_inspection_models.ActionSemanticsView(
-        semantics.use_case,
-        semantics.effect.value,
-        tuple(role.value for role in semantics.permitted_roles),
-        semantics.subject_kind.value,
-        semantics.lifecycle_precondition.value,
-        semantics.practical_result,
-    )
-
-
 def input_contract_view(
     kind: decision_models.ActionKind,
 ) -> errors.TransitionInputResult[work_inspection_models.InputContractView]:
@@ -97,7 +33,7 @@ def input_contract_view(
         if isinstance(encoded_schema, errors.TransitionInputFailure):
             return encoded_schema
         payload_schema = msgspec.Raw(encoded_schema)
-    return work_inspection_models.InputContractView(kind.value, action_semantics_view(semantics), payload_schema)
+    return work_inspection_models.InputContractView(kind.value, semantics, payload_schema)
 
 
 def action_view(
@@ -122,7 +58,7 @@ def action_view(
         subject_revision=capability.subject_revision or "",
         authorization="observer" if capability.authorization is None else capability.authorization.value,
         lease_id=capability.lease_id or "",
-        semantics=action_semantics_view(decision_models.action_semantics(action.kind)),
+        semantics=decision_models.action_semantics(action.kind),
         input_contract=input_contract,
     )
 
@@ -153,10 +89,7 @@ def parallel_preview_view(
                         item.state.value,
                         item.attempt_id,
                         "excluded",
-                        tuple(
-                            work_inspection_models.ParallelReasonView(reason.code.value, reason.message)
-                            for reason in reasons
-                        ),
+                        reasons,
                     )
                 )
             case _ as unreachable:
@@ -220,7 +153,7 @@ def overview(roots: cli_commands.ResolvedRoots, command: cli_commands.OverviewCo
     now = datetime.now(UTC)
     value = queries.overview_from_state(SQLiteWorkStore(roots.work / "state.sqlite3").snapshot(), now)
     if command.json:
-        write_json(overview_view(value))
+        write_json(value)
         return 0
     print(f"OK WORK_OVERVIEW revision={value.revision} authority={value.authority}")
     if not value.items:
@@ -389,9 +322,10 @@ def input_contract(
         print(f"OK INPUT_CONTRACT action_kind={value.action_kind}")
         print(f"use_case={value.semantics.use_case}")
         print(
-            f"effect={value.semantics.effect} permitted_roles={','.join(value.semantics.permitted_roles)} "
-            f"subject_kind={value.semantics.subject_kind} "
-            f"lifecycle_precondition={value.semantics.lifecycle_precondition}"
+            f"effect={value.semantics.effect.value} "
+            f"permitted_roles={','.join(role.value for role in value.semantics.permitted_roles)} "
+            f"subject_kind={value.semantics.subject_kind.value} "
+            f"lifecycle_precondition={value.semantics.lifecycle_precondition.value}"
         )
         print(f"practical_result={value.semantics.practical_result}")
         if value.payload_schema is None:
@@ -423,14 +357,7 @@ def parallel(
         now=datetime.now(UTC),
     )
     if isinstance(preview, query_models.QueryFailure):
-        match preview.code:
-            case query_models.QueryRejectionCode.PARALLEL_SELECTION_INVALID:
-                code = errors.CommandErrorCode.PARALLEL_SELECTION_INVALID
-            case query_models.QueryRejectionCode.PARALLEL_TIME_INVALID:
-                code = errors.CommandErrorCode.PARALLEL_TIME_INVALID
-            case _ as unreachable:
-                assert_never(unreachable)
-        return errors.CommandFailure(code, preview.message)
+        return errors.CommandFailure(preview.code, preview.message)
     view = parallel_preview_view(preview)
     if command.json:
         write_json(view)

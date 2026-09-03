@@ -197,14 +197,6 @@ class LifecycleDecisionTest(unittest.TestCase):
         }
         self.assertNotIn(decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE, inconsistent_kinds)
 
-        empty_evidence = decision_outcome(
-            snapshot,
-            make_command(selected, work_models.AcceptReviewAndContinueInput(CandidateId("candidate-a"), "")),
-            NOW,
-        )
-        self.assertIsInstance(empty_evidence, DecisionFailure)
-        self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, empty_evidence.code)
-
     def test_blocker_actions_expose_distinct_roles_subjects_preconditions_and_effects(self) -> None:
         active = replace(
             item("target", work_models.WorkState.ACTIVE, attempt="target-1"),

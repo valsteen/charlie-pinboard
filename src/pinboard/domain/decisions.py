@@ -806,10 +806,10 @@ def _accept_review_and_continue(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             "Only an attempt in review can have its review accepted for continuation.",
         )
-    if not value.evidence or attempt.protected_candidate_revision != value.candidate:
+    if attempt.protected_candidate_revision != value.candidate:
         return DecisionFailure(
             DecisionFailureCode.TRANSITION_INPUT_INVALID,
-            "Review continuation requires nonempty evidence and the exact protected candidate.",
+            "Review continuation requires the exact protected candidate.",
         )
     authorities = tuple(candidate for candidate in snapshot.attempt_authorities if candidate.attempt == attempt_id)
     if len(authorities) != 1:

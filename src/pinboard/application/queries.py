@@ -304,15 +304,6 @@ def item_definition_history(
     )
 
 
-def _preview_time(value: datetime) -> query_models.QueryResult[datetime]:
-    if value.tzinfo is None:
-        return query_models.QueryFailure(
-            query_models.QueryRejectionCode.PARALLEL_TIME_INVALID,
-            "Preview time must be timezone-aware.",
-        )
-    return value
-
-
 def _parallel_reasons(
     state: stored_state.StoredWorkState,
     item_id: ItemId,
@@ -388,9 +379,6 @@ def preview_parallel(
     now: datetime,
 ) -> query_models.QueryResult[query_models.ParallelPreview]:
     state = store.snapshot()
-    current = _preview_time(now)
-    if isinstance(current, query_models.QueryFailure):
-        return current
     live = tuple(
         (item, live_state)
         for item in sorted(state.lifecycle.work_items, key=_item_key)
@@ -407,7 +395,7 @@ def preview_parallel(
     live_ids = frozenset(by_id)
     items: list[query_models.ParallelItem] = []
     for item, live_state in candidates:
-        reasons = _parallel_reasons(state, item.item_id, live_ids, current)
+        reasons = _parallel_reasons(state, item.item_id, live_ids, now)
         common = (
             str(item.item_id),
             definitions[item.item_id].title,
