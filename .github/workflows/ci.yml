@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - name: Install Node.js
         uses: actions/setup-node@v7
         with:
@@ -25,7 +27,7 @@ jobs:
           cache: npm
       - name: Install duplication detector
         run: npm ci
-      - name: Enforce production duplication ceiling
+      - name: Reject new production duplication
         run: npm run duplication:ci
 
   checks:

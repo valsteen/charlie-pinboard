@@ -23,6 +23,42 @@ from pinboard.domain.errors import DecisionResult
 from pinboard.domain.identifiers import ArtifactRefId
 
 
+def _accepted_artifact(
+    state: stored_state.StoredWorkState,
+    published: ArtifactRef | ResultArtifactRef | EvidenceArtifactRef,
+) -> stored_state.ArtifactReference | None:
+    return next(
+        (
+            value
+            for value in state.artifact_references
+            if (value.kind, value.key, value.revision) == (published.kind, published.key, published.revision)
+        ),
+        None,
+    )
+
+
+def _insert_artifact(connection: sqlite3.Connection, reference: stored_state.ArtifactReference) -> None:
+    connection.execute(
+        """
+        INSERT INTO artifact_refs (
+            artifact_ref_id, artifact_key, artifact_revision, kind, relative_path,
+            content_sha256, size_bytes, accepted_revision, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            reference.artifact_ref_id,
+            reference.key,
+            reference.revision,
+            reference.kind.value,
+            reference.selector,
+            reference.content_sha256,
+            reference.size_bytes,
+            reference.accepted_revision,
+            reference.created_at.isoformat(),
+        ),
+    )
+
+
 def read_artifacts(connection: sqlite3.Connection) -> tuple[stored_state.ArtifactReference, ...]:
     return tuple(
         decode_row(row, stored_state.ArtifactReference)
@@ -45,14 +81,7 @@ def accept_checkpoint_artifact(
     revision: int,
     now: datetime,
 ) -> ArtifactRefId:
-    existing = next(
-        (
-            value
-            for value in state.artifact_references
-            if (value.kind, value.key, value.revision) == (published.kind, published.key, published.revision)
-        ),
-        None,
-    )
+    existing = _accepted_artifact(state, published)
     if existing is not None:
         if existing.artifact_ref_id != expected_id or (
             existing.selector,
@@ -64,23 +93,18 @@ def accept_checkpoint_artifact(
                 "An accepted checkpoint artifact identity names different bytes.",
             )
         return existing.artifact_ref_id
-    connection.execute(
-        """
-        INSERT INTO artifact_refs (
-            artifact_ref_id, artifact_key, artifact_revision, kind, relative_path,
-            content_sha256, size_bytes, accepted_revision, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
+    _insert_artifact(
+        connection,
+        stored_state.ArtifactReference(
             expected_id,
             published.key,
             published.revision,
-            published.kind.value,
+            published.kind,
             published.selector,
             published.content_sha256,
             published.size_bytes,
             revision,
-            now.isoformat(),
+            now,
         ),
     )
     return expected_id
@@ -96,14 +120,7 @@ def accept_artifact_reference(
     """Accept one verified reference; the caller owns transaction and readback."""
 
     verify_reference(work_root, published)
-    existing = next(
-        (
-            value
-            for value in before.artifact_references
-            if (value.kind, value.key, value.revision) == (published.kind, published.key, published.revision)
-        ),
-        None,
-    )
+    existing = _accepted_artifact(before, published)
     if existing is not None:
         if (
             existing.selector,
@@ -127,25 +144,7 @@ def accept_artifact_reference(
         accepted_at,
     )
     revision = before.lifecycle.project.revision + 1
-    connection.execute(
-        """
-        INSERT INTO artifact_refs (
-            artifact_ref_id, artifact_key, artifact_revision, kind, relative_path,
-            content_sha256, size_bytes, accepted_revision, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            reference.artifact_ref_id,
-            reference.key,
-            reference.revision,
-            reference.kind.value,
-            reference.selector,
-            reference.content_sha256,
-            reference.size_bytes,
-            reference.accepted_revision,
-            reference.created_at.isoformat(),
-        ),
-    )
+    _insert_artifact(connection, reference)
     if (
         failure := require_one_changed_row(
             connection.execute(
