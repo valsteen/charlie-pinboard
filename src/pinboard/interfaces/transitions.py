@@ -306,7 +306,7 @@ def execute_borrowed_coordination(
                 store,
                 authority_models.ReleaseCoordinationAuthority(borrowed, datetime.now(UTC)),
             )
-        except Exception as cleanup_error:  # noqa: BLE001 - cleanup must preserve any primary infrastructure failure
+        except Exception as cleanup_error:
             transition_error.add_note(
                 f"Borrowed coordination cleanup raised {type(cleanup_error).__name__}: {cleanup_error}"
             )

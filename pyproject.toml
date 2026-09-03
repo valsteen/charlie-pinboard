@@ -27,6 +27,7 @@ src = ["src", "tests", "docs/how_it_works"]
 [tool.ruff.lint]
 extend-select = ["ICN003", "RUF100"]
 select = ["ANN", "ARG", "B", "BLE", "C4", "C90", "E4", "E7", "E9", "F", "I", "PERF", "PGH", "PIE", "PLC0415", "PLR0912", "PLR0915", "PTH", "RET", "RUF", "SIM", "T10", "TID", "UP", "W"]
+ignore = ["BLE001"]
 
 [tool.ruff.lint.flake8-import-conventions]
 banned-from = [
