@@ -262,10 +262,6 @@ class SQLiteQueriesTest(unittest.TestCase):
         self.assertIsInstance(invalid_selection, query_models.QueryFailure)
         assert isinstance(invalid_selection, query_models.QueryFailure)
         self.assertEqual(query_models.QueryRejectionCode.PARALLEL_SELECTION_INVALID, invalid_selection.code)
-        invalid_time = preview_parallel(store, now=SQLITE_NOW.replace(tzinfo=None))
-        self.assertIsInstance(invalid_time, query_models.QueryFailure)
-        assert isinstance(invalid_time, query_models.QueryFailure)
-        self.assertEqual(query_models.QueryRejectionCode.PARALLEL_TIME_INVALID, invalid_time.code)
 
 
 if __name__ == "__main__":

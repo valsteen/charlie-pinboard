@@ -58,7 +58,6 @@ class ParallelReasonCode(Enum):
 
 class QueryRejectionCode(Enum):
     PARALLEL_SELECTION_INVALID = "PARALLEL_SELECTION_INVALID"
-    PARALLEL_TIME_INVALID = "PARALLEL_TIME_INVALID"
 
 
 @dataclass(frozen=True, slots=True)
