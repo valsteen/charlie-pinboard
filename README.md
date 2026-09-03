@@ -109,7 +109,7 @@ jscpd is the sole non-Python development tool. It requires Node.js 18 or newer a
 npm ci
 ```
 
-The checked-in `package-lock.json` makes that installation repeatable. `npm run duplication` performs an aggressive local scan at four lines and 40 tokens; its current 46 matches are prompts for judgment, not failures to eliminate mechanically. CI uses calmer eight-line and 60-token limits, rejects every clone that is new relative to `origin/main`, and also enforces a 0.7% ceiling set just above the accepted 0.656% baseline. Lower the ceiling when later cleanup reduces that result rather than raising it to accommodate new duplication.
+The checked-in `package-lock.json` makes that installation repeatable. `npm run duplication` performs an aggressive local scan at four lines and 40 tokens; its matches are prompts for judgment, not failures to eliminate mechanically. CI uses calmer eight-line and 60-token limits, rejects every clone that is new relative to `origin/main`, and also enforces a 0.7% ceiling set just above the accepted 0.656% baseline. Lower the ceiling when later cleanup reduces that result rather than raising it to accommodate new duplication.
 
 ```sh
 uv sync --locked

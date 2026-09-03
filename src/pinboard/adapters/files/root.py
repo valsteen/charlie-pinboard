@@ -6,9 +6,9 @@ from pinboard.adapters.files.errors import RootError, RootErrorCode
 PINBOARD_GIT_EXCLUDE = b"/.codex/pinboard/"
 
 
-def _resolve_git_common_directory(cwd: Path) -> Path:
+def _resolve_git_path(cwd: Path, selector: str, unavailable_message: str) -> Path:
     result = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        ["git", "rev-parse", "--path-format=absolute", selector],
         cwd=cwd,
         text=True,
         capture_output=True,
@@ -17,9 +17,17 @@ def _resolve_git_common_directory(cwd: Path) -> Path:
     if result.returncode != 0:
         raise RootError(
             RootErrorCode.PROJECT_GIT_ROOT_UNAVAILABLE,
-            result.stderr.strip() or f"'{cwd}' is not inside a Git repository.",
+            result.stderr.strip() or unavailable_message,
         )
-    common_directory = Path(result.stdout.strip()).resolve()
+    return Path(result.stdout.strip()).resolve()
+
+
+def _resolve_git_common_directory(cwd: Path) -> Path:
+    common_directory = _resolve_git_path(
+        cwd,
+        "--git-common-dir",
+        f"'{cwd}' is not inside a Git repository.",
+    )
     if common_directory.name != ".git":
         raise RootError(
             RootErrorCode.PROJECT_GIT_LAYOUT_UNSUPPORTED,
@@ -29,19 +37,11 @@ def _resolve_git_common_directory(cwd: Path) -> Path:
 
 
 def resolve_source_checkout_root(cwd: Path) -> Path:
-    result = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--show-toplevel"],
-        cwd=cwd,
-        text=True,
-        capture_output=True,
-        check=False,
+    return _resolve_git_path(
+        cwd,
+        "--show-toplevel",
+        f"'{cwd}' is not inside a Git checkout.",
     )
-    if result.returncode != 0:
-        raise RootError(
-            RootErrorCode.PROJECT_GIT_ROOT_UNAVAILABLE,
-            result.stderr.strip() or f"'{cwd}' is not inside a Git checkout.",
-        )
-    return Path(result.stdout.strip()).resolve()
 
 
 def resolve_shared_repository_root(cwd: Path) -> Path:
