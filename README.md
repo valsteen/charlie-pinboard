@@ -101,7 +101,15 @@ For a quick current picture, ask:
 
 ## Runtime and development
 
-The package targets Python 3.14 only. msgspec provides immutable records and strict JSON decoding at repository boundaries. uv manages Python installation, the project environment, dependencies, the checked-in lockfile, and command execution.
+The package targets Python 3.14 only. msgspec provides immutable records and strict JSON decoding at repository boundaries. uv manages Python installation, the project environment, Python dependencies, the checked-in Python lockfile, and Python command execution.
+
+jscpd is the sole non-Python development tool. It requires Node.js 18 or newer and npm, but no global package installation. Install the pinned native binary into this repository's ignored `node_modules/` directory:
+
+```sh
+npm ci
+```
+
+The checked-in `package-lock.json` makes that installation repeatable. `npm run duplication` performs the more sensitive local scan; CI uses `npm run duplication:ci` with calmer clone-size limits and enforces a 0.7% ceiling set just above the accepted 0.656% baseline. Lower the ceiling when later cleanup reduces that result rather than raising it to accommodate new duplication.
 
 ```sh
 uv sync --locked
@@ -113,8 +121,10 @@ uv run --locked pyrefly coverage check src --strict --fail-under 100
 uv run --locked coverage run -m unittest discover -v
 uv run --locked coverage report
 uv run --locked python scripts/validate-metadata.py
+npm run duplication
+npm run duplication:ci
 uv build --no-sources
 scripts/pinboard --help
 ```
 
-Local checks, CI, and the plugin launcher all use the package installed by uv. The checked-in uv lockfile is the single development dependency record. CI validates the plugin and its skills before the repository is published.
+Local Python checks, CI, and the plugin launcher all use the package installed by uv. Copy-paste detection runs separately through the project-local jscpd installation. CI validates the plugin and its skills before the repository is published.

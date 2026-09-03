@@ -31,17 +31,10 @@ def _parallel_item_key(value: query_models.ParallelItem) -> str:
 def _preparation_status(
     state: stored_state.StoredWorkState, item_id: ItemId, now: datetime
 ) -> query_models.PreparationStatusView | None:
-    lease = next((value for value in state.authority.preparation_leases if value.item_id == item_id), None)
-    if lease is None:
+    retained = stored_state.retained_preparation(state, item_id)
+    if retained is None:
         return None
-    anchor = next(
-        (
-            value
-            for value in state.authority.preparation_generations
-            if value.item_id == item_id and value.generation == lease.generation
-        ),
-        None,
-    )
+    lease, anchor = retained
     if anchor is None:
         return None
     match lease.state:

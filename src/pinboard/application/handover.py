@@ -6,7 +6,7 @@ from typing import Literal, assert_never
 
 import msgspec
 
-from pinboard.application import stored_state
+from pinboard.application import query_models, stored_state
 from pinboard.domain import work_models
 
 
@@ -43,25 +43,11 @@ class HandoverWorkItem(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     queue_position: int | None
 
 
-class HandoverDefinition(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    schema: Literal["pinboard-work-item-definition/v1"]
-    title: str
-    objective: str
-    hypothesis: str
-    evidence: tuple[str, ...]
-    scope: tuple[str, ...]
-    non_scope: tuple[str, ...]
-    acceptance_criteria: tuple[str, ...]
-    dependencies: tuple[str, ...]
-    effect: str
-    unlock: str
-
-
 class HandoverDefinitionRevision(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     item_id: str
     revision: int
     digest: str
-    definition: HandoverDefinition
+    definition: query_models.WorkItemDefinitionView
     reason: str
     source_task_id: str
     before_digest: str | None
@@ -266,8 +252,8 @@ def artifact_reference(
     )
 
 
-def _definition(value: work_models.WorkItemDefinition) -> HandoverDefinition:
-    return HandoverDefinition(
+def _definition(value: work_models.WorkItemDefinition) -> query_models.WorkItemDefinitionView:
+    return query_models.WorkItemDefinitionView(
         "pinboard-work-item-definition/v1",
         value.title,
         value.objective,
