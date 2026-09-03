@@ -7,7 +7,13 @@ description: Preserve one newly proposed piece of project work as an intake item
 
 Convert one explicit concern into immutable proposal facts and a same-identity intake item. Do not claim that intake made it ready, active, or current work.
 
-Intake may be standalone or embedded in ongoing Pinboard coordination. Standalone intake may end after its persistence receipt. Before embedded intake, retain a compact continuation anchor containing the pre-intake objective, the next promised action, and the exact durable owner selector. Intake changes queue state but preserves focus and active attempts, so return control to that anchor after persistence and optional notification handling.
+Intake may be standalone or embedded in ongoing Pinboard coordination. Standalone intake may end after its persistence receipt only when the user did not also ask to begin the new work. Before embedded intake, retain a compact continuation anchor containing the pre-intake objective, the next promised action, and the exact durable owner selector. Intake changes queue state but preserves focus and active attempts, so return control to that anchor after persistence and optional notification handling.
+
+## Preserve immediate-start intent
+
+When the same request says `start`, `begin`, `work on`, `implement`, `fix now`, or otherwise clearly asks for immediate execution, treat intake as the first atomic step rather than the requested outcome. After persistence, continue through `$pinboard` to admit, prepare, and activate the same-identity item, then use `$pinboard-deliver` to complete its accepted work. Do not end with a save-for-later receipt merely because the user explicitly named `$pinboard-intake`.
+
+Ask one quick confirmation only when the human phrasing leaves a material choice between queueing for later and beginning now. An explicit immediate-work verb is sufficient and needs no confirmation. Intake remains standalone when the request only asks to add, queue, preserve, or save work for later.
 
 ## Preconditions
 
@@ -63,6 +69,8 @@ Keep the active work as the main topic and lead with the practical outcome:
 - After `OK PROPOSAL_CREATED`, say `Saved for later — <concern> is now <proposal-id> at intake position <n>; current work <continues | is blocked by it>.`
 - For exact prior coverage, say `Saved for later — <concern> was already recorded at <selector and state>; current work <continues | is blocked by it>.`
 - When the user explicitly dismisses the concern, say `Not saved — <concern> was dismissed at your request; no follow-up remains.`
+
+The `Saved for later` forms apply only when intake is the terminal action requested. For immediate-start intent, keep the persistence receipt subordinate while continuing the same turn; report the work as started only after the normal Pinboard activation succeeds.
 
 Use `now` only after `OK PROPOSAL_CREATED`; it means this turn before the update. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact concern was present earlier. When delivery is user-requested or materially affects the result, report it after the durable outcome without implying that optional transport changes persistence.
 
