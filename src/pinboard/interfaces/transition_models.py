@@ -12,6 +12,11 @@ type Sha256 = Annotated[str, msgspec.Meta(pattern=r"\A[0-9a-f]{64}\z")]
 type PositiveInt = Annotated[int, msgspec.Meta(ge=1)]
 
 
+def _require_unique_dependencies(depends_on: tuple[Identity, ...]) -> None:
+    if len(set(depends_on)) != len(depends_on):
+        raise ValueError("depends_on must contain unique identities")
+
+
 class ResumeInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     brief_artifact_ref_id: Annotated[int, msgspec.Meta(ge=1)] | None = None
 
@@ -37,8 +42,7 @@ class BlockInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True)
     depends_on: tuple[Identity, ...] = ()
 
     def __post_init__(self) -> None:
-        if len(set(self.depends_on)) != len(self.depends_on):
-            raise ValueError("depends_on must contain unique identities")
+        _require_unique_dependencies(self.depends_on)
 
 
 class EvidenceInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -74,8 +78,7 @@ class AcceptProposalInputPayload(msgspec.Struct, frozen=True, forbid_unknown_fie
     depends_on: tuple[Identity, ...] = ()
 
     def __post_init__(self) -> None:
-        if len(set(self.depends_on)) != len(self.depends_on):
-            raise ValueError("depends_on must contain unique identities")
+        _require_unique_dependencies(self.depends_on)
         if self.item in self.depends_on:
             raise ValueError("depends_on must not contain the accepted item")
 
