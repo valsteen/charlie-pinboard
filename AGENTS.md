@@ -1,6 +1,6 @@
 # Repository Guidance
 
-- Consult `DESIGN_PRINCIPLES.md` when changing module ownership, dependency direction, effect contracts, expected-failure handling, or recurring boundary boilerplate. Apply its decision visibility, outer-glue ownership, plain-function, thematic symmetry, and fixed-point stop rules as repository constraints.
+- Consult `DESIGN_PRINCIPLES.md` when changing module ownership, dependency direction, effect contracts, expected-failure handling, closed-family members, or recurring boundary boilerplate. Apply its decision visibility, outer-glue ownership, plain-function, thematic symmetry, and fixed-point stop rules as repository constraints.
 - Use Python 3.14.x syntax only. Keep `.python-version`, `requires-python`, Ruff `target-version`, Pyrefly, CI, and the uv lock aligned with the current stable 3.14 patch release.
 - Use uv as the only dependency, environment, build, and installed-package entry point. Keep `uv.lock` checked in.
 - Do not inject `PYTHONPATH` or another import path, invoke an ambient Python interpreter, add requirements files, or run source files as a substitute for the installed package.

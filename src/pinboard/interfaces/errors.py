@@ -1,17 +1,17 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from pinboard.application import query_models
 from pinboard.domain.errors import DecisionFailureCode
 
 
 class CommandErrorCode(Enum):
     ACTION_ID_INVALID = "ACTION_ID_INVALID"
+    PARALLEL_SELECTION_INVALID = "PARALLEL_SELECTION_INVALID"
     STALE_ACTION = "STALE_ACTION"
     WORK_STATE_INVALID = "WORK_STATE_INVALID"
 
 
-type CommandFailureCode = CommandErrorCode | DecisionFailureCode | query_models.QueryRejectionCode
+type CommandFailureCode = CommandErrorCode | DecisionFailureCode
 
 
 @dataclass(frozen=True, slots=True)
