@@ -242,8 +242,8 @@ def change_preparation_authority(
     )
     if refresh_result.warning is not None:
         print(refresh_result.warning.message, file=sys.stderr)
-    latest_committed_state = store.snapshot()
     presented_at = datetime.now(UTC)
+    latest_committed_state = store.snapshot()
     return _present_latest_preparation_authority(
         latest_committed_state, command.item_id, presented_at, json=command.json
     )
