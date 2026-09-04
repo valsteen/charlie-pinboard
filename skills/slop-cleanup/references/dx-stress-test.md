@@ -1,5 +1,7 @@
 # Stress-test developer navigation
 
+This test audits structural navigation and repeated routing ownership. For the separate human-comprehension pass that compares a product overview with the story told by code, use [storytelling readability](storytelling-readability.md).
+
 Use this test when a command or closed-variant family crosses several production owners. First apply the shared [developer-navigation lens](../../pinboard/references/developer-navigation.md). This cleanup-specific test extends that bounded prevention check across the complete production surface and adds fixed-point evidence.
 
 ## Trace one supported value

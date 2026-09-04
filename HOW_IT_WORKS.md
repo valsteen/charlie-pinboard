@@ -45,14 +45,16 @@ Every arrow in this view means “may depend on”; the next view shows runtime 
 
 ## Follow one change
 
-Submitting work for review is one visible action, but it strengthens meaning at every boundary. The interface reselects the advertised action, decodes external values against that concrete variant, and produces its exact command without carrying a second general action discriminator into the domain. Advertised command, proposal, and dispatch rejections return as typed failures to one CLI presenter. The application reloads complete current state and mutation ownership inside the write operation. Domain evaluation returns either an accepted change or an expected rejection; rejection leaves the ledger unchanged. The application projects an accepted decision, its receipt, and its affected auxiliary values into a focused storage mutation. SQLite applies only those guarded relational changes. A stale guard returns an expected failure, while infrastructure or programming failures remain exceptions; every unsuccessful path rolls back the transaction without changing the prior ledger.
+Acquiring a preparation claim shows one complete changing-command story. The command-line boundary first decodes an exact acquisition command. The preparation interface observes stored context, then resolves the caller's supplied coordination claim and requested lease details into one requested preparation change. This observation can explain an absent claim, but it is not the authoritative state used to approve the change.
+
+The application opens the write transaction and rereads locked current state. A pure domain decision returns either an accepted authority change or an expected rejection. Rejection leaves the previous ledger intact. The application projects an accepted decision into one focused mutation, and SQLite commits only those guarded facts. A stale guard returns an expected failure; infrastructure or programming failures remain exceptions; every unsuccessful transaction rolls back.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/journey-dark.svg">
-  <img src="assets/how-it-works/journey.svg" alt="A submit-review request travelling through interface decoding, application orchestration, domain decision, mutation projection, and atomic SQLite commit">
+  <img src="assets/how-it-works/journey.svg" alt="A preparation-authority request being decoded, observed, resolved, decided against locked state, committed, refreshed, and presented">
 </picture>
 
-The layers do not repeat the same decision. Each contributes a different guarantee, then hands a narrower value to the next owner. Generated views refresh after the authoritative commit and can be rebuilt from the ledger if that refresh is interrupted.
+After the authoritative commit, the interface refreshes replaceable views. An interrupted refresh can warn without undoing the successful ledger change because the views can be rebuilt. The interface then reloads the latest committed state and presents it. The representative code repeats these verbs and provenance distinctions directly: observed state becomes a requested change; the application owns locked state, accepted decision, focused mutation, and commit; refresh and latest-state presentation happen afterward.
 
 ## Carry the project into another tool
 
