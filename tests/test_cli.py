@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import runpy
 import sys
 import tempfile
@@ -907,6 +908,68 @@ class CliTest(unittest.TestCase):
         )
         self.assertEqual(11, renew_result)
         self.assertIn("COORDINATION_LEASE_REQUIRED", renew_stderr)
+
+    def test_first_init_recommends_body_after_prefix_once_when_user_setting_is_absent(self) -> None:
+        for label, config_contents in (("missing-config", None), ("other-setting", 'model = "gpt-5"\n')):
+            with self.subTest(label=label):
+                project = Path(tempfile.mkdtemp()).resolve()
+                work = project / ".codex" / "work"
+                codex_home = Path(tempfile.mkdtemp()).resolve()
+                config = codex_home / "config.toml"
+                if config_contents is not None:
+                    config.write_text(config_contents, encoding="utf-8")
+                common = ("--project-root", str(project), "--work-root", str(work), "init")
+                recommendation = (
+                    'OPTIONAL: Add model_auto_compact_token_limit_scope = "body_after_prefix" to '
+                    f"{codex_home / 'config.toml'}. Reference: "
+                    "https://learn.chatgpt.com/docs/config-file/config-reference"
+                )
+
+                with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}):
+                    first_result, first_stdout, first_stderr = self.run_cli(*common)
+                    second_result, second_stdout, second_stderr = self.run_cli(*common)
+
+                self.assertEqual(0, first_result, first_stderr)
+                self.assertEqual(0, second_result, second_stderr)
+                self.assertEqual(1, first_stdout.splitlines().count(recommendation))
+                self.assertNotIn("model_auto_compact_token_limit_scope", second_stdout)
+                if config_contents is None:
+                    self.assertFalse(config.exists())
+                else:
+                    self.assertEqual(config_contents, config.read_text(encoding="utf-8"))
+
+    def test_first_init_omits_recommendation_without_reliable_user_setting_absence(self) -> None:
+        for label, config_contents in (
+            ("total", 'model_auto_compact_token_limit_scope = "total"\n'),
+            ("body-after-prefix", 'model_auto_compact_token_limit_scope = "body_after_prefix"\n'),
+            ("invalid", "[\n"),
+            ("invalid-encoding", b"\xff"),
+            ("unreadable", None),
+        ):
+            with self.subTest(label=label):
+                project = Path(tempfile.mkdtemp()).resolve()
+                work = project / ".codex" / "work"
+                codex_home = Path(tempfile.mkdtemp()).resolve()
+                config = codex_home / "config.toml"
+                if config_contents is None:
+                    config.mkdir()
+                elif isinstance(config_contents, bytes):
+                    config.write_bytes(config_contents)
+                else:
+                    config.write_text(config_contents, encoding="utf-8")
+
+                with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}):
+                    result, stdout, stderr = self.run_cli(
+                        "--project-root",
+                        str(project),
+                        "--work-root",
+                        str(work),
+                        "init",
+                    )
+
+                self.assertEqual(0, result, stderr)
+                self.assertNotIn("model_auto_compact_token_limit_scope", stdout)
+                self.assertTrue((work / "state.sqlite3").is_file())
 
     def test_installed_initialization_samples_its_operation_time_once(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
