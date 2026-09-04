@@ -305,9 +305,7 @@ def decide_and_commit_preparation_authority_change(
             return accepted_decision
         accepted_authority = accepted_decision.current_after
         transition_receipt = decision_models.TransitionReceipt(
-            action_id=ActionId(
-                f"continue:preparation-authority:{item_id}:{accepted_authority.generation}"
-            ),
+            action_id=ActionId(f"continue:preparation-authority:{item_id}:{accepted_authority.generation}"),
             item=item_id,
             outcome=history_outcome,
             evidence=None,
@@ -326,9 +324,7 @@ def decide_and_commit_preparation_authority_change(
             input_schema="preparation-authority/v1",
             input_payload=work_models.CanonicalJson(b"{}"),
         )
-        focused_mutation = PreparationAuthorityMutation(
-            receipt=mutation_receipt, decision=accepted_decision
-        )
+        focused_mutation = PreparationAuthorityMutation(receipt=mutation_receipt, decision=accepted_decision)
         return transaction.commit(focused_mutation)
 
 

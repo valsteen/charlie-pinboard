@@ -69,14 +69,20 @@ Name the actor and expected next action in every user-facing review update. Desc
 
 Do not use or wake another visible Codex task to review or receive the same outcome. Dispatching work, clarifying or widening scope, sending a prior message, or once holding coordination does not establish current responsibility. A separate visible task owns a genuinely independent outcome and reports in its own conversation; it is never a subordinate return path.
 
-Before a task that began with a read-only request starts repository writes, inspect whether the exact target checkout or worktree is occupied. When it is, say so and name the owning Codex task with its real title when available. Make a bounded merge-risk assessment from:
+Treat an explicit user choice of the main checkout or an isolated worktree as settled. Do not ask again. For an explicit worktree choice, use that worktree without a generic warning about possible later integration conflicts. Discuss integration risk only when observed overlap or conflict makes it concrete, or when the later repository-disposition decision requires it.
+
+Before repository writes begin in the main checkout, establish that it is available for the current task. Use current Codex task occupancy together with the exact active Pinboard attempt and its dispatch checkout as the existing ownership evidence; do not create persistent checkout ownership state. A matching current task, attempt, and dispatch checkout establishes availability for that task. Another writing task in the main checkout means it is occupied; name that task with its real title when available.
+
+When the user has not chosen a checkout, inspect main-checkout occupancy first, then ask one concise question. Base the recommendation on the observed context: prefer the main checkout when it is available and no concurrent isolation is useful; prefer an isolated worktree for independent concurrent work. End with `Quick reply: 1 main checkout · 2 isolated worktree`.
+
+When the main checkout is occupied, make a bounded overlap assessment from:
 
 - target-checkout or worktree occupancy;
 - the intended write paths;
 - currently changed filenames; and
 - at most the active brief's named owners or source selectors.
 
-Separate direct observations from uncertainty and limitations. Recommend waiting when the same checkout is occupied or known overlap or unresolved uncertainty makes that safest. The human may knowingly choose an isolated worktree instead; state that isolation prevents competing writes in one checkout but does not remove later integration or merge-conflict risk.
+Separate direct observations from uncertainty and limitations. Recommend waiting when the intended files overlap or unresolved uncertainty makes waiting safest; otherwise recommend an isolated worktree. Ask one concise question and end with `Quick reply: 1 wait for main checkout · 2 isolated worktree`.
 
 Stop after the bounded recommendation unless further evidence is necessary for the user's decision. Do not turn this assessment into a full-diff review, history walk, test run, open-ended investigation, persistent checkout registry, or generic resource-lock subsystem without concrete evidence that the bounded path fails.
 
@@ -212,7 +218,7 @@ Treat worker completion as a review request, not acceptance. Compare the attempt
 
 After a repository candidate is accepted, keep its code acceptance, Pinboard state, commit state, branch integration, remote publication, and deliberate deferral distinct. Before asking the human to wrap up, refresh only the decision-relevant facts: review outcome; dirty or committed state; current branch and checkout or worktree; intended target; known filename overlap or conflict risk; and remote delivery status when it affects the choice. State observations, uncertainty, and limitations. A separate worktree avoids competing writes in one checkout but does not make later integration conflict-free.
 
-Recommend the best-supported next action and offer two to four concrete alternatives whose repository effects are explicit, such as fix the candidate, commit it in place, integrate it into a named branch, publish it, or deliberately leave it isolated. Perform only the action the human selects. An accepted candidate with no acknowledged repository disposition remains a concise conversational obligation: mention the unresolved choice in later responses, even after a topic change, until the human chooses or acknowledges a deliberate deferral. Keep this obligation in the active conversation; do not create a scheduler, reminder store, or persistent checkout owner.
+Recommend the best-supported next action and offer two to four concrete alternatives whose repository effects are explicit. End with a numbered `Quick reply:` line. When remote publication is available, include `commit the candidate, push its branch, and open a draft PR` as one choice alongside any useful commit-only, named-branch integration, publication, or deliberate-deferral choices. Do not imply that the draft-PR path is required. Perform only the action the human selects. An accepted candidate with no acknowledged repository disposition remains a concise conversational obligation: mention the unresolved choice in later responses, even after a topic change, until the human chooses or acknowledges a deliberate deferral. Keep this obligation in the active conversation; do not create a scheduler, reminder store, or persistent checkout owner.
 
 After the selected administrative action, refresh the same bounded repository facts and ask the human to confirm whether the task can be considered done. Do not perform the terminal completion transition before that explicit confirmation, and do not manufacture integration or publication as a prerequisite when the human knowingly accepts another disposition.
 

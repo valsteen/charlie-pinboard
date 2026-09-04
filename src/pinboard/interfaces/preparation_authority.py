@@ -195,9 +195,7 @@ def _resolve_requested_preparation_change(  # noqa: C901, PLR0912
             )
             if isinstance(supplied_authority, CommandFailure):
                 return supplied_authority
-            return authority_models.ReleasePreparationAuthority(
-                current=supplied_authority, released_at=now
-            )
+            return authority_models.ReleasePreparationAuthority(current=supplied_authority, released_at=now)
         case cli_commands.PreparationRevokeCommand():
             coordination = _resolve_supplied_coordination_authority(
                 observed_state, command.coordination_lease_id, command.coordination_generation
