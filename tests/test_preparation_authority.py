@@ -14,7 +14,7 @@ from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import query_models, stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.queries import overview_from_state, preview_parallel
-from pinboard.application.service import change_preparation_authority, create_proposal
+from pinboard.application.service import create_proposal, decide_and_commit_preparation_authority_change
 from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.authority_decisions import decide_preparation_authority
 from pinboard.domain.errors import DecisionFailure
@@ -208,7 +208,9 @@ class PreparationAuthorityTest(unittest.TestCase):
     def test_preparation_persists_reloads_and_changes_visibility_exactly_at_expiry(self) -> None:
         store, database_path = self._store()
         expires_at = SQLITE_NOW + timedelta(seconds=1)
-        receipt = change_preparation_authority(store, self._acquisition(store.snapshot(), expires_at=expires_at))
+        receipt = decide_and_commit_preparation_authority_change(
+            store, self._acquisition(store.snapshot(), expires_at=expires_at)
+        )
         self.assertNotIsInstance(receipt, DecisionFailure)
 
         reloaded = SQLiteWorkStore(database_path).snapshot()
@@ -238,7 +240,9 @@ class PreparationAuthorityTest(unittest.TestCase):
     def test_live_preparation_rejects_prerequisite_proposal_atomically_then_expiry_admits_it(self) -> None:
         store, database_path = self._store()
         expires_at = SQLITE_NOW + timedelta(seconds=1)
-        acquired = change_preparation_authority(store, self._acquisition(store.snapshot(), expires_at=expires_at))
+        acquired = decide_and_commit_preparation_authority_change(
+            store, self._acquisition(store.snapshot(), expires_at=expires_at)
+        )
         self.assertNotIsInstance(acquired, DecisionFailure)
         intake = ProposalIntake(
             ProposalId("required-before-work-c"),
@@ -386,7 +390,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         assert definition is not None
         assert coordination_authority is not None
         expires_at = acquired_at + timedelta(seconds=1)
-        acquired = change_preparation_authority(
+        acquired = decide_and_commit_preparation_authority_change(
             store,
             authority_models.AcquireInitialPreparationAuthority(
                 snapshot.host_epoch,
@@ -418,7 +422,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         operation_start = datetime.now(expires_at.tzinfo)
         self.assertLess(operation_start, expires_at)
 
-        released = change_preparation_authority(
+        released = decide_and_commit_preparation_authority_change(
             store,
             authority_models.ReleasePreparationAuthority(command_authority, operation_start),
         )
@@ -431,7 +435,7 @@ class PreparationAuthorityTest(unittest.TestCase):
         self.assertEqual(
             authority_models.PreparationLeaseStatus.RELEASED, store.snapshot().authority.preparation_leases[0].state
         )
-        rejected = change_preparation_authority(
+        rejected = decide_and_commit_preparation_authority_change(
             store,
             authority_models.RenewPreparationAuthority(
                 command_authority,

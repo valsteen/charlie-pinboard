@@ -22,7 +22,7 @@ from pinboard.application.artifacts import (
 )
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.mutations import project_checkpoint_acceptance_mutation, project_transition_mutation
-from pinboard.application.service import change_preparation_authority, create_proposal, execute
+from pinboard.application.service import create_proposal, decide_and_commit_preparation_authority_change, execute
 from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.decisions import (
     available_actions,
@@ -192,7 +192,7 @@ def _acquire_same_preparation(
         SQLITE_NOW + timedelta(minutes=1),
     )
     barrier.wait()
-    result = change_preparation_authority(store, operation)
+    result = decide_and_commit_preparation_authority_change(store, operation)
     results.put(result.code.value if isinstance(result, DecisionFailure) else "committed")
 
 
@@ -226,7 +226,7 @@ def _race_preparation_and_prerequisite_proposal(
             SQLITE_NOW + timedelta(minutes=1),
         )
         barrier.wait()
-        result = change_preparation_authority(store, operation)
+        result = decide_and_commit_preparation_authority_change(store, operation)
     else:
         intake = ProposalIntake(
             ProposalId("required-before-work-c"),

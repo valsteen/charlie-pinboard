@@ -1,3 +1,10 @@
+"""Compose preparation-authority commands from observation through presentation.
+
+This interface may read the clock and concrete store, refresh generated views, and
+present output. The application use case owns the locked reread, decision, and
+durable commit; an earlier observation here only helps resolve the caller's request.
+"""
+
 import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -8,7 +15,7 @@ from pinboard.adapters.files.models import AffectedViews
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
-from pinboard.application.service import change_preparation_authority as apply_preparation_authority_change
+from pinboard.application.service import decide_and_commit_preparation_authority_change
 from pinboard.domain import authority_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import ItemId, LeaseId
@@ -17,7 +24,7 @@ from pinboard.interfaces.cli_output import write_json
 from pinboard.interfaces.errors import CommandErrorCode, CommandFailure, CommandResult
 
 
-def _retained(
+def _find_retained_preparation_claim(
     state: stored_state.StoredWorkState, item_id: ItemId, now: datetime
 ) -> CommandResult[tuple[stored_state.StoredPreparationLease, stored_state.PreparationLeaseGeneration]]:
     retained = stored_state.retained_preparation(state, item_id)
@@ -31,14 +38,14 @@ def _retained(
     return lease, anchor
 
 
-def _emit(
+def _present_latest_preparation_authority(
     state: stored_state.StoredWorkState,
     item_id: ItemId,
     now: datetime,
     *,
     json: bool,
 ) -> CommandResult[int]:
-    retained = _retained(state, item_id, now)
+    retained = _find_retained_preparation_claim(state, item_id, now)
     if isinstance(retained, CommandFailure):
         return retained
     lease, anchor = retained
@@ -66,49 +73,49 @@ def preparation_status(
 ) -> CommandResult[int]:
     now = datetime.now(UTC)
     state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
-    return _emit(state, command.item_id, now, json=command.json)
+    return _present_latest_preparation_authority(state, command.item_id, now, json=command.json)
 
 
-def _coordination(
-    state: stored_state.StoredWorkState,
+def _resolve_supplied_coordination_authority(
+    observed_state: stored_state.StoredWorkState,
     lease_id: LeaseId,
     generation: int,
 ) -> CommandResult[work_models.CoordinationCommandAuthority]:
-    retained = state.authority.coordination
+    retained = observed_state.authority.coordination
     if retained is None:
         return CommandFailure(DecisionFailureCode.COORDINATION_LEASE_REQUIRED, "Coordination authority is absent.")
     return work_models.CoordinationCommandAuthority(
-        state.lifecycle.project.host_epoch,
-        retained.task_id,
-        retained.host_id,
-        lease_id,
-        generation,
-        retained.expires_at,
+        host_epoch=observed_state.lifecycle.project.host_epoch,
+        task_id=retained.task_id,
+        host_id=retained.host_id,
+        lease_id=lease_id,
+        generation=generation,
+        expires_at=retained.expires_at,
     )
 
 
-def _current_token(
-    state: stored_state.StoredWorkState,
+def _resolve_supplied_preparation_authority(
+    observed_state: stored_state.StoredWorkState,
     item_id: ItemId,
     lease_id: LeaseId,
     generation: int,
     now: datetime,
 ) -> CommandResult[work_models.PreparationCommandAuthority]:
-    token = next(
+    observed_authority = next(
         (
             value
-            for value in project_decision_snapshot(state, now).command_preparation_authorities
+            for value in project_decision_snapshot(observed_state, now).command_preparation_authorities
             if value.item == item_id
         ),
         None,
     )
-    if token is None:
+    if observed_authority is None:
         return CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation authority is not active.")
-    return replace(token, lease_id=lease_id, generation=generation)
+    return replace(observed_authority, lease_id=lease_id, generation=generation)
 
 
-def _operation(  # noqa: C901, PLR0912
-    state: stored_state.StoredWorkState,
+def _resolve_requested_preparation_change(  # noqa: C901, PLR0912
+    observed_state: stored_state.StoredWorkState,
     command: (
         cli_commands.CoordinatorPreparationAcquireCommand
         | cli_commands.CoordinatedPreparationTransferCommand
@@ -120,75 +127,89 @@ def _operation(  # noqa: C901, PLR0912
 ) -> CommandResult[authority_models.PreparationAuthorityOperation]:
     match command:
         case cli_commands.CoordinatorPreparationAcquireCommand():
-            coordination = _coordination(state, command.coordination_lease_id, command.coordination_generation)
+            coordination = _resolve_supplied_coordination_authority(
+                observed_state, command.coordination_lease_id, command.coordination_generation
+            )
             if isinstance(coordination, CommandFailure):
                 return coordination
             return authority_models.AcquireInitialPreparationAuthority(
-                state.lifecycle.project.host_epoch,
-                command.item_id,
-                command.expected_project_revision,
-                command.expected_item_subject_revision,
-                command.expected_definition_revision,
-                command.expected_definition_digest,
-                coordination,
-                command.task_id,
-                command.host_id,
-                LeaseId(uuid4().hex),
-                now,
-                now + timedelta(seconds=command.ttl_seconds),
+                host_epoch=observed_state.lifecycle.project.host_epoch,
+                item=command.item_id,
+                expected_project_revision=command.expected_project_revision,
+                expected_item_subject_revision=command.expected_item_subject_revision,
+                expected_definition_revision=command.expected_definition_revision,
+                expected_definition_digest=command.expected_definition_digest,
+                coordination=coordination,
+                task_id=command.task_id,
+                host_id=command.host_id,
+                lease_id=LeaseId(uuid4().hex),
+                acquired_at=now,
+                expires_at=now + timedelta(seconds=command.ttl_seconds),
             )
         case cli_commands.CoordinatedPreparationTransferCommand():
-            retained = _retained(state, command.item_id, now)
+            retained = _find_retained_preparation_claim(observed_state, command.item_id, now)
             if isinstance(retained, CommandFailure):
                 return retained
             lease, anchor = retained
             if lease.state == authority_models.PreparationLeaseStatus.ACTIVE:
                 return CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation authority remains live.")
-            coordination = _coordination(state, command.coordination_lease_id, command.coordination_generation)
+            coordination = _resolve_supplied_coordination_authority(
+                observed_state, command.coordination_lease_id, command.coordination_generation
+            )
             if isinstance(coordination, CommandFailure):
                 return coordination
             return authority_models.TransferPreparationAuthority(
-                authority_models.InactivePreparationAuthority(
-                    state.lifecycle.project.host_epoch,
-                    lease.item_id,
-                    lease.definition_revision,
-                    lease.definition_digest,
-                    anchor.task_id,
-                    anchor.host_id,
-                    anchor.lease_id,
-                    lease.generation,
-                    lease.expires_at,
-                    lease.state,
+                current=authority_models.InactivePreparationAuthority(
+                    host_epoch=observed_state.lifecycle.project.host_epoch,
+                    item=lease.item_id,
+                    definition_revision=lease.definition_revision,
+                    definition_digest=lease.definition_digest,
+                    task_id=anchor.task_id,
+                    host_id=anchor.host_id,
+                    lease_id=anchor.lease_id,
+                    generation=lease.generation,
+                    expires_at=lease.expires_at,
+                    state=lease.state,
                 ),
-                coordination,
-                command.task_id,
-                command.host_id,
-                LeaseId(uuid4().hex),
-                now,
-                now + timedelta(seconds=command.ttl_seconds),
+                coordination=coordination,
+                task_id=command.task_id,
+                host_id=command.host_id,
+                lease_id=LeaseId(uuid4().hex),
+                acquired_at=now,
+                expires_at=now + timedelta(seconds=command.ttl_seconds),
             )
         case cli_commands.PreparationRenewCommand():
-            current = _current_token(state, command.item_id, command.lease_id, command.generation, now)
-            if isinstance(current, CommandFailure):
-                return current
+            supplied_authority = _resolve_supplied_preparation_authority(
+                observed_state, command.item_id, command.lease_id, command.generation, now
+            )
+            if isinstance(supplied_authority, CommandFailure):
+                return supplied_authority
             return authority_models.RenewPreparationAuthority(
-                current, now, now + timedelta(seconds=command.ttl_seconds)
+                current=supplied_authority,
+                renewed_at=now,
+                expires_at=now + timedelta(seconds=command.ttl_seconds),
             )
         case cli_commands.PreparationReleaseCommand():
-            current = _current_token(state, command.item_id, command.lease_id, command.generation, now)
-            if isinstance(current, CommandFailure):
-                return current
-            return authority_models.ReleasePreparationAuthority(current, now)
+            supplied_authority = _resolve_supplied_preparation_authority(
+                observed_state, command.item_id, command.lease_id, command.generation, now
+            )
+            if isinstance(supplied_authority, CommandFailure):
+                return supplied_authority
+            return authority_models.ReleasePreparationAuthority(
+                current=supplied_authority, released_at=now
+            )
         case cli_commands.PreparationRevokeCommand():
-            coordination = _coordination(state, command.coordination_lease_id, command.coordination_generation)
+            coordination = _resolve_supplied_coordination_authority(
+                observed_state, command.coordination_lease_id, command.coordination_generation
+            )
             if isinstance(coordination, CommandFailure):
                 return coordination
             return authority_models.RevokePreparationAuthority(
-                command.item_id,
-                command.lease_id,
-                command.generation,
-                coordination,
-                now,
+                item=command.item_id,
+                lease_id=command.lease_id,
+                generation=command.generation,
+                coordination=coordination,
+                revoked_at=now,
             )
         case _ as unreachable:
             assert_never(unreachable)
@@ -205,14 +226,14 @@ def change_preparation_authority(
     ),
 ) -> CommandResult[int]:
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
-    state = store.snapshot()
-    operation_time = datetime.now(UTC)
-    operation = _operation(state, command, operation_time)
-    if isinstance(operation, CommandFailure):
-        return operation
-    result = apply_preparation_authority_change(store, operation)
-    if isinstance(result, DecisionFailure):
-        return CommandFailure(result.code, result.message)
+    observed_state = store.snapshot()
+    requested_at = datetime.now(UTC)
+    requested_change = _resolve_requested_preparation_change(observed_state, command, requested_at)
+    if isinstance(requested_change, CommandFailure):
+        return requested_change
+    commit_result = decide_and_commit_preparation_authority_change(store, requested_change)
+    if isinstance(commit_result, DecisionFailure):
+        return CommandFailure(commit_result.code, commit_result.message)
     refresh_result = work_views.refresh(
         roots,
         store,
@@ -221,5 +242,8 @@ def change_preparation_authority(
     )
     if refresh_result.warning is not None:
         print(refresh_result.warning.message, file=sys.stderr)
-    render_time = datetime.now(UTC)
-    return _emit(store.snapshot(), command.item_id, render_time, json=command.json)
+    latest_committed_state = store.snapshot()
+    presented_at = datetime.now(UTC)
+    return _present_latest_preparation_authority(
+        latest_committed_state, command.item_id, presented_at, json=command.json
+    )

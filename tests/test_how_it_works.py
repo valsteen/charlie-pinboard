@@ -269,9 +269,9 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         self.assertTrue(all(value.label for value in layers.DIAGRAM.connectors))
 
         journey_edges = {(value.source, value.target) for value in journey.DIAGRAM.connectors}
-        self.assertIn(("transaction", "result"), journey_edges)
         self.assertIn(("transaction", "views"), journey_edges)
-        self.assertNotIn(("views", "result"), journey_edges)
+        self.assertIn(("views", "result"), journey_edges)
+        self.assertNotIn(("transaction", "result"), journey_edges)
 
         database_edges = {(value.source, value.target) for value in database.DIAGRAM.connectors}
         self.assertIn(("work-items", "dependencies"), database_edges)

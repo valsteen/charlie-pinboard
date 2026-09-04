@@ -69,6 +69,14 @@ Use these dispositions:
 - **Retain as an exception:** a real production, persistence, protocol, or explicit user-owned reason exists. Record the exact current reason and reopen condition; do not call it generally reachable.
 - **Productize separately:** the user wants the feature. Create product work for a supported entry point rather than disguising feature completion as cleanup.
 
+## Offer the optional storytelling pass
+
+Cleanup can leave supported code reachable and structurally sound while its human story remains difficult to follow, or while product documentation and implementation describe the same flow in different language. When that concern appears, offer one optional intensive pass and ask one concrete question: “Do you want to proof-read the surviving flow for storytelling readability and make its code and overview tell the same story?” Do not begin the pass unless the user chooses it or already requested it explicitly.
+
+When chosen, read and follow [the storytelling-readability cookbook](references/storytelling-readability.md). Adapt its probes to the repository's actual architecture and product vocabulary. The pass may recommend bounded changes to names, composition, responsibility boundaries, current-story documentation, or durable contributor guidance, but cleanup scope does not by itself authorize a broader refactor. Keep material responsibility changes and the chosen durable principle visible for the human to decide.
+
+This pass is distinct from the [developer-navigation stress test](references/dx-stress-test.md). The navigation test exhaustively finds duplicated routing facts and ceremonial edit sites in closed families. The storytelling pass asks whether a newcomer can retell the product flow and reconcile code with its overview; use either or both only when their question is present.
+
 ## Build the cleanup plan
 
 Prefer one cleanup objective with dependency-ordered checkpoints. Split out separate work only when it represents an independently valuable product decision, a data migration with distinct authority, or an outcome that can genuinely complete on its own.

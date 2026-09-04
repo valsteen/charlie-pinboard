@@ -35,6 +35,24 @@ Prefer these properties:
 
 A helper that takes bread and cheese may return a sandwich. It must not also collect the mail, call another service, or decide whether the meal was authorized.
 
+## Make code and guide tell the same story
+
+Treat explanatory code as part of the delivered product. A computer-literate reader should be able to start from the product overview, enter one representative implementation path, and retell the same ordered story without first learning Python's type system or guessing what a noun-shaped helper might do.
+
+Use verbs for work and provenance nouns for values. For a state-changing path, a useful reading grammar is: decode an exact command, observe context, resolve caller-supplied claims into a requested change, reread locked current state, decide legality, project the accepted change, commit it, refresh replaceable views, and present the committed result. This is a diagnostic vocabulary, not a mandatory pipeline. Omit absent stages, combine stages that one owner genuinely performs together, and use the repository's own architectural language.
+
+Keep distinctions visible when they answer different questions. An observed snapshot is not locked current state. A supplied claim is not resolved authority. An accepted decision is not yet a durable commit. A failed replaceable-view refresh does not undo an authoritative change. Expected rejection and infrastructure failure leave through different paths. Names, local composition, and explicit resource boundaries should reveal those facts before comments or type inspection are needed.
+
+When several same-shaped values cross a meaningful boundary, prefer named arguments and role-specific local names. When one function performs several conceptually different stages, split it only where the resulting functions own clear verbs, inputs, effects, and exits; do not manufacture a workflow framework to make the sequence look regular.
+
+Treat function length, a linter's smell category, duplicate-detector output, and split-by-default style as weak prompts. Restructure when a different composition makes the product sequence, effect boundary, or next owner easier to predict. Keep or merge a longer cohesive function when splitting it would distribute one responsibility or force the reader to reconstruct its order across files. Never trade clear layer ownership for a locally smaller function or a lower duplication count.
+
+Review the guide and code in both directions. The guide is not automatically right, and it must not become a missing manual for opaque code. Change whichever side tells the less accurate story until their vocabulary, order, effects, and expected exits agree. Then ask a fresh reader to read the overview and trace one real path without coaching. If they cannot say what happens next and why, repair the earliest misleading owner: code structure or vocabulary first, current-story documentation second, and durable contributor guidance only for a recurring method.
+
+Story ambiguity is not authority to change behavior. Check accepted requirements, observable tests, and existing consumers before calling an unusual sequence a defect. When intent remains unresolved, name the product question and prefer a behavior-preserving structural or vocabulary repair until the product owner decides.
+
+Stop when the representative path reads coherently, sibling paths use the same grammar where their responsibilities match, and another refactor would only restate an already visible distinction or impose ceremony that the product does not need.
+
 ## Put glue at the outer owner
 
 Dependencies point toward policy. Domain code owns product vocabulary and pure legality. Application code sequences use cases through storage-independent capabilities. Adapters implement those capabilities. Interfaces decode external input, compose concrete implementations, and present results.
