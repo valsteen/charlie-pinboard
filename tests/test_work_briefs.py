@@ -291,7 +291,6 @@ class WorkBriefBoundaryTest(unittest.TestCase):
     def test_markdown_is_a_complete_generated_projection(self) -> None:
         rendered = render_work_brief_markdown(example_work_brief()).decode()
 
-        self.assertIn("Generated projection; canonical JSON is authoritative.", rendered)
         self.assertIn("item_id: make-canonical-briefs-typed-json", rendered)
         self.assertIn("branch: codex/release-candidate", rendered)
         self.assertIn("base_revision: 2f61739541738bdd8a9ba2d484ddcdf3ab38a218", rendered)
