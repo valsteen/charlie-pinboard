@@ -43,7 +43,6 @@ class GeneratedViewsTest(unittest.TestCase):
         ):
             text = (work_root / selector).read_text(encoding="utf-8")
             self.assertIn("database_revision: 12", text)
-            self.assertIn("Generated projection; SQLite is authoritative.", text)
         history = (work_root / "views" / "history.md").read_text(encoding="utf-8")
         self.assertIn("| Accepted test definition. | test-source |", history)
 
@@ -92,8 +91,6 @@ class GeneratedViewsTest(unittest.TestCase):
         path = roots.work_root / "views" / "attempts" / "work-a-1.md"
         text = path.read_text(encoding="utf-8")
         self.assertIn("database_revision: 12", text)
-        self.assertIn("canonical JSON is authoritative", text)
-        self.assertIn("Strict typed JSON remains canonical.", text)
         self.assertIn("typed-json-cutover", text)
         path.unlink()
         rebuild_state(

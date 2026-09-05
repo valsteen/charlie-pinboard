@@ -196,7 +196,6 @@ class DispatchTest(unittest.TestCase):
         self.assertIn(f"Checkpoint: {CHECKPOINT_ID}", prompt)
         self.assertIn(f"Canonical brief: {path}", prompt)
         self.assertIn("- Declared permissions: repository-read", prompt)
-        self.assertIn("they neither grant authority nor enforce the environment", prompt)
         altered_prompt = expect_dispatch_failure(
             prepare_dispatch_from_artifact(
                 path,

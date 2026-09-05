@@ -16,7 +16,7 @@ from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.artifacts import NewArtifact
 from pinboard.interfaces.cli import main
-from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
+from pinboard.interfaces.work_briefs import canonical_work_brief_bytes, render_work_brief_markdown
 from pinboard.interfaces.work_state import initialize_work_state
 from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
 from tests.work_brief_support import work_a_brief
@@ -133,7 +133,9 @@ class SQLiteValidationTest(unittest.TestCase):
         self.assertFalse(staging.exists())
         self.assertFalse(staging_journal.exists())
         attempt_view = first.work_root / "views" / "attempts" / "work-a-1.md"
-        self.assertIn("canonical JSON is authoritative", attempt_view.read_text(encoding="utf-8"))
+        self.assertEqual(
+            render_work_brief_markdown(brief, before.lifecycle.project.revision), attempt_view.read_bytes()
+        )
 
     def test_initialization_rejects_conflicting_publication_residue_without_mutation(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

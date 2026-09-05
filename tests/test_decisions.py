@@ -108,6 +108,15 @@ class LifecycleDecisionTest(unittest.TestCase):
             (decision_models.Role.COORDINATOR, decision_models.Role.WORKER),
             decision_models.action_semantics(decision_models.ActionKind.CONTINUE).permitted_roles,
         )
+        advisory = decision_models.action_semantics(decision_models.ActionKind.CONTINUE)
+        review_acceptance = decision_models.action_semantics(decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE)
+        self.assertEqual(decision_models.LifecycleEffect.NO_LIFECYCLE_CHANGE, advisory.lifecycle_effect)
+        self.assertEqual(decision_models.ActionLifecyclePrecondition.ACTIVE_ATTEMPT, advisory.lifecycle_precondition)
+        self.assertEqual(decision_models.LifecycleEffect.CHANGES_LIFECYCLE, review_acceptance.lifecycle_effect)
+        self.assertEqual(
+            decision_models.ActionLifecyclePrecondition.REVIEW_ATTEMPT,
+            review_acceptance.lifecycle_precondition,
+        )
 
     def test_review_continuation_is_coordination_only_and_requires_the_protected_candidate(self) -> None:
         review = item("target", work_models.WorkState.REVIEW, attempt="target-1")
