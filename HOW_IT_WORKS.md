@@ -55,14 +55,14 @@ Pinboard gives both sides a stable reference. The implementer rereads the accept
 
 ### Strict shape, semantic judgment
 
-**Code checks the envelope.** The canonical work brief is strict JSON and the sole semantic brief. Unknown fields are rejected. Required sections, accepted-scope identity, authority references, acceptance-criterion references, coverage, and artifact bytes are checked before the brief can travel with an attempt. Most of the brief remains prose whose labels and hierarchy keep different reasoning jobs visible.
+**The brief is an information architecture, not a bag of prose.** Artifact identity and accepted-scope identity anchor the whole job. The work definition separates outcome, scope, non-goals, compatibility, provenance, testing, bootstrap, and remaining work. Its checkpoint then names the reviewable boundary and expands it into criteria, architecture impact, reviewed authorities, contracts, coverage, lifecycle distinctions, verification, and explicit deferrals. Those relationships tell an implementer what to build and give an independent reviewer the same map for challenging it.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/brief-dark.svg">
-  <img src="assets/how-it-works/brief.svg" alt="One canonical work brief branching into the meaning a human and LLM interpret and the shape, references, and artifact identity that Pinboard code validates">
+  <img src="assets/how-it-works/brief.svg" alt="The canonical work brief organized into artifact identity, accepted scope, whole-work definition, and a checkpoint containing criteria, architecture impact, reviewed authorities, contracts, coverage, lifecycle distinctions, verification, and deferrals">
 </picture>
 
-**Humans and models interpret the meaning.** The validator cannot prove that prose under `scope` is truly in scope or that a `non_goals` entry expresses the human's intent. The model interprets those meanings, the human accepts the product decision, and independent review challenges the compiled result. The schema makes the distinctions difficult to omit and stable across stages without pretending to replace judgment.
+**Code checks the envelope; humans and models interpret the meaning.** The canonical work brief is strict JSON and the sole semantic brief. Pinboard rejects unknown fields and cross-checks identities, references, coverage, and canonical bytes. It cannot prove that prose under `scope` is truly in scope or that a `non_goals` entry expresses the human's intent. The model interprets those meanings, the human accepts the product decision, and independent review challenges the compiled result. The schema makes distinct reasoning jobs difficult to omit and stable across stages without pretending to replace judgment.
 
 **Project impact remains a judgment too.** Pinboard has no rule saying that a visitor-facing decision must also change a workflow guide or a durable design principle. Structured scope, provenance, reviewed authorities, and coverage help Codex reason toward affected surfaces without a hard-coded file map or an exhaustive reread. The model can still miss or invent a connection; human acceptance and independent review decide whether it is real. This is information architecture refined through experience, not a semantic consistency engine.
 

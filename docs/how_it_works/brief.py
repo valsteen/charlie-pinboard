@@ -1,26 +1,53 @@
 from pinboard.interfaces import work_brief_models, work_briefs
 
-from .model import Box, Connector, Diagram, Guide, Note, Section
+from .model import Box, Diagram, Guide, Note, Section
 
-BRIEF_REASONING_FIELDS = frozenset(
+IDENTITY_FIELDS = frozenset(
     {
-        "outcome",
-        "product_decision_and_provenance",
-        "scope",
-        "non_goals",
-        "testing_strategy",
-        "remaining_work",
+        "schema",
+        "artifact_revision",
+        "item_id",
+        "attempt_id",
+        "owner_task_id",
+        "base_revision",
+        "branch",
+        "title",
     }
 )
 
-CHECKPOINT_REASONING_FIELDS = frozenset(
+WORK_DEFINITION_FIELDS = frozenset(
     {
-        "contracts",
+        "outcome",
+        "scope",
+        "non_goals",
+        "compatibility",
+        "supported_production_roots",
+        "product_decision_and_provenance",
+        "testing_strategy",
+        "remaining_work",
+        "bootstrap",
+    }
+)
+
+CHECKPOINT_HEADER_FIELDS = frozenset(
+    {
+        "checkpoint_id",
+        "title",
+        "outcome",
+        "outcome_description",
+    }
+)
+
+CHECKPOINT_DETAIL_FIELDS = frozenset(
+    {
         "acceptance_criteria",
+        "architecture_impact",
         "reviewed_authorities",
+        "contracts",
         "coverage",
         "lifecycle_partition",
         "verification",
+        "deferrals",
     }
 )
 
@@ -36,152 +63,226 @@ def validate() -> None:
     renamed = tuple(name for name, actual_name in SOURCE_SYMBOL_NAMES.items() if actual_name != name)
     if renamed:
         raise ValueError(f"brief visual references renamed source symbols: {', '.join(renamed)}")
-    missing_brief_fields = BRIEF_REASONING_FIELDS.difference(work_brief_models.WorkBrief.__struct_fields__)
-    missing_checkpoint_fields = CHECKPOINT_REASONING_FIELDS.difference(
-        work_brief_models.CrossBoundaryCheckpoint.__struct_fields__
-    )
-    if missing_brief_fields or missing_checkpoint_fields:
-        missing = sorted(missing_brief_fields | missing_checkpoint_fields)
-        raise ValueError(f"brief visual references missing reasoning fields: {', '.join(missing)}")
+
+    visual_brief_fields = IDENTITY_FIELDS | WORK_DEFINITION_FIELDS | {"accepted_scope", "checkpoint"}
+    model_brief_fields = frozenset(work_brief_models.WorkBrief.__struct_fields__)
+    visual_checkpoint_fields = CHECKPOINT_HEADER_FIELDS | CHECKPOINT_DETAIL_FIELDS
+    model_checkpoint_fields = frozenset(work_brief_models.CrossBoundaryCheckpoint.__struct_fields__)
+    if visual_brief_fields != model_brief_fields or visual_checkpoint_fields != model_checkpoint_fields:
+        drifted = sorted(visual_brief_fields ^ model_brief_fields | visual_checkpoint_fields ^ model_checkpoint_fields)
+        raise ValueError(f"brief visual and work-brief information architecture differ: {', '.join(drifted)}")
+
+    if frozenset(work_brief_models.AcceptedScope.__struct_fields__) != {"revision", "digest"}:
+        raise ValueError("brief visual and accepted-scope identity differ")
 
 
 DIAGRAM = Diagram(
     slug="brief",
-    title="One strict brief works as a reasoning scaffold and a validated envelope",
+    title="The canonical work brief turns one accepted decision into structured implementation and review attention",
     description=(
-        "The same canonical work brief is interpreted by a human and an LLM through explicit semantic sections, while "
-        "Pinboard code checks only its shape, internal references, and immutable identity. Implementation, review, and "
-        "resume receive those same distinctions; code does not decide whether the prose is true."
+        "A document-anatomy view of the canonical work brief. Artifact identity and accepted-scope identity anchor the "
+        "whole-work definition. A cross-boundary checkpoint then names its boundary and outcome before expanding into "
+        "acceptance criteria, architecture impact, reviewed authorities, contracts, coverage, lifecycle distinctions, "
+        "verification, and deferrals. Humans and language models interpret those named relationships, while Pinboard "
+        "code validates the envelope and stable artifact identity."
     ),
-    width=1400,
-    height=860,
+    width=1200,
+    height=1040,
     sections=(
-        Section("One accepted artifact", "the same distinctions travel with the attempt", 28, 44),
-        Section("Meaning carried forward", "human + LLM semantic responsibility", 28, 430),
-        Section("Checks code can perform", "machine-enforced envelope", 730, 430),
+        Section("Canonical work brief", "one strict hierarchy travels with implementation, review, and resume", 28, 42),
+        Section("Anchor the whole job", "identity, accepted scope, and the complete work definition", 28, 192),
+        Section("Checkpoint", "one reviewable boundary expands into explicit reasoning obligations", 28, 390),
+        Section(
+            "The schema disciplines attention",
+            "the structure is enforced; the meaning still requires judgment",
+            28,
+            868,
+        ),
     ),
     guides=(
-        Guide((220, 40), (1372, 40)),
-        Guide((205, 426), (680, 426)),
-        Guide((900, 426), (1372, 426)),
-        Guide((700, 396), (700, 800)),
+        Guide((255, 38), (1172, 38)),
+        Guide((214, 188), (1172, 188)),
+        Guide((132, 386), (1172, 386)),
+        Guide((300, 864), (1172, 864)),
     ),
-    connectors=(
-        Connector(((600, 200), (600, 215), (370, 215), (370, 250)), "brief", "reasoning", "interpreted", (485, 204)),
-        Connector(((800, 200), (800, 215), (1030, 215), (1030, 250)), "brief", "validation", "validated", (915, 204)),
-        Connector(((250, 370), (250, 410), (200, 410), (200, 470)), "reasoning", "intent"),
-        Connector(((490, 370), (490, 410), (540, 410), (540, 470)), "reasoning", "proof"),
-        Connector(((370, 370), (370, 625), (370, 660)), "reasoning", "remainder"),
-        Connector(((910, 370), (910, 410), (860, 410), (860, 470)), "validation", "shape"),
-        Connector(((1150, 370), (1150, 410), (1200, 410), (1200, 470)), "validation", "references"),
-        Connector(((1030, 370), (1030, 625), (1030, 660)), "validation", "identity"),
-    ),
+    connectors=(),
     boxes=(
         Box(
             "brief",
-            "Canonical work brief",
+            "pinboard-work-brief/v2",
             "One accepted artifact",
-            ("travels with the attempt", "reread for implementation + review"),
-            ("pinboard-work-brief/v2",),
-            520,
-            80,
-            360,
-            120,
-        ),
-        Box(
-            "reasoning",
-            "Semantic responsibility",
-            "Human + LLM interpret it",
-            ("labels + hierarchy guide attention", "each stage sees the same distinctions"),
-            ("meaning remains a judgment",),
-            130,
-            250,
-            480,
-            120,
-        ),
-        Box(
-            "validation",
-            "Mechanical responsibility",
-            "Pinboard checks the envelope",
-            ("decode · cross-check · canonicalize", "never infer whether prose is true"),
-            ("code-owned guarantees",),
-            790,
-            250,
-            480,
-            120,
-        ),
-        Box(
-            "intent",
-            "Intent + boundary",
-            "Say what the work means",
-            ("outcome + provenance", "scope + non-goals"),
-            ("interpreted semantics",),
-            50,
-            470,
-            300,
-            120,
-        ),
-        Box(
-            "proof",
-            "Obligations + proof",
-            "Say what earns acceptance",
-            ("contracts + criteria", "sources + tests + verification"),
-            ("interpreted semantics",),
-            390,
-            470,
-            300,
-            120,
-        ),
-        Box(
-            "remainder",
-            "Honest remainder",
-            "Say what is still undone",
-            ("remaining work + deferrals",),
-            ("interpreted semantics",),
-            220,
-            660,
-            300,
-            115,
-        ),
-        Box(
-            "shape",
-            "Exact shape",
-            "Reject malformed briefs",
-            ("required fields present", "unknown fields rejected"),
-            ("typed decode",),
-            710,
-            470,
-            300,
-            120,
-        ),
-        Box(
-            "references",
-            "Coherent references",
-            "Reject mismatched links",
-            ("scope + authority identities", "coverage owners + unique IDs"),
-            ("cross-field checks",),
-            1050,
-            470,
-            300,
-            120,
+            ("same hierarchy · exact bytes · stable identity",),
+            ("WorkBrief",),
+            400,
+            70,
+            400,
+            105,
         ),
         Box(
             "identity",
-            "Stable identity",
-            "Bind the exact artifact",
-            ("canonical bytes + SHA-256", "immutable publication"),
-            ("byte identity",),
-            880,
-            660,
+            "Identity + versioning",
+            "Which exact artifact is this?",
+            ("item · attempt · owner", "revision · base · branch"),
+            ("schema · title",),
+            35,
+            220,
             300,
+            145,
+        ),
+        Box(
+            "accepted-scope",
+            "Accepted scope reference",
+            "Which decision was accepted?",
+            ("revision + digest",),
+            ("accepted_scope",),
+            355,
+            220,
+            280,
+            145,
+        ),
+        Box(
+            "work-definition",
+            "Overall work definition",
+            "What is the whole job?",
+            (
+                "outcome · scope · non-goals",
+                "compatibility · roots · provenance",
+                "testing · bootstrap · remaining work",
+            ),
+            ("definition-bound semantics",),
+            655,
+            220,
+            510,
+            145,
+        ),
+        Box(
+            "checkpoint",
+            "Checkpoint identity + boundary",
+            "What can be built and reviewed together?",
+            ("checkpoint id · title · boundary", "outcome + outcome description"),
+            ("CrossBoundaryCheckpoint",),
+            35,
+            418,
+            1130,
+            125,
+        ),
+        Box(
+            "criteria",
+            "Acceptance criteria",
+            "What earns acceptance?",
+            ("numbered requirements",),
+            ("number · requirement",),
+            35,
+            553,
+            275,
             120,
+        ),
+        Box(
+            "architecture",
+            "Architecture impact",
+            "Is architecture affected?",
+            ("reason + exact selector",),
+            ("kind · reason · selector",),
+            320,
+            553,
+            275,
+            120,
+        ),
+        Box(
+            "authorities",
+            "Reviewed authorities",
+            "Which sources were examined?",
+            ("identity · selector · digest",),
+            ("families[]",),
+            605,
+            553,
+            275,
+            120,
+        ),
+        Box(
+            "contracts",
+            "Contracts",
+            "What must remain true?",
+            ("authority → consumer", "invariant · failure · revalidation"),
+            ("verification · authorization basis",),
+            890,
+            553,
+            275,
+            120,
+        ),
+        Box(
+            "coverage",
+            "Coverage",
+            "Who owns each distinction?",
+            ("consumer + counterexample",),
+            ("criterion · contract · deferral",),
+            35,
+            703,
+            275,
+            120,
+        ),
+        Box(
+            "lifecycle",
+            "Lifecycle partition",
+            "Which sibling is illegal?",
+            ("operation · source · authority", "effects + evidence"),
+            ("illegal_sibling",),
+            320,
+            703,
+            275,
+            120,
+        ),
+        Box(
+            "verification",
+            "Verification",
+            "How is each obligation proved?",
+            ("obligation + authorization",),
+            ("accepted scope or authority",),
+            605,
+            703,
+            275,
+            120,
+        ),
+        Box(
+            "deferrals",
+            "Deferrals",
+            "What remains outside?",
+            ("why it waits",),
+            ("deferral id · reopen when",),
+            890,
+            703,
+            275,
+            120,
+        ),
+        Box(
+            "interpretation",
+            "Human + LLM responsibility",
+            "Interpret what the work means",
+            ("labels + hierarchy guide attention",),
+            ("semantic judgment",),
+            35,
+            900,
+            550,
+            105,
+        ),
+        Box(
+            "validation",
+            "Pinboard code responsibility",
+            "Verify the envelope",
+            ("decode · cross-check · canonicalize · bind bytes",),
+            ("structural guarantees",),
+            615,
+            900,
+            550,
+            105,
+            "muted",
         ),
     ),
     notes=(
         Note(
-            "IMPLEMENTATION · REVIEW · RESUME RECEIVE THE SAME DISTINCTIONS — CODE PROVES THE ENVELOPE, NOT THE MEANING",
-            700,
-            825,
+            "THE SAME NAMED RELATIONSHIPS STEER IMPLEMENTATION · REVIEW · CORRECTION · RESUME",
+            600,
+            1022,
             12,
             "middle",
             True,
