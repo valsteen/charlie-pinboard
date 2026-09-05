@@ -17,7 +17,7 @@ from pinboard.application import stored_state
 from pinboard.application.artifacts import NewArtifact
 from pinboard.interfaces.cli import main
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
-from pinboard.interfaces.work_state import initialize_work_state, validate_work_state
+from pinboard.interfaces.work_state import initialize_work_state
 from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
 from tests.work_brief_support import work_a_brief
 
@@ -51,30 +51,38 @@ class SQLiteValidationTest(unittest.TestCase):
         project = Path(tempfile.mkdtemp()).resolve()
         receipt = initialize_work_state(project, now=SQLITE_NOW)
 
-        report = validate_work_state(receipt.work_root, now=SQLITE_NOW)
-        self.assertTrue(report.valid, report.render())
-        self.assertEqual("OK WORK_STATE_VALID", report.render())
+        result, stdout, stderr = self.run_cli(
+            "--project-root", str(project), "--work-root", str(receipt.work_root), "validate"
+        )
+        self.assertEqual(0, result, stderr)
+        self.assertEqual("OK WORK_STATE_VALID\n", stdout)
 
         view = receipt.work_root / "views" / "queue.md"
         view.write_text("stale\n", encoding="utf-8")
-        stale = validate_work_state(receipt.work_root, now=SQLITE_NOW)
-        self.assertTrue(stale.valid)
-        self.assertIn("VIEW_REFRESH_REQUIRED", stale.render())
-        self.assertIn("pinboard views rebuild", stale.render())
+        stale_result, stale_stdout, stale_stderr = self.run_cli(
+            "--project-root", str(project), "--work-root", str(receipt.work_root), "validate"
+        )
+        self.assertEqual(0, stale_result, stale_stderr)
+        self.assertIn("VIEW_REFRESH_REQUIRED", stale_stdout)
+        self.assertIn("pinboard views rebuild", stale_stdout)
 
     def test_missing_database_and_missing_accepted_artifacts_are_errors(self) -> None:
         missing = Path(tempfile.mkdtemp()).resolve() / ".codex" / "pinboard"
-        report = validate_work_state(missing, now=SQLITE_NOW)
-        self.assertFalse(report.valid)
-        self.assertIn("STORAGE_IO_ERROR", report.render())
+        result, stdout, _stderr = self.run_cli(
+            "--project-root", str(missing.parent.parent), "--work-root", str(missing), "validate"
+        )
+        self.assertEqual(10, result)
+        self.assertIn("STORAGE_IO_ERROR", stdout)
 
         project = Path(tempfile.mkdtemp()).resolve()
         roots = resolve_durable_roots(project)
         initialize_database(roots, SQLITE_NOW)
         initialize_store(SQLiteWorkStore(roots.database_path), complete_sqlite_state())
-        invalid = validate_work_state(roots.work_root, now=SQLITE_NOW)
-        self.assertFalse(invalid.valid)
-        self.assertIn("STORAGE_INVARIANT_VIOLATION", invalid.render())
+        invalid_result, invalid_stdout, _invalid_stderr = self.run_cli(
+            "--project-root", str(project), "--work-root", str(roots.work_root), "validate"
+        )
+        self.assertEqual(10, invalid_result)
+        self.assertIn("STORAGE_INVARIANT_VIOLATION", invalid_stdout)
 
     def test_initialization_resumes_current_state(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import assert_never
+from typing import assert_never, overload
 
 from pinboard.application import stored_state
 from pinboard.application.artifact_publication import validate_transition_work_brief
@@ -51,7 +51,7 @@ def _next_history_id(state: stored_state.StoredWorkState) -> HistoryId:
 def decide_and_commit_coordination_authority_change(
     store: WorkStore,
     requested_change: authority_models.CoordinationAuthorityOperation,
-) -> DecisionResult[decision_models.TransitionReceipt]:
+) -> DecisionResult[MutationReceipt]:
     """Reread locked state, decide, and commit one coordination-authority change."""
 
     match requested_change:
@@ -143,7 +143,7 @@ def _project_retained_attempt_authority(
 def decide_and_commit_attempt_authority_change(
     store: WorkStore,
     requested_change: authority_models.AttemptAuthorityOperation,
-) -> DecisionResult[decision_models.TransitionReceipt]:
+) -> DecisionResult[MutationReceipt]:
     """Reread locked state, decide, and commit one attempt-authority change."""
 
     match requested_change:
@@ -256,7 +256,7 @@ def _project_retained_preparation_authority(
 def decide_and_commit_preparation_authority_change(
     store: WorkStore,
     requested_change: authority_models.PreparationAuthorityOperation,
-) -> DecisionResult[decision_models.TransitionReceipt]:
+) -> DecisionResult[MutationReceipt]:
     """Reread locked state, decide, and commit one preparation-authority change."""
 
     match requested_change:
@@ -330,7 +330,7 @@ def create_proposal(
     store: WorkStore,
     operation: CreateProposalOperation,
     now: datetime,
-) -> DecisionResult[decision_models.TransitionReceipt]:
+) -> DecisionResult[MutationReceipt]:
     """Reread locked state, decide, and commit proposal facts plus their intake item."""
 
     with store.write() as transaction:
@@ -368,7 +368,7 @@ def create_proposal(
         return transaction.commit(focused_mutation)
 
 
-def _actor_for(
+def _resolve_actor_authority(
     snapshot: LedgerSnapshot,
     action: decision_models.TransitionAction,
     now: datetime,
@@ -442,54 +442,81 @@ def _actor_for(
             assert_never(unreachable)
 
 
-def execute(
+@overload
+def _validate_supplied_transition_and_decide(
+    locked_state: stored_state.StoredWorkState,
+    command: decision_models.AcceptCheckpointCommand,
+    now: datetime,
+    transition_brief_identity: WorkBriefIdentity | None,
+) -> DecisionResult[decision_models.CheckpointAcceptanceDecision]: ...
+
+
+@overload
+def _validate_supplied_transition_and_decide(
+    locked_state: stored_state.StoredWorkState,
+    command: decision_models.NonCheckpointTransitionCommand,
+    now: datetime,
+    transition_brief_identity: WorkBriefIdentity | None,
+) -> DecisionResult[decision_models.TransitionDecision]: ...
+
+
+def _validate_supplied_transition_and_decide(
+    locked_state: stored_state.StoredWorkState,
+    command: decision_models.TransitionCommand,
+    now: datetime,
+    transition_brief_identity: WorkBriefIdentity | None,
+) -> DecisionResult[decision_models.Decision]:
+    """Resolve supplied authority and reject stale context before deciding."""
+
+    decision_context = project_decision_snapshot(locked_state, now)
+    actor_authority = _resolve_actor_authority(decision_context, command.action, now)
+    if isinstance(actor_authority, DecisionFailure):
+        return actor_authority
+    if (failure := validate_supplied_action(decision_context, actor_authority, command.action)) is not None:
+        return failure
+    if (failure := validate_transition_work_brief(locked_state, command, transition_brief_identity)) is not None:
+        return failure
+    return decide(decision_context, command, now)
+
+
+def decide_and_commit_transition(
     store: WorkStore,
     command: decision_models.NonCheckpointTransitionCommand,
     now: datetime,
     *,
     transition_brief_identity: WorkBriefIdentity | None = None,
-) -> DecisionResult[decision_models.TransitionReceipt]:
-    """Validate, decide, and persist one lifecycle mutation under one write lock."""
+) -> DecisionResult[MutationReceipt]:
+    """Validate, decide, and commit one lifecycle mutation under one write lock."""
 
-    supplied = command.action
     with store.write() as transaction:
-        before = transaction.snapshot()
-        snapshot = project_decision_snapshot(before, now)
-        actor = _actor_for(snapshot, supplied, now)
-        if isinstance(actor, DecisionFailure):
-            return actor
-        if (failure := validate_supplied_action(snapshot, actor, supplied)) is not None:
-            return failure
-        if (failure := validate_transition_work_brief(before, command, transition_brief_identity)) is not None:
-            return failure
-        decision = decide(snapshot, command, now)
-        if isinstance(decision, DecisionFailure):
-            return decision
-        return transaction.commit(project_transition_mutation(before, decision))
+        locked_state = transaction.snapshot()
+        decision_result = _validate_supplied_transition_and_decide(
+            locked_state, command, now, transition_brief_identity
+        )
+        if isinstance(decision_result, DecisionFailure):
+            return decision_result
+        accepted_decision = decision_result
+        focused_mutation = project_transition_mutation(locked_state, accepted_decision)
+        return transaction.commit(focused_mutation)
 
 
-def execute_checkpoint_acceptance(
+def decide_and_commit_checkpoint_acceptance(
     store: WorkStore,
     command: decision_models.AcceptCheckpointCommand,
     now: datetime,
     checkpoint_artifacts: CheckpointArtifacts,
     *,
     transition_brief_identity: WorkBriefIdentity | None = None,
-) -> DecisionResult[decision_models.TransitionReceipt]:
-    """Validate, decide, and persist checkpoint acceptance with its required artifacts."""
+) -> DecisionResult[MutationReceipt]:
+    """Validate, decide, and commit checkpoint acceptance with its required artifacts."""
 
-    supplied = command.action
     with store.write() as transaction:
-        before = transaction.snapshot()
-        snapshot = project_decision_snapshot(before, now)
-        actor = _actor_for(snapshot, supplied, now)
-        if isinstance(actor, DecisionFailure):
-            return actor
-        if (failure := validate_supplied_action(snapshot, actor, supplied)) is not None:
-            return failure
-        if (failure := validate_transition_work_brief(before, command, transition_brief_identity)) is not None:
-            return failure
-        decision = decide(snapshot, command, now)
-        if isinstance(decision, DecisionFailure):
-            return decision
-        return transaction.commit(project_checkpoint_acceptance_mutation(before, decision, checkpoint_artifacts))
+        locked_state = transaction.snapshot()
+        decision_result = _validate_supplied_transition_and_decide(
+            locked_state, command, now, transition_brief_identity
+        )
+        if isinstance(decision_result, DecisionFailure):
+            return decision_result
+        accepted_decision = decision_result
+        focused_mutation = project_checkpoint_acceptance_mutation(locked_state, accepted_decision, checkpoint_artifacts)
+        return transaction.commit(focused_mutation)

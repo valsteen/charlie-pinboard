@@ -93,21 +93,22 @@ def validate_state(roots: cli_commands.ResolvedRoots, command: cli_commands.Vali
     return 0 if validation_report.valid else 10
 
 
-def _context_setting_recommendation() -> str | None:
+def _read_user_config_and_recommend_body_after_prefix() -> str | None:
     codex_home = Path(os.environ["CODEX_HOME"]) if "CODEX_HOME" in os.environ else Path.home() / ".codex"
-    config = codex_home / "config.toml"
+    user_config = codex_home / "config.toml"
     try:
-        with config.open("rb") as stream:
-            setting_present = "model_auto_compact_token_limit_scope" in tomllib.load(stream)
+        with user_config.open("rb") as stream:
+            setting_present_in_user_config = "model_auto_compact_token_limit_scope" in tomllib.load(stream)
     except FileNotFoundError:
-        setting_present = False
+        setting_present_in_user_config = False
     except OSError, UnicodeDecodeError, tomllib.TOMLDecodeError:
         return None
-    if setting_present:
+    if setting_present_in_user_config:
         return None
     return (
-        'OPTIONAL: Add model_auto_compact_token_limit_scope = "body_after_prefix" to '
-        f"{config}. Reference: https://learn.chatgpt.com/docs/config-file/config-reference"
+        'OPTIONAL: For long Codex tasks, set the user default model_auto_compact_token_limit_scope = "body_after_prefix" '
+        f"in {user_config} to count only context added after a compaction. A trusted project's .codex/config.toml "
+        "can override this user default. Reference: https://learn.chatgpt.com/docs/config-file/config-reference"
     )
 
 
@@ -116,7 +117,7 @@ def initialize_state(roots: cli_commands.ResolvedRoots, _command: cli_commands.I
     operation_time = datetime.now(UTC)
     receipt = initialize_work_state(roots.shared_repository, selected_work, now=operation_time)
     print(f"OK WORK_STATE_INITIALIZED {receipt.work_root}")
-    if not receipt.resumed and (recommendation := _context_setting_recommendation()) is not None:
+    if not receipt.resumed and (recommendation := _read_user_config_and_recommend_body_after_prefix()) is not None:
         print(recommendation)
     return 0
 

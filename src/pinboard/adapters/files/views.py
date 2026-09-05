@@ -6,15 +6,16 @@ writes selected or complete generated projections.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from pinboard.adapters.files.errors import FileIOError
 from pinboard.adapters.files.file_io import atomic_replace, ensure_child_directory
 from pinboard.adapters.files.models import AffectedViews, ViewRefreshResult, ViewWarning
-from pinboard.application import stored_state
+from pinboard.application import query_models, stored_state
 from pinboard.application.queries import project_overview
-from pinboard.domain.identifiers import AttemptId
+from pinboard.domain.identifiers import AttemptId, ItemId
 
 NOTICE = "Generated projection; SQLite is authoritative."
 
@@ -27,10 +28,30 @@ def _render_header(kind: str, revision: int) -> str:
     return f"---\nkind: {kind}\ndatabase_revision: {revision}\nauthority: sqlite-v3\n---\n\n> {NOTICE}\n\n"
 
 
-def _render_queue(state: stored_state.StoredWorkState, now: datetime) -> bytes:
+@dataclass(frozen=True, slots=True)
+class _ViewInputs:
+    overview: query_models.WorkOverview
+    overview_items: dict[str, query_models.OverviewItem]
+    dependencies: dict[ItemId, tuple[ItemId, ...]]
+    definitions: dict[ItemId, stored_state.ItemDefinitionRevision]
+
+
+def _project_view_inputs(state: stored_state.StoredWorkState, now: datetime) -> _ViewInputs:
     overview = project_overview(state, now)
+    dependency_groups: dict[ItemId, list[ItemId]] = {item.item_id: [] for item in state.lifecycle.work_items}
+    for dependency in sorted(state.lifecycle.dependencies, key=_dependency_key):
+        dependency_groups[dependency.item_id].append(dependency.dependency_id)
+    return _ViewInputs(
+        overview,
+        {item.item_id: item for item in overview.items},
+        {item_id: tuple(dependencies) for item_id, dependencies in dependency_groups.items()},
+        {definition.item_id: definition for definition in state.lifecycle.definition_revisions},
+    )
+
+
+def _render_queue(project_revision: int, overview: query_models.WorkOverview) -> bytes:
     lines = [
-        _render_header("work-queue-view", state.lifecycle.project.revision),
+        _render_header("work-queue-view", project_revision),
         "# Work Queue\n\n",
         "| Position | Item | State | Preparation | Eligible | Review | Attempt | Next action |\n",
         "| --- | --- | --- | --- | --- | --- | --- | --- |\n",
@@ -59,16 +80,13 @@ def _render_current_focus(state: stored_state.StoredWorkState) -> bytes:
     ).encode()
 
 
-def _render_item(state: stored_state.StoredWorkState, item: stored_state.StoredWorkItem, now: datetime) -> bytes:
-    dependencies = tuple(
-        value.dependency_id
-        for value in sorted(state.lifecycle.dependencies, key=_dependency_key)
-        if value.item_id == item.item_id
-    )
-    overview_item = next(
-        (value for value in project_overview(state, now).items if value.item_id == str(item.item_id)),
-        None,
-    )
+def _render_item(
+    project_revision: int,
+    item: stored_state.StoredWorkItem,
+    dependencies: tuple[ItemId, ...],
+    overview_item: query_models.OverviewItem | None,
+    definition: stored_state.ItemDefinitionRevision,
+) -> bytes:
     dependency_reasons = (
         tuple(f"{value.item_id}: {value.reason}" for value in overview_item.dependency_reasons)
         if overview_item is not None
@@ -82,15 +100,9 @@ def _render_item(state: stored_state.StoredWorkState, item: stored_state.StoredW
         if overview_item is not None
         else ()
     )
-    definition = next(
-        (value for value in reversed(state.lifecycle.definition_revisions) if value.item_id == item.item_id),
-        None,
-    )
-    if definition is None:
-        raise ValueError(f"Work item '{item.item_id}' has no current definition.")
     accepted = definition.definition
     return (
-        _render_header("work-item-view", state.lifecycle.project.revision)
+        _render_header("work-item-view", project_revision)
         + f"# {accepted.title}\n\n"
         + f"- Item: {item.item_id}\n"
         + f"- State: {item.state.value}\n"
@@ -135,8 +147,9 @@ def _render_attempt(
 
 
 def _render_history_row(receipt: stored_state.StoredTransitionReceipt) -> str:
+    outcome_json = bytes(receipt.outcome_payload).decode("utf-8").replace("|", r"\|")
     return (
-        f"| {receipt.history_id} | {receipt.project_revision} | {receipt.action_kind.value} | "
+        f"| {receipt.history_id} | {receipt.project_revision} | {receipt.action_id} | {outcome_json} | "
         f"{receipt.subject_id} | {receipt.committed_at.isoformat()} |\n"
     )
 
@@ -145,8 +158,8 @@ def _render_history(state: stored_state.StoredWorkState) -> bytes:
     return (
         _render_header("work-history-view", state.lifecycle.project.revision)
         + "# Transition History\n\n"
-        + "| History | Revision | Action | Subject | Committed |\n"
-        + "| --- | --- | --- | --- | --- |\n"
+        + "| History | Revision | Action receipt | Recorded outcome | Subject | Committed |\n"
+        + "| --- | --- | --- | --- | --- | --- |\n"
         + "".join(_render_history_row(receipt) for receipt in state.transition_receipts)
         + "\n## Definition History\n\n"
         + "| Item | Revision | Digest | Reason | Source task | Accepted revision | Accepted at |\n"
@@ -166,11 +179,12 @@ def _write_selected_views(
     attempt_briefs: Mapping[AttemptId, bytes],
     now: datetime,
 ) -> None:
+    view_inputs = _project_view_inputs(state, now)
     view_root = ensure_child_directory(work_root, "views")
     item_root = ensure_child_directory(view_root, "items")
     attempt_root = ensure_child_directory(view_root, "attempts")
     if affected.queue:
-        atomic_replace(view_root / "queue.md", _render_queue(state, now))
+        atomic_replace(view_root / "queue.md", _render_queue(state.lifecycle.project.revision, view_inputs.overview))
     if affected.current_focus:
         atomic_replace(view_root / "current.md", _render_current_focus(state))
     if affected.history:
@@ -179,7 +193,16 @@ def _write_selected_views(
     for item_id in affected.items:
         item = items.get(item_id)
         if item is not None:
-            atomic_replace(item_root / f"{item_id}.md", _render_item(state, item, now))
+            atomic_replace(
+                item_root / f"{item_id}.md",
+                _render_item(
+                    state.lifecycle.project.revision,
+                    item,
+                    view_inputs.dependencies[item_id],
+                    view_inputs.overview_items.get(str(item_id)),
+                    view_inputs.definitions[item_id],
+                ),
+            )
     attempts = {attempt.attempt_id: attempt for attempt in state.lifecycle.attempts}
     for attempt_id in affected.attempts:
         attempt = attempts.get(attempt_id)
@@ -216,13 +239,24 @@ def derive_expected_view_bytes(
 ) -> dict[str, bytes]:
     """Return every generated selector and its canonical bytes for one SQLite snapshot."""
 
+    view_inputs = _project_view_inputs(state, now)
     expected_views = {
-        "queue.md": _render_queue(state, now),
+        "queue.md": _render_queue(state.lifecycle.project.revision, view_inputs.overview),
         "current.md": _render_current_focus(state),
         "history.md": _render_history(state),
     }
     expected_views.update(
-        (f"items/{item.item_id}.md", _render_item(state, item, now)) for item in state.lifecycle.work_items
+        (
+            f"items/{item.item_id}.md",
+            _render_item(
+                state.lifecycle.project.revision,
+                item,
+                view_inputs.dependencies[item.item_id],
+                view_inputs.overview_items.get(str(item.item_id)),
+                view_inputs.definitions[item.item_id],
+            ),
+        )
+        for item in state.lifecycle.work_items
     )
     expected_views.update(
         (f"attempts/{attempt.attempt_id}.md", _render_attempt(state, attempt, attempt_briefs or {}))

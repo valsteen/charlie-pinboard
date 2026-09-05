@@ -103,17 +103,3 @@ def validate_loaded_work_state(
                 )
             )
     return ValidationReport(tuple(diagnostics))
-
-
-def validate_work_state(
-    work_root: Path,
-    attempt_briefs: Mapping[AttemptId, bytes] | None = None,
-    *,
-    now: datetime,
-) -> ValidationReport:
-    """Read one authoritative snapshot, verify artifacts, and classify view drift."""
-
-    state = read_state_for_validation(work_root)
-    if isinstance(state, ValidationReport):
-        return state
-    return validate_loaded_work_state(work_root, state, attempt_briefs, now=now)

@@ -54,7 +54,7 @@ def require_one_changed_row(cursor: sqlite3.Cursor, message: str) -> DecisionFai
     return None
 
 
-def _database_uri(path: Path, mode: OpenMode, *, immutable: bool = False) -> str:
+def _build_database_uri(path: Path, mode: OpenMode, *, immutable: bool = False) -> str:
     immutable_query = "&immutable=1" if immutable else ""
     return f"file:{quote(str(path.absolute()), safe='/')}?mode={mode.value}{immutable_query}"
 
@@ -95,7 +95,7 @@ def _configure_writes(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA synchronous = FULL")
 
 
-def _required_meta(connection: sqlite3.Connection) -> tuple[str, int]:
+def _read_required_metadata(connection: sqlite3.Connection) -> tuple[str, int]:
     try:
         table = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'project_meta'"
@@ -114,7 +114,7 @@ def _required_meta(connection: sqlite3.Connection) -> tuple[str, int]:
     return application, version
 
 
-def _schema_signature(connection: sqlite3.Connection) -> tuple[tuple[str, str, str, str | None], ...]:
+def _read_schema_signature(connection: sqlite3.Connection) -> tuple[tuple[str, str, str, str | None], ...]:
     rows = connection.execute(
         """
         SELECT type, name, tbl_name, sql
@@ -136,11 +136,11 @@ def _schema_signature(connection: sqlite3.Connection) -> tuple[tuple[str, str, s
 
 
 @cache
-def _expected_schema_signature() -> tuple[tuple[str, str, str, str | None], ...]:
+def _build_expected_schema_signature() -> tuple[tuple[str, str, str, str | None], ...]:
     connection = sqlite3.connect(":memory:")
     try:
-        connection.executescript(schema_bytes().decode("utf-8"))
-        return _schema_signature(connection)
+        connection.executescript(read_schema_bytes().decode("utf-8"))
+        return _read_schema_signature(connection)
     except StorageError:
         raise
     except (sqlite3.Error, UnicodeError) as error:
@@ -150,7 +150,7 @@ def _expected_schema_signature() -> tuple[tuple[str, str, str, str | None], ...]
 
 
 def _verify_current_schema(connection: sqlite3.Connection) -> None:
-    application, version = _required_meta(connection)
+    application, version = _read_required_metadata(connection)
     if application != APPLICATION:
         raise StorageError(
             StorageErrorCode.INVALID_STATE,
@@ -162,7 +162,7 @@ def _verify_current_schema(connection: sqlite3.Connection) -> None:
             f"Schema sqlite-v{version} is not the supported {SCHEMA_ID} schema.",
         )
     try:
-        if _schema_signature(connection) != _expected_schema_signature():
+        if _read_schema_signature(connection) != _build_expected_schema_signature():
             raise StorageError(StorageErrorCode.INVALID_STATE, "The database does not have the exact current schema.")
         quick_check = connection.execute("PRAGMA quick_check").fetchone()
         foreign_key_errors = connection.execute("PRAGMA foreign_key_check").fetchone()
@@ -172,7 +172,7 @@ def _verify_current_schema(connection: sqlite3.Connection) -> None:
         raise StorageError(StorageErrorCode.INVALID_STATE, "SQLite reported invalid current work state.")
 
 
-def schema_bytes() -> bytes:
+def read_schema_bytes() -> bytes:
     try:
         return Path(__file__).with_name("schema.sql").read_bytes()
     except OSError as error:
@@ -311,7 +311,7 @@ def initialize_database(roots: DurableRoots, now: datetime) -> None:
             connection = sqlite3.connect(staging, timeout=BUSY_TIMEOUT_MS / 1_000, isolation_level=None)
             _configure_connection(connection)
             _configure_writes(connection)
-            connection.executescript(schema_bytes().decode("utf-8"))
+            connection.executescript(read_schema_bytes().decode("utf-8"))
             with write_transaction(connection):
                 timestamp = now.isoformat()
                 connection.execute(
@@ -349,7 +349,7 @@ def _open_verified_database(
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(
-            _database_uri(path, mode, immutable=immutable),
+            _build_database_uri(path, mode, immutable=immutable),
             uri=True,
             timeout=BUSY_TIMEOUT_MS / 1_000,
             isolation_level=None,

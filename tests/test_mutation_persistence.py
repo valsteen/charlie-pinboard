@@ -37,7 +37,6 @@ from pinboard.domain.identifiers import (
 )
 from pinboard.domain.ledger import LedgerSnapshot
 from pinboard.interfaces.transition_input import parse_transition_command
-from tests.domain_support import command as make_command
 from tests.domain_support import expect_success, expect_transition_command
 from tests.support import (
     SQLITE_NOW,
@@ -231,7 +230,7 @@ class MutationPersistenceTest(unittest.TestCase):
         decided_at = SQLITE_NOW + timedelta(seconds=1)
         decision = decide(
             snapshot,
-            make_command(
+            decision_models.ActivateCommand(
                 action,
                 work_models.ActivateInput(
                     AttemptId("work-c-1"),
@@ -336,7 +335,7 @@ class MutationPersistenceTest(unittest.TestCase):
         assert isinstance(action, decision_models.ReviseItemAction)
         decision = decide(
             snapshot,
-            make_command(
+            decision_models.ReviseItemCommand(
                 action,
                 work_models.ReviseItemDefinitionInput(
                     ItemId("work-a"),
@@ -355,7 +354,7 @@ class MutationPersistenceTest(unittest.TestCase):
 
         self.assertNotIsInstance(committed, DecisionFailure)
         assert not isinstance(committed, DecisionFailure)
-        self.assertEqual(ActionId("revise-item:work-a"), committed.action_id)
+        self.assertEqual(ActionId("revise-item:work-a"), committed.transition.action_id)
         reopened = store.snapshot()
         reopened_item = project_decision_snapshot(reopened, SQLITE_NOW).item(ItemId("work-a"))
         assert reopened_item is not None
@@ -444,7 +443,9 @@ class MutationPersistenceTest(unittest.TestCase):
         )
         assert isinstance(action, decision_models.ResumeAction)
         decision = decide(
-            snapshot, make_command(action, work_models.ResumeInput(replacement.artifact_ref_id)), SQLITE_NOW
+            snapshot,
+            decision_models.ResumeCommand(action, work_models.ResumeInput(replacement.artifact_ref_id)),
+            SQLITE_NOW,
         )
 
         with store.write() as transaction:
@@ -472,7 +473,7 @@ class MutationPersistenceTest(unittest.TestCase):
         assert isinstance(action, decision_models.AcceptProposalAction)
         decision = decide(
             snapshot,
-            make_command(
+            decision_models.AcceptProposalCommand(
                 action,
                 work_models.AcceptProposalInput(
                     ItemId("zz-proposal-a"),
@@ -618,7 +619,7 @@ class MutationPersistenceTest(unittest.TestCase):
         assert isinstance(action, decision_models.DeferAction)
         decision = decide(
             snapshot,
-            make_command(
+            decision_models.DeferCommand(
                 action,
                 work_models.DeferInput(work_models.Timing.SAFE_TO_DEFER, "Reopen when the prerequisite is accepted."),
             ),

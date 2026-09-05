@@ -550,7 +550,9 @@ def build_parser() -> argparse.ArgumentParser:
     proposal = commands.add_parser("proposal", help="Create one intake item without activating it.")
     proposal.add_argument("--file", type=Path, required=True)
     _select_command(proposal, cli_commands.ProposalCommand)
-    transition = commands.add_parser("transition", help="Apply one action returned by the actions command.")
+    transition = commands.add_parser(
+        "transition", help="Apply one selected lifecycle-changing action returned by the actions command."
+    )
     transition.add_argument("--action-id", required=True)
     transition.add_argument("--expected-revision", required=True)
     transition.add_argument("--generation", required=True, type=int)

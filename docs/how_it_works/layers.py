@@ -3,7 +3,7 @@ from pathlib import Path
 from .model import Box, Connector, Diagram, Guide, Note, Section
 
 LAYER_DIRECTORIES: dict[str, str] = {
-    "interfaces": "Turn outside input into exact commands and compose one thematic use case at a time.",
+    "interfaces": "Turn outside input and optional setup context into exact commands and thematic use cases.",
     "application": "Read complete stored state and project accepted decisions into focused storage mutations.",
     "domain": "Decide what is legal without reading files, issuing SQL, or presenting commands.",
     "adapters": "Store and recover accepted facts without deciding workflow policy.",
@@ -71,7 +71,7 @@ DIAGRAM = Diagram(
             "interfaces",
             "Interfaces",
             "Make the request exact",
-            ("small exhaustive route", "thematic command composition"),
+            ("small exhaustive route", "thematic composition · setup context"),
             ("src/pinboard/interfaces",),
             60,
             100,

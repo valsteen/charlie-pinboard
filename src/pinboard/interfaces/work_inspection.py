@@ -22,18 +22,33 @@ from pinboard.interfaces import cli_commands, errors, transition_input, work_ins
 from pinboard.interfaces.cli_output import write_json
 
 
+def _project_action_semantics(
+    semantics: decision_models.ActionSemantics,
+) -> work_inspection_models.ActionSemanticsView:
+    """Preserve the stable `effect` field while naming its narrower lifecycle meaning internally."""
+
+    return work_inspection_models.ActionSemanticsView(
+        semantics.use_case,
+        semantics.lifecycle_effect.value,
+        tuple(role.value for role in semantics.permitted_roles),
+        semantics.subject_kind.value,
+        semantics.lifecycle_precondition.value,
+        semantics.practical_result,
+    )
+
+
 def describe_input_contract(
     kind: decision_models.ActionKind,
 ) -> errors.TransitionInputResult[work_inspection_models.InputContractView]:
     semantics = decision_models.action_semantics(kind)
-    if semantics.effect == decision_models.ActionEffect.ADVISORY:
+    if semantics.lifecycle_effect == decision_models.LifecycleEffect.NO_LIFECYCLE_CHANGE:
         payload_schema = None
     else:
         encoded_schema = transition_input.encoded_transition_input_schema(kind)
         if isinstance(encoded_schema, errors.TransitionInputFailure):
             return encoded_schema
         payload_schema = msgspec.Raw(encoded_schema)
-    return work_inspection_models.InputContractView(kind.value, semantics, payload_schema)
+    return work_inspection_models.InputContractView(kind.value, _project_action_semantics(semantics), payload_schema)
 
 
 def project_action(
@@ -58,7 +73,7 @@ def project_action(
         subject_revision=capability.subject_revision or "",
         authorization="observer" if capability.authorization is None else capability.authorization.value,
         lease_id=capability.lease_id or "",
-        semantics=decision_models.action_semantics(action.kind),
+        semantics=_project_action_semantics(decision_models.action_semantics(action.kind)),
         input_contract=input_contract,
     )
 
@@ -114,7 +129,7 @@ def compose_status(
     overview_value = queries.project_overview(state, now)
     coordinator = state.authority.coordination
     return work_inspection_models.StatusView(
-        valid=True,
+        stored_state_opened=True,
         source_checkout_root=str(source_checkout),
         shared_repository_root=str(shared_repository),
         work_root=str(work),
@@ -345,10 +360,10 @@ def show_input_contract(
         print(f"OK INPUT_CONTRACT action_kind={contract.action_kind}")
         print(f"use_case={contract.semantics.use_case}")
         print(
-            f"effect={contract.semantics.effect.value} "
-            f"permitted_roles={','.join(role.value for role in contract.semantics.permitted_roles)} "
-            f"subject_kind={contract.semantics.subject_kind.value} "
-            f"lifecycle_precondition={contract.semantics.lifecycle_precondition.value}"
+            f"effect={contract.semantics.effect} "
+            f"permitted_roles={','.join(contract.semantics.permitted_roles)} "
+            f"subject_kind={contract.semantics.subject_kind} "
+            f"lifecycle_precondition={contract.semantics.lifecycle_precondition}"
         )
         print(f"practical_result={contract.semantics.practical_result}")
         if contract.payload_schema is None:

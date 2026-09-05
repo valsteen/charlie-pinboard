@@ -50,6 +50,7 @@ from pinboard.application.mutation_models import (
     AttemptAuthorityMutation,
     CheckpointAcceptanceMutation,
     CoordinationAuthorityMutation,
+    MutationReceipt,
     PreparationAuthorityMutation,
     ProposalCreationMutation,
     StoredStateMutation,
@@ -638,7 +639,7 @@ class _SQLiteWorkTransaction:
     def snapshot(self) -> stored_state.StoredWorkState:
         return sqlite_state.read_state(self.connection)
 
-    def commit(self, mutation: StoredStateMutation) -> DecisionResult[decision_models.TransitionReceipt]:
+    def commit(self, mutation: StoredStateMutation) -> DecisionResult[MutationReceipt]:
         connection = self.connection
         current = sqlite_state.read_state(connection)
         if (failure := _persist(connection, current, mutation)) is not None:
@@ -653,7 +654,7 @@ class _SQLiteWorkTransaction:
                 | AttemptAuthorityMutation()
                 | PreparationAuthorityMutation()
             ):
-                return self._select(mutation.receipt.transition)
+                return self._select(mutation.receipt)
             case _ as unreachable:
                 assert_never(unreachable)
 

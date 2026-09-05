@@ -22,7 +22,8 @@ from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import service, stored_state
 from pinboard.application.actions import discover_actions
-from pinboard.application.artifacts import NewArtifact
+from pinboard.application.artifacts import NewArtifact, WorkBriefIdentity
+from pinboard.application.mutation_models import MutationReceipt
 from pinboard.application.ports import WorkStore
 from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
@@ -919,24 +920,61 @@ class CliTest(unittest.TestCase):
                 if config_contents is not None:
                     config.write_text(config_contents, encoding="utf-8")
                 common = ("--project-root", str(project), "--work-root", str(work), "init")
-                recommendation = (
-                    'OPTIONAL: Add model_auto_compact_token_limit_scope = "body_after_prefix" to '
-                    f"{codex_home / 'config.toml'}. Reference: "
-                    "https://learn.chatgpt.com/docs/config-file/config-reference"
-                )
-
                 with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}):
                     first_result, first_stdout, first_stderr = self.run_cli(*common)
                     second_result, second_stdout, second_stderr = self.run_cli(*common)
 
                 self.assertEqual(0, first_result, first_stderr)
                 self.assertEqual(0, second_result, second_stderr)
-                self.assertEqual(1, first_stdout.splitlines().count(recommendation))
+                self.assertEqual(1, first_stdout.count("model_auto_compact_token_limit_scope"))
+                self.assertIn(str(config), first_stdout)
                 self.assertNotIn("model_auto_compact_token_limit_scope", second_stdout)
                 if config_contents is None:
                     self.assertFalse(config.exists())
                 else:
                     self.assertEqual(config_contents, config.read_text(encoding="utf-8"))
+
+    def test_first_init_recommendation_is_only_about_the_user_default(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        project_config = project / ".codex" / "config.toml"
+        project_config.parent.mkdir()
+        project_contents = 'model_auto_compact_token_limit_scope = "total"\n'
+        project_config.write_text(project_contents, encoding="utf-8")
+        work = project / ".codex" / "work"
+        codex_home = Path(tempfile.mkdtemp()).resolve()
+
+        with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}):
+            result, stdout, stderr = self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "init",
+            )
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("model_auto_compact_token_limit_scope", stdout)
+        self.assertIn(str(codex_home / "config.toml"), stdout)
+        self.assertEqual(project_contents, project_config.read_text(encoding="utf-8"))
+
+    def test_failed_init_does_not_recommend_a_codex_setting(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        invalid_parent = project / "not-a-directory"
+        invalid_parent.write_text("occupied", encoding="utf-8")
+        codex_home = Path(tempfile.mkdtemp()).resolve()
+
+        with patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}):
+            result, stdout, stderr = self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(invalid_parent / "work"),
+                "init",
+            )
+
+        self.assertEqual(12, result)
+        self.assertNotIn("model_auto_compact_token_limit_scope", stdout)
+        self.assertNotIn("model_auto_compact_token_limit_scope", stderr)
 
     def test_first_init_omits_recommendation_without_reliable_user_setting_absence(self) -> None:
         for label, config_contents in (
@@ -3033,7 +3071,10 @@ Not launchable:
             patch(
                 "pinboard.interfaces.transitions.discover_actions", wraps=transition_interface.discover_actions
             ) as discovery,
-            patch("pinboard.interfaces.transitions.execute", wraps=transition_interface.execute) as execution,
+            patch(
+                "pinboard.interfaces.transitions.decide_and_commit_transition",
+                wraps=transition_interface.decide_and_commit_transition,
+            ) as transition_commit,
             patch(
                 "pinboard.interfaces.transitions.work_views.rebuild", wraps=transition_interface.work_views.rebuild
             ) as rebuild,
@@ -3063,7 +3104,7 @@ Not launchable:
         assert isinstance(released_operation, authority_models.ReleaseCoordinationAuthority)
         self.assertEqual(samples[0], acquired_operation.acquired_at)
         self.assertEqual(samples[1], discovery.call_args.kwargs["now"])
-        self.assertEqual(samples[2], execution.call_args.args[2])
+        self.assertEqual(samples[2], transition_commit.call_args.args[2])
         self.assertEqual(samples[3], released_operation.released_at)
         self.assertEqual(samples[4], rebuild.call_args.args[2])
 
@@ -3101,7 +3142,7 @@ Not launchable:
             selected_store: SQLiteWorkStore,
             artifacts: ArtifactRepository,
             command: decision_models.TransitionCommand,
-        ) -> CommandResult[decision_models.TransitionReceipt]:
+        ) -> CommandResult[MutationReceipt]:
             transition_result = execute_transition(selected_roots, selected_store, artifacts, command)
             if isinstance(transition_result, CommandFailure):
                 return transition_result
@@ -3139,6 +3180,176 @@ Not launchable:
             tuple((receipt.action_kind, receipt.project_revision) for receipt in receipts[-3:]),
         )
 
+    def test_direct_transition_reports_its_own_revision_across_a_disjoint_commit(self) -> None:
+        state = complete_sqlite_state()
+        now = datetime.now(UTC)
+        coordination = state.authority.coordination
+        assert coordination is not None
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                coordination=replace(coordination, acquired_at=now, expires_at=now + timedelta(minutes=5)),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        action = self.json_object(
+            self.json_list(
+                self.run_json_cli(
+                    *common,
+                    "actions",
+                    "--role",
+                    "coordinator",
+                    "--lease-id",
+                    "coordination-a",
+                    "--generation",
+                    "9",
+                    "--action-id",
+                    "pause:work-a-1",
+                )["actions"]
+            )[0]
+        )
+        payload = project / "pause.json"
+        payload.write_text('{"reason":"Pause at a stable checkpoint."}\n', encoding="utf-8")
+        proposal_path = project / "interleaved-direct-proposal.json"
+        proposal_path.write_text(
+            json.dumps(
+                {
+                    "schema": "pinboard-proposal/v1",
+                    "proposal_id": "interleaved-direct-proposal",
+                    "created_at": "2026-08-25T12:00:00+02:00",
+                    "source_task_id": "discovering-task",
+                    "user_label": "Interleaved direct proposal",
+                    "trigger": "A disjoint commit must not change the direct transition receipt.",
+                    "evidence": ["source:cli"],
+                    "why_it_matters": "The command must report the revision it committed.",
+                    "relation": {"kind": "independent", "item": None},
+                    "effect": "The proposal commits before transition presentation.",
+                    "unlock": "Prove exact revision attribution.",
+                    "urgency_evidence": "The direct command exposes a revision.",
+                    "freshness_assumptions": ["SQLite remains authoritative."],
+                }
+            ),
+            encoding="utf-8",
+        )
+        commit_transition = transition_interface.decide_and_commit_transition
+
+        def commit_then_create_disjoint_proposal(
+            selected_store: WorkStore,
+            command: decision_models.NonCheckpointTransitionCommand,
+            decided_at: datetime,
+            *,
+            transition_brief_identity: WorkBriefIdentity | None = None,
+        ) -> DecisionResult[MutationReceipt]:
+            commit_result = commit_transition(
+                selected_store,
+                command,
+                decided_at,
+                transition_brief_identity=transition_brief_identity,
+            )
+            if isinstance(commit_result, DecisionFailure):
+                return commit_result
+            proposal_result, _, proposal_stderr = self.run_cli(*common, "proposal", "--file", str(proposal_path))
+            self.assertEqual(0, proposal_result, proposal_stderr)
+            return commit_result
+
+        with patch(
+            "pinboard.interfaces.transitions.decide_and_commit_transition",
+            side_effect=commit_then_create_disjoint_proposal,
+        ):
+            result, stdout, stderr = self.run_transition(common, action, payload)
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK TRANSITION_APPLIED pause:work-a-1 revision=13", stdout)
+        self.assertEqual(
+            (
+                (stored_state.TransitionHistoryActionKind.PAUSE, 13),
+                (stored_state.TransitionHistoryActionKind.INSPECT, 14),
+            ),
+            tuple(
+                (receipt.action_kind, receipt.project_revision) for receipt in store.snapshot().transition_receipts[-2:]
+            ),
+        )
+
+    def test_borrowed_coordination_releases_the_exact_generation_committed_after_an_interleaving(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, store = self.initialized_state(state)
+        original = service.decide_and_commit_coordination_authority_change
+        interleaved = False
+
+        def rotate_before_requested_acquisition(
+            selected_store: WorkStore,
+            operation: authority_models.CoordinationAuthorityOperation,
+        ) -> DecisionResult[MutationReceipt]:
+            nonlocal interleaved
+            if isinstance(operation, authority_models.AcquireCoordinationAuthority) and not interleaved:
+                interleaved = True
+                interleaved_at = operation.acquired_at - timedelta(seconds=2)
+                acquired = original(
+                    selected_store,
+                    authority_models.AcquireCoordinationAuthority(
+                        operation.host_epoch,
+                        TaskId("interleaving-task"),
+                        HostId("interleaving-host"),
+                        LeaseId("interleaving-lease"),
+                        interleaved_at,
+                        interleaved_at + timedelta(minutes=1),
+                    ),
+                )
+                self.assertNotIsInstance(acquired, DecisionFailure)
+                retained = transition_interface.coordination_authority.find_retained_coordination_authority(
+                    selected_store.snapshot()
+                )
+                assert not isinstance(retained, CommandFailure)
+                current_state = selected_store.snapshot()
+                released = original(
+                    selected_store,
+                    authority_models.ReleaseCoordinationAuthority(
+                        work_models.CoordinationCommandAuthority(
+                            current_state.lifecycle.project.host_epoch,
+                            retained.task_id,
+                            retained.host_id,
+                            retained.lease_id,
+                            retained.generation,
+                            retained.expires_at,
+                        ),
+                        operation.acquired_at - timedelta(seconds=1),
+                    ),
+                )
+                self.assertNotIsInstance(released, DecisionFailure)
+            return original(selected_store, operation)
+
+        with patch(
+            "pinboard.interfaces.transitions.decide_and_commit_coordination_authority_change",
+            side_effect=rotate_before_requested_acquisition,
+        ):
+            result, stdout, stderr = self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "close",
+                "work-c",
+                "--outcome",
+                "done",
+                "--reason",
+                "The prerequisite outcome is already complete.",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+            )
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK WORK_ITEM_CLOSED item=work-c outcome=done", stdout)
+        retained = store.snapshot().authority.coordination
+        assert retained is not None
+        self.assertEqual(work_models.CoordinationLeaseStatus.RELEASED, retained.state)
+        self.assertEqual(2, retained.generation)
+
     def test_borrowed_coordination_reports_release_failure_after_the_transition_applies(self) -> None:
         state = complete_sqlite_state()
         state = replace(state, authority=replace(state.authority, coordination=None))
@@ -3149,7 +3360,7 @@ Not launchable:
         def fail_release(
             selected_store: WorkStore,
             operation: authority_models.CoordinationAuthorityOperation,
-        ) -> DecisionResult[decision_models.TransitionReceipt]:
+        ) -> DecisionResult[MutationReceipt]:
             if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
                 return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "injected release failure")
             return original(selected_store, operation)
@@ -3196,7 +3407,7 @@ Not launchable:
         def reject_release(
             selected_store: WorkStore,
             operation: authority_models.CoordinationAuthorityOperation,
-        ) -> DecisionResult[decision_models.TransitionReceipt]:
+        ) -> DecisionResult[MutationReceipt]:
             if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
                 return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "cleanup rejected")
             return original(selected_store, operation)
@@ -3247,7 +3458,7 @@ Not launchable:
         def reject_release(
             selected_store: WorkStore,
             operation: authority_models.CoordinationAuthorityOperation,
-        ) -> DecisionResult[decision_models.TransitionReceipt]:
+        ) -> DecisionResult[MutationReceipt]:
             if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
                 return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "cleanup rejected")
             return original(selected_store, operation)
@@ -3338,7 +3549,7 @@ Not launchable:
         def raise_on_release(
             selected_store: WorkStore,
             operation: authority_models.CoordinationAuthorityOperation,
-        ) -> DecisionResult[decision_models.TransitionReceipt]:
+        ) -> DecisionResult[MutationReceipt]:
             if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
                 raise RuntimeError("cleanup broke")
             return original(selected_store, operation)
@@ -3389,7 +3600,7 @@ Not launchable:
         def raise_on_release(
             selected_store: WorkStore,
             operation: authority_models.CoordinationAuthorityOperation,
-        ) -> DecisionResult[decision_models.TransitionReceipt]:
+        ) -> DecisionResult[MutationReceipt]:
             if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
                 raise ValueError("cleanup broke")
             return original(selected_store, operation)
@@ -3438,7 +3649,7 @@ Not launchable:
         def raise_on_release(
             selected_store: WorkStore,
             operation: authority_models.CoordinationAuthorityOperation,
-        ) -> DecisionResult[decision_models.TransitionReceipt]:
+        ) -> DecisionResult[MutationReceipt]:
             if isinstance(operation, authority_models.ReleaseCoordinationAuthority):
                 raise RuntimeError("cleanup broke")
             return original(selected_store, operation)
