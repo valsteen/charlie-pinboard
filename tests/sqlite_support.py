@@ -7,7 +7,7 @@ import msgspec
 from pinboard.adapters.sqlite.database import APPLICATION, SCHEMA_VERSION
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.adapters.sqlite.lifecycle import _definition_revision_values
-from pinboard.adapters.sqlite.proposals import _proposal_disposition_columns
+from pinboard.adapters.sqlite.proposals import _encode_proposal_disposition_columns
 from pinboard.adapters.sqlite.state import _validate_current_state, append_history
 from pinboard.application import stored_state
 
@@ -145,7 +145,7 @@ def _insert_proposals(connection: sqlite3.Connection, records: stored_state.Prop
                 value.effect,
                 value.unlock,
                 value.urgency_evidence,
-                *_proposal_disposition_columns(value.disposition),
+                *_encode_proposal_disposition_columns(value.disposition),
                 value.subject_revision,
             )
             for value in records.proposals

@@ -21,7 +21,7 @@ _DIRECTORIES: dict[stored_state.ArtifactKind, str] = {
 }
 
 
-def _identity(value: str, *, label: str) -> str:
+def _validate_identity_component(value: str, *, label: str) -> str:
     if not value or value in {".", ".."} or "/" in value or os.sep in value or "\x00" in value:
         raise ArtifactError(
             ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
@@ -30,21 +30,24 @@ def _identity(value: str, *, label: str) -> str:
     return value
 
 
-def _suffix(value: str) -> str:
+def _validate_suffix(value: str) -> str:
     if not value.startswith(".") or value in {".", ".."} or "/" in value or os.sep in value or "\x00" in value:
         raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact suffix is not canonical.")
     return value
 
 
-def _selector(kind: stored_state.ArtifactKind, key: str, revision: int, suffix: str) -> str:
+def _build_selector(kind: stored_state.ArtifactKind, key: str, revision: int, suffix: str) -> str:
     if revision < 1:
         raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact revision must be positive.")
     return PurePosixPath(
-        "artifacts", _DIRECTORIES[kind], _identity(key, label="key"), f"{revision}{_suffix(suffix)}"
+        "artifacts",
+        _DIRECTORIES[kind],
+        _validate_identity_component(key, label="key"),
+        f"{revision}{_validate_suffix(suffix)}",
     ).as_posix()
 
 
-def _canonical_reference(reference: ArtifactRef | stored_state.ArtifactReference) -> Path:
+def _validate_and_resolve_reference_path(reference: ArtifactRef | stored_state.ArtifactReference) -> Path:
     pure = PurePosixPath(reference.selector)
     parts = pure.parts
     if pure.is_absolute() or not parts or any(part in {"", ".", ".."} for part in parts):
@@ -52,7 +55,7 @@ def _canonical_reference(reference: ArtifactRef | stored_state.ArtifactReference
     if len(parts) != 4 or parts[:3] != (
         "artifacts",
         _DIRECTORIES[reference.kind],
-        _identity(reference.key, label="key"),
+        _validate_identity_component(reference.key, label="key"),
     ):
         raise ArtifactError(
             ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION,
@@ -69,7 +72,7 @@ def _canonical_reference(reference: ArtifactRef | stored_state.ArtifactReference
 
 
 def read_reference(work_root: Path, reference: ArtifactRef | stored_state.ArtifactReference) -> bytes:
-    relative = _canonical_reference(reference)
+    relative = _validate_and_resolve_reference_path(reference)
     try:
         data = (work_root / relative).read_bytes()
     except OSError as error:
@@ -90,7 +93,7 @@ def verify_reference(work_root: Path, reference: ArtifactRef | stored_state.Arti
 
 
 def write_revision(roots: DurableRoots, artifact: NewArtifact) -> ArtifactRef:
-    selector = _selector(artifact.kind, artifact.key, artifact.revision, artifact.suffix)
+    selector = _build_selector(artifact.kind, artifact.key, artifact.revision, artifact.suffix)
     digest = sha256(artifact.content).hexdigest()
     reference = ArtifactRef(artifact.kind, artifact.key, artifact.revision, selector, digest, len(artifact.content))
     try:
@@ -135,7 +138,7 @@ class ArtifactRepository:
         return read_reference(self.work_root, reference)
 
     def path(self, reference: stored_state.ArtifactReference) -> Path:
-        return self.work_root / _canonical_reference(reference)
+        return self.work_root / _validate_and_resolve_reference_path(reference)
 
     def publish(self, artifact: NewArtifact) -> ArtifactRef:
         return write_revision(self.roots, artifact)

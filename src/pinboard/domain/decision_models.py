@@ -39,9 +39,9 @@ class Role(Enum):
 type MutationRole = Literal[Role.COORDINATOR, Role.WORKER, Role.PREPARER]
 
 
-class ActionEffect(Enum):
-    ADVISORY = "advisory"
-    MUTATING = "mutating"
+class LifecycleEffect(Enum):
+    NO_LIFECYCLE_CHANGE = "advisory"
+    CHANGES_LIFECYCLE = "mutating"
 
 
 class ActionSubjectKind(Enum):
@@ -71,7 +71,7 @@ class ActionLifecyclePrecondition(Enum):
 @dataclass(frozen=True, slots=True)
 class ActionSemantics:
     use_case: str
-    effect: ActionEffect
+    lifecycle_effect: LifecycleEffect
     permitted_roles: tuple[Role, ...]
     subject_kind: ActionSubjectKind
     lifecycle_precondition: ActionLifecyclePrecondition
@@ -110,7 +110,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.ACCEPT_CHECKPOINT:
             return ActionSemantics(
                 "Accept one independently reviewed checkpoint without completing its item.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.REVIEW_ATTEMPT,
@@ -119,7 +119,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.ACCEPT_REVIEW_AND_CONTINUE:
             return ActionSemantics(
                 "Accept a reviewed candidate while continuing the same attempt.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.REVIEW_ATTEMPT,
@@ -128,7 +128,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.ACCEPT_PROPOSAL:
             return ActionSemantics(
                 "Admit an intake proposal as accepted work.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
                 ActionLifecyclePrecondition.INTAKE_PROPOSAL,
@@ -137,7 +137,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.ACTIVATE:
             return ActionSemantics(
                 "Start one ready item from an accepted brief.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.PREPARER,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.READY_ITEM,
@@ -146,7 +146,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.REPORT_BLOCKER:
             return ActionSemantics(
                 "Preserve blocker evidence for coordination.",
-                ActionEffect.ADVISORY,
+                LifecycleEffect.NO_LIFECYCLE_CHANGE,
                 (Role.WORKER,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
@@ -155,7 +155,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.BLOCK:
             return ActionSemantics(
                 "Stop an active attempt on dependencies already accepted in its definition.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
@@ -164,7 +164,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.BLOCK_ITEM:
             return ActionSemantics(
                 "Stop unstarted intake work on dependencies already accepted in its definition.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.INTAKE_ITEM,
@@ -173,7 +173,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.COMPLETE:
             return ActionSemantics(
                 "Accept and finish an active or reviewed attempt.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.ACTIVE_OR_REVIEW_ATTEMPT_CURRENT_SCOPE,
@@ -182,7 +182,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.CLOSE:
             return ActionSemantics(
                 "Record a terminal decision for non-active work.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.ITEM_OUTSIDE_ACTIVE_AND_REVIEW,
@@ -191,7 +191,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.CONTINUE:
             return ActionSemantics(
                 "Continue work already active in an accepted attempt.",
-                ActionEffect.ADVISORY,
+                LifecycleEffect.NO_LIFECYCLE_CHANGE,
                 (Role.COORDINATOR, Role.WORKER),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
@@ -200,7 +200,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.DEFER:
             return ActionSemantics(
                 "Set aside unstarted work with an explicit reopen condition.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.INTAKE_READY_OR_BLOCKED_UNSTARTED_ITEM,
@@ -209,7 +209,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.DISPATCH:
             return ActionSemantics(
                 "Prepare or verify a worker launch for an active attempt.",
-                ActionEffect.ADVISORY,
+                LifecycleEffect.NO_LIFECYCLE_CHANGE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.ACTIVE_ATTEMPT_CURRENT_SCOPE,
@@ -218,7 +218,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.INSPECT:
             return ActionSemantics(
                 "Inspect current work without taking authority.",
-                ActionEffect.ADVISORY,
+                LifecycleEffect.NO_LIFECYCLE_CHANGE,
                 (Role.OBSERVER,),
                 ActionSubjectKind.LEDGER,
                 ActionLifecyclePrecondition.VALID_LEDGER,
@@ -227,7 +227,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.MARK_READY:
             return ActionSemantics(
                 "Admit an intake item to ready work.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.INTAKE_ITEM,
@@ -236,7 +236,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.MERGE_PROPOSAL:
             return ActionSemantics(
                 "Merge an intake proposal into an existing work identity.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
                 ActionLifecyclePrecondition.INTAKE_PROPOSAL,
@@ -245,7 +245,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.PAUSE:
             return ActionSemantics(
                 "Preserve an active attempt without a named dependency condition.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.ACTIVE_ATTEMPT,
@@ -254,7 +254,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.REJECT_PROPOSAL:
             return ActionSemantics(
                 "Reject an intake proposal.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
                 ActionLifecyclePrecondition.INTAKE_PROPOSAL,
@@ -263,7 +263,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.REOPEN:
             return ActionSemantics(
                 "Return deferred work for intake reconsideration.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.DEFERRED_ITEM,
@@ -272,7 +272,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.RESUME:
             return ActionSemantics(
                 "Restore paused or blocked work after its dependencies are clear.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.PAUSED_OR_BLOCKED_ITEM_WITHOUT_LIVE_DEPENDENCIES,
@@ -281,7 +281,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.RETURN_FOR_CORRECTION:
             return ActionSemantics(
                 "Return a reviewed attempt for correction.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.REVIEW_ATTEMPT,
@@ -290,7 +290,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.RETURN_PROPOSAL:
             return ActionSemantics(
                 "Return an intake proposal for more evidence or clarification.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
                 ActionLifecyclePrecondition.INTAKE_PROPOSAL,
@@ -299,7 +299,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.REVISE_ITEM:
             return ActionSemantics(
                 "Replace one nonterminal item's complete accepted definition.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.ITEM,
                 ActionLifecyclePrecondition.NONTERMINAL_ITEM,
@@ -308,7 +308,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.SUBMIT_REVIEW:
             return ActionSemantics(
                 "Submit an active attempt's exact candidate for review.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.WORKER,),
                 ActionSubjectKind.ATTEMPT,
                 ActionLifecyclePrecondition.ACTIVE_ATTEMPT_CURRENT_SCOPE,
@@ -317,7 +317,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
         case ActionKind.TRANSFER_COORDINATOR:
             return ActionSemantics(
                 "Transfer graph-wide coordination ownership.",
-                ActionEffect.MUTATING,
+                LifecycleEffect.CHANGES_LIFECYCLE,
                 (Role.COORDINATOR,),
                 ActionSubjectKind.LEDGER,
                 ActionLifecyclePrecondition.ACTIVE_TRANSFERABLE_COORDINATION,
@@ -358,17 +358,11 @@ class AcceptCheckpointAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_CHECKPOINT)
 
-    def command(self, value: work_models.AcceptCheckpointInput) -> AcceptCheckpointCommand:
-        return AcceptCheckpointCommand(self, value)
-
 
 @dataclass(frozen=True, slots=True)
 class AcceptReviewAndContinueAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_REVIEW_AND_CONTINUE)
-
-    def command(self, value: work_models.AcceptReviewAndContinueInput) -> AcceptReviewAndContinueCommand:
-        return AcceptReviewAndContinueCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,17 +370,11 @@ class AcceptProposalAction:
     capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.ACCEPT_PROPOSAL)
 
-    def command(self, value: work_models.AcceptProposalInput) -> AcceptProposalCommand:
-        return AcceptProposalCommand(self, value)
-
 
 @dataclass(frozen=True, slots=True)
 class ActivateAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.ACTIVATE)
-
-    def command(self, value: work_models.ActivateInput) -> ActivateCommand:
-        return ActivateCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,17 +382,11 @@ class BlockAttemptAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.BLOCK)
 
-    def command(self, value: work_models.BlockInput) -> BlockCommand:
-        return BlockCommand(self, value)
-
 
 @dataclass(frozen=True, slots=True)
 class BlockItemAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.BLOCK_ITEM)
-
-    def command(self, value: work_models.BlockInput) -> BlockItemCommand:
-        return BlockItemCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,17 +394,11 @@ class CompleteAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.COMPLETE)
 
-    def command(self, value: work_models.EvidenceInput) -> CompleteCommand:
-        return CompleteCommand(self, value)
-
 
 @dataclass(frozen=True, slots=True)
 class CloseAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.CLOSE)
-
-    def command(self, value: work_models.CloseInput) -> CloseCommand:
-        return CloseCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -435,9 +411,6 @@ class ContinueAction:
 class DeferAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.DEFER)
-
-    def command(self, value: work_models.DeferInput) -> DeferCommand:
-        return DeferCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -457,17 +430,11 @@ class MarkReadyAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.MARK_READY)
 
-    def command(self, value: work_models.ReasonInput) -> MarkReadyCommand:
-        return MarkReadyCommand(self, value)
-
 
 @dataclass(frozen=True, slots=True)
 class MergeProposalAction:
     capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.MERGE_PROPOSAL)
-
-    def command(self, value: work_models.MergeProposalInput) -> MergeProposalCommand:
-        return MergeProposalCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -475,26 +442,17 @@ class PauseAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.PAUSE)
 
-    def command(self, value: work_models.ReasonInput) -> PauseCommand:
-        return PauseCommand(self, value)
-
 
 @dataclass(frozen=True, slots=True)
 class RejectProposalAction:
     capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.REJECT_PROPOSAL)
 
-    def command(self, value: work_models.ReasonInput) -> RejectProposalCommand:
-        return RejectProposalCommand(self, value)
-
 
 @dataclass(frozen=True, slots=True)
 class ReopenAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.REOPEN)
-
-    def command(self, value: work_models.EvidenceInput) -> ReopenCommand:
-        return ReopenCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -508,17 +466,11 @@ class ResumeAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.RESUME)
 
-    def command(self, value: work_models.ResumeInput) -> ResumeCommand:
-        return ResumeCommand(self, value)
-
 
 @dataclass(frozen=True, slots=True)
 class ReturnForCorrectionAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.RETURN_FOR_CORRECTION)
-
-    def command(self, value: work_models.ReasonInput) -> ReturnForCorrectionCommand:
-        return ReturnForCorrectionCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,17 +478,11 @@ class ReturnProposalAction:
     capability: MutationActionCapability[ProposalId]
     kind: ActionKind = field(init=False, default=ActionKind.RETURN_PROPOSAL)
 
-    def command(self, value: work_models.ReasonInput) -> ReturnProposalCommand:
-        return ReturnProposalCommand(self, value)
-
 
 @dataclass(frozen=True, slots=True)
 class ReviseItemAction:
     capability: MutationActionCapability[ItemId]
     kind: ActionKind = field(init=False, default=ActionKind.REVISE_ITEM)
-
-    def command(self, value: work_models.ReviseItemDefinitionInput) -> ReviseItemCommand:
-        return ReviseItemCommand(self, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -544,17 +490,11 @@ class SubmitReviewAction:
     capability: MutationActionCapability[AttemptId]
     kind: ActionKind = field(init=False, default=ActionKind.SUBMIT_REVIEW)
 
-    def command(self, value: work_models.SubmitReviewInput) -> SubmitReviewCommand:
-        return SubmitReviewCommand(self, value)
-
 
 @dataclass(frozen=True, slots=True)
 class TransferCoordinatorAction:
     capability: MutationActionCapability[LedgerId]
     kind: ActionKind = field(init=False, default=ActionKind.TRANSFER_COORDINATOR)
-
-    def command(self, value: work_models.TransferCoordinatorInput) -> TransferCoordinatorCommand:
-        return TransferCoordinatorCommand(self, value)
 
 
 type AdvisoryAction = ContinueAction | DispatchAction | InspectAction | ReportBlockerAction

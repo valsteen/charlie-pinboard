@@ -130,14 +130,14 @@ def read_focus(connection: sqlite3.Connection) -> stored_state.StoredFocus:
     return decode_row(rows[0], stored_state.StoredFocus)
 
 
-def item(state: stored_state.StoredWorkState, item_id: ItemId) -> stored_state.StoredWorkItem:
+def require_stored_item(state: stored_state.StoredWorkState, item_id: ItemId) -> stored_state.StoredWorkItem:
     value = next((candidate for candidate in state.lifecycle.work_items if candidate.item_id == item_id), None)
     if value is None:
         raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "The focused mutation item is missing.")
     return value
 
 
-def attempt(state: stored_state.StoredWorkState, attempt_id: AttemptId) -> stored_state.StoredAttempt:
+def require_stored_attempt(state: stored_state.StoredWorkState, attempt_id: AttemptId) -> stored_state.StoredAttempt:
     value = next((candidate for candidate in state.lifecycle.attempts if candidate.attempt_id == attempt_id), None)
     if value is None:
         raise StorageError(StorageErrorCode.INVARIANT_VIOLATION, "The focused mutation attempt is missing.")
@@ -217,7 +217,7 @@ def set_item_state(
     now: datetime,
     outcome_evidence: str | None = None,
 ) -> DecisionFailure | None:
-    current = item(state, item_id)
+    current = require_stored_item(state, item_id)
     terminal = after_state in {
         stored_state.StoredWorkItemState.DONE,
         stored_state.StoredWorkItemState.SUPERSEDED,
@@ -265,7 +265,7 @@ def set_attempt_state(
     candidate_revision: str | None = None,
     candidate_recorded_at: datetime | None = None,
 ) -> DecisionFailure | None:
-    current = attempt(state, attempt_id)
+    current = require_stored_attempt(state, attempt_id)
     if after_state == work_models.AttemptState.REVIEW:
         stored_candidate = candidate_revision
         stored_candidate_at = None if candidate_recorded_at is None else candidate_recorded_at.isoformat()
@@ -333,7 +333,7 @@ def insert_definition_revision(
             "The current definition changed before persistence.",
         )
     append_definition_revision(connection, revision)
-    current_item = item(state, revision.item_id)
+    current_item = require_stored_item(state, revision.item_id)
     return require_one_changed_row(
         connection.execute(
             """
@@ -375,7 +375,7 @@ def insert_attempt(
     revision: int,
     now: datetime,
 ) -> DecisionFailure | None:
-    item(state, change.item)
+    require_stored_item(state, change.item)
     definition = next(
         (value for value in reversed(state.lifecycle.definition_revisions) if value.item_id == change.item),
         None,

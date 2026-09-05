@@ -19,7 +19,7 @@ from pinboard.domain.identifiers import (
 )
 from pinboard.domain.ledger import LedgerSnapshot
 from pinboard.interfaces.transition_input import parse_transition_command
-from tests.domain_support import action, command, expect_success
+from tests.domain_support import action, expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state, test_definition
 
 
@@ -130,14 +130,14 @@ class TypedTransitionContractTest(unittest.TestCase):
         )
         for value in variants:
             with self.subTest(value=value):
-                selected_command = command(activation, value)
+                selected_command = decision_models.ActivateCommand(activation, value)
                 rejected = decision_outcome(snapshot, selected_command, SQLITE_NOW)
                 self.assertIsInstance(rejected, DecisionFailure)
             self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
         accepted = decide(
             snapshot,
-            command(
+            decision_models.ActivateCommand(
                 activation,
                 work_models.ActivateInput(AttemptId("ready-item-1"), "branch", "base", "task", ArtifactRefId(1)),
             ),
@@ -168,7 +168,7 @@ class TypedTransitionContractTest(unittest.TestCase):
         )
         rejected_without_attempt = decision_outcome(
             without_attempt,
-            command(
+            decision_models.ResumeCommand(
                 action(decision_models.ResumeAction, ItemId("ready-item")), work_models.ResumeInput(ArtifactRefId(1))
             ),
             SQLITE_NOW,
@@ -219,11 +219,15 @@ class TypedTransitionContractTest(unittest.TestCase):
 
         for value in (work_models.ResumeInput(ArtifactRefId(99)), work_models.ResumeInput(ArtifactRefId(3))):
             with self.subTest(value=value):
-                rejected = decision_outcome(snapshot, command(resume, value), SQLITE_NOW)
+                rejected = decision_outcome(snapshot, decision_models.ResumeCommand(resume, value), SQLITE_NOW)
                 self.assertIsInstance(rejected, DecisionFailure)
                 self.assertEqual(DecisionFailureCode.TRANSITION_INPUT_INVALID, rejected.code)
 
-        accepted = decide(snapshot, command(resume, work_models.ResumeInput(ArtifactRefId(2))), SQLITE_NOW)
+        accepted = decide(
+            snapshot,
+            decision_models.ResumeCommand(resume, work_models.ResumeInput(ArtifactRefId(2))),
+            SQLITE_NOW,
+        )
         self.assertIsInstance(accepted.change, decision_models.ResumeAttemptChange)
         assert isinstance(accepted.change, decision_models.ResumeAttemptChange)
         revised_brief = accepted.change.revised_brief

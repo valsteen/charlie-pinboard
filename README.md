@@ -48,7 +48,7 @@ The code, branch, and conversation remain ordinary repository work. Pinboard kee
 - **Interruption and recovery:** block, pause, resume, or recover work without rebuilding its context from chat history.
 - **Parallel work:** preview independent items and recheck the group as each attempt starts, without creating tasks on the user's behalf.
 - **Review:** keep the submitted candidate and its evidence exact, then use a separate Codex reviewer—normally a subagent that returns to the owning task—to accept it or return it for correction.
-- **Handover:** export one complete revision-stamped JSON package containing admitted work, pending proposals, relationships, decisions, and verified review evidence without choosing a team-tool vendor.
+- **Handover:** export one revision-stamped JSON package of supported project facts—admitted work, pending proposals, relationships, decisions, and verified review evidence—without choosing a team-tool vendor. Live lease authority remains local.
 - **Recursive cleanup:** use `$slop-cleanup` to trace residue from revised or abandoned features, remove an approved family, and repeat until a fresh pass finds nothing new.
 - **Optional storytelling review:** after you choose it, proof-read one representative flow or the complete supported repository so the code, its names, and the product overview tell the same accurate story without casually breaking compatibility or deliberate identity.
 
@@ -75,7 +75,7 @@ pinboard item revise --file <pinboard-item-revision-v1.json> --task-id <task> --
 
 Revision files replace the whole `pinboard-work-item-definition/v1`; partial patches are rejected. Blocking can only name dependencies already present in that definition and never changes accepted dependencies itself.
 
-Run `pinboard handover --json` to materialize the strict `pinboard-project-handover/v1` document. The command reads one validated SQLite snapshot, verifies every accepted immutable artifact, embeds its exact bytes as UTF-8 text or base64, and writes nothing unless the complete package is ready.
+Run `pinboard handover --json` to materialize the strict `pinboard-project-handover/v1` document. The command reads one validated SQLite snapshot, verifies every accepted immutable artifact, embeds its exact bytes as UTF-8 text or base64, and writes nothing unless the complete exported project-facts subset is ready. Coordination, preparation, and attempt leases stay in the local ledger; the handover document does not transfer live authority.
 
 ## Install from GitHub
 
@@ -92,6 +92,8 @@ Start a Codex task in the repository and ask:
 
 > Set up the pinboard here and explain how I can use it from one chat or several chats.
 
+After the first successful setup, Pinboard may print an optional recommendation for long Codex tasks when the user setting `model_auto_compact_token_limit_scope` is absent. It only reads the user config at `~/.codex/config.toml` (or the equivalent under `CODEX_HOME`) and never edits user or project Codex configuration. A trusted project's `.codex/config.toml` can override that user default. Reopening an existing Pinboard, a failed setup, or an unreadable or malformed user config produces no recommendation.
+
 When another task uncovers something worth keeping, ask it:
 
 > Add this to the repository work queue as intake: saving a boss fight currently captures temporary animation state. Include what you found and why it could block phase-two save support.
@@ -102,7 +104,7 @@ For a quick current picture, ask:
 
 ## Runtime and development
 
-The package targets Python 3.14 only. msgspec provides immutable records and strict JSON decoding at repository boundaries. uv manages Python installation, the project environment, Python dependencies, the checked-in Python lockfile, and Python command execution.
+The repository currently pins Python 3.14.7 and uv 0.12.10. msgspec provides immutable records and strict JSON decoding at repository boundaries. uv manages Python installation, the project environment, Python dependencies, the checked-in Python lockfile, and Python command execution.
 
 jscpd is the sole non-Python development tool. It requires Node.js 18 or newer and npm, but no global package installation. Install the pinned native binary into this repository's ignored `node_modules/` directory:
 
@@ -110,7 +112,7 @@ jscpd is the sole non-Python development tool. It requires Node.js 18 or newer a
 npm ci --prefer-offline --no-audit --no-fund
 ```
 
-The checked-in `package-lock.json` makes that installation repeatable. The install prefers npm's local cache and skips registry audit and funding requests that are unrelated to this development-only binary. `npm run duplication` performs an aggressive local scan at four lines and 40 tokens; its matches are prompts for judgment, not failures to eliminate mechanically. CI uses calmer eight-line and 60-token limits, rejects every clone that is new relative to `origin/main`, and also enforces a 0.7% ceiling set just above the accepted 0.6% baseline. Lower the ceiling when later cleanup reduces that result rather than raising it to accommodate new duplication.
+The checked-in `package-lock.json` makes that installation repeatable. The install prefers npm's local cache and skips registry audit and funding requests that are unrelated to this development-only binary. `npm run duplication` performs an aggressive local scan at four lines and 40 tokens; its matches are prompts for judgment, not failures to eliminate mechanically. CI uses calmer eight-line and 60-token limits, rejects every clone that is new relative to `origin/main`, and enforces a 0.7% ceiling; the current accepted scan reports 0.4%. Lower the ceiling when later cleanup reduces that result rather than raising it to accommodate new duplication.
 
 ```sh
 uv sync --locked
@@ -128,4 +130,4 @@ uv build --no-sources
 scripts/pinboard --help
 ```
 
-Local Python checks, CI, and the plugin launcher all use the package installed by uv. Copy-paste detection runs separately through the project-local jscpd installation. CI validates the plugin and its skills before the repository is published.
+Local Python checks, CI, and the plugin launcher all use the package installed by uv. Copy-paste detection runs separately through the project-local jscpd installation. Every pull request and main-branch update runs the macOS and Linux checks, including plugin and skill validation.

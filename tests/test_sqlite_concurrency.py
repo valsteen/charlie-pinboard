@@ -22,7 +22,11 @@ from pinboard.application.artifacts import (
 )
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.application.mutations import project_checkpoint_acceptance_mutation, project_transition_mutation
-from pinboard.application.service import create_proposal, decide_and_commit_preparation_authority_change, execute
+from pinboard.application.service import (
+    create_proposal,
+    decide_and_commit_preparation_authority_change,
+    decide_and_commit_transition,
+)
 from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.decisions import (
     available_actions,
@@ -41,7 +45,7 @@ from pinboard.domain.identifiers import (
     TaskId,
 )
 from pinboard.domain.proposal_models import CreateProposalOperation, ProposalIntake
-from tests.domain_support import command, expect_success
+from tests.domain_support import expect_success
 from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
 
 
@@ -59,7 +63,7 @@ def _commit_same_pause(
     actions = expect_success(available_actions(snapshot, actor))
     action = next(value for value in actions if value.kind == decision_models.ActionKind.PAUSE)
     assert isinstance(action, decision_models.PauseAction)
-    selected_command = command(action, work_models.ReasonInput("Concurrent pause."))
+    selected_command = decision_models.PauseCommand(action, work_models.ReasonInput("Concurrent pause."))
     decision = expect_success(decide(snapshot, selected_command, SQLITE_NOW))
     assert isinstance(decision, decision_models.TransitionDecision)
     mutation = project_transition_mutation(before, decision)
@@ -90,7 +94,7 @@ def _commit_same_checkpoint(
     actions = expect_success(available_actions(snapshot, actor))
     action = next(value for value in actions if value.kind == decision_models.ActionKind.ACCEPT_CHECKPOINT)
     assert isinstance(action, decision_models.AcceptCheckpointAction)
-    selected_command = command(
+    selected_command = decision_models.AcceptCheckpointCommand(
         action,
         work_models.AcceptCheckpointInput(
             CheckpointId("checkpoint-a"),
@@ -143,7 +147,7 @@ def _commit_same_definition_revision(
         objective="Commit exactly one concurrent definition revision.",
         dependencies=(ItemId("intake-work"),),
     )
-    selected_command = command(
+    selected_command = decision_models.ReviseItemCommand(
         action,
         work_models.ReviseItemDefinitionInput(
             ItemId("work-a"),
@@ -266,7 +270,7 @@ def _activate_same_prepared_item(
     action = next(value for value in actions if value.kind == decision_models.ActionKind.ACTIVATE)
     assert isinstance(action, decision_models.ActivateAction)
     state_artifact_ref_id = store.snapshot().artifact_references[0].artifact_ref_id
-    selected_command = command(
+    selected_command = decision_models.ActivateCommand(
         action,
         work_models.ActivateInput(
             AttemptId("work-c-1"),
@@ -285,7 +289,7 @@ def _activate_same_prepared_item(
         authority.definition_digest,
     )
     barrier.wait()
-    result = execute(
+    result = decide_and_commit_transition(
         store,
         selected_command,
         SQLITE_NOW + timedelta(seconds=1),
@@ -465,7 +469,9 @@ class SQLiteConcurrencyTest(unittest.TestCase):
             if value.kind == decision_models.ActionKind.SUBMIT_REVIEW
         )
         assert isinstance(submit_action, decision_models.SubmitReviewAction)
-        submit_command = command(submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a")))
+        submit_command = decision_models.SubmitReviewCommand(
+            submit_action, work_models.SubmitReviewInput(CandidateId("candidate-a"))
+        )
         submit_decision = expect_success(decide(snapshot, submit_command, SQLITE_NOW))
         assert isinstance(submit_decision, decision_models.TransitionDecision)
         with store.write() as transaction:

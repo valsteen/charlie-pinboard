@@ -5,15 +5,14 @@ from typing import Protocol
 
 from pinboard.application import stored_state
 from pinboard.application.artifacts import ArtifactRef
-from pinboard.application.mutation_models import StoredStateMutation
-from pinboard.domain import decision_models
+from pinboard.application.mutation_models import MutationReceipt, StoredStateMutation
 from pinboard.domain.errors import DecisionResult
 
 
 class WorkTransaction(Protocol):
     def snapshot(self) -> stored_state.StoredWorkState: ...
 
-    def commit(self, mutation: StoredStateMutation) -> DecisionResult[decision_models.TransitionReceipt]: ...
+    def commit(self, mutation: StoredStateMutation) -> DecisionResult[MutationReceipt]: ...
 
 
 class WorkStore(Protocol):

@@ -295,9 +295,9 @@ class HowItWorksDocumentationTests(unittest.TestCase):
     def test_product_view_distinguishes_advisory_continue_from_review_acceptance(self) -> None:
         advisory = decision_models.action_semantics(decision_models.ActionKind.CONTINUE)
         review_acceptance = decision_models.action_semantics(decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE)
-        self.assertEqual(decision_models.ActionEffect.ADVISORY, advisory.effect)
+        self.assertEqual(decision_models.LifecycleEffect.NO_LIFECYCLE_CHANGE, advisory.lifecycle_effect)
         self.assertEqual(decision_models.ActionLifecyclePrecondition.ACTIVE_ATTEMPT, advisory.lifecycle_precondition)
-        self.assertEqual(decision_models.ActionEffect.MUTATING, review_acceptance.effect)
+        self.assertEqual(decision_models.LifecycleEffect.CHANGES_LIFECYCLE, review_acceptance.lifecycle_effect)
         self.assertEqual(
             decision_models.ActionLifecyclePrecondition.REVIEW_ATTEMPT,
             review_acceptance.lifecycle_precondition,

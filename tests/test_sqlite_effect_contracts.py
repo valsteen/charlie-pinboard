@@ -112,10 +112,10 @@ class SQLiteEffectContractTest(unittest.TestCase):
         path, store = self._store()
         before = store.snapshot()
         with self.assertRaises(StorageError) as missing_item:
-            lifecycle.item(before, ItemId("missing"))
+            lifecycle.require_stored_item(before, ItemId("missing"))
         self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, missing_item.exception.code)
         with self.assertRaises(StorageError) as missing_attempt:
-            lifecycle.attempt(before, AttemptId("missing-1"))
+            lifecycle.require_stored_attempt(before, AttemptId("missing-1"))
         self.assertEqual(StorageErrorCode.INVARIANT_VIOLATION, missing_attempt.exception.code)
 
         connection = open_database(path, OpenMode.READ_WRITE)

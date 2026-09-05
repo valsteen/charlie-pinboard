@@ -36,7 +36,7 @@ class ActionCapabilityFactory:
         )
 
 
-def _authority(
+def _find_attempt_authority(
     snapshot: LedgerSnapshot, actor: decision_models.ActorAuthority, attempt: AttemptId
 ) -> work_models.AttemptAuthority | None:
     if attempt not in actor.attempts:
@@ -59,7 +59,7 @@ def _worker_actions(snapshot: LedgerSnapshot, factory: ActionCapabilityFactory) 
     result: list[decision_models.Action] = []
     for attempt in factory.actor.attempts:
         item = snapshot.item_for_attempt(attempt)
-        authority = _authority(snapshot, factory.actor, attempt)
+        authority = _find_attempt_authority(snapshot, factory.actor, attempt)
         if item is None or authority is None or item.state != work_models.WorkState.ACTIVE:
             continue
         command_authority = next(
@@ -337,7 +337,7 @@ def validate_supplied_action(
     return None
 
 
-def _receipt(
+def _build_transition_receipt(
     action: decision_models.TransitionAction,
     item: ItemId | None,
     outcome: str,
@@ -347,7 +347,7 @@ def _receipt(
     return decision_models.TransitionReceipt(decision_models.action_id(action), item, outcome, evidence, now)
 
 
-def _result(
+def _accepted_transition_decision(
     action: decision_models.NonCheckpointTransitionAction,
     now: datetime,
     change: decision_models.NonCheckpointDecisionChange,
@@ -359,11 +359,11 @@ def _result(
     return decision_models.TransitionDecision(
         action,
         change,
-        _receipt(action, item, outcome or action.kind.value, evidence, now),
+        _build_transition_receipt(action, item, outcome or action.kind.value, evidence, now),
     )
 
 
-def _checkpoint_result(
+def _accepted_checkpoint_decision(
     action: decision_models.AcceptCheckpointAction,
     now: datetime,
     change: decision_models.CheckpointAcceptanceChange,
@@ -374,7 +374,7 @@ def _checkpoint_result(
     return decision_models.CheckpointAcceptanceDecision(
         action,
         change,
-        _receipt(action, item, action.kind.value, evidence, now),
+        _build_transition_receipt(action, item, action.kind.value, evidence, now),
     )
 
 
@@ -416,7 +416,7 @@ def _activate(
             DecisionFailureCode.TRANSITION_INPUT_INVALID,
             "Activation requires one existing brief artifact reference.",
         )
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         decision_models.ActivationChange(
@@ -488,7 +488,7 @@ def _pause_or_block(
             )
         case _ as unreachable:
             assert_never(unreachable)
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         change,
@@ -535,7 +535,7 @@ def _complete(
         else work_models.AttemptState.ACTIVE
     )
     authority_change = _fence_retained_attempt_authority(snapshot, attempt_id)
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         decision_models.CompletionChange(item.item, item.state, attempt_id, before, value.evidence, authority_change),
@@ -581,7 +581,7 @@ def _close(
             attempt.state,
             authority_change,
         )
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         change,
@@ -651,7 +651,7 @@ def _resume(
         )
     else:
         change = decision_models.ItemStateChange(item.item, item.state, target)
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         change,
@@ -680,7 +680,7 @@ def _submit_review(
     attempt = snapshot.attempt(attempt_id)
     if attempt is None:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_NOT_FOUND, f"Attempt '{attempt_id}' does not exist.")
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         decision_models.ReviewSubmissionChange(
@@ -719,7 +719,7 @@ def _return_for_correction(
         authority,
         replace(authority, lease_id=None, generation=authority.generation + 1),
     )
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         decision_models.ReviewReturnChange(
@@ -764,7 +764,7 @@ def _accept_checkpoint(
         authority,
         replace(authority, lease_id=None, generation=authority.generation + 1),
     )
-    return _checkpoint_result(
+    return _accepted_checkpoint_decision(
         action,
         now,
         decision_models.CheckpointAcceptanceChange(
@@ -822,7 +822,7 @@ def _accept_review_and_continue(
         authority,
         replace(authority, lease_id=None, generation=authority.generation + 1),
     )
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         decision_models.ReviewAcceptanceChange(item.item, attempt_id, value.candidate, authority_change),
@@ -847,7 +847,7 @@ def _block_item(
     dependencies = _block_dependencies(snapshot, item, command.value)
     if isinstance(dependencies, DecisionFailure):
         return dependencies
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         decision_models.BlockItemChange(item.item, item.state, dependencies),
@@ -879,7 +879,9 @@ def _simple_item_transition(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             f"Item '{item.item}' cannot perform '{action.kind.value}' now.",
         )
-    return _result(action, now, decision_models.ItemStateChange(item.item, item.state, target), item=item.item)
+    return _accepted_transition_decision(
+        action, now, decision_models.ItemStateChange(item.item, item.state, target), item=item.item
+    )
 
 
 def _defer(
@@ -895,7 +897,7 @@ def _defer(
         or item.attempt is not None
     ):
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, f"Item '{item.item}' cannot be deferred now.")
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         decision_models.ItemStateChange(item.item, item.state, work_models.WorkState.DEFERRED),
@@ -903,7 +905,7 @@ def _defer(
     )
 
 
-def _current_intake_proposal(
+def _require_current_intake_proposal(
     snapshot: LedgerSnapshot,
     proposal_id: ProposalId,
     unavailable_message: str,
@@ -925,10 +927,12 @@ def _accept_proposal(
     action = command.action
     value = command.value
     proposal_id = action.capability.subject
-    current = _current_intake_proposal(snapshot, proposal_id, "Only a current intake proposal can be accepted.")
-    if isinstance(current, DecisionFailure):
-        return current
-    proposal, current_item = current
+    current_proposal = _require_current_intake_proposal(
+        snapshot, proposal_id, "Only a current intake proposal can be accepted."
+    )
+    if isinstance(current_proposal, DecisionFailure):
+        return current_proposal
+    proposal, current_item = current_proposal
     if value.item != ItemId(proposal_id):
         return DecisionFailure(
             DecisionFailureCode.TRANSITION_INPUT_INVALID,
@@ -971,7 +975,7 @@ def _accept_proposal(
         accepted_definition,
         proposal.source_task_id,
     )
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         decision_models.AcceptedProposalChange(proposal.proposal, now, accepted_item),
@@ -987,13 +991,15 @@ def _merge_proposal(
     action = command.action
     value = command.value
     proposal_id = action.capability.subject
-    current = _current_intake_proposal(snapshot, proposal_id, "Only a current intake proposal can be merged.")
-    if isinstance(current, DecisionFailure):
-        return current
-    proposal, _item = current
+    current_proposal = _require_current_intake_proposal(
+        snapshot, proposal_id, "Only a current intake proposal can be merged."
+    )
+    if isinstance(current_proposal, DecisionFailure):
+        return current_proposal
+    proposal, _item = current_proposal
     if snapshot.item(value.target) is None and value.target not in snapshot.history_items:
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{value.target}' does not exist.")
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         decision_models.MergedProposalChange(proposal.proposal, value.target, now),
@@ -1007,14 +1013,14 @@ def _dispose_proposal(
 ) -> DecisionResult[decision_models.TransitionDecision]:
     action = command.action
     proposal_id = action.capability.subject
-    current = _current_intake_proposal(
+    current_proposal = _require_current_intake_proposal(
         snapshot,
         proposal_id,
         "Only a current intake proposal can be returned or rejected.",
     )
-    if isinstance(current, DecisionFailure):
-        return current
-    proposal, _item = current
+    if isinstance(current_proposal, DecisionFailure):
+        return current_proposal
+    proposal, _item = current_proposal
     match command:
         case decision_models.ReturnProposalCommand(value=value):
             change: decision_models.ReturnedProposalChange | decision_models.RejectedProposalChange = (
@@ -1024,7 +1030,7 @@ def _dispose_proposal(
             change = decision_models.RejectedProposalChange(proposal.proposal, value.reason, now)
         case _ as unreachable:
             assert_never(unreachable)
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         change,
@@ -1049,7 +1055,7 @@ def _transfer(
     if before.state != work_models.CoordinationLeaseStatus.ACTIVE or before.expires_at <= now:
         return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "The coordination lease is not active.")
     value = command.value
-    return _result(
+    return _accepted_transition_decision(
         action,
         now,
         decision_models.CoordinatorTransferChange(
@@ -1069,7 +1075,7 @@ def _revise_item(
     revision = decide_definition_revision(snapshot, command.action.capability.subject, command.value, now)
     if isinstance(revision, DecisionFailure):
         return revision
-    return _result(
+    return _accepted_transition_decision(
         command.action,
         now,
         revision,

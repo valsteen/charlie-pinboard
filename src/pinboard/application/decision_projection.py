@@ -57,7 +57,7 @@ def _proposal_freshness_order(value: stored_state.ProposalFreshness) -> tuple[st
     return str(value.proposal_id), value.position
 
 
-def _work_item(
+def _project_work_item(
     value: stored_state.StoredWorkItem, state: work_models.WorkState, attempt_by_item: dict[ItemId, AttemptId]
 ) -> work_models.WorkItem:
     return work_models.WorkItem(
@@ -83,7 +83,7 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
         if attempt.state != work_models.AttemptState.DONE
     }
     live_items = tuple(
-        _work_item(item, live_state, attempts_by_item)
+        _project_work_item(item, live_state, attempts_by_item)
         for item in state.lifecycle.work_items
         if (live_state := stored_state.live_work_state(item.state)) is not None
     )
@@ -232,8 +232,8 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
                 proposal.effect,
                 proposal.unlock,
                 proposal.urgency_evidence,
-                evidence_by_proposal.get(proposal.proposal_id, ()),
-                freshness_by_proposal.get(proposal.proposal_id, ()),
+                evidence_by_proposal[proposal.proposal_id],
+                freshness_by_proposal[proposal.proposal_id],
             )
             for proposal in state.proposals.proposals
             if proposal.disposition is None

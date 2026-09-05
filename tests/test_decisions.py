@@ -29,9 +29,6 @@ from tests.domain_support import (
     attempt_record as AttemptRecord,
 )
 from tests.domain_support import (
-    command as make_command,
-)
-from tests.domain_support import (
     defer_input as DeferInput,
 )
 from tests.domain_support import (
@@ -151,7 +148,9 @@ class LifecycleDecisionTest(unittest.TestCase):
 
         mismatch = decision_outcome(
             snapshot,
-            make_command(selected, work_models.AcceptReviewAndContinueInput(CandidateId("candidate-b"), "accepted")),
+            decision_models.AcceptReviewAndContinueCommand(
+                selected, work_models.AcceptReviewAndContinueInput(CandidateId("candidate-b"), "accepted")
+            ),
             NOW,
         )
         self.assertIsInstance(mismatch, DecisionFailure)
@@ -159,7 +158,9 @@ class LifecycleDecisionTest(unittest.TestCase):
 
         accepted = decide(
             snapshot,
-            make_command(selected, work_models.AcceptReviewAndContinueInput(CandidateId("candidate-a"), "accepted")),
+            decision_models.AcceptReviewAndContinueCommand(
+                selected, work_models.AcceptReviewAndContinueInput(CandidateId("candidate-a"), "accepted")
+            ),
             NOW,
         )
         self.assertIsInstance(accepted.change, decision_models.ReviewAcceptanceChange)
@@ -173,7 +174,7 @@ class LifecycleDecisionTest(unittest.TestCase):
             with self.subTest(retained_authorities=len(retained_authorities)):
                 rejected = decision_outcome(
                     replace_dataclass(snapshot, attempt_authorities=retained_authorities),
-                    make_command(
+                    decision_models.AcceptReviewAndContinueCommand(
                         selected,
                         work_models.AcceptReviewAndContinueInput(CandidateId("candidate-a"), "accepted"),
                     ),
@@ -291,7 +292,7 @@ class LifecycleDecisionTest(unittest.TestCase):
                     semantics,
                     (
                         descriptor.use_case,
-                        descriptor.effect.value,
+                        descriptor.lifecycle_effect.value,
                         tuple(role.value for role in descriptor.permitted_roles),
                         descriptor.subject_kind.value,
                         descriptor.lifecycle_precondition.value,
@@ -310,7 +311,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         assert isinstance(block_action, decision_models.BlockAttemptAction)
         blocked = decide(
             snapshot,
-            make_command(
+            decision_models.BlockCommand(
                 block_action,
                 work_models.BlockInput("Waiting for prerequisite.", (ItemId("prerequisite"),)),
             ),
@@ -321,7 +322,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         self.assertEqual((ItemId("prerequisite"),), blocked.change.dependencies_after)
         rejected_dependency = decision_outcome(
             snapshot,
-            make_command(
+            decision_models.BlockCommand(
                 block_action,
                 work_models.BlockInput("Waiting for an unaccepted prerequisite.", (ItemId("unstarted"),)),
             ),
@@ -371,7 +372,7 @@ class LifecycleDecisionTest(unittest.TestCase):
 
     def test_missing_attempt_is_a_returned_failure(self) -> None:
         snapshot = LedgerSnapshot("revision", 1, ())
-        command = make_command(
+        command = decision_models.PauseCommand(
             action(decision_models.PauseAction, AttemptId("missing-attempt")), work_models.ReasonInput("pause")
         )
 
@@ -392,7 +393,11 @@ class LifecycleDecisionTest(unittest.TestCase):
         )
 
         completed_action = action(decision_models.CompleteAction, AttemptId("target-1"))
-        completed = decide(snapshot, make_command(completed_action, work_models.EvidenceInput("review accepted")), NOW)
+        completed = decide(
+            snapshot,
+            decision_models.CompleteCommand(completed_action, work_models.EvidenceInput("review accepted")),
+            NOW,
+        )
         self.assertEqual("review accepted", completed.receipt.evidence)
         self.assertIsInstance(completed.change, decision_models.CompletionChange)
         assert isinstance(completed.change, decision_models.CompletionChange)
@@ -401,7 +406,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         intake = LedgerSnapshot("revision", 1, (item("obsolete", work_models.WorkState.INTAKE),))
         closed = decide(
             intake,
-            make_command(
+            decision_models.CloseCommand(
                 action(decision_models.CloseAction, ItemId("obsolete")),
                 work_models.CloseInput(work_models.CloseOutcome.DROPPED, "no longer needed"),
             ),
@@ -433,7 +438,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         self.assertNotIn("dispatch:build-map-1", action_ids)
         self.assertNotIn("complete:build-map-1", action_ids)
         submit = action(decision_models.SubmitReviewAction, AttemptId("build-map-1"))
-        command = make_command(submit, work_models.SubmitReviewInput(CandidateId("candidate")))
+        command = decision_models.SubmitReviewCommand(submit, work_models.SubmitReviewInput(CandidateId("candidate")))
         rejected = decision_outcome(snapshot, command, NOW)
         self.assertIsInstance(rejected, DecisionFailure)
         self.assertEqual(DecisionFailureCode.ITEM_DEFINITION_STALE, rejected.code)
@@ -449,7 +454,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         cases: tuple[tuple[LedgerSnapshot, decision_models.TransitionCommand, str], ...] = (
             (
                 LedgerSnapshot("r", 1, ()),
-                make_command(
+                decision_models.ActivateCommand(
                     action(decision_models.ActivateAction, ItemId("missing")),
                     work_models.ActivateInput(AttemptId("missing-1"), "branch", "base", "owner", ArtifactRefId(1)),
                 ),
@@ -457,7 +462,7 @@ class LifecycleDecisionTest(unittest.TestCase):
             ),
             (
                 LedgerSnapshot("r", 1, (item("target", work_models.WorkState.INTAKE),)),
-                make_command(
+                decision_models.ActivateCommand(
                     action(decision_models.ActivateAction, ItemId("target")),
                     work_models.ActivateInput(AttemptId("target-1"), "branch", "base", "owner", ArtifactRefId(1)),
                 ),
@@ -465,21 +470,21 @@ class LifecycleDecisionTest(unittest.TestCase):
             ),
             (
                 LedgerSnapshot("r", 1, (ready,)),
-                make_command(
+                decision_models.PauseCommand(
                     action(decision_models.PauseAction, AttemptId("missing-1")), work_models.ReasonInput("pause")
                 ),
                 "ATTEMPT_NOT_FOUND",
             ),
             (
                 LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,)),
-                make_command(
+                decision_models.PauseCommand(
                     action(decision_models.PauseAction, AttemptId("target-1")), work_models.ReasonInput("pause")
                 ),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
                 LedgerSnapshot("r", 1, (paused,)),
-                make_command(
+                decision_models.CompleteCommand(
                     action(decision_models.CompleteAction, AttemptId("target-1")), work_models.EvidenceInput("done")
                 ),
                 "ACTION_NOT_AVAILABLE",
@@ -492,21 +497,21 @@ class LifecycleDecisionTest(unittest.TestCase):
                     attempts=(replace(attempt_active, accepted_scope_revision=1, accepted_scope_digest=DIGEST_A),),
                     definitions=(stale_definition,),
                 ),
-                make_command(
+                decision_models.CompleteCommand(
                     action(decision_models.CompleteAction, AttemptId("target-1")), work_models.EvidenceInput("done")
                 ),
                 "ITEM_DEFINITION_STALE",
             ),
             (
                 LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,), history_items=(ItemId("target"),)),
-                make_command(
+                decision_models.CompleteCommand(
                     action(decision_models.CompleteAction, AttemptId("target-1")), work_models.EvidenceInput("done")
                 ),
                 "HISTORY_RECORD_EXISTS",
             ),
             (
                 LedgerSnapshot("r", 1, (active,), attempts=(attempt_active,)),
-                make_command(
+                decision_models.CloseCommand(
                     action(decision_models.CloseAction, ItemId("target")),
                     work_models.CloseInput(work_models.CloseOutcome.DONE, "done"),
                 ),
@@ -516,7 +521,7 @@ class LifecycleDecisionTest(unittest.TestCase):
                 LedgerSnapshot(
                     "r", 1, (ready, replace(item("dependent", work_models.WorkState.READY), depends_on=("target",)))
                 ),
-                make_command(
+                decision_models.CloseCommand(
                     action(decision_models.CloseAction, ItemId("target")),
                     work_models.CloseInput(work_models.CloseOutcome.DROPPED, "obsolete"),
                 ),
@@ -524,7 +529,7 @@ class LifecycleDecisionTest(unittest.TestCase):
             ),
             (
                 LedgerSnapshot("r", 1, (ready,), history_items=(ItemId("target"),)),
-                make_command(
+                decision_models.CloseCommand(
                     action(decision_models.CloseAction, ItemId("target")),
                     work_models.CloseInput(work_models.CloseOutcome.DONE, "done"),
                 ),
@@ -532,19 +537,23 @@ class LifecycleDecisionTest(unittest.TestCase):
             ),
             (
                 LedgerSnapshot("r", 1, (ready,)),
-                make_command(action(decision_models.ResumeAction, ItemId("target")), work_models.ResumeInput()),
+                decision_models.ResumeCommand(
+                    action(decision_models.ResumeAction, ItemId("target")), work_models.ResumeInput()
+                ),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
                 LedgerSnapshot(
                     "r", 1, (replace(paused, depends_on=("source",)), item("source", work_models.WorkState.READY))
                 ),
-                make_command(action(decision_models.ResumeAction, ItemId("target")), work_models.ResumeInput()),
+                decision_models.ResumeCommand(
+                    action(decision_models.ResumeAction, ItemId("target")), work_models.ResumeInput()
+                ),
                 "DEPENDENCY_NOT_SATISFIED",
             ),
             (
                 LedgerSnapshot("r", 1, (review,), attempts=(attempt_review,)),
-                make_command(
+                decision_models.SubmitReviewCommand(
                     action(decision_models.SubmitReviewAction, AttemptId("target-1")),
                     work_models.SubmitReviewInput(CandidateId("candidate")),
                 ),
@@ -558,7 +567,7 @@ class LifecycleDecisionTest(unittest.TestCase):
                     attempts=(replace(attempt_active, accepted_scope_revision=1, accepted_scope_digest=DIGEST_A),),
                     definitions=(stale_definition,),
                 ),
-                make_command(
+                decision_models.SubmitReviewCommand(
                     action(decision_models.SubmitReviewAction, AttemptId("target-1")),
                     work_models.SubmitReviewInput(CandidateId("candidate")),
                 ),
@@ -566,28 +575,28 @@ class LifecycleDecisionTest(unittest.TestCase):
             ),
             (
                 LedgerSnapshot("r", 1, (active,)),
-                make_command(
+                decision_models.BlockItemCommand(
                     action(decision_models.BlockItemAction, ItemId("target")), work_models.BlockInput("blocked")
                 ),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
                 LedgerSnapshot("r", 1, (item("target", work_models.WorkState.INTAKE),)),
-                make_command(
+                decision_models.ReopenCommand(
                     action(decision_models.ReopenAction, ItemId("target")), work_models.EvidenceInput("reopen")
                 ),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
                 LedgerSnapshot("r", 1, (active,)),
-                make_command(
+                decision_models.DeferCommand(
                     action(decision_models.DeferAction, ItemId("target")), DeferInput("safe-to-defer", "later")
                 ),
                 "ACTION_NOT_AVAILABLE",
             ),
             (
                 LedgerSnapshot("r", 1, ()),
-                make_command(
+                decision_models.AcceptProposalCommand(
                     action(decision_models.AcceptProposalAction, ProposalId("proposal")),
                     AcceptProposalInput(
                         item="new-item", state=work_models.AcceptedProposalState.READY, next_action="start"
@@ -602,7 +611,7 @@ class LifecycleDecisionTest(unittest.TestCase):
                     (ready, item("proposal", work_models.WorkState.INTAKE)),
                     proposals=(ProposalRecord("proposal", "p1"),),
                 ),
-                make_command(
+                decision_models.AcceptProposalCommand(
                     action(decision_models.AcceptProposalAction, ProposalId("proposal")),
                     AcceptProposalInput(
                         item="target", state=work_models.AcceptedProposalState.READY, next_action="start"
@@ -612,7 +621,7 @@ class LifecycleDecisionTest(unittest.TestCase):
             ),
             (
                 LedgerSnapshot("r", 1, ()),
-                make_command(
+                decision_models.TransferCoordinatorCommand(
                     action(decision_models.TransferCoordinatorAction, LedgerId("ledger")),
                     TransferCoordinatorInput("task", "host"),
                 ),
@@ -620,7 +629,7 @@ class LifecycleDecisionTest(unittest.TestCase):
             ),
             (
                 LedgerSnapshot("r", 1, (), can_transfer_coordinator=True),
-                make_command(
+                decision_models.TransferCoordinatorCommand(
                     action(decision_models.TransferCoordinatorAction, LedgerId("ledger")),
                     TransferCoordinatorInput("task", "host"),
                 ),
@@ -638,7 +647,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         missing_item = LedgerSnapshot("r", 1, (), proposals=(proposal,))
         cases: tuple[tuple[decision_models.TransitionCommand, str], ...] = (
             (
-                make_command(
+                decision_models.AcceptProposalCommand(
                     action(decision_models.AcceptProposalAction, ProposalId("proposal")),
                     AcceptProposalInput(
                         item="proposal",
@@ -649,14 +658,14 @@ class LifecycleDecisionTest(unittest.TestCase):
                 "Only a current intake proposal can be accepted.",
             ),
             (
-                make_command(
+                decision_models.MergeProposalCommand(
                     action(decision_models.MergeProposalAction, ProposalId("proposal")),
                     work_models.MergeProposalInput(ItemId("target")),
                 ),
                 "Only a current intake proposal can be merged.",
             ),
             (
-                make_command(
+                decision_models.RejectProposalCommand(
                     action(decision_models.RejectProposalAction, ProposalId("proposal")),
                     work_models.ReasonInput("obsolete"),
                 ),
@@ -678,7 +687,7 @@ class LifecycleDecisionTest(unittest.TestCase):
         )
         rejected = decision_outcome(
             mismatched_identity,
-            make_command(
+            decision_models.AcceptProposalCommand(
                 action(decision_models.AcceptProposalAction, ProposalId("proposal")),
                 AcceptProposalInput(
                     item="other-item",

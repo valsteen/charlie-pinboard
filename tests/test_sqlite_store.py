@@ -17,7 +17,7 @@ from pinboard.adapters.sqlite.database import (
     initialize_database,
     open_database,
     read_operation,
-    schema_bytes,
+    read_schema_bytes,
     write_transaction,
 )
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
@@ -41,7 +41,7 @@ from pinboard.domain.identifiers import (
     TaskId,
 )
 from pinboard.domain.ledger import LedgerSnapshot
-from tests.domain_support import command, expect_success
+from tests.domain_support import expect_success
 from tests.domain_support import replace as replace_dataclass
 from tests.support import SQLITE_DIGEST, SQLITE_NOW, complete_sqlite_state, initialize_store
 
@@ -350,13 +350,13 @@ class SQLiteStoreTest(unittest.TestCase):
             patch("pathlib.Path.read_bytes", side_effect=OSError("injected schema read failure")),
             self.assertRaises(StorageError) as schema_error,
         ):
-            schema_bytes()
+            read_schema_bytes()
         self.assertEqual(StorageErrorCode.IO_ERROR, schema_error.exception.code)
 
         interrupted_project = Path(tempfile.mkdtemp()).resolve()
         interrupted_roots = resolve_durable_roots(interrupted_project)
         with (
-            patch("pinboard.adapters.sqlite.database.schema_bytes", return_value=b"\xff"),
+            patch("pinboard.adapters.sqlite.database.read_schema_bytes", return_value=b"\xff"),
             self.assertRaises(StorageError) as initialize_error,
         ):
             initialize_database(interrupted_roots, SQLITE_NOW)
@@ -381,7 +381,7 @@ class SQLiteStoreTest(unittest.TestCase):
         prepublication_project = Path(tempfile.mkdtemp()).resolve()
         prepublication_roots = resolve_durable_roots(prepublication_project)
         with (
-            patch("pinboard.adapters.sqlite.database.schema_bytes", return_value=b"\xff"),
+            patch("pinboard.adapters.sqlite.database.read_schema_bytes", return_value=b"\xff"),
             patch(
                 "pinboard.adapters.sqlite.database.Path.unlink",
                 side_effect=OSError("injected pre-publication cleanup failure"),
@@ -700,7 +700,7 @@ class SQLiteStoreTest(unittest.TestCase):
         assert isinstance(action, decision_models.PauseAction)
         decision = decide(
             snapshot,
-            command(action, work_models.ReasonInput("Pause at the checkpoint boundary.")),
+            decision_models.PauseCommand(action, work_models.ReasonInput("Pause at the checkpoint boundary.")),
             SQLITE_NOW,
         )
         mutation = project_transition_mutation(initial, decision)
@@ -709,7 +709,7 @@ class SQLiteStoreTest(unittest.TestCase):
             self.assertEqual(initial, transaction.snapshot())
             receipt = expect_success(transaction.commit(mutation))
         committed = store.snapshot()
-        self.assertEqual(decision_models.ActionKind.PAUSE.value, receipt.outcome)
+        self.assertEqual(decision_models.ActionKind.PAUSE.value, receipt.transition.outcome)
         self.assertEqual(13, committed.lifecycle.project.revision)
         self.assertEqual(stored_state.StoredWorkItemState.PAUSED, committed.lifecycle.work_items[1].state)
         self.assertEqual(work_models.AttemptState.PAUSED, committed.lifecycle.attempts[0].state)
@@ -754,7 +754,7 @@ class SQLiteStoreTest(unittest.TestCase):
         assert isinstance(failed_action, decision_models.PauseAction)
         failed_decision = decide(
             failed_snapshot,
-            command(failed_action, work_models.ReasonInput("This write is interrupted.")),
+            decision_models.PauseCommand(failed_action, work_models.ReasonInput("This write is interrupted.")),
             SQLITE_NOW,
         )
         failed_mutation = project_transition_mutation(failed_initial, failed_decision)
@@ -794,7 +794,7 @@ class SQLiteStoreTest(unittest.TestCase):
         assert isinstance(action, decision_models.PauseAction)
         decision = decide(
             snapshot,
-            command(action, work_models.ReasonInput("This write raises a programming failure.")),
+            decision_models.PauseCommand(action, work_models.ReasonInput("This write raises a programming failure.")),
             SQLITE_NOW,
         )
         mutation = project_transition_mutation(before, decision)
@@ -827,7 +827,9 @@ class SQLiteStoreTest(unittest.TestCase):
         assert isinstance(action, decision_models.PauseAction)
         decision = decide(
             snapshot,
-            command(action, work_models.ReasonInput("Pause without rewriting unrelated relations.")),
+            decision_models.PauseCommand(
+                action, work_models.ReasonInput("Pause without rewriting unrelated relations.")
+            ),
             SQLITE_NOW,
         )
 
@@ -863,7 +865,7 @@ class SQLiteStoreTest(unittest.TestCase):
         assert isinstance(action, decision_models.CompleteAction)
         decision = decide(
             snapshot,
-            command(action, work_models.EvidenceInput("accepted direct completion")),
+            decision_models.CompleteCommand(action, work_models.EvidenceInput("accepted direct completion")),
             SQLITE_NOW + timedelta(seconds=1),
         )
 
@@ -873,7 +875,10 @@ class SQLiteStoreTest(unittest.TestCase):
         completed = store.snapshot()
         item = next(value for value in completed.lifecycle.work_items if value.item_id == ItemId("work-a"))
         attempt = completed.lifecycle.attempts[0]
-        self.assertEqual(("complete", "accepted direct completion"), (receipt.outcome, receipt.evidence))
+        self.assertEqual(
+            ("complete", "accepted direct completion"),
+            (receipt.transition.outcome, receipt.transition.evidence),
+        )
         self.assertEqual(
             (stored_state.StoredWorkItemState.DONE, "accepted direct completion"), (item.state, item.outcome_evidence)
         )
@@ -907,7 +912,7 @@ class SQLiteStoreTest(unittest.TestCase):
         candidate = CandidateId("candidate-from-caller")
         decision = decide(
             snapshot,
-            command(action, work_models.SubmitReviewInput(candidate)),
+            decision_models.SubmitReviewCommand(action, work_models.SubmitReviewInput(candidate)),
             SQLITE_NOW + timedelta(seconds=1),
         )
 
@@ -953,7 +958,7 @@ class SQLiteStoreTest(unittest.TestCase):
         assert isinstance(action, decision_models.ReturnForCorrectionAction)
         decision = decide(
             snapshot,
-            command(action, work_models.ReasonInput("Address the review feedback.")),
+            decision_models.ReturnForCorrectionCommand(action, work_models.ReasonInput("Address the review feedback.")),
             SQLITE_NOW + timedelta(seconds=1),
         )
 

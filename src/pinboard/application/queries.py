@@ -44,9 +44,9 @@ def _parallel_item_key(value: query_models.ParallelItem) -> str:
 
 
 def _project_preparation_status(
-    state: stored_state.StoredWorkState, item_id: ItemId, now: datetime
+    retained: tuple[stored_state.StoredPreparationLease, stored_state.PreparationLeaseGeneration | None] | None,
+    now: datetime,
 ) -> query_models.PreparationStatusView | None:
-    retained = stored_state.retained_preparation(state, item_id)
     if retained is None:
         return None
     lease, anchor = retained
@@ -82,17 +82,25 @@ def project_overview(state: stored_state.StoredWorkState, now: datetime) -> quer
         for attempt in state.lifecycle.attempts
         if attempt.state != work_models.AttemptState.DONE
     }
-    dependency_links = {
-        item.item_id: tuple(
-            link
-            for link in sorted(
-                (candidate for candidate in state.lifecycle.dependencies if candidate.item_id == item.item_id),
-                key=_dependency_key,
-            )
-        )
-        for item in state.lifecycle.work_items
+    dependency_groups: dict[ItemId, list[stored_state.ItemDependency]] = {
+        item.item_id: [] for item in state.lifecycle.work_items
     }
+    for link in sorted(state.lifecycle.dependencies, key=_dependency_key):
+        dependency_groups[link.item_id].append(link)
+    dependency_links = {item_id: tuple(links) for item_id, links in dependency_groups.items()}
     proposals = {ItemId(proposal.proposal_id): proposal for proposal in state.proposals.proposals}
+    prerequisite_proposals = {
+        (proposal.relation.item, ItemId(proposal.proposal_id)): proposal
+        for proposal in state.proposals.proposals
+        if isinstance(proposal.relation, work_models.PrerequisiteProposalRelation)
+    }
+    preparation_anchors = {
+        (anchor.item_id, anchor.generation): anchor for anchor in state.authority.preparation_generations
+    }
+    preparations = {
+        lease.item_id: (lease, preparation_anchors.get((lease.item_id, lease.generation)))
+        for lease in state.authority.preparation_leases
+    }
     live_items = _select_live_items(state)
     live_ids = frozenset(item.item_id for item, _live_state in live_items)
 
@@ -105,16 +113,7 @@ def project_overview(state: stored_state.StoredWorkState, now: datetime) -> quer
         ):
             reason = f"Follow-up to {link.dependency_id}: {proposal.why_it_matters}"
         else:
-            prerequisite = next(
-                (
-                    value
-                    for value in proposals.values()
-                    if isinstance(value.relation, work_models.PrerequisiteProposalRelation)
-                    and value.relation.item == item_id
-                    and ItemId(value.proposal_id) == link.dependency_id
-                ),
-                None,
-            )
+            prerequisite = prerequisite_proposals.get((item_id, link.dependency_id))
             reason = (
                 f"Inferred prerequisite {link.dependency_id}: {prerequisite.why_it_matters}"
                 if prerequisite is not None
@@ -164,7 +163,7 @@ def project_overview(state: stored_state.StoredWorkState, now: datetime) -> quer
             str(attempts[item.item_id]) if item.item_id in attempts else None,
             item.next_action,
             item.notes or "",
-            _project_preparation_status(state, item.item_id, now),
+            _project_preparation_status(preparations.get(item.item_id), now),
         )
         for item, live_state in live_items
     )
@@ -227,7 +226,7 @@ def project_item_status(
         item.next_action,
         item.notes or "",
         attempts,
-        _project_preparation_status(state, item_id, now),
+        _project_preparation_status(stored_state.retained_preparation(state, item_id), now),
     )
 
 
@@ -313,12 +312,14 @@ def project_item_definition_history(
 
 
 def _classify_parallel_exclusion_reasons(
-    state: stored_state.StoredWorkState,
-    item_id: ItemId,
-    live_items: frozenset[str],
+    item: stored_state.StoredWorkItem,
+    preparation: stored_state.StoredPreparationLease | None,
+    live_dependencies: tuple[str, ...],
+    active_attempt: stored_state.StoredAttempt | None,
+    attempt_lease: stored_state.StoredAttemptLease | None,
     operation_time: datetime,
 ) -> tuple[query_models.ParallelReason, ...]:
-    item = next(value for value in state.lifecycle.work_items if value.item_id == item_id)
+    item_id = item.item_id
     if item.state not in {stored_state.StoredWorkItemState.READY, stored_state.StoredWorkItemState.ACTIVE}:
         return (
             query_models.ParallelReason(
@@ -326,10 +327,6 @@ def _classify_parallel_exclusion_reasons(
                 f"Item '{item_id}' is {item.state.value}; only ready items and unowned active attempts can launch.",
             ),
         )
-    preparation = next(
-        (candidate for candidate in state.authority.preparation_leases if candidate.item_id == item_id),
-        None,
-    )
     if (
         preparation is not None
         and preparation.state == authority_models.PreparationLeaseStatus.ACTIVE
@@ -341,11 +338,6 @@ def _classify_parallel_exclusion_reasons(
                 f"Item '{item_id}' is being prepared until {preparation.expires_at.isoformat()}.",
             ),
         )
-    live_dependencies = tuple(
-        str(link.dependency_id)
-        for link in sorted(state.lifecycle.dependencies, key=_dependency_position)
-        if link.item_id == item_id and str(link.dependency_id) in live_items
-    )
     if live_dependencies:
         return (
             query_models.ParallelReason(
@@ -353,30 +345,18 @@ def _classify_parallel_exclusion_reasons(
                 f"Item '{item_id}' still depends on live work: {', '.join(live_dependencies)}.",
             ),
         )
-    attempt = next(
-        (
-            candidate
-            for candidate in state.lifecycle.attempts
-            if candidate.item_id == item_id and candidate.state == work_models.AttemptState.ACTIVE
-        ),
-        None,
-    )
-    if attempt is not None:
-        lease = next(
-            (candidate for candidate in state.authority.attempt_leases if candidate.attempt_id == attempt.attempt_id),
-            None,
+    if (
+        active_attempt is not None
+        and attempt_lease is not None
+        and attempt_lease.state == authority_models.AttemptLeaseStatus.ACTIVE
+        and operation_time < attempt_lease.expires_at
+    ):
+        return (
+            query_models.ParallelReason(
+                query_models.ParallelReasonCode.ATTEMPT_OWNED,
+                f"Active attempt '{active_attempt.attempt_id}' is owned until {attempt_lease.expires_at.isoformat()}.",
+            ),
         )
-        if (
-            lease is not None
-            and lease.state == authority_models.AttemptLeaseStatus.ACTIVE
-            and operation_time < lease.expires_at
-        ):
-            return (
-                query_models.ParallelReason(
-                    query_models.ParallelReasonCode.ATTEMPT_OWNED,
-                    f"Active attempt '{attempt.attempt_id}' is owned until {lease.expires_at.isoformat()}.",
-                ),
-            )
     return ()
 
 
@@ -393,24 +373,39 @@ def project_parallel_preview(
     candidates = tuple(by_id[item_id] for item_id in selected) if selected else live
     definitions = {value.item_id: value.definition for value in state.lifecycle.definition_revisions}
     live_ids = frozenset(by_id)
+    preparations_by_item = {lease.item_id: lease for lease in state.authority.preparation_leases}
+    open_attempts_by_item = {
+        attempt.item_id: attempt
+        for attempt in state.lifecycle.attempts
+        if attempt.state != work_models.AttemptState.DONE
+    }
+    active_attempts_by_item = {
+        item_id: attempt
+        for item_id, attempt in open_attempts_by_item.items()
+        if attempt.state == work_models.AttemptState.ACTIVE
+    }
+    attempt_leases_by_attempt = {lease.attempt_id: lease for lease in state.authority.attempt_leases}
+    live_dependency_groups: dict[ItemId, list[str]] = {item.item_id: [] for item, _live_state in live}
+    for link in sorted(state.lifecycle.dependencies, key=_dependency_position):
+        if str(link.dependency_id) in live_ids:
+            live_dependency_groups[link.item_id].append(str(link.dependency_id))
     items: list[query_models.ParallelItem] = []
     for item, live_state in candidates:
-        reasons = _classify_parallel_exclusion_reasons(state, item.item_id, live_ids, now)
+        active_attempt = active_attempts_by_item.get(item.item_id)
+        reasons = _classify_parallel_exclusion_reasons(
+            item,
+            preparations_by_item.get(item.item_id),
+            tuple(live_dependency_groups[item.item_id]),
+            active_attempt,
+            None if active_attempt is None else attempt_leases_by_attempt.get(active_attempt.attempt_id),
+            now,
+        )
+        open_attempt = open_attempts_by_item.get(item.item_id)
         common = (
             str(item.item_id),
             definitions[item.item_id].title,
             live_state,
-            str(
-                next(
-                    (
-                        attempt.attempt_id
-                        for attempt in state.lifecycle.attempts
-                        if attempt.item_id == item.item_id and attempt.state != work_models.AttemptState.DONE
-                    ),
-                    "",
-                )
-            )
-            or None,
+            None if open_attempt is None else str(open_attempt.attempt_id),
         )
         items.append(
             query_models.ExcludedParallelItem(*common, reasons)

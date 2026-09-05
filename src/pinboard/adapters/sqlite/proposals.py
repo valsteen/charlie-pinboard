@@ -13,7 +13,12 @@ import msgspec
 
 from pinboard.adapters.sqlite.database import decode_row, require_one_changed_row
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
-from pinboard.adapters.sqlite.lifecycle import append_definition_revision, item, make_queue_space, replace_dependencies
+from pinboard.adapters.sqlite.lifecycle import (
+    append_definition_revision,
+    make_queue_space,
+    replace_dependencies,
+    require_stored_item,
+)
 from pinboard.application import stored_state
 from pinboard.application.mutation_models import ProposalCreationMutation
 from pinboard.domain import decision_models, work_models
@@ -49,11 +54,11 @@ class _StoredProposalRow(msgspec.Struct, frozen=True, forbid_unknown_fields=True
             self.user_label,
             self.trigger,
             self.why_it_matters,
-            _stored_proposal_relation(self.relation_kind, self.relation_item_id),
+            _decode_stored_proposal_relation(self.relation_kind, self.relation_item_id),
             self.effect,
             self.unlock,
             self.urgency_evidence,
-            _stored_proposal_disposition(
+            _decode_stored_proposal_disposition(
                 self.disposition,
                 self.disposition_target_item_id,
                 self.disposition_reason,
@@ -63,41 +68,41 @@ class _StoredProposalRow(msgspec.Struct, frozen=True, forbid_unknown_fields=True
         )
 
 
-def _required_relation_item(kind: work_models.ProposalRelationKind, value: ItemId | None) -> ItemId:
+def _require_relation_item(kind: work_models.ProposalRelationKind, value: ItemId | None) -> ItemId:
     if value is None:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal has no related item.")
     return value
 
 
-def _forbidden_relation_item(kind: work_models.ProposalRelationKind, value: ItemId | None) -> None:
+def _reject_relation_item(kind: work_models.ProposalRelationKind, value: ItemId | None) -> None:
     if value is not None:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal has a related item.")
 
 
-def _stored_proposal_relation(
+def _decode_stored_proposal_relation(
     kind: work_models.ProposalRelationKind,
     value: ItemId | None,
 ) -> work_models.ProposalRelation:
     match kind:
         case work_models.ProposalRelationKind.INDEPENDENT:
-            _forbidden_relation_item(kind, value)
+            _reject_relation_item(kind, value)
             return work_models.IndependentProposalRelation()
         case work_models.ProposalRelationKind.PREREQUISITE:
-            return work_models.PrerequisiteProposalRelation(_required_relation_item(kind, value))
+            return work_models.PrerequisiteProposalRelation(_require_relation_item(kind, value))
         case work_models.ProposalRelationKind.FOLLOW_UP:
-            return work_models.FollowUpProposalRelation(_required_relation_item(kind, value))
+            return work_models.FollowUpProposalRelation(_require_relation_item(kind, value))
         case work_models.ProposalRelationKind.DUPLICATE:
-            return work_models.DuplicateProposalRelation(_required_relation_item(kind, value))
+            return work_models.DuplicateProposalRelation(_require_relation_item(kind, value))
         case work_models.ProposalRelationKind.CONTRADICTION:
-            return work_models.ContradictionProposalRelation(_required_relation_item(kind, value))
+            return work_models.ContradictionProposalRelation(_require_relation_item(kind, value))
         case work_models.ProposalRelationKind.CLARIFICATION:
-            _forbidden_relation_item(kind, value)
+            _reject_relation_item(kind, value)
             return work_models.ClarificationProposalRelation()
         case _ as unreachable:
             assert_never(unreachable)
 
 
-def _required_disposition_target(
+def _require_disposition_target(
     kind: work_models.ProposalDispositionKind,
     target: ItemId | None,
 ) -> ItemId:
@@ -106,13 +111,13 @@ def _required_disposition_target(
     return target
 
 
-def _required_disposition_reason(kind: work_models.ProposalDispositionKind, reason: str | None) -> str:
+def _require_disposition_reason(kind: work_models.ProposalDispositionKind, reason: str | None) -> str:
     if reason is None:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal disposition has no reason.")
     return reason
 
 
-def _required_disposition_time(kind: work_models.ProposalDispositionKind, value: datetime | None) -> datetime:
+def _require_disposition_time(kind: work_models.ProposalDispositionKind, value: datetime | None) -> datetime:
     if value is None:
         raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal disposition has no timestamp.")
     return value
@@ -127,7 +132,7 @@ def _forbid_disposition_value(
         raise StorageError(StorageErrorCode.INVALID_STATE, f"{kind.value} proposal disposition has a {name}.")
 
 
-def _stored_proposal_disposition(
+def _decode_stored_proposal_disposition(
     kind: work_models.ProposalDispositionKind | None,
     target: ItemId | None,
     reason: str | None,
@@ -141,32 +146,32 @@ def _stored_proposal_disposition(
         case work_models.ProposalDispositionKind.ACCEPTED:
             _forbid_disposition_value(kind, "reason", reason)
             return work_models.AcceptedProposalDisposition(
-                _required_disposition_target(kind, target),
-                _required_disposition_time(kind, disposed_at),
+                _require_disposition_target(kind, target),
+                _require_disposition_time(kind, disposed_at),
             )
         case work_models.ProposalDispositionKind.MERGED:
             _forbid_disposition_value(kind, "reason", reason)
             return work_models.MergedProposalDisposition(
-                _required_disposition_target(kind, target),
-                _required_disposition_time(kind, disposed_at),
+                _require_disposition_target(kind, target),
+                _require_disposition_time(kind, disposed_at),
             )
         case work_models.ProposalDispositionKind.RETURNED:
             _forbid_disposition_value(kind, "target item", target)
             return work_models.ReturnedProposalDisposition(
-                _required_disposition_reason(kind, reason),
-                _required_disposition_time(kind, disposed_at),
+                _require_disposition_reason(kind, reason),
+                _require_disposition_time(kind, disposed_at),
             )
         case work_models.ProposalDispositionKind.REJECTED:
             _forbid_disposition_value(kind, "target item", target)
             return work_models.RejectedProposalDisposition(
-                _required_disposition_reason(kind, reason),
-                _required_disposition_time(kind, disposed_at),
+                _require_disposition_reason(kind, reason),
+                _require_disposition_time(kind, disposed_at),
             )
         case _ as unreachable:
             assert_never(unreachable)
 
 
-def _proposal_disposition_columns(
+def _encode_proposal_disposition_columns(
     value: work_models.ProposalDisposition | None,
 ) -> tuple[str | None, ItemId | None, str | None, str | None]:
     match value:
@@ -220,7 +225,7 @@ def set_proposal_disposition(
     disposition: work_models.ProposalDisposition,
     revision: int,
 ) -> DecisionFailure | None:
-    kind, target, reason, disposed_at = _proposal_disposition_columns(disposition)
+    kind, target, reason, disposed_at = _encode_proposal_disposition_columns(disposition)
     return require_one_changed_row(
         connection.execute(
             """
@@ -243,7 +248,7 @@ def accept_proposal(
     now: datetime,
 ) -> DecisionFailure | None:
     accepted = change.accepted_item
-    current = item(state, accepted.item)
+    current = require_stored_item(state, accepted.item)
     if accepted.definition_digest_after != accepted.definition_digest_before:
         append_definition_revision(
             connection,
@@ -375,7 +380,7 @@ def create_proposal(
     prerequisite = decision.prerequisite_change
     if prerequisite is None:
         return None
-    target = item(state, prerequisite.item_id)
+    target = require_stored_item(state, prerequisite.item_id)
     if (
         failure := require_one_changed_row(
             connection.execute(

@@ -23,7 +23,7 @@ from pinboard.domain.errors import DecisionResult
 from pinboard.domain.identifiers import ArtifactRefId
 
 
-def _accepted_artifact(
+def _find_accepted_artifact(
     state: stored_state.StoredWorkState,
     published: ArtifactRef | ResultArtifactRef | EvidenceArtifactRef,
 ) -> stored_state.ArtifactReference | None:
@@ -81,7 +81,7 @@ def accept_checkpoint_artifact(
     revision: int,
     now: datetime,
 ) -> ArtifactRefId:
-    existing = _accepted_artifact(state, published)
+    existing = _find_accepted_artifact(state, published)
     if existing is not None:
         if existing.artifact_ref_id != expected_id or (
             existing.selector,
@@ -120,7 +120,7 @@ def accept_artifact_reference(
     """Accept one verified reference; the caller owns transaction and readback."""
 
     verify_reference(work_root, published)
-    existing = _accepted_artifact(before, published)
+    existing = _find_accepted_artifact(before, published)
     if existing is not None:
         if (
             existing.selector,

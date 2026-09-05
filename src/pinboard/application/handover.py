@@ -8,6 +8,7 @@ import msgspec
 
 from pinboard.application import query_models, stored_state
 from pinboard.domain import work_models
+from pinboard.domain.identifiers import ProposalId
 
 
 class ContentEncoding(Enum):
@@ -323,13 +324,17 @@ def project_handover_from_state(
 
     pending_proposals = tuple(value for value in state.proposals.proposals if value.disposition is None)
     proposal_ids = frozenset(value.proposal_id for value in pending_proposals)
-    proposal_evidence = {
-        proposal_id: tuple(value.selector for value in state.proposals.evidence if value.proposal_id == proposal_id)
-        for proposal_id in proposal_ids
-    }
+    proposal_evidence_groups: dict[ProposalId, list[str]] = {proposal_id: [] for proposal_id in proposal_ids}
+    for evidence in state.proposals.evidence:
+        if evidence.proposal_id in proposal_evidence_groups:
+            proposal_evidence_groups[evidence.proposal_id].append(evidence.selector)
+    proposal_evidence = {proposal_id: tuple(evidence) for proposal_id, evidence in proposal_evidence_groups.items()}
+    proposal_freshness_groups: dict[ProposalId, list[str]] = {proposal_id: [] for proposal_id in proposal_ids}
+    for freshness in state.proposals.freshness:
+        if freshness.proposal_id in proposal_freshness_groups:
+            proposal_freshness_groups[freshness.proposal_id].append(freshness.assumption)
     proposal_freshness = {
-        proposal_id: tuple(value.assumption for value in state.proposals.freshness if value.proposal_id == proposal_id)
-        for proposal_id in proposal_ids
+        proposal_id: tuple(assumptions) for proposal_id, assumptions in proposal_freshness_groups.items()
     }
     return ProjectHandover(
         "pinboard-project-handover/v1",
