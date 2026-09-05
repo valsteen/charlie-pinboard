@@ -108,7 +108,7 @@ DIAGRAM = Diagram(
             "LIVE AUTHORITY NOT EXPORTED · NO LIFECYCLE CHANGE · NO REMOTE WRITE · NO TOOL CHOSEN BY PINBOARD",
             600,
             505,
-            11,
+            12,
             "middle",
             True,
         ),

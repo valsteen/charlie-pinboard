@@ -38,7 +38,7 @@ DIAGRAM = Diagram(
     width=1400,
     height=820,
     sections=(
-        Section("Interface", "observe / resolve / present", 28, 118),
+        Section("Interface", "observe / resolve\npresent", 28, 118),
         Section("Application", "lock / reread / project", 28, 298),
         Section("Domain", "decide / reject", 28, 478),
         Section("Adapter", "commit / write projections", 28, 658),
@@ -170,7 +170,7 @@ DIAGRAM = Diagram(
             "Only the application reread authorizes. SQLite commits before the interface refreshes replaceable file views and presents latest state.",
             190,
             783,
-            11,
+            12,
         ),
     ),
 )
