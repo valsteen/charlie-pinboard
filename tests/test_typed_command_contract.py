@@ -84,8 +84,8 @@ class TypedTransitionContractTest(unittest.TestCase):
             1,
             (ready,),
             artifacts=(
-                work_models.ArtifactRecord(ArtifactRefId(1), "brief"),
-                work_models.ArtifactRecord(ArtifactRefId(2), "design"),
+                work_models.ArtifactRecord(ArtifactRefId(1), work_models.ArtifactKind.BRIEF),
+                work_models.ArtifactRecord(ArtifactRefId(2), work_models.ArtifactKind.RESULT),
             ),
             definitions=(
                 work_models.DefinitionAnchor(
@@ -164,7 +164,7 @@ class TypedTransitionContractTest(unittest.TestCase):
                     1,
                 ),
             ),
-            artifacts=(work_models.ArtifactRecord(ArtifactRefId(1), "brief"),),
+            artifacts=(work_models.ArtifactRecord(ArtifactRefId(1), work_models.ArtifactKind.BRIEF),),
         )
         rejected_without_attempt = decision_outcome(
             without_attempt,
@@ -200,9 +200,9 @@ class TypedTransitionContractTest(unittest.TestCase):
                 ),
             ),
             artifacts=(
-                work_models.ArtifactRecord(ArtifactRefId(1), "brief"),
-                work_models.ArtifactRecord(ArtifactRefId(2), "brief"),
-                work_models.ArtifactRecord(ArtifactRefId(3), "design"),
+                work_models.ArtifactRecord(ArtifactRefId(1), work_models.ArtifactKind.BRIEF),
+                work_models.ArtifactRecord(ArtifactRefId(2), work_models.ArtifactKind.BRIEF),
+                work_models.ArtifactRecord(ArtifactRefId(3), work_models.ArtifactKind.RESULT),
             ),
             definitions=(
                 work_models.DefinitionAnchor(

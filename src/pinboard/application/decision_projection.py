@@ -216,7 +216,7 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
             for attempt in state.lifecycle.attempts
         ),
         artifacts=tuple(
-            work_models.ArtifactRecord(artifact.artifact_ref_id, artifact.kind.value)
+            work_models.ArtifactRecord(artifact.artifact_ref_id, artifact.kind)
             for artifact in state.artifact_references
         ),
         proposals=tuple(

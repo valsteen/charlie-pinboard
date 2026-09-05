@@ -254,12 +254,12 @@ class HandoverTest(unittest.TestCase):
         published = (
             write_revision(
                 roots,
-                NewArtifact(stored_state.ArtifactKind.BRIEF, "work-a-brief", 1, ".json", b'{"brief":"work-a"}\n'),
+                NewArtifact(work_models.ArtifactKind.BRIEF, "work-a-brief", 1, ".json", b'{"brief":"work-a"}\n'),
             ),
             write_revision(
                 roots,
                 NewArtifact(
-                    stored_state.ArtifactKind.REQUIREMENTS,
+                    work_models.ArtifactKind.REQUIREMENTS,
                     "work-a-requirements",
                     1,
                     ".bin",
@@ -268,12 +268,12 @@ class HandoverTest(unittest.TestCase):
             ),
             write_revision(
                 roots,
-                NewArtifact(stored_state.ArtifactKind.RESULT, "work-a-result", 1, ".md", b"Result: complete.\n"),
+                NewArtifact(work_models.ArtifactKind.RESULT, "work-a-result", 1, ".md", b"Result: complete.\n"),
             ),
             write_revision(
                 roots,
                 NewArtifact(
-                    stored_state.ArtifactKind.EVIDENCE,
+                    work_models.ArtifactKind.EVIDENCE,
                     "work-a-review",
                     1,
                     ".json",

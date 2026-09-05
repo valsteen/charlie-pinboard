@@ -59,7 +59,7 @@ def _render_queue(project_revision: int, overview: query_models.WorkOverview) ->
     lines.extend(
         (
             f"| {item.position} | {item.item_id} | {item.state.value} | "
-            f"{item.preparation.status if item.preparation is not None else '—'} | "
+            f"{item.preparation.status.value if item.preparation is not None else '—'} | "
             f"{'yes' if item.eligible else 'no'} | "
             f"{', '.join(flag.kind.value for flag in item.review_flags) or '—'} | "
             f"{item.attempt_id or '—'} | {item.next_action or '—'} |\n"
@@ -109,7 +109,7 @@ def _render_item(
         + f"- Queue position: {item.queue_position or 'none'}\n"
         + f"- Eligible: {'yes' if overview_item is not None and overview_item.eligible else 'no'}\n"
         + f"- Subject revision: {item.subject_revision}\n"
-        + f"- Preparation: {overview_item.preparation.status if overview_item is not None and overview_item.preparation is not None else 'none'}\n"
+        + f"- Preparation: {overview_item.preparation.status.value if overview_item is not None and overview_item.preparation is not None else 'none'}\n"
         + f"- Dependencies: {', '.join(dependencies) if dependencies else 'none'}\n"
         + f"- Dependency reasons: {'; '.join(dependency_reasons) if dependency_reasons else 'none'}\n"
         + f"- Review flags: {'; '.join(review_flags) if review_flags else 'none'}\n"

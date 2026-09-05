@@ -1,6 +1,6 @@
 ---
 name: slop-cleanup
-description: Guide recursive repository cleanup after abandoned or repeatedly revised features leave dead production paths, test-only APIs, stale variants, archaeological names, stale documentation or tooling, or incoherent boundaries. Use for campaigns that must trace provenance and recurse to no new cleanup candidates. Do not use for one known unused symbol or a localized refactor.
+description: Guide recursive repository cleanup after abandoned or repeatedly revised features leave dead production paths, test-only APIs, stale variants, archaeological names, stale documentation or tooling, or incoherent boundaries. Use for campaigns that must trace provenance and recurse to no new cleanup candidates, and to close the cleanup loop after a readability or developer-navigation pass changes code. Do not use for one known unused symbol or a localized refactor.
 ---
 
 # Clean repository slop recursively
@@ -83,6 +83,8 @@ Then read and follow [the storytelling-readability cookbook](references/storytel
 Treat a misleading name as a finding, not as automatic rename authority. Internal incidental names can usually change directly; stable API, wire, schema, storage, history, and compatibility names may need a truthful local translation or an explicit migration or versioning deferral; deliberate product, personal, or emotionally meaningful identities require human disposition. Keep every finding visible until the cookbook's disposition record explains the protected consumers and safe reopening condition.
 
 This pass is distinct from the [developer-navigation stress test](references/dx-stress-test.md). The navigation test exhaustively finds duplicated routing facts and ceremonial edit sites in closed families. The storytelling pass asks whether a newcomer can retell the product flow and reconcile code with its overview; use either or both only when their question is present. Whole-repository storytelling uses both: one plain-English trace and sibling simulation for every distinct narrative shape, all eight separate navigation receipts, and one fresh complete pass that finds no new candidate.
+
+Any code change made for storytelling readability or developer navigation must close its cleanup loop. For a representative or otherwise focused pass, inspect every changed owner and its adjacent producer and consumer with the structural cleanup lens, remove direct residue, and reread the flow. For a whole-repository pass, finish the readability or navigation repairs, run a fresh complete slop-cleanup pass over the declared roots, then repeat the two passes until neither produces a new in-scope candidate. Readability is not a reason to retain helpers, remaps, aliases, or variants created only to narrate the code.
 
 ## Build the cleanup plan
 

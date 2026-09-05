@@ -190,7 +190,7 @@ def show_overview(roots: cli_commands.ResolvedRoots, command: cli_commands.Overv
             " preparation=none"
             if item.preparation is None
             else (
-                f" preparation={item.preparation.status}"
+                f" preparation={item.preparation.status.value}"
                 f" preparer={item.preparation.task_id}@{item.preparation.host_id}"
                 f" preparation_generation={item.preparation.generation}"
                 f" preparation_expires_at={item.preparation.expires_at}"
@@ -234,7 +234,7 @@ def show_item_status(
         print("preparation=none")
     else:
         print(
-            f"preparation={item_projection.preparation.status} "
+            f"preparation={item_projection.preparation.status.value} "
             f"preparer={item_projection.preparation.task_id}@{item_projection.preparation.host_id} "
             f"lease_id={item_projection.preparation.lease_id} generation={item_projection.preparation.generation} "
             f"expires_at={item_projection.preparation.expires_at} "

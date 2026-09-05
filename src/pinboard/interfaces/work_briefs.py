@@ -343,7 +343,7 @@ def build_attempt_brief_views(state: stored_state.StoredWorkState, artifacts: Ar
         if attempt.state == work_models.AttemptState.DONE:
             continue
         reference = references.get(attempt.brief_artifact_ref_id)
-        if reference is None or reference.kind != stored_state.ArtifactKind.BRIEF:
+        if reference is None or reference.kind != work_models.ArtifactKind.BRIEF:
             raise _invalid(f"Live attempt '{attempt.attempt_id}' has no accepted brief reference.")
         if not reference.selector.endswith(".json"):
             raise _invalid(f"Live attempt '{attempt.attempt_id}' accepted brief is not canonical v2 JSON.")

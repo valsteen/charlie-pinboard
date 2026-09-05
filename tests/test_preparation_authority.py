@@ -221,8 +221,8 @@ class PreparationAuthorityTest(unittest.TestCase):
         at_item = next(value for value in at.items if value.item_id == "work-c")
         assert before_item.preparation is not None
         assert at_item.preparation is not None
-        self.assertEqual("active", before_item.preparation.status)
-        self.assertEqual("expired", at_item.preparation.status)
+        self.assertEqual(authority_models.PreparationLeaseStatus.ACTIVE, before_item.preparation.status)
+        self.assertEqual(authority_models.PreparationLeaseStatus.EXPIRED, at_item.preparation.status)
         self.assertNotIn("work-c", before.immediate_options)
         self.assertIn("work-c", at.immediate_options)
         loaded = store.snapshot()

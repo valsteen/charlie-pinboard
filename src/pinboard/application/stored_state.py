@@ -18,13 +18,6 @@ from pinboard.domain.identifiers import (
 )
 
 
-class ArtifactKind(Enum):
-    REQUIREMENTS = "requirements"
-    BRIEF = "brief"
-    RESULT = "result"
-    EVIDENCE = "evidence"
-
-
 class StoredWorkItemState(Enum):
     INTAKE = "intake"
     READY = "ready"
@@ -101,7 +94,7 @@ class ArtifactReference:
     artifact_ref_id: ArtifactRefId
     key: str
     revision: int
-    kind: ArtifactKind
+    kind: work_models.ArtifactKind
     selector: str
     content_sha256: str
     size_bytes: int

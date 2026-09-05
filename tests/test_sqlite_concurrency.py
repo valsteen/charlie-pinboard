@@ -106,11 +106,11 @@ def _commit_same_checkpoint(
     assert isinstance(decision, decision_models.CheckpointAcceptanceDecision)
     result = write_revision(
         roots,
-        NewArtifact(stored_state.ArtifactKind.RESULT, "work-a-1-checkpoint-a-result", 1, ".md", b"result\n"),
+        NewArtifact(work_models.ArtifactKind.RESULT, "work-a-1-checkpoint-a-result", 1, ".md", b"result\n"),
     )
     review = write_revision(
         roots,
-        NewArtifact(stored_state.ArtifactKind.EVIDENCE, "work-a-1-checkpoint-a-review", 1, ".md", b"review\n"),
+        NewArtifact(work_models.ArtifactKind.EVIDENCE, "work-a-1-checkpoint-a-review", 1, ".md", b"review\n"),
     )
     artifacts = CheckpointArtifacts(
         ResultArtifactRef(result.key, result.revision, result.selector, result.content_sha256, result.size_bytes),

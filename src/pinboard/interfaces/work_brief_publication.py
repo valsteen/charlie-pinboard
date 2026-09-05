@@ -15,7 +15,8 @@ import msgspec
 from pinboard.adapters.files import artifacts as artifact_files
 from pinboard.adapters.files import file_io
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
-from pinboard.application import artifact_publication, artifacts, stored_state
+from pinboard.application import artifact_publication, artifacts
+from pinboard.domain import work_models
 from pinboard.domain.errors import DecisionFailure
 from pinboard.interfaces import cli_commands, work_briefs, work_views
 from pinboard.interfaces.cli_output import write_json
@@ -51,7 +52,7 @@ def publish_brief(
         store,
         artifact_files.ArtifactRepository(file_io.resolve_durable_roots(roots.shared_repository, roots.work)),
         artifacts.NewArtifact(
-            stored_state.ArtifactKind.BRIEF,
+            work_models.ArtifactKind.BRIEF,
             validated_brief.attempt_id,
             validated_brief.artifact_revision,
             ".json",

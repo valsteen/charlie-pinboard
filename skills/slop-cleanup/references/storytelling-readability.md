@@ -133,6 +133,14 @@ Trace at least one sibling operation that shares the same responsibilities. It s
 
 Simulate adding one sibling. Count the owners a developer must discover and edit. Keep a site when it owns input decoding, validation, policy, representation conversion, an effect, or presentation. Recommend folding a site when it only repeats a fact already selected elsewhere. A low edit count is evidence of navigation cost, not proof of readable responsibility. In whole-repository mode, repeat this simulation for every distinct narrative shape.
 
+## Close the cleanup loop
+
+A readability repair can itself leave narrative scaffolding: one-line helpers, renamed duplicate vocabularies, pass-through conversions, parallel projections, or variants that merely restate an already selected fact. Treat those as part of the pass rather than as later debt.
+
+For a representative-flow pass, apply the cleanup skill's structural lens to every changed owner and its adjacent producer and consumer after the coherent readability repair. Follow direct orphan chains, then reread the same flow and sibling. Finish only when the reading remains clear without the removed ceremony and that focused cleanup finds no new candidate.
+
+For a whole-repository pass, complete the readability repairs, then run a fresh full slop-cleanup inventory and semantic sweep across the original declared roots. Apply supported findings and reread every affected narrative shape. Alternate the readability and cleanup passes until a fresh complete pass of each produces no new in-scope candidate. Neither pass may use the other as permission to change behavior, compatibility, or product identity.
+
 ## Close whole-repository semantics separately
 
 A whole-repository result includes one separate disposition receipt for each semantic category required by the navigation stress test. Do not combine categories even when one analyzer or search supports several:

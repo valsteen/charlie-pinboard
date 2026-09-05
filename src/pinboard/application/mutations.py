@@ -114,7 +114,7 @@ def _checkpoint_artifact_ids(
     before: stored_state.StoredWorkState,
     artifacts: CheckpointArtifacts,
 ) -> CheckpointArtifactChanges:
-    assigned: list[tuple[stored_state.ArtifactKind, str, int, ArtifactRefId, str, str, int]] = [
+    assigned: list[tuple[work_models.ArtifactKind, str, int, ArtifactRefId, str, str, int]] = [
         (
             value.kind,
             value.key,

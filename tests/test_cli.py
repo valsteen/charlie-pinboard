@@ -414,7 +414,7 @@ class CliTest(unittest.TestCase):
                 published = write_revision(
                     roots,
                     NewArtifact(
-                        stored_state.ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)
+                        work_models.ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)
                     ),
                 )
                 reference = replace(

@@ -154,7 +154,7 @@ def parse_transition_command(  # noqa: C901, PLR0912, PLR0915 - one visible exha
                     ItemId(payload.item),
                     payload.state,
                     payload.next_action,
-                    work_models.Timing(payload.timing) if payload.timing is not None else None,
+                    payload.timing,
                     tuple(ItemId(value) for value in payload.depends_on),
                 ),
             )
@@ -203,7 +203,7 @@ def parse_transition_command(  # noqa: C901, PLR0912, PLR0915 - one visible exha
             if isinstance(payload := _decode(data, transition_models.DeferInputPayload), TransitionInputFailure):
                 return payload
             return decision_models.DeferCommand(
-                action, work_models.DeferInput(work_models.Timing(payload.timing), payload.reopen_condition)
+                action, work_models.DeferInput(payload.timing, payload.reopen_condition)
             )
         case (
             decision_models.MarkReadyAction()

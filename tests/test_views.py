@@ -11,8 +11,8 @@ from pinboard.adapters.files.models import AffectedViews
 from pinboard.adapters.files.views import rebuild_state, refresh_state
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
-from pinboard.application import stored_state
 from pinboard.application.artifacts import NewArtifact
+from pinboard.domain import work_models
 from pinboard.interfaces.errors import WorkBriefError, WorkBriefErrorCode
 from pinboard.interfaces.work_briefs import build_attempt_brief_views, canonical_work_brief_bytes
 from tests.support import SQLITE_NOW, complete_sqlite_state, initialize_store
@@ -68,7 +68,7 @@ class GeneratedViewsTest(unittest.TestCase):
         published = write_revision(
             roots,
             NewArtifact(
-                stored_state.ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)
+                work_models.ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)
             ),
         )
         state = complete_sqlite_state()
