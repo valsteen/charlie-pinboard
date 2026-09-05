@@ -2,9 +2,51 @@
 
 # How Pinboard works
 
-Pinboard keeps repository work coherent across tasks and interruptions. It preserves what the project decided, which execution is acting on it, who may change it now, and what evidence another task can trust later.
+Pinboard adds one repository-local ledger of proposals, accepted work, attempts, and evidence to long-running Codex work. It preserves what the human requested, what an agent proposed, what the project accepted, which execution is acting on it, and what evidence a reviewer can trust later.
 
-The five views move from the work-item lifecycle to package responsibilities, then follow one change, carry one project-facts package across a read-only handover boundary, and show the durable relationships underneath.
+For one short, isolated change, Codex already supplies the planning, implementation, testing, and review loop. Pinboard adds deliberate steps when the project must remain coherent across discoveries, parallel tasks, interruptions, and later iterations.
+
+## The workflow before the model
+
+The practical path is short enough to tell without the data model:
+
+1. **Preserve a discovery.** Intake records its trigger, evidence, hypothesis, and likely effect without changing current priority or adding it to the active feature.
+2. **Accept exact work.** Coordination decides which proposal belongs in the product, records the complete current definition, and keeps unaccepted ideas visibly separate.
+3. **Prepare the brief.** A renewable preparation claim reserves that exact ready definition while one canonical brief is compiled and reviewed. The item does not become active yet.
+4. **Implement that brief.** Activation binds the accepted brief to one attempt. The worker claims the attempt, rereads the brief, and changes the ordinary repository in its assigned checkout.
+5. **Submit one candidate.** The worker records the exact candidate and its evidence. Submission protects that identity instead of asking review to infer what changed from the latest files.
+6. **Review the same decision.** A separate Codex reviewer compares that candidate with the same accepted brief and returns it for correction, accepts a checkpoint, continues the attempt, or completes the work.
+7. **Recover without retelling.** Pause and block preserve the attempt and its evidence. Resume requires a brief matching the current definition, so a later task cannot quietly continue obsolete scope.
+
+This normally takes more turns than asking Codex to implement and review a prompt directly. The extra work is the mechanism: discoveries remain proposals, implementation rereads accepted scope, and review receives the exact brief and candidate. Pinboard trades first-delivery speed for a durable boundary between the product you accepted and the plausible additions an agent could otherwise accumulate.
+
+## The loop Codex already provides
+
+A coding harness turns prose into code through interpretation. An implementer reads the request and repository, produces a change, and a reviewer interprets the request and result again. Review findings become new prose for another implementation pass. Codex already supplies this productive back-and-forth.
+
+When the only shared target is the evolving conversation and latest diff, each pass can give new weight to an implementation detail or useful reviewer suggestion. That does not make every untracked loop drift. The risk grows when work crosses more turns, tasks, interruptions, and adjacent discoveries.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/review-loop-dark.svg">
+  <img src="assets/how-it-works/review-loop.svg" alt="An ordinary Codex implementation and review loop beside the same loop anchored by one accepted Pinboard brief, exact candidate, and evidence">
+</picture>
+
+Pinboard gives both sides a stable reference. The implementer rereads the accepted brief, submits one exact candidate with evidence, and a separate reviewer receives that same brief and candidate. Correction returns to the same attempt, with blocking findings tied to accepted scope, criteria, or reviewed project authority. The loop still depends on LLM and human judgment and can still be wrong; its corrections remain aimed at an explicit accepted target instead of whatever prose happens to be most recent.
+
+## Strict shape, semantic judgment
+
+The canonical work brief is strict JSON and the sole semantic brief. Unknown fields are rejected. Required sections, accepted-scope identity, authority references, acceptance-criterion references, coverage, and artifact bytes are checked before the brief can travel with an attempt. Most of the brief is still prose: its labels and hierarchy keep different reasoning jobs visible to the human and the LLM.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/brief-dark.svg">
+  <img src="assets/how-it-works/brief.svg" alt="One canonical work brief branching into the meaning a human and LLM interpret and the shape, references, and artifact identity that Pinboard code validates">
+</picture>
+
+The validator cannot prove that prose under `scope` is truly in scope or that a `non_goals` entry expresses the human's intent. The model interprets those meanings, the human accepts the product decision, and independent review challenges the compiled result. The schema disciplines an LLM by making the distinctions difficult to omit and stable across stages, while leaving semantic judgment where it belongs.
+
+The same boundary applies to project impact. Pinboard has no rule saying that a visitor-facing decision must also change a workflow guide or a durable design principle. The structured scope, provenance, reviewed authorities, and coverage give Codex enough context to propose that relationship without a hard-coded file map. Human acceptance and independent review still decide whether the proposed connection is real. This is information architecture refined through experience, not a semantic consistency engine.
+
+The rest of this guide explains the lifecycle behind that workflow, follows one stored change, shows temporary shared authority and read-only handover, then ends with the relational memory and package responsibilities underneath.
 
 ## What moves
 
@@ -31,17 +73,6 @@ The lifecycle is accompanied by four guarantees:
 - **Each authoritative change is atomic.** An accepted change updates its related facts and history together; a rejected or failed change leaves the previous ledger intact.
 
 These guarantees explain why seemingly similar words remain distinct.
-
-## Where responsibilities live
-
-The package is split into four layers because each removes a different kind of ambiguity. The split keeps workflow policy out of storage and keeps external representations out of decisions.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/layers-dark.svg">
-  <img src="assets/how-it-works/layers.svg" alt="Four package layers showing interfaces, application, domain, and adapters, connected by package dependencies">
-</picture>
-
-Every arrow in this view means “may depend on”; the next view shows runtime flow. Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. A small exhaustive entry point routes exact commands, while thematic interface modules own composition that needs concrete adapters. Application code reads complete stored state through capabilities and projects an accepted decision into one focused storage mutation. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
 
 ## Read, validate, initialize, and repair
 
@@ -105,6 +136,17 @@ Dispatch preparation reads the strict environment and any optional prompt or rev
 Checkpoint acceptance publishes the exact result and independent review as immutable artifacts. It then atomically records the result on the attempt, the review on the accepted history receipt, the lifecycle change, and the single receipt. Publication alone does not change lifecycle state; a rejected or rolled-back acceptance leaves the prior ledger relationships intact.
 
 Mutation ownership has three scopes. Shared-change authority is temporary: any task may borrow the single coordination lease for one shared scheduling or graph-wide change, then release it. A preparation claim keeps an item ready while one task compiles and reviews its exact definition-bound brief; activation consumes that claim atomically when it creates the attempt. An attempt lease records which task session—identified by task, host, and lease id—owns one implementation attempt. Generations fence older preparation and attempt owners after transfer or revocation, while unrelated item-scoped leases remain independent. Project state holds the current revision, and committed history records each accepted input, outcome, and actor.
+
+## Where responsibilities live
+
+The package is split into four layers because each removes a different kind of ambiguity. The split keeps workflow policy out of storage and keeps external representations out of decisions.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works/layers-dark.svg">
+  <img src="assets/how-it-works/layers.svg" alt="Four package layers showing interfaces, application, domain, and adapters, connected by package dependencies">
+</picture>
+
+Every arrow in this view means “may depend on.” Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. A small exhaustive entry point routes exact commands, while thematic interface modules own composition that needs concrete adapters. Application code reads complete stored state through capabilities and projects an accepted decision into one focused storage mutation. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
 
 For installation and the product story, return to the [README](README.md). For contributor-facing ownership, storage boundaries, and representative command flows, continue to the [architecture map](ARCHITECTURE.md). The [design principles](DESIGN_PRINCIPLES.md) explain the method used to keep those boundaries explicit.
 

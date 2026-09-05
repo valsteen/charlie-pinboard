@@ -26,18 +26,22 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                 Path("assets/how-it-works/journey.svg"),
                 Path("assets/how-it-works/database.svg"),
                 Path("assets/how-it-works/handover.svg"),
+                Path("assets/how-it-works/brief.svg"),
+                Path("assets/how-it-works/review-loop.svg"),
                 Path("assets/how-it-works/product-dark.svg"),
                 Path("assets/how-it-works/layers-dark.svg"),
                 Path("assets/how-it-works/journey-dark.svg"),
                 Path("assets/how-it-works/database-dark.svg"),
                 Path("assets/how-it-works/handover-dark.svg"),
+                Path("assets/how-it-works/brief-dark.svg"),
+                Path("assets/how-it-works/review-loop-dark.svg"),
             },
             outputs.keys(),
         )
         guide = outputs[Path("HOW_IT_WORKS.md")]
-        self.assertEqual(5, guide.count("<picture>"))
-        self.assertEqual(5, guide.count('media="(prefers-color-scheme: dark)"'))
-        for slug in ("product", "layers", "journey", "database", "handover"):
+        self.assertEqual(7, guide.count("<picture>"))
+        self.assertEqual(7, guide.count('media="(prefers-color-scheme: dark)"'))
+        for slug in ("product", "layers", "journey", "database", "handover", "brief", "review-loop"):
             self.assertIn(f'srcset="assets/how-it-works/{slug}-dark.svg"', guide)
             self.assertIn(f'src="assets/how-it-works/{slug}.svg"', guide)
 
@@ -58,7 +62,7 @@ class HowItWorksDocumentationTests(unittest.TestCase):
                 self.assertNotIn("linearGradient", svg)
                 self.assertNotIn("feDropShadow", svg)
 
-        for slug in ("product", "layers", "journey", "database", "handover"):
+        for slug in ("product", "layers", "journey", "database", "handover", "brief", "review-loop"):
             day = outputs[Path(f"assets/how-it-works/{slug}.svg")]
             night = outputs[Path(f"assets/how-it-works/{slug}-dark.svg")]
             with self.subTest(slug=slug):
