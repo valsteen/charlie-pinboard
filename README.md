@@ -11,7 +11,7 @@
 
 Pinboard is a repository-local work ledger for long-running Codex projects, built first for solo developers whose requirements arrive while they build. It preserves the difference between what you requested, what an agent proposed, what you accepted, what was implemented, and what was reviewed.
 
-**Codex-only today · Solo-project first · Overkill for one-off changes**
+<br clear="right">
 
 ## The first pass is easy. Drift starts on the second.
 
@@ -25,7 +25,7 @@ Codex can plan, delegate, implement, test, review, use isolated worktrees, and c
 
 With Pinboard, a discovery can remain a proposal instead of quietly joining the feature. An implementation attempt stays tied to an exact accepted definition and brief. Current ownership is explicit, stale actions are rejected, and review examines one exact candidate with its evidence. In AI-native SDLC terms, Codex performs the work; Pinboard keeps planning, implementation, and review about the same product decision.
 
-Pinboard still does not decide the product, choose priorities, or create Codex tasks. It makes the human and agent decisions around those capabilities durable and distinguishable.
+Pinboard is Codex-only today. It does not decide the product, choose priorities, or create Codex tasks. It makes the human and agent decisions around those capabilities durable and distinguishable.
 
 ## The format is strict. The meaning is still yours.
 
