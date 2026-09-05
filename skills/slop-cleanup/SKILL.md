@@ -1,6 +1,6 @@
 ---
 name: slop-cleanup
-description: Guide recursive repository cleanup after abandoned or repeatedly revised features leave dead production paths, test-only APIs, stale variants, archaeological names, stale documentation or tooling, or incoherent boundaries. Use for campaigns that must trace provenance and recurse to no new cleanup candidates, and to close the cleanup loop after a readability or developer-navigation pass changes code. Do not use for one known unused symbol or a localized refactor.
+description: Guide recursive repository cleanup after abandoned or repeatedly revised features leave dead production paths, test-only APIs, stale variants, archaeological names, or stale documentation and tooling. Use for campaigns that must trace provenance and recurse until no new cleanup candidates remain. Do not use for one known unused symbol, a localized refactor, or a general repository-readiness assessment.
 ---
 
 # Clean repository slop recursively
@@ -69,23 +69,6 @@ Use these dispositions:
 - **Retain as an exception:** a real production, persistence, protocol, or explicit user-owned reason exists. Record the exact current reason and reopen condition; do not call it generally reachable.
 - **Productize separately:** the user wants the feature. Create product work for a supported entry point rather than disguising feature completion as cleanup.
 
-## Offer the optional storytelling pass
-
-Cleanup can leave supported code reachable and structurally sound while its human story remains difficult to follow, or while product documentation and implementation describe the same flow in different language. When that concern appears, offer one optional intensive pass and ask one concrete question: “Do you want to proof-read the surviving flow for storytelling readability and make its code and overview tell the same story?” Do not begin the pass unless the user chooses it or already requested it explicitly.
-
-When chosen, establish one of two explicit coverage modes:
-
-- **Representative flow:** proof-read one supported path and enough siblings to test whether matching responsibilities use the same story. This is the default bounded mode and never supports a whole-repository claim.
-- **Whole repository:** enumerate every supported runtime root and public or installed entry point; agent skill, prompt, and metadata surface; product document and contributor guide; generated document or diagram and its generator; development tool and configuration; package, dependency, lockfile, and release surface; CI workflow and assurance path; and test or fixture used as evidence. Derive every distinct narrative shape across that inventory rather than assuming one command path represents them all.
-
-Then read and follow [the storytelling-readability cookbook](references/storytelling-readability.md). Adapt its probes to the repository's actual architecture and product vocabulary. The pass may recommend bounded changes to names, composition, responsibility boundaries, current-story documentation, or durable contributor guidance, but cleanup scope does not by itself authorize a broader refactor. Keep material responsibility changes and the chosen durable principle visible for the human to decide.
-
-Treat a misleading name as a finding, not as automatic rename authority. Internal incidental names can usually change directly; stable API, wire, schema, storage, history, and compatibility names may need a truthful local translation or an explicit migration or versioning deferral; deliberate product, personal, or emotionally meaningful identities require human disposition. Keep every finding visible until the cookbook's disposition record explains the protected consumers and safe reopening condition.
-
-This pass is distinct from the [developer-navigation stress test](references/dx-stress-test.md). The navigation test exhaustively finds duplicated routing facts and ceremonial edit sites in closed families. The storytelling pass asks whether a newcomer can retell the product flow and reconcile code with its overview; use either or both only when their question is present. Whole-repository storytelling uses both: one plain-English trace and sibling simulation for every distinct narrative shape, all eight separate navigation receipts, and one fresh complete pass that finds no new candidate.
-
-Any code change made for storytelling readability or developer navigation must close its cleanup loop. For a representative or otherwise focused pass, inspect every changed owner and its adjacent producer and consumer with the structural cleanup lens, remove direct residue, and reread the flow. For a whole-repository pass, finish the readability or navigation repairs, run a fresh complete slop-cleanup pass over the declared roots, then repeat the two passes until neither produces a new in-scope candidate. Readability is not a reason to retain helpers, remaps, aliases, or variants created only to narrate the code.
-
 ## Build the cleanup plan
 
 Prefer one cleanup objective with dependency-ordered checkpoints. Split out separate work only when it represents an independently valuable product decision, a data migration with distinct authority, or an outcome that can genuinely complete on its own.
@@ -148,8 +131,6 @@ Regroup by current concepts. Separate declarations from logic when each side has
 
 Run an archaeology pass over names, comments, error codes, schema labels, help text, examples, documentation, and tests. Remove wording that describes a predecessor, migration phase, plural capability that is now singular, or behavior the code can no longer perform. Collapse documentation around the surviving concepts, remove pages, sections, examples, diagrams, badges, and setup instructions whose feature or workflow was removed, and keep parallel documents consistent rather than leaving one stale version behind. Every advertised feature must trace to a supported entry point or explicitly labeled current limitation; do not turn deleted or never-shipped implementation into present-tense documentation or an invented roadmap. Remove stale lint, warning, ignore, and coverage suppressions with the ecosystem’s unused-suppression check when available.
 
-When a command or closed-variant family crosses several production owners, read and run the [developer-navigation stress test](references/dx-stress-test.md). Use its distinct-shape traces, sibling-change simulation, and complete category-by-category semantic sweep receipt to find repeated routing facts and called-but-ceremonial APIs that ordinary reachability and line-count inventories miss. Keep exhaustive branches at justified decision and boundary owners; do not replace them with an open dispatch mechanism merely to make the edit count smaller.
-
 For structural boilerplate, use one repeatable pass:
 
 1. List collections traversed by neighboring projections. Group each collection once by the consumer key when repeated scans reconstruct the same relationship; keep the grouping local and explicit.
@@ -175,11 +156,13 @@ After the last change, rerun the complete inventory from the production roots. F
 
 - every production definition is accounted for by a supported root, a verified dynamic mechanism, supported persisted data or protocol compatibility, or one exact retained exception;
 - every closed variant and branch has a real producer and consumer or an explicit boundary reason;
-- each distinct cross-owner routing shape can be traced and extended without rediscovering same-meaning routing facts in owners that add no boundary, decision, presentation, or effect;
+- routes affected by removal contain no pass-through owner, duplicated decision, or obsolete alternative that existed only for the deleted family;
 - no production API exists only for tests, and no advertised entry point can only reject;
 - surviving files and tests have meaningful, preferably symmetric conceptual ownership;
-- names, comments, docs, examples, diagrams, schema labels, and suppressions describe only current behavior;
+- names, comments, docs, examples, diagrams, schema labels, and suppressions affected by the cleanup describe only current behavior;
 - every direct dependency and CI path has a named surviving consumer or assurance role, and regenerated lockfiles contain no packages retained solely by removed direct dependencies;
 - package-content, behavior, persistence, type, lint, and repository metadata checks pass for the changed surface.
 
 Report the deleted families, isolated prototypes, retained exceptions, migrations and recoverability, provenance conclusions the user asked for, and the evidence for the clean final pass. Do not hide unresolved candidates behind the phrase “fixed point.”
+
+If the surviving repository remains difficult to understand or change safely after cleanup, offer `$repository-readiness` as a separate optional assessment when that skill is available. Ordinary cleanup completes without it; do not turn the deletion fixed point into a readiness prerequisite.

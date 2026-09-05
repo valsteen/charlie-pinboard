@@ -63,7 +63,7 @@ Pinboard is used to build Pinboard. Its product decisions, parallel work, exact 
 
 Pinboard did not begin as a complete human-authored product specification. The problem and final product judgment were human; Codex proposed much of the solution between them. Keeping those roles distinct made it possible to examine what emerged, accept or reject its shape, and then refine its identity, principles, code, and explanation through the same workflow. Writing [How Pinboard works](HOW_IT_WORKS.md) was part of discovering what had actually been built, not documentation added after the fact.
 
-Its bundled Slop Cleanup skill has also been applied to this repository: tracing residue from revised features, removing test-only production paths, reconciling names and documentation, and repeating the scan until it found no new candidates. The optional storytelling pass was developed here, stress-tested against an earlier revision by fresh Codex reviewers, and then applied across the repository.
+Its bundled Slop Cleanup skill has also been applied to this repository: tracing residue from revised features, removing test-only production paths, and repeating the scan until it found no new candidates. Repository Readiness's developer-navigation and storytelling lenses were developed here, stress-tested against earlier revisions by fresh Codex reviewers, and then used to reconcile names, code, and documentation.
 
 That makes this codebase one concrete case study, not proof that Pinboard eliminates every mistake or makes every repository clean.
 
@@ -80,10 +80,13 @@ That makes this codebase one concrete case study, not proof that Pinboard elimin
 - **Review:** keep the submitted candidate and its evidence exact, then use a separate Codex reviewer—normally a subagent that returns to the owning task—to accept it or return it for correction.
 - **Wrap-up:** reconcile later accepted direction and repository changes before candidate presentation or acceptance, then let the human choose the repository disposition and confirm terminal completion.
 - **Handover:** export one revision-stamped JSON package of supported project facts—admitted work, pending proposals, relationships, decisions, and verified review evidence—without choosing a team-tool vendor. Live lease authority remains local.
-- **Recursive cleanup:** use `$slop-cleanup` to trace residue from revised or abandoned features, remove an approved family, and repeat until a fresh pass finds nothing new.
-- **Optional storytelling review:** after you choose it, proof-read one representative flow or the complete supported repository so the code, its names, and the product overview tell the same accurate story without casually breaking compatibility or deliberate identity; then remove any ceremony introduced by the readability work before calling the pass complete.
+- **Repository readiness:** use `$repository-readiness` to map the real authority, consumers, projections, and validation behind a representative change before improving an unfamiliar repository; select whole-repository coverage explicitly.
+- **Recursive cleanup:** use `$slop-cleanup` to remove approved residue from revised or abandoned features and repeat until a fresh pass finds nothing new.
+- **Durable agent guidance:** use `$maintaining-agent-guidance` to place recurring AI-facing knowledge at its smallest authoritative owner without installing generic boilerplate.
 
 The `$pinboard`, `$pinboard-intake`, and `$pinboard-deliver` skills provide the conversational workflows. The `pinboard` command validates and updates the repository-local ledger, rejects stale actions, and keeps unrelated attempts from invalidating one another.
+
+The three repository-care skills are optional and independently usable; none requires a Pinboard ledger.
 
 For the most reliable workflow, keep one user-facing Codex task responsible for an outcome through its final repository decision. Let it delegate bounded research, implementation, and review to subagents whose results return automatically. Open another visible task only for a genuinely independent outcome you intend to follow there.
 
@@ -125,7 +128,9 @@ Start a Codex task in the repository and ask:
 
 > Set up the pinboard here and explain how I can use it from one chat or several chats.
 
-After the first successful setup, Pinboard may print an optional recommendation for long Codex tasks when the user setting `model_auto_compact_token_limit_scope` is absent. It only reads the user config at `~/.codex/config.toml` (or the equivalent under `CODEX_HOME`) and never edits user or project Codex configuration. A trusted project's `.codex/config.toml` can override that user default. Reopening an existing Pinboard, a failed setup, or an unreadable or malformed user config produces no recommendation.
+After the first successful setup, Pinboard prints one optional next-steps pointer to `$repository-readiness`, `$slop-cleanup`, and `$maintaining-agent-guidance`. It does not run a skill, create work, or change configuration, and reopening an existing Pinboard or a failed setup does not print it.
+
+Pinboard may separately recommend one setting for long Codex tasks when the user setting `model_auto_compact_token_limit_scope` is absent. It only reads the user config at `~/.codex/config.toml` (or the equivalent under `CODEX_HOME`) and never edits user or project Codex configuration. A trusted project's `.codex/config.toml` can override that user default. Reopening an existing Pinboard, a failed setup, or an unreadable or malformed user config produces no setting recommendation.
 
 When another task uncovers something worth keeping, ask it:
 

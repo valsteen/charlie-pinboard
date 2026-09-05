@@ -119,7 +119,7 @@ Prefer the smallest repair that makes the next step predictable:
 2. Give values provenance names such as `observed_state`, `requested_change`, `locked_state`, `accepted_decision`, `focused_mutation`, and `committed_state` when those distinctions exist.
 3. Use named arguments where several same-shaped values otherwise require positional decoding.
 4. Recompose a long function when another arrangement makes the ordered product story or next owner clearer. Extract only functions that own meaningful inputs, effects, and exits; inline or regroup helpers when their separation creates a scavenger hunt.
-5. Move a responsibility when the reading exposes genuine mixed ownership; explain the proposed boundary and obtain the human's decision before expanding cleanup scope.
+5. Move a responsibility when the reading exposes genuine mixed ownership; explain the proposed boundary and obtain the human's decision before expanding improvement scope.
 6. Update the current-story overview to the same vocabulary and order.
 7. Add durable contributor guidance only when the method should govern future delivery and no earlier executable owner can enforce it.
 
@@ -129,21 +129,21 @@ Function length, lint smell categories, duplication reports, and split-by-defaul
 
 ## Stress-test the family, not one polished example
 
-Trace at least one sibling operation that shares the same responsibilities. It should use the same verb grammar and provenance distinctions without duplicating a routing fact in every layer. When the flow is a command or closed family, reuse the [developer-navigation lens](../../pinboard/references/developer-navigation.md) and, for an exhaustive cleanup audit, the [developer-navigation stress test](dx-stress-test.md).
+Trace at least one sibling operation that shares the same responsibilities. It should use the same verb grammar and provenance distinctions without duplicating a routing fact in every layer. When the flow is a command or closed family, use [developer navigation](developer-navigation.md) at the selected representative or whole-repository depth.
 
 Simulate adding one sibling. Count the owners a developer must discover and edit. Keep a site when it owns input decoding, validation, policy, representation conversion, an effect, or presentation. Recommend folding a site when it only repeats a fact already selected elsewhere. A low edit count is evidence of navigation cost, not proof of readable responsibility. In whole-repository mode, repeat this simulation for every distinct narrative shape.
 
-## Close the cleanup loop
+## Close the repair loop
 
 A readability repair can itself leave narrative scaffolding: one-line helpers, renamed duplicate vocabularies, pass-through conversions, parallel projections, or variants that merely restate an already selected fact. Treat those as part of the pass rather than as later debt.
 
-For a representative-flow pass, apply the cleanup skill's structural lens to every changed owner and its adjacent producer and consumer after the coherent readability repair. Follow direct orphan chains, then reread the same flow and sibling. Finish only when the reading remains clear without the removed ceremony and that focused cleanup finds no new candidate.
+For a representative-flow pass, inspect every changed owner and its adjacent producer and consumer after the coherent readability repair. Remove new pass-throughs, duplicated vocabularies, and obsolete projections whose disposition is already authorized, then reread the same flow and sibling. Finish only when the reading remains clear without that ceremony and the focused repair exposes no new candidate.
 
-For a whole-repository pass, complete the readability repairs, then run a fresh full slop-cleanup inventory and semantic sweep across the original declared roots. Apply supported findings and reread every affected narrative shape. Alternate the readability and cleanup passes until a fresh complete pass of each produces no new in-scope candidate. Neither pass may use the other as permission to change behavior, compatibility, or product identity.
+For a whole-repository pass, complete the readability repairs, then run a fresh full surface, narrative-shape, and semantic sweep across the original declared roots. Apply authorized findings and reread every affected narrative shape until a fresh complete pass produces no new in-scope candidate. A finding never grants permission to change behavior, compatibility, or product identity.
 
 ## Close whole-repository semantics separately
 
-A whole-repository result includes one separate disposition receipt for each semantic category required by the navigation stress test. Do not combine categories even when one analyzer or search supports several:
+A whole-repository result includes one separate disposition receipt for each semantic category required by the developer-navigation reference. Do not combine categories even when one analyzer or search supports several:
 
 1. Same-meaning remaps and pass-through delegation.
 2. Repeated traversal and projection scans.
@@ -168,4 +168,4 @@ Run behavior, expected-rejection, transaction, concurrency, generation, link, an
 
 Repeat the fresh reading after the changes. In representative-flow mode, finish when the reader can tell one accurate ordered story from overview through code, sibling paths are symmetric where their responsibilities match, authoritative and repairable effects remain distinct, and another refactor would only rename already clear work or introduce ceremony. In whole-repository mode, also require the complete fresh no-new-candidate pass above; one polished trace cannot satisfy that claim.
 
-When validating this cookbook itself, compare two context-isolated readers on the same historical repository snapshot and identical task. Give the control reader the existing cleanup guidance without this cookbook and give the other reader the revised skill. Compare whether they recover the intended sequence, documentation mismatches, effect boundaries, architecture-neutral advice, and bounded next changes. Report only the demonstrated scenario; one successful comparison does not prove universal effectiveness.
+When validating this reference itself, compare two context-isolated readers on the same historical repository snapshot and identical task. Give one reader no readiness guidance and the other only the copied Repository Readiness skill directory. Compare whether they recover the intended sequence, documentation mismatches, effect boundaries, architecture-neutral advice, and bounded next changes. Report only the demonstrated scenario; one successful comparison does not prove universal effectiveness.
