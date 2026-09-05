@@ -43,17 +43,17 @@ Pinboard is not designed to win the first-prompt race. It is designed for the fi
 
 Imagine you are building *Ashfall Keep*, a small action RPG. While one Codex task works on the dragon boss's second phase, two useful but distracting discoveries arrive: save games capture temporary animation state, and controller mappings identify abilities by inventory position.
 
-<img width="32" height="32" src="assets/quest-scroll.png" alt="Sealed quest scroll"> **Capture an idea without expanding the feature.** `$pinboard-intake` records the save-game concern with its trigger, evidence, and likely consequence. It enters intake without becoming ready, replacing the current focus, or interrupting the dragon attempt.
+<img width="20" height="20" src="assets/quest-scroll.png" alt="Sealed quest scroll"> **Capture an idea without expanding the feature.** `$pinboard-intake` records the save-game concern with its trigger, evidence, and likely consequence. It enters intake without becoming ready, replacing the current focus, or interrupting the dragon attempt.
 
 > **Saved for later — the animation-state concern is now in `save-game-animation-state` (`intake`); dragon work continues.**
 
 <img align="right" width="390" src="assets/party-crossroads.png" alt="Fantasy adventurer comparing routes toward a riverside village, a dragon keep, and a crystal cave while a scout investigates">
 
-<img width="32" height="32" src="assets/quick-quest-log.png" alt="Open quest ledger and compass"> **Decide from one current project view.** `$pinboard` shows the dragon phase as active, controller mapping as ready, and the save-game concern as intake. Coordination can accept, defer, connect, or close work without asking each conversation to reconstruct the plan.
+<img width="20" height="20" src="assets/quick-quest-log.png" alt="Open quest ledger and compass"> **Decide from one current project view.** `$pinboard` shows the dragon phase as active, controller mapping as ready, and the save-game concern as intake. Coordination can accept, defer, connect, or close work without asking each conversation to reconstruct the plan.
 
-<img width="32" height="32" src="assets/safe-camp.png" alt="Campfire and bedroll checkpoint"> **Resume the decision, not the conversation.** If stable ability IDs become a real prerequisite, the dragon attempt records where it stopped and what must change. The same attempt later resumes from its accepted brief and evidence.
+<img width="20" height="20" src="assets/safe-camp.png" alt="Campfire and bedroll checkpoint"> **Resume the decision, not the conversation.** If stable ability IDs become a real prerequisite, the dragon attempt records where it stopped and what must change. The same attempt later resumes from its accepted brief and evidence.
 
-<img width="32" height="32" src="assets/ready-to-build.png" alt="Crossed sword and blacksmith hammer"> **Review what was approved, not merely what now exists.** `$pinboard-deliver` claims the active attempt, follows its exact definition and brief, records the candidate and evidence, and returns them for review by a separate Codex reviewer. If the definition changed, the old brief cannot quietly stand in for it.
+<img width="20" height="20" src="assets/ready-to-build.png" alt="Crossed sword and blacksmith hammer"> **Review what was approved, not merely what now exists.** `$pinboard-deliver` claims the active attempt, follows its exact definition and brief, records the candidate and evidence, and returns them for review by a separate Codex reviewer. If the definition changed, the old brief cannot quietly stand in for it.
 
 The code, branch, and conversation remain ordinary Codex work. Pinboard keeps their product decisions connected. [How Pinboard works](HOW_IT_WORKS.md) starts with this workflow, then follows it into the detailed lifecycle, persistence model, and package boundaries.
 
