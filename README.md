@@ -7,7 +7,7 @@
 
 ## Keep Codex building the product you meant
 
-<img align="right" width="430" src="assets/pinboard-investigation-board.png" alt="Pixel-art bard explaining a fantasy investigation board covered with maps, clues, and red thread">
+<img align="right" width="430" src="assets/pinboard-investigation-board.png" alt="Fantasy adventurer explaining an investigation board covered with maps, clues, portraits, and red thread">
 
 Pinboard is a repository-local work ledger for long-running Codex projects, built first for solo developers whose requirements arrive while they build. It preserves the difference between what you requested, what an agent proposed, what you accepted, what was implemented, and what was reviewed.
 
@@ -43,23 +43,25 @@ Pinboard is not designed to win the first-prompt race. It is designed for the fi
 
 Imagine you are building *Ashfall Keep*, a small action RPG. While one Codex task works on the dragon boss's second phase, two useful but distracting discoveries arrive: save games capture temporary animation state, and controller mappings identify abilities by inventory position.
 
-![Pixel-art quest scroll](assets/quest-scroll.png) **Capture an idea without expanding the feature.** `$pinboard-intake` records the save-game concern with its trigger, evidence, and likely consequence. It enters intake without becoming ready, replacing the current focus, or interrupting the dragon attempt.
+<img width="32" height="32" src="assets/quest-scroll.png" alt="Sealed quest scroll"> **Capture an idea without expanding the feature.** `$pinboard-intake` records the save-game concern with its trigger, evidence, and likely consequence. It enters intake without becoming ready, replacing the current focus, or interrupting the dragon attempt.
 
 > **Saved for later — the animation-state concern is now in `save-game-animation-state` (`intake`); dragon work continues.**
 
-<img align="right" width="390" src="assets/party-crossroads.png" alt="Pixel-art bard and adventurers considering routes toward a river village, a dragon keep, and a crystal cave">
+<img align="right" width="390" src="assets/party-crossroads.png" alt="Fantasy adventurer comparing routes toward a riverside village, a dragon keep, and a crystal cave while a scout investigates">
 
-![Pixel-art open quest ledger](assets/quick-quest-log.png) **Decide from one current project view.** `$pinboard` shows the dragon phase as active, controller mapping as ready, and the save-game concern as intake. Coordination can accept, defer, connect, or close work without asking each conversation to reconstruct the plan.
+<img width="32" height="32" src="assets/quick-quest-log.png" alt="Open quest ledger and compass"> **Decide from one current project view.** `$pinboard` shows the dragon phase as active, controller mapping as ready, and the save-game concern as intake. Coordination can accept, defer, connect, or close work without asking each conversation to reconstruct the plan.
 
-![Pixel-art campfire checkpoint](assets/safe-camp.png) **Resume the decision, not the conversation.** If stable ability IDs become a real prerequisite, the dragon attempt records where it stopped and what must change. The same attempt later resumes from its accepted brief and evidence.
+<img width="32" height="32" src="assets/safe-camp.png" alt="Campfire and bedroll checkpoint"> **Resume the decision, not the conversation.** If stable ability IDs become a real prerequisite, the dragon attempt records where it stopped and what must change. The same attempt later resumes from its accepted brief and evidence.
 
-![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **Review what was approved, not merely what now exists.** `$pinboard-deliver` claims the active attempt, follows its exact definition and brief, records the candidate and evidence, and returns them for review by a separate Codex reviewer. If the definition changed, the old brief cannot quietly stand in for it.
+<img width="32" height="32" src="assets/ready-to-build.png" alt="Crossed sword and blacksmith hammer"> **Review what was approved, not merely what now exists.** `$pinboard-deliver` claims the active attempt, follows its exact definition and brief, records the candidate and evidence, and returns them for review by a separate Codex reviewer. If the definition changed, the old brief cannot quietly stand in for it.
 
 The code, branch, and conversation remain ordinary Codex work. Pinboard keeps their product decisions connected. [How Pinboard works](HOW_IT_WORKS.md) starts with this workflow, then follows it into the detailed lifecycle, persistence model, and package boundaries.
 
 ## Pinboard became its own use case
 
 Pinboard is used to build Pinboard. Its product decisions, parallel work, exact briefs, implementation evidence, and reviews move through the same workflow it ships.
+
+Pinboard did not begin as a complete human-authored product specification. The problem and final product judgment were human; Codex proposed much of the solution between them. Keeping those roles distinct made it possible to examine what emerged, accept or reject its shape, and then refine its identity, principles, code, and explanation through the same workflow. Writing [How Pinboard works](HOW_IT_WORKS.md) was part of discovering what had actually been built, not documentation added after the fact.
 
 Its bundled Slop Cleanup skill has also been applied to this repository: tracing residue from revised features, removing test-only production paths, reconciling names and documentation, and repeating the scan until it found no new candidates. The optional storytelling pass was developed here, stress-tested against an earlier revision by fresh Codex reviewers, and then applied across the repository.
 
