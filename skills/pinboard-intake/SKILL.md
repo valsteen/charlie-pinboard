@@ -58,9 +58,10 @@ Before creating a proposal, distinguish exact prior coverage from a merely relat
 1. Write the proposal to a temporary file outside canonical work state.
 2. Run `pinboard proposal --file <path>`.
 3. Treat `OK PROPOSAL_CREATED <proposal-id> position=<n> state=intake` as proof that both the proposal facts and intake item persisted.
-4. Read `references/codex-transport.md` only when the user explicitly requested delivery to another visible task and Codex task messaging is available.
-5. Notify the requested eligible task with the proposal ID and shared work root. Repository persistence, not messaging, is the correctness boundary.
-6. Report delivery only when the user requested it or when its outcome materially changes confidence, current work, or the next action.
+4. After that success, mention the generated item summary once as the readable accepted-definition view only when `<work-root>/views/items/<proposal-id>.md` is confirmed available, using a concise purpose label and a native clickable link. If the command reports a generated-view warning or the file is unavailable, preserve the successful intake receipt without a broken link; after a successful refresh or rebuild confirms availability, mention the link once. Do not re-announce it after an unchanged refresh.
+5. Read `references/codex-transport.md` only when the user explicitly requested delivery to another visible task and Codex task messaging is available.
+6. Notify the requested eligible task with the proposal ID and shared work root. Repository persistence, not messaging, is the correctness boundary.
+7. Report delivery only when the user requested it or when its outcome materially changes confidence, current work, or the next action.
 
 For embedded intake, resume the invoking coordinator before the surrounding turn ends. If context compaction obscured the conversation, re-read the anchor's active or paused item, attempt, proposal, or exact selector rather than inventing continuation state. Complete the promised action when it remains in scope; otherwise surface its exact blocker or durably defer it at an exact owner.
 
@@ -70,11 +71,11 @@ When delivery was explicitly requested but transport or the requested target is 
 
 Keep the active work as the main topic and lead with the practical outcome:
 
-- After `OK PROPOSAL_CREATED`, say `Saved for later — <concern> is now <proposal-id> at intake position <n>; current work <continues | is blocked by it>.`
+- After `OK PROPOSAL_CREATED`, say `Saved for later — <concern> is now <proposal-id> at intake position <n>; current work <continues | is blocked by it>.` When the generated item Markdown is confirmed available, add one compact link labelled `Accepted definition summary`; otherwise keep the persistence receipt accurate without linking an unavailable view.
 - For exact prior coverage, say `Saved for later — <concern> was already recorded at <selector and state>; current work <continues | is blocked by it>.`
 - When the user explicitly dismisses the concern, say `Not saved — <concern> was dismissed at your request; no follow-up remains.`
 
-The `Saved for later` forms apply only when intake is the terminal action requested. For immediate-start intent, keep the persistence receipt subordinate while continuing the same turn; report the work as started only after the normal Pinboard activation succeeds.
+The `Saved for later` forms apply only when intake is the terminal action requested. For immediate-start intent, keep the persistence receipt and, only when its readable view is confirmed available, its accepted-definition-summary link subordinate while continuing the same turn. An unavailable item summary does not undo persistence or stop immediate-start continuation; report the work as started only after the normal Pinboard activation succeeds.
 
 Use `now` only after `OK PROPOSAL_CREATED`; it means this turn before the update. Notification delivery never upgrades persistence into admission or priority. If persistence happened in response to the user's question, say that directly instead of implying the exact concern was present earlier. When delivery is user-requested or materially affects the result, report it after the durable outcome without implying that optional transport changes persistence.
 

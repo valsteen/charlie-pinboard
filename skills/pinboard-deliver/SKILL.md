@@ -51,9 +51,10 @@ If a discovered problem blocks the attempt:
 1. stop widening the implementation;
 2. preserve the current commit/worktree and verification;
 3. write `blocker.md` in the active attempt directory with the observation, affected criterion, completed work, and safest next action;
-4. use `$pinboard-intake` to propose a prerequisite when explicitly requested;
-5. use the worker-visible `report-blocker:<attempt>` affordance to report that preserved evidence; it is advisory and has no mutation payload;
-6. leave shared lifecycle mutation to coordination, which must select the exact `block:<attempt>` action only for dependencies already accepted in the current definition or `pause:<attempt>` when no accepted dependency condition applies; a newly accepted dependency requires a complete item revision and revised-brief recovery, and `block-item:<item>` is only for unstarted intake work.
+4. return the blocker to the owning task with one concise purpose label and one native clickable link to that Markdown;
+5. use `$pinboard-intake` to propose a prerequisite when explicitly requested;
+6. use the worker-visible `report-blocker:<attempt>` affordance to report that preserved evidence; it is advisory and has no mutation payload;
+7. leave shared lifecycle mutation to coordination, which must select the exact `block:<attempt>` action only for dependencies already accepted in the current definition or `pause:<attempt>` when no accepted dependency condition applies; a newly accepted dependency requires a complete item revision and revised-brief recovery, and `block-item:<item>` is only for unstarted intake work.
 
 ## Implement and verify
 
@@ -71,6 +72,8 @@ Before review:
 6. if an existing test file shrank materially, inventory the removed behavior or test names and identify the replacement evidence;
 7. when acceptance claims lifecycle wiring, prove it through the production entry point rather than only through an internal primitive;
 8. write `result.md` in the attempt directory.
+
+When `result.md` is new or materially refreshed, return it to the owning task with one concise purpose label and one native clickable link. Do not repeat an unchanged result link in later status updates.
 
 The result must record:
 
@@ -91,7 +94,7 @@ When the accepted checkpoint is one of several recorded for the item, report its
 
 ## Return the candidate for review
 
-`result.md` makes the candidate durably ready for review. It does not by itself notify another task.
+`result.md` makes the candidate durably ready for review. It does not by itself notify another task. The worker return includes exactly one purpose-labelled native clickable link to the current result so the owning task can inspect and surface the implementation evidence; a corrected candidate links the refreshed result once.
 
 Apply the [current-responsibility review route](../pinboard/SKILL.md#coordinate-review-responsibility-and-checkout-use). By default, the user-facing task that owns this outcome commissions one fresh-context, candidate-read-only review subagent and processes its complete verdict. The review result returns automatically to the owning task. In user-facing updates, call this `review by a separate Codex reviewer`; reserve `ready for your review` for an actual human review request. An exact `source_thread_id`, prior dispatch, scope clarification, earlier message, or former coordination is not sufficient reason to wake another visible task.
 
