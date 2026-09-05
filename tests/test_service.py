@@ -461,7 +461,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(4, authority.generation)
         self.assertEqual("continue", reloaded.focus.next_action)
         receipt = reloaded.transition_receipts[-1]
-        self.assertEqual(stored_state.TransitionHistoryActionKind.ACCEPT_REVIEW_AND_CONTINUE, receipt.action_kind)
+        self.assertEqual(decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE, receipt.action_kind)
         self.assertEqual("transition-receipt/v1", receipt.outcome_schema)
         self.assertIn(b'"candidate":"protected-candidate"', receipt.outcome_payload)
         self.assertIn(

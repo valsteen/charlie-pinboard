@@ -713,7 +713,7 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual(13, committed.lifecycle.project.revision)
         self.assertEqual(stored_state.StoredWorkItemState.PAUSED, committed.lifecycle.work_items[1].state)
         self.assertEqual(work_models.AttemptState.PAUSED, committed.lifecycle.attempts[0].state)
-        self.assertEqual(stored_state.TransitionHistoryActionKind.PAUSE, committed.transition_receipts[-1].action_kind)
+        self.assertEqual(decision_models.ActionKind.PAUSE, committed.transition_receipts[-1].action_kind)
 
         with store.write() as transaction:
             stale = transaction.commit(mutation)
@@ -850,7 +850,7 @@ class SQLiteStoreTest(unittest.TestCase):
         self.assertEqual("resume", reopened.focus.next_action)
         self.assertEqual(before.lifecycle.project.revision + 1, reopened.lifecycle.project.revision)
         self.assertEqual(len(before.transition_receipts) + 1, len(reopened.transition_receipts))
-        self.assertEqual(stored_state.TransitionHistoryActionKind.PAUSE, reopened.transition_receipts[-1].action_kind)
+        self.assertEqual(decision_models.ActionKind.PAUSE, reopened.transition_receipts[-1].action_kind)
 
     def test_direct_completion_commits_one_domain_decision_atomically(self) -> None:
         _path, store = self._store()

@@ -541,7 +541,7 @@ class SQLiteConcurrencyTest(unittest.TestCase):
         self.assertEqual(before.lifecycle.project.revision + 1, reloaded.lifecycle.project.revision)
         self.assertEqual(len(before.transition_receipts) + 1, len(reloaded.transition_receipts))
         self.assertEqual(
-            stored_state.TransitionHistoryActionKind.REVISE_ITEM,
+            decision_models.ActionKind.REVISE_ITEM,
             reloaded.transition_receipts[-1].action_kind,
         )
 

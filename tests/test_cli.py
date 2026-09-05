@@ -326,7 +326,7 @@ class CliTest(unittest.TestCase):
         store: SQLiteWorkStore,
     ) -> None:
         self.assertEqual(
-            stored_state.TransitionHistoryAuthorizationKind.COORDINATOR,
+            decision_models.AuthorizationKind.COORDINATOR,
             store.snapshot().transition_receipts[-1].authorization,
         )
         overview = self.run_json_cli(*common, "overview")
@@ -841,7 +841,7 @@ class CliTest(unittest.TestCase):
         receipt = next(
             value
             for value in reopened.transition_receipts
-            if value.action_kind == stored_state.TransitionHistoryActionKind.REVISE_ITEM
+            if value.action_kind == decision_models.ActionKind.REVISE_ITEM
         )
         self.assertEqual(revisions[-1].accepted_project_revision, receipt.project_revision)
         rebuild_result, _rebuild_stdout, rebuild_stderr = self.run_cli(*common, "views", "rebuild")
@@ -1783,10 +1783,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(work_models.AttemptState.PAUSED, reopened.lifecycle.attempts[0].state)
         self.assertEqual(
             1,
-            sum(
-                value.action_kind == stored_state.TransitionHistoryActionKind.PAUSE
-                for value in reopened.transition_receipts
-            ),
+            sum(value.action_kind == decision_models.ActionKind.PAUSE for value in reopened.transition_receipts),
         )
 
     def test_checkpoint_acceptance_archives_exact_attempt_receipts_in_one_transition(self) -> None:
@@ -3173,9 +3170,9 @@ Not launchable:
         receipts = store.snapshot().transition_receipts
         self.assertEqual(
             (
-                (stored_state.TransitionHistoryActionKind.CLOSE, 14),
-                (stored_state.TransitionHistoryActionKind.INSPECT, 15),
-                (stored_state.TransitionHistoryActionKind.CONTINUE, 16),
+                (decision_models.ActionKind.CLOSE, 14),
+                (decision_models.ActionKind.INSPECT, 15),
+                (decision_models.ActionKind.CONTINUE, 16),
             ),
             tuple((receipt.action_kind, receipt.project_revision) for receipt in receipts[-3:]),
         )
@@ -3264,8 +3261,8 @@ Not launchable:
         self.assertIn("OK TRANSITION_APPLIED pause:work-a-1 revision=13", stdout)
         self.assertEqual(
             (
-                (stored_state.TransitionHistoryActionKind.PAUSE, 13),
-                (stored_state.TransitionHistoryActionKind.INSPECT, 14),
+                (decision_models.ActionKind.PAUSE, 13),
+                (decision_models.ActionKind.INSPECT, 14),
             ),
             tuple(
                 (receipt.action_kind, receipt.project_revision) for receipt in store.snapshot().transition_receipts[-2:]

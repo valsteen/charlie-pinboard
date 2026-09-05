@@ -19,7 +19,7 @@ from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.adapters.sqlite.lifecycle import read_focus, read_lifecycle
 from pinboard.adapters.sqlite.proposals import read_proposals
 from pinboard.application import stored_state
-from pinboard.domain import authority_models, work_models
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import (
     ActionId,
@@ -45,10 +45,10 @@ class _StoredTransitionRow(msgspec.Struct, frozen=True, forbid_unknown_fields=Tr
     history_id: HistoryId
     project_revision: int
     action_id: ActionId
-    action_kind: stored_state.TransitionHistoryActionKind
+    action_kind: decision_models.ActionKind
     subject_id: HistorySubjectId
     artifact_ref_id: ArtifactRefId | None
-    authorization: stored_state.TransitionHistoryAuthorizationKind
+    authorization: decision_models.AuthorizationKind
     actor_task_id: TaskId | None
     actor_host_id: HostId | None
     input_schema: str

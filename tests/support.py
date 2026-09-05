@@ -10,7 +10,7 @@ from pinboard.adapters.sqlite import store as sqlite_store
 from pinboard.adapters.sqlite.models import OpenMode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
-from pinboard.domain import authority_models, work_models
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import (
     ActionId,
@@ -348,10 +348,10 @@ def complete_sqlite_state() -> stored_state.StoredWorkState:
             HistoryId(1),
             11,
             ActionId("continue:work-a-1"),
-            stored_state.TransitionHistoryActionKind.CONTINUE,
+            decision_models.ActionKind.CONTINUE,
             HistorySubjectId("work-a-1"),
             evidence.artifact_ref_id,
-            stored_state.TransitionHistoryAuthorizationKind.ATTEMPT,
+            decision_models.AuthorizationKind.ATTEMPT,
             TaskId("worker"),
             HostId("host-a"),
             "empty/v1",
