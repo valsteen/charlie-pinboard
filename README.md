@@ -53,7 +53,7 @@ Imagine you are building *Ashfall Keep*, a small action RPG. While one Codex tas
 
 <img width="20" height="20" src="assets/safe-camp.png" alt="Campfire and bedroll checkpoint"> **Resume the decision, not the conversation.** If stable ability IDs become a real prerequisite, the dragon attempt records where it stopped and what must change. The same attempt later resumes from its accepted brief and evidence.
 
-<img width="20" height="20" src="assets/ready-to-build.png" alt="Crossed sword and blacksmith hammer"> **Review what was approved, not merely what now exists.** `$pinboard-deliver` claims the active attempt, follows its exact definition and brief, records the candidate and evidence, and returns them for review by a separate Codex reviewer. If the definition changed, the old brief cannot quietly stand in for it.
+<img width="20" height="20" src="assets/ready-to-build.png" alt="Crossed sword and blacksmith hammer"> **Review what was approved, not merely what now exists.** `$pinboard-deliver` is the implementer route for an already prepared active attempt: it follows the exact definition and brief, records the candidate and evidence, and returns them for review by a separate Codex reviewer. If later accepted direction changes the target, the complete definition and brief change too, and the resulting exact candidate receives a new review before wrap-up.
 
 The code, branch, and conversation remain ordinary Codex work. Pinboard keeps their product decisions connected. [How Pinboard works](HOW_IT_WORKS.md) starts with this workflow, then follows it into the detailed lifecycle, persistence model, and package boundaries.
 
@@ -78,6 +78,7 @@ That makes this codebase one concrete case study, not proof that Pinboard elimin
 - **Interruption and recovery:** block, pause, resume, or recover work without rebuilding its context from chat history.
 - **Parallel work:** preview independent items and recheck the group as each attempt starts, without creating tasks on the user's behalf.
 - **Review:** keep the submitted candidate and its evidence exact, then use a separate Codex reviewer—normally a subagent that returns to the owning task—to accept it or return it for correction.
+- **Wrap-up:** reconcile later accepted direction and repository changes before candidate presentation or acceptance, then let the human choose the repository disposition and confirm terminal completion.
 - **Handover:** export one revision-stamped JSON package of supported project facts—admitted work, pending proposals, relationships, decisions, and verified review evidence—without choosing a team-tool vendor. Live lease authority remains local.
 - **Recursive cleanup:** use `$slop-cleanup` to trace residue from revised or abandoned features, remove an approved family, and repeat until a fresh pass finds nothing new.
 - **Optional storytelling review:** after you choose it, proof-read one representative flow or the complete supported repository so the code, its names, and the product overview tell the same accurate story without casually breaking compatibility or deliberate identity; then remove any ceremony introduced by the readability work before calling the pass complete.
