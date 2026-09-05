@@ -7,7 +7,7 @@ from typing import Literal, assert_never
 import msgspec
 
 from pinboard.application import query_models, stored_state
-from pinboard.domain import work_models
+from pinboard.domain import decision_models, work_models
 from pinboard.domain.identifiers import ProposalId
 
 
@@ -175,10 +175,10 @@ class HandoverTransition(msgspec.Struct, frozen=True, forbid_unknown_fields=True
     history_id: int
     project_revision: int
     action_id: str
-    action_kind: stored_state.TransitionHistoryActionKind
+    action_kind: decision_models.ActionKind
     subject_id: str
     artifact_ref_id: int | None
-    authorization: stored_state.TransitionHistoryAuthorizationKind
+    authorization: decision_models.AuthorizationKind
     actor_task_id: str | None
     actor_host_id: str | None
     input_schema: str

@@ -3,7 +3,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal, assert_never
 
-from pinboard.domain import authority_models, work_models
+from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.identifiers import (
     ActionId,
     ArtifactRefId,
@@ -84,40 +84,6 @@ def stored_close_outcome(value: work_models.CloseOutcome) -> StoredWorkItemState
             return StoredWorkItemState(value.value)
         case _ as unreachable:
             assert_never(unreachable)
-
-
-class TransitionHistoryActionKind(Enum):
-    ACCEPT_CHECKPOINT = "accept-checkpoint"
-    ACCEPT_REVIEW_AND_CONTINUE = "accept-review-and-continue"
-    ACCEPT_PROPOSAL = "accept-proposal"
-    ACTIVATE = "activate"
-    BLOCK = "block"
-    BLOCK_ITEM = "block-item"
-    COMPLETE = "complete"
-    CLOSE = "close"
-    CONTINUE = "continue"
-    DEFER = "defer"
-    DISPATCH = "dispatch"
-    INSPECT = "inspect"
-    MARK_READY = "mark-ready"
-    MERGE_PROPOSAL = "merge-proposal"
-    PAUSE = "pause"
-    REJECT_PROPOSAL = "reject-proposal"
-    REOPEN = "reopen"
-    REPORT_BLOCKER = "report-blocker"
-    RESUME = "resume"
-    RETURN_FOR_CORRECTION = "return-for-correction"
-    RETURN_PROPOSAL = "return-proposal"
-    REVISE_ITEM = "revise-item"
-    SUBMIT_REVIEW = "submit-review"
-    TRANSFER_COORDINATOR = "transfer-coordinator"
-
-
-class TransitionHistoryAuthorizationKind(Enum):
-    COORDINATOR = "coordinator"
-    COORDINATION = "coordination"
-    ATTEMPT = "attempt"
-    PREPARATION = "preparation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,10 +269,10 @@ class StoredTransitionReceipt:
     history_id: HistoryId
     project_revision: int
     action_id: ActionId
-    action_kind: TransitionHistoryActionKind
+    action_kind: decision_models.ActionKind
     subject_id: HistorySubjectId
     artifact_ref_id: ArtifactRefId | None
-    authorization: TransitionHistoryAuthorizationKind
+    authorization: decision_models.AuthorizationKind
     actor_task_id: TaskId | None
     actor_host_id: HostId | None
     input_schema: str

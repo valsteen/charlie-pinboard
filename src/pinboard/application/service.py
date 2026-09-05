@@ -57,16 +57,16 @@ def decide_and_commit_coordination_authority_change(
     match requested_change:
         case authority_models.AcquireCoordinationAuthority(acquired_at=decided_at):
             history_outcome = "acquire-coordination-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
+            history_authorization = decision_models.AuthorizationKind.COORDINATOR
         case authority_models.RenewCoordinationAuthority(renewed_at=decided_at):
             history_outcome = "renew-coordination-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
+            history_authorization = decision_models.AuthorizationKind.COORDINATION
         case authority_models.ReleaseCoordinationAuthority(released_at=decided_at):
             history_outcome = "release-coordination-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
+            history_authorization = decision_models.AuthorizationKind.COORDINATION
         case authority_models.RevokeCoordinationAuthority(revoked_at=decided_at):
             history_outcome = "revoke-coordination-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
+            history_authorization = decision_models.AuthorizationKind.COORDINATOR
         case _ as unreachable:
             assert_never(unreachable)
     with store.write() as transaction:
@@ -91,7 +91,7 @@ def decide_and_commit_coordination_authority_change(
             transition=transition_receipt,
             history_id=_next_history_id(locked_state),
             project_revision=locked_state.lifecycle.project.revision + 1,
-            action_kind=stored_state.TransitionHistoryActionKind.CONTINUE,
+            action_kind=decision_models.ActionKind.CONTINUE,
             subject_id=HistorySubjectId("ledger"),
             artifact_ref_id=None,
             authorization=history_authorization,
@@ -149,22 +149,22 @@ def decide_and_commit_attempt_authority_change(
     match requested_change:
         case authority_models.AcquireInitialAttemptAuthority(attempt=attempt_id, acquired_at=decided_at):
             history_outcome = "acquire-initial-attempt-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
+            history_authorization = decision_models.AuthorizationKind.COORDINATOR
         case authority_models.TransferAttemptAuthority(current=current, acquired_at=decided_at):
             attempt_id = current.attempt
             history_outcome = "transfer-attempt-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
+            history_authorization = decision_models.AuthorizationKind.COORDINATION
         case authority_models.RenewAttemptAuthority(current=current, renewed_at=decided_at):
             attempt_id = current.attempt
             history_outcome = "renew-attempt-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.ATTEMPT
+            history_authorization = decision_models.AuthorizationKind.ATTEMPT
         case authority_models.ReleaseAttemptAuthority(current=current, released_at=decided_at):
             attempt_id = current.attempt
             history_outcome = "release-attempt-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.ATTEMPT
+            history_authorization = decision_models.AuthorizationKind.ATTEMPT
         case authority_models.RevokeAttemptAuthority(attempt=attempt_id, revoked_at=decided_at):
             history_outcome = "revoke-attempt-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
+            history_authorization = decision_models.AuthorizationKind.COORDINATION
         case _ as unreachable:
             assert_never(unreachable)
     with store.write() as transaction:
@@ -212,7 +212,7 @@ def decide_and_commit_attempt_authority_change(
             transition=transition_receipt,
             history_id=_next_history_id(locked_state),
             project_revision=locked_state.lifecycle.project.revision + 1,
-            action_kind=stored_state.TransitionHistoryActionKind.CONTINUE,
+            action_kind=decision_models.ActionKind.CONTINUE,
             subject_id=HistorySubjectId(attempt_id),
             artifact_ref_id=None,
             authorization=history_authorization,
@@ -262,22 +262,22 @@ def decide_and_commit_preparation_authority_change(
     match requested_change:
         case authority_models.AcquireInitialPreparationAuthority(item=item_id, acquired_at=decided_at):
             history_outcome = "acquire-initial-preparation-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATOR
+            history_authorization = decision_models.AuthorizationKind.COORDINATOR
         case authority_models.TransferPreparationAuthority(current=current, acquired_at=decided_at):
             item_id = current.item
             history_outcome = "transfer-preparation-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
+            history_authorization = decision_models.AuthorizationKind.COORDINATION
         case authority_models.RenewPreparationAuthority(current=current, renewed_at=decided_at):
             item_id = current.item
             history_outcome = "renew-preparation-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.PREPARATION
+            history_authorization = decision_models.AuthorizationKind.PREPARATION
         case authority_models.ReleasePreparationAuthority(current=current, released_at=decided_at):
             item_id = current.item
             history_outcome = "release-preparation-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.PREPARATION
+            history_authorization = decision_models.AuthorizationKind.PREPARATION
         case authority_models.RevokePreparationAuthority(item=item_id, revoked_at=decided_at):
             history_outcome = "revoke-preparation-authority"
-            history_authorization = stored_state.TransitionHistoryAuthorizationKind.COORDINATION
+            history_authorization = decision_models.AuthorizationKind.COORDINATION
         case _ as unreachable:
             assert_never(unreachable)
     with store.write() as transaction:
@@ -313,7 +313,7 @@ def decide_and_commit_preparation_authority_change(
             transition=transition_receipt,
             history_id=_next_history_id(locked_state),
             project_revision=locked_state.lifecycle.project.revision + 1,
-            action_kind=stored_state.TransitionHistoryActionKind.CONTINUE,
+            action_kind=decision_models.ActionKind.CONTINUE,
             subject_id=HistorySubjectId(item_id),
             artifact_ref_id=None,
             authorization=history_authorization,
@@ -355,10 +355,10 @@ def create_proposal(
             transition_receipt,
             _next_history_id(locked_state),
             project.revision + 1,
-            stored_state.TransitionHistoryActionKind.INSPECT,
+            decision_models.ActionKind.INSPECT,
             HistorySubjectId(intake.proposal_id),
             None,
-            stored_state.TransitionHistoryAuthorizationKind.COORDINATOR,
+            decision_models.AuthorizationKind.COORDINATOR,
             intake.source_task_id,
             None,
             "proposal-intake/v1",

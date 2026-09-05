@@ -645,18 +645,7 @@ class _SQLiteWorkTransaction:
         if (failure := _persist(connection, current, mutation)) is not None:
             return self._select(failure)
         sqlite_state.read_state(connection)
-        match mutation:
-            case (
-                TransitionMutation()
-                | CheckpointAcceptanceMutation()
-                | ProposalCreationMutation()
-                | CoordinationAuthorityMutation()
-                | AttemptAuthorityMutation()
-                | PreparationAuthorityMutation()
-            ):
-                return self._select(mutation.receipt)
-            case _ as unreachable:
-                assert_never(unreachable)
+        return self._select(mutation.receipt)
 
 
 class SQLiteWorkStore:

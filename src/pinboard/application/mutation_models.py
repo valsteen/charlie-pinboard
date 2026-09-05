@@ -14,10 +14,10 @@ class MutationReceipt:
     transition: decision_models.TransitionReceipt
     history_id: HistoryId
     project_revision: int
-    action_kind: stored_state.TransitionHistoryActionKind
+    action_kind: decision_models.ActionKind
     subject_id: HistorySubjectId
     artifact_ref_id: ArtifactRefId | None
-    authorization: stored_state.TransitionHistoryAuthorizationKind
+    authorization: decision_models.AuthorizationKind
     actor_task_id: TaskId | None
     actor_host_id: HostId | None
     input_schema: str

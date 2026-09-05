@@ -110,54 +110,6 @@ def stored_transition_receipt(mutation: StoredStateMutation) -> stored_state.Sto
     )
 
 
-def _history_action_kind(value: decision_models.ActionKind) -> stored_state.TransitionHistoryActionKind:
-    match value:
-        case (
-            decision_models.ActionKind.ACCEPT_CHECKPOINT
-            | decision_models.ActionKind.ACCEPT_REVIEW_AND_CONTINUE
-            | decision_models.ActionKind.ACCEPT_PROPOSAL
-            | decision_models.ActionKind.ACTIVATE
-            | decision_models.ActionKind.BLOCK
-            | decision_models.ActionKind.BLOCK_ITEM
-            | decision_models.ActionKind.COMPLETE
-            | decision_models.ActionKind.CLOSE
-            | decision_models.ActionKind.CONTINUE
-            | decision_models.ActionKind.DEFER
-            | decision_models.ActionKind.DISPATCH
-            | decision_models.ActionKind.INSPECT
-            | decision_models.ActionKind.MARK_READY
-            | decision_models.ActionKind.MERGE_PROPOSAL
-            | decision_models.ActionKind.PAUSE
-            | decision_models.ActionKind.REJECT_PROPOSAL
-            | decision_models.ActionKind.REOPEN
-            | decision_models.ActionKind.REPORT_BLOCKER
-            | decision_models.ActionKind.RESUME
-            | decision_models.ActionKind.RETURN_FOR_CORRECTION
-            | decision_models.ActionKind.RETURN_PROPOSAL
-            | decision_models.ActionKind.REVISE_ITEM
-            | decision_models.ActionKind.SUBMIT_REVIEW
-            | decision_models.ActionKind.TRANSFER_COORDINATOR
-        ):
-            return stored_state.TransitionHistoryActionKind(value.value)
-        case _ as unreachable:
-            assert_never(unreachable)
-
-
-def _history_authorization_kind(
-    value: decision_models.AuthorizationKind,
-) -> stored_state.TransitionHistoryAuthorizationKind:
-    match value:
-        case (
-            decision_models.AuthorizationKind.COORDINATOR
-            | decision_models.AuthorizationKind.COORDINATION
-            | decision_models.AuthorizationKind.ATTEMPT
-            | decision_models.AuthorizationKind.PREPARATION
-        ):
-            return stored_state.TransitionHistoryAuthorizationKind(value.value)
-        case _ as unreachable:
-            assert_never(unreachable)
-
-
 def _checkpoint_artifact_ids(
     before: stored_state.StoredWorkState,
     artifacts: CheckpointArtifacts,
@@ -312,15 +264,14 @@ def _transition_receipt[SubjectT: SubjectId](
         if preparation is not None:
             actor_task_id, actor_host_id = preparation.task_id, preparation.host_id
     revision = before.lifecycle.project.revision + 1
-    authorization = _history_authorization_kind(capability.authorization)
     return MutationReceipt(
         transition,
         HistoryId(1 + max((int(value.history_id) for value in before.transition_receipts), default=0)),
         revision,
-        _history_action_kind(action_kind),
+        action_kind,
         HistorySubjectId(capability.subject),
         artifact_ref_id,
-        authorization,
+        capability.authorization,
         actor_task_id,
         actor_host_id,
         "decision/v1",
