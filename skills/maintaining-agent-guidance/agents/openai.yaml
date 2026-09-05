@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintaining Agent Guidance"
+  short_description: "Establish or improve durable AI guidance"
+  default_prompt: "Use $maintaining-agent-guidance to assess this project's durable AI guidance and recommend the smallest useful baseline."

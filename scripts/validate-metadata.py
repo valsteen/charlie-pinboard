@@ -30,8 +30,11 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
-EXPECTED_SKILLS: Final = frozenset({"pinboard", "pinboard-deliver", "pinboard-intake", "slop-cleanup"})
+EXPECTED_SKILLS: Final = frozenset(
+    {"maintaining-agent-guidance", "pinboard", "pinboard-deliver", "pinboard-intake", "slop-cleanup"}
+)
 EXPECTED_SKILL_DISPLAY_NAMES: Final = {
+    "maintaining-agent-guidance": "Maintaining Agent Guidance",
     "pinboard": "Pinboard",
     "pinboard-deliver": "Pinboard: Deliver",
     "pinboard-intake": "Pinboard: Intake",
@@ -242,7 +245,9 @@ def main() -> None:
     validate_marketplace()
     skill_paths = tuple(sorted((ROOT / "skills").glob("*/SKILL.md")))
     if {path.parent.name for path in skill_paths} != EXPECTED_SKILLS:
-        raise ValueError("public skills must be exactly pinboard, pinboard-deliver, pinboard-intake, and slop-cleanup")
+        raise ValueError(
+            "public skills must be exactly maintaining-agent-guidance, pinboard, pinboard-deliver, pinboard-intake, and slop-cleanup"
+        )
     for path in skill_paths:
         validate_skill(path)
     print(f"validated plugin marketplace and {len(skill_paths)} skills")

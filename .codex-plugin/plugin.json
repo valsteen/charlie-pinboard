@@ -1,6 +1,6 @@
 {
   "name": "pinboard",
-  "version": "0.1.0+codex.20260901214825",
+  "version": "0.1.0+codex.20260905164515",
   "description": "Coordinate repository work with canonical execution briefs and validated state transitions.",
   "author": {
     "name": "Vincent Alsteen",
@@ -29,7 +29,7 @@
     "defaultPrompt": [
       "Show the legal next project actions.",
       "Preserve this proposed work for the next coordination pass.",
-      "Trace and plan a recursive cleanup of dead, test-only, and abandoned feature residue."
+      "Use $maintaining-agent-guidance to improve durable AI guidance, or $slop-cleanup to trace implementation residue."
     ]
   }
 }

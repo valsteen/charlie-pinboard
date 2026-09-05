@@ -71,6 +71,8 @@ That makes this codebase one concrete case study, not proof that Pinboard elimin
 
 ## What it covers
 
+Pinboard's core ledger workflows cover:
+
 - **Intake:** preserve a discovery without silently changing priority or starting work.
 - **Planning:** make readiness, deferral, closure, dependencies, and current focus explicit.
 - **Revisioned definitions:** replace a complete accepted definition with compare-and-swap safety, retain every prior revision, and inspect current or paginated history as typed JSON.
@@ -79,10 +81,15 @@ That makes this codebase one concrete case study, not proof that Pinboard elimin
 - **Parallel work:** preview independent items and recheck the group as each attempt starts, without creating tasks on the user's behalf.
 - **Review:** keep the submitted candidate and its evidence exact, then use a separate Codex reviewer—normally a subagent that returns to the owning task—to accept it or return it for correction.
 - **Handover:** export one revision-stamped JSON package of supported project facts—admitted work, pending proposals, relationships, decisions, and verified review evidence—without choosing a team-tool vendor. Live lease authority remains local.
-- **Recursive cleanup:** use `$slop-cleanup` to trace residue from revised or abandoned features, remove an approved family, and repeat until a fresh pass finds nothing new.
-- **Optional storytelling review:** after you choose it, proof-read one representative flow or the complete supported repository so the code, its names, and the product overview tell the same accurate story without casually breaking compatibility or deliberate identity; then remove any ceremony introduced by the readability work before calling the pass complete.
 
-The `$pinboard`, `$pinboard-intake`, and `$pinboard-deliver` skills provide the conversational workflows. The `pinboard` command validates and updates the repository-local ledger, rejects stale actions, and keeps unrelated attempts from invalidating one another.
+The plugin also bundles two generic companion workflows. They can be used independently and do not require Pinboard coordination:
+
+- **Guidance maintenance:** use `$maintaining-agent-guidance` to establish or improve durable AI-facing project guidance, place each proposition at its smallest authoritative owner, and reconcile duplication or conflicts.
+- **Recursive cleanup:** use `$slop-cleanup` to trace residue from revised or abandoned features, remove an approved family, and repeat until a fresh pass finds nothing new.
+
+Slop Cleanup also offers an optional storytelling review. After you choose it, proof-read one representative flow or the complete supported repository so the code, its names, and the product overview tell the same accurate story without casually breaking compatibility or deliberate identity; then remove any ceremony introduced by the readability work before calling the pass complete.
+
+The `$pinboard`, `$pinboard-intake`, and `$pinboard-deliver` skills provide the core coordination, intake, and delivery workflows. The `pinboard` command validates and updates the repository-local ledger, rejects stale actions, and keeps unrelated attempts from invalidating one another.
 
 For the most reliable workflow, keep one user-facing Codex task responsible for an outcome through its final repository decision. Let it delegate bounded research, implementation, and review to subagents whose results return automatically. Open another visible task only for a genuinely independent outcome you intend to follow there.
 
