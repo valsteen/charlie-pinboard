@@ -1,6 +1,6 @@
 {
   "name": "pinboard",
-  "version": "0.1.0+codex.20260901214825",
+  "version": "0.1.0+codex.20260905184500",
   "description": "Coordinate repository work with canonical execution briefs and validated state transitions.",
   "author": {
     "name": "Vincent Alsteen",
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "Pinboard",
     "shortDescription": "Coordinate one validated repository work ledger.",
-    "longDescription": "Keep one repository queue, turn accepted work into canonical execution briefs, and prevent worker launches from drifting before independent review.",
+    "longDescription": "Keep repository work aligned with accepted decisions, assess unfamiliar change paths, remove unsupported residue, and place durable agent guidance at the right owner.",
     "developerName": "Vincent Alsteen",
     "category": "Productivity",
     "websiteURL": "https://github.com/valsteen/pinboard",
@@ -29,7 +29,9 @@
     "defaultPrompt": [
       "Show the legal next project actions.",
       "Preserve this proposed work for the next coordination pass.",
-      "Trace and plan a recursive cleanup of dead, test-only, and abandoned feature residue."
+      "Assess whether this unfamiliar repository can be changed reliably.",
+      "Trace and plan a recursive cleanup of dead, test-only, and abandoned feature residue.",
+      "Find the smallest durable owner for this project's AI-facing guidance."
     ]
   }
 }

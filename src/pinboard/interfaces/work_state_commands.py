@@ -117,8 +117,13 @@ def initialize_state(roots: cli_commands.ResolvedRoots, _command: cli_commands.I
     operation_time = datetime.now(UTC)
     receipt = initialize_work_state(roots.shared_repository, selected_work, now=operation_time)
     print(f"OK WORK_STATE_INITIALIZED {receipt.work_root}")
-    if not receipt.resumed and (recommendation := _read_user_config_and_recommend_body_after_prefix()) is not None:
-        print(recommendation)
+    if not receipt.resumed:
+        print(
+            "Optional next steps: $repository-readiness maps safe change paths; $slop-cleanup removes unsupported "
+            "residue; $maintaining-agent-guidance places durable AI guidance."
+        )
+        if (recommendation := _read_user_config_and_recommend_body_after_prefix()) is not None:
+            print(recommendation)
     return 0
 
 

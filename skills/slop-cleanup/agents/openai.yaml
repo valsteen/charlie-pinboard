@@ -1,4 +1,4 @@
 interface:
   display_name: "Slop Cleanup"
   short_description: "Clean repository residue to a verified fixed point"
-  default_prompt: "Use $slop-cleanup to trace and plan recursive cleanup of dead, test-only, and abandoned residue. When readability or developer navigation is also in scope, close every changed flow with a focused cleanup pass and close whole-repository work with a fresh complete cleanup pass."
+  default_prompt: "Use $slop-cleanup to trace, remove, and recursively recheck dead, test-only, and abandoned repository residue until no new cleanup candidate remains."

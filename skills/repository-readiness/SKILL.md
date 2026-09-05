@@ -1,0 +1,66 @@
+---
+name: repository-readiness
+description: Assess whether an unfamiliar repository can be changed reliably by mapping semantic authority through consumers, projections, and validation, then make only authorized improvements. Use for onboarding vibe-coded, inherited, or long-lived multi-team codebases. Do not use for a known cleanup-only task or a routine guidance correction with an already settled owner.
+---
+
+# Make an unfamiliar repository safe to change
+
+Build an evidence-backed map that lets a newcomer find the real owner of a change, its complete footprint, and the checks that keep it coherent. Diagnose before improving. Do not treat existing structure as intentional merely because it exists.
+
+## Choose the assessment boundary
+
+Use **representative mode** by default. Select one meaningful supported change path and enough neighboring consumers to test whether the same ownership story holds. State that the result is bounded and do not turn it into a whole-repository claim.
+
+Use **whole-repository mode** only when the user explicitly asks for complete coverage. Enumerate every supported runtime and public entry point, agent and plugin surface, product and contributor document, generated projection and generator, development tool and configuration, packaging and dependency surface, CI path, and test-evidence surface. Assign each surface to a traced change path, a non-routing role, or an explicit unresolved disposition.
+
+Assessment is read-only unless the user has also asked for improvements. Treat audit findings as evidence, not mutation authority.
+
+## Establish current authority
+
+Start from the user's requested outcome and the repository's current product, architecture, contributor, and agent guidance. Then verify supported entry points through package metadata, runtime registration, configuration, generators, and actual consumers.
+
+Classify relevant material as:
+
+- established semantic authority;
+- strong but inferred authority;
+- consumer;
+- generated or explanatory projection;
+- validation evidence;
+- historical, transitional, dead, or uncertain.
+
+Code proves implementation, tests prove observed behavior, and documentation proves a claim only after its ownership is established. None of them alone proves product intent. Prefer improving an existing trustworthy map over creating a competing one.
+
+## Trace authority to validation
+
+For each selected change, start from a realistic user-level request and record:
+
+1. **Authority:** where the product decision, schema, policy, configuration, or generator input lives.
+2. **Consumers:** every supported implementation, configuration, documentation, or guidance surface that applies it.
+3. **Projections:** generated or copied representations and the owner that produces them.
+4. **Validation:** tests, checks, schemas, CI, or runtime evidence that detect divergence.
+
+Trace outward from the authority and backward from likely entry points. Record plausible wrong paths, missing links, duplicated decisions, projection/authority confusion, and places that require repository history or tribal knowledge. Keep unresolved intent visible instead of guessing.
+
+When a command, closed family, or dynamic route makes the next implementation owner difficult to predict, read [developer-navigation.md](references/developer-navigation.md). When code and its overview tell different stories, names make false promises, or a newcomer cannot accurately retell the flow, read [storytelling-readability.md](references/storytelling-readability.md). Load neither reference for an ordinary authority trace that does not need its lens.
+
+## Present the diagnosis
+
+Scale the result to the selected mode. Include:
+
+- an executive assessment of how safely a newcomer can make the selected change;
+- the authority → consumers → projections → validation map;
+- a walkthrough from the user request to the owning implementation and checks;
+- evidence-backed risks and misleading alternatives;
+- unresolved human decisions;
+- small safe improvements and larger follow-ups kept separate; and
+- awkward structures that evidence says should remain alone.
+
+Do not produce a readiness score or certification. A useful result makes evidence, uncertainty, and the next owner discoverable.
+
+## Improve only what is authorized
+
+When the user has asked for improvements, apply the smallest changes whose authority and complete footprint are established. Good candidates include correcting an existing map, adding a local pointer from a misleading projection, exposing an existing generator, reconciling stale explanatory documentation, or removing a clearly deceptive obsolete path with no supported consumer.
+
+Pause for a human decision when outward behavior, compatibility, persisted data, product identity, or architectural responsibility remains ambiguous. Validate every changed authority, consumer, and projection through the repository's existing checks. Stop when the selected change path is discoverable and another edit would merely restyle clear work or settle unsupported intent.
+
+Confirmed unsupported residue belongs to `$slop-cleanup` when that skill is available; report the candidate and obtain deletion authority rather than copying its recursive removal workflow here. A durable AI-guidance ownership problem may use `$maintaining-agent-guidance` when available. Pinboard may preserve an accepted improvement campaign when the user already uses it. These are optional enhancements: never require or invoke a sibling skill, create work, or initialize Pinboard merely to complete this assessment.

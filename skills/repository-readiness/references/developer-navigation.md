@@ -1,26 +1,30 @@
-# Stress-test developer navigation
+# Trace developer navigation
 
-This test audits structural navigation and repeated routing ownership. For the separate human-comprehension pass that compares a product overview with the story told by code, use [storytelling readability](storytelling-readability.md).
+Use this lens when a command or closed-variant family crosses several production owners, or when dynamic dispatch makes the next implementation owner difficult to predict. It audits structural navigation and repeated routing ownership. For the separate human-comprehension pass that compares a product overview with the story told by code, use [storytelling readability](storytelling-readability.md).
 
-Use this test when a command or closed-variant family crosses several production owners. First apply the shared [developer-navigation lens](../../pinboard/references/developer-navigation.md). This cleanup-specific test extends that bounded prevention check across the complete production surface and adds fixed-point evidence.
+In representative mode, trace one supported value and simulate one sibling. In explicitly selected whole-repository mode, repeat the method for every distinct routing shape and complete the category-by-category surface inventory below. A representative path may establish one shape but cannot stand for the complete surface.
 
-For an explicitly selected whole-repository storytelling pass, inventory every supported product, agent, documentation, tooling, packaging, CI, and test-evidence surface first. Derive every distinct routing or narrative shape from that inventory, then require one English-only trace and one sibling simulation per shape. A representative path may establish one shape but cannot stand for the complete surface.
+For whole-repository work, inventory every supported product, agent, documentation, tooling, packaging, CI, and test-evidence surface first. Derive every distinct routing shape from that inventory, then require one English-only trace and one sibling simulation per shape.
 
 ## Trace one supported value
 
-Choose a representative command or variant with a real production entry point and effect and record the trace required by the shared lens. Repeat for another family only when it has a distinct routing shape, such as state mutation versus read projection or direct versus borrowed authority; stop adding traces when a new shape exposes no new owner category. In cleanup, every same-meaning pass-through or remap in those traces becomes a candidate whose semantic responsibility must be inspected and dispositioned.
+Choose a representative command or variant with a real production entry point and effect. Follow it through boundary validation, product decisions, representation conversions, effects or persistence, and presentation. At every site, classify the owned responsibility or mark it as same-meaning pass-through or remapping. Names, imports, and direct calls should make the next owner predictable.
+
+Repeat for another family only when it has a distinct routing shape, such as state mutation versus read projection or direct versus borrowed authority. Stop adding traces when a new shape exposes no new owner category. After a concrete alternative is selected, carry the exact typed value directly until another owner has a different decision or representation to own.
 
 ## Audit what names promise
 
-Use the reachability inventory's complete name surface rather than sampling identifiers that happen to appear in a trace. For each in-scope name, ask what an ordinary English reading claims about provenance, timing, success, durability, authority, capability, intelligence, autonomy, universality, prestige, and identity. Compare that claim with the responsibility the implementation, boundary, or product actually demonstrates. Symmetric spelling across sibling paths does not clear a name whose meaning is false in both places.
+In representative mode, inspect the names on the traced path. In whole-repository mode, build a complete name surface instead of sampling identifiers. For each in-scope name, ask what an ordinary English reading claims about provenance, timing, success, durability, authority, capability, intelligence, autonomy, universality, prestige, and identity. Compare that claim with the responsibility the implementation, boundary, or product actually demonstrates. Symmetric spelling across sibling paths does not clear a name whose meaning is false in both places.
 
 Record every mismatch with its selector, claimed meaning, demonstrated responsibility, mismatch, normal reading cost, affected consumers, and evidence. Then use the [storytelling readability](storytelling-readability.md) classification and disposition method. A stable or identity-sensitive name remains a reported finding even when immediate rename would be unsafe.
 
 ## Generate candidates mechanically
 
+Use this complete-surface procedure only in explicitly selected whole-repository mode. In representative mode, search only the traced family and its sibling for the same signals.
+
 Choose the cheapest available path without changing the required coverage:
 
-- **Analyzer path:** Use a repository-declared syntax or semantic analyzer when it can enumerate a category completely. For Python, consume the AST inventory's `trivial_callable_bodies`, `equivalent_match_arms`, `exhaustive_passthrough_matches`, and `duplicated_match_structures` before semantic inspection.
+- **Analyzer path:** Use a repository-declared syntax or semantic analyzer when it can enumerate a category completely. Useful categories include trivial callable bodies, equivalent match arms, exhaustive pass-through matches, and duplicated branch structures.
 - **Language-portable fallback:** For every category the available analyzers leave partial or unsupported, use an existing syntax tool or a disposable extractor outside the repository to enumerate the relevant constructs across the complete production surface. The procedure is shared across languages, but the extractor must understand the concrete language's syntax. Save a compact structural ledger in private scratch space and inspect its groups and failures rather than printing source bodies. Do not add a production dependency or permanent parser for the audit.
 
 Before fingerprinting, build an independent construct-universe inventory for every production language and category in scope. Derive it from a language-aware parser or analyzer when available; otherwise use a separate lexical or token sweep from the fingerprint extractor. The fingerprint extractor may consume the resulting selectors, but it must not define its own denominator. Record the syntax families and branch-bearing keywords or operators the inventory recognizes. Include both statement and expression forms of branching, such as conditional expressions as well as `if`, `match`, `switch`, or `when`; include exception handlers, callable bodies, loops and comprehensions, dispatch defaults, and protocol, interface, or trait declarations. Language-specific spelling may differ, but an unrecognized construct is a coverage failure rather than evidence that the category is empty.
@@ -83,7 +87,9 @@ The last signal needs extra care. Identical spelling does not prove identical pr
 
 ## Simulate one sibling change
 
-Apply the shared lens's sibling simulation and dispatch test to every distinct routing shape found by the trace. In cleanup, those results produce candidates rather than automatic deletion authority. Preserve a site when semantic inspection exposes an independent observation, nominal distinction, boundary representation, policy, effect, or presentation responsibility that its superficial code shape concealed.
+Choose one plausible sibling with the same boundary and lifecycle shape. List every site that would need an edit. Keep a site when it owns validation, policy, an independently required representation conversion, an effect, persistence, or presentation. Fold a site when it only repeats a selection made earlier. Preserve nominal distinctions when another consumer or protocol genuinely distinguishes them.
+
+Keep exhaustive branching where a closed boundary or owner genuinely distinguishes the family. Use direct calls or a required protocol when the caller should not distinguish implementations. Use dynamic dispatch only for a deliberately open family with one visible wiring owner, an explicit required surface, and explicit failure for missing support. Do not hide incomplete handling behind a catch-all, mapping default, optional callback, inherited implementation, or fallback handler.
 
 ## Mock example: CLI leaf routing
 
@@ -104,6 +110,6 @@ The same test can justify superficially repeated work. Selecting an advertised c
 
 ## Evidence and stop condition
 
-Every code change made by this stress test returns to the cleanup skill's structural lens. For a focused family, inspect the changed owners and their adjacent producers and consumers, remove direct residue, and rerun the trace. For whole-repository coverage, finish the navigation repairs and then rerun the complete slop-cleanup inventory and semantic sweep over the original declared roots. Alternate navigation and cleanup until both fresh passes produce no new in-scope candidate.
+After a focused repair, inspect each changed owner and its adjacent producers and consumers for pass-throughs, obsolete routes, or duplicated decisions introduced or exposed by the change, then rerun the trace. For whole-repository coverage, rerun the complete routing-shape, construct, and semantic inventories over the original declared roots until a fresh pass produces no new in-scope candidate.
 
-Report the before-and-after traces, sibling edit sites, retained exhaustive sites with their owned distinction, all eight separate semantic sweep receipts, and deleted pass-through sites. Stop when the required cleanup loop is also closed, every distinct routing shape has an English-only trace, no same-meaning routing fact repeats outside a boundary, decision, effect, or presentation owner, the sibling simulations expose no ceremonial edit site in scope, and every sweep above has a concrete zero-result or disposition receipt.
+Report the before-and-after traces, sibling edit sites, retained exhaustive sites with their owned distinction, applicable semantic sweep receipts, and removed pass-through sites. In representative mode, stop when the sibling adds edits only at owners with distinct responsibilities and the route remains predictable. In whole-repository mode, also require every distinct routing shape to have an English-only trace and every sweep above to have a concrete zero-result or disposition receipt.

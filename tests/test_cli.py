@@ -49,6 +49,11 @@ from .work_brief_support import work_a_brief, work_c_brief
 
 
 class CliTest(unittest.TestCase):
+    def assert_repository_care_pointer(self, output: str, *, present: bool) -> None:
+        expected_count = 1 if present else 0
+        for skill in ("$repository-readiness", "$slop-cleanup", "$maintaining-agent-guidance"):
+            self.assertEqual(expected_count, output.count(skill), skill)
+
     def run_cli(self, *arguments: str) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -858,6 +863,7 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(0, result, stderr)
         self.assertIn("WORK_STATE_INITIALIZED", stdout)
+        self.assert_repository_care_pointer(stdout, present=True)
         self.assertTrue((work / "state.sqlite3").is_file())
         self.assertFalse((work / "authority.json").exists())
         self.assertFalse((work / "queue.md").exists())
@@ -929,12 +935,14 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(1, first_stdout.count("model_auto_compact_token_limit_scope"))
                 self.assertIn(str(config), first_stdout)
                 self.assertNotIn("model_auto_compact_token_limit_scope", second_stdout)
+                self.assert_repository_care_pointer(first_stdout, present=True)
+                self.assert_repository_care_pointer(second_stdout, present=False)
                 if config_contents is None:
                     self.assertFalse(config.exists())
                 else:
                     self.assertEqual(config_contents, config.read_text(encoding="utf-8"))
 
-    def test_first_init_recommendation_is_only_about_the_user_default(self) -> None:
+    def test_first_init_config_recommendation_is_only_about_the_user_default(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         project_config = project / ".codex" / "config.toml"
         project_config.parent.mkdir()
@@ -955,9 +963,10 @@ class CliTest(unittest.TestCase):
         self.assertEqual(0, result, stderr)
         self.assertIn("model_auto_compact_token_limit_scope", stdout)
         self.assertIn(str(codex_home / "config.toml"), stdout)
+        self.assert_repository_care_pointer(stdout, present=True)
         self.assertEqual(project_contents, project_config.read_text(encoding="utf-8"))
 
-    def test_failed_init_does_not_recommend_a_codex_setting(self) -> None:
+    def test_failed_init_does_not_print_optional_guidance(self) -> None:
         project = Path(tempfile.mkdtemp()).resolve()
         invalid_parent = project / "not-a-directory"
         invalid_parent.write_text("occupied", encoding="utf-8")
@@ -975,8 +984,10 @@ class CliTest(unittest.TestCase):
         self.assertEqual(12, result)
         self.assertNotIn("model_auto_compact_token_limit_scope", stdout)
         self.assertNotIn("model_auto_compact_token_limit_scope", stderr)
+        self.assert_repository_care_pointer(stdout, present=False)
+        self.assert_repository_care_pointer(stderr, present=False)
 
-    def test_first_init_omits_recommendation_without_reliable_user_setting_absence(self) -> None:
+    def test_first_init_omits_config_recommendation_without_reliable_user_setting_absence(self) -> None:
         for label, config_contents in (
             ("total", 'model_auto_compact_token_limit_scope = "total"\n'),
             ("body-after-prefix", 'model_auto_compact_token_limit_scope = "body_after_prefix"\n'),
@@ -1007,6 +1018,7 @@ class CliTest(unittest.TestCase):
 
                 self.assertEqual(0, result, stderr)
                 self.assertNotIn("model_auto_compact_token_limit_scope", stdout)
+                self.assert_repository_care_pointer(stdout, present=True)
                 self.assertTrue((work / "state.sqlite3").is_file())
 
     def test_installed_initialization_samples_its_operation_time_once(self) -> None:
