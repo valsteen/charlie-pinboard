@@ -12,7 +12,7 @@ Treat agent-facing schemas, values, and entry points as product surfaces when ag
 
 When an agent-facing artifact must survive several reasoning stages, prefer a strict semantic scaffold to an unstructured prose packet. Give outcome, provenance, scope, non-goals, acceptance criteria, reviewed sources, verification, and remaining work stable named places when those distinctions matter. Mechanically validate required shape, cross-references, identity, and canonical bytes. Do not claim that a validator can prove the prose under a label is semantically true.
 
-Let the agent use that structured context to propose which code, documentation, architecture, or durable principles a decision affects. That cross-surface mapping remains reasoning, not enforcement: human acceptance and independent review confirm whether the relationship is real. Add a hard-coded impact map only when the repository owns an actual deterministic contract; otherwise it replaces useful judgment with a second source of truth.
+Let the agent use that structured context to propose which code, documentation, architecture, or durable principles a decision affects. Reviewed authorities and coverage should make likely owners discoverable without requiring every change to restart an exhaustive repository scan; read outward when the new prose exposes an owner the brief did not anticipate. That cross-surface mapping remains reasoning, not enforcement: the model can miss or invent a connection, and human acceptance and independent review confirm whether the relationship is real. Add a hard-coded impact map only when the repository owns an actual deterministic contract; otherwise it replaces useful judgment with a second source of truth.
 
 ## Separate decisions, conversions, and effects
 

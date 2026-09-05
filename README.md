@@ -31,7 +31,7 @@ Pinboard still does not decide the product, choose priorities, or create Codex t
 
 A Pinboard brief has named places for the outcome, accepted scope, provenance, non-goals, acceptance criteria, reviewed sources, verification, and remaining work. Code enforces the shape, cross-references, identity, and exact artifact bytes. It cannot know whether a sentence filed under `non_goals` truly belongs there or route that sentence to the right file.
 
-The model interprets the words, the human accepts the product decision, and an independent reviewer challenges the result. The structure keeps those distinctions stable and gives Codex enough context to propose that a visitor-facing decision also affects a workflow guide or durable design principle. Human acceptance and review decide whether that connection is real. That is information architecture refined through experience, not semantic enforcement.
+The model interprets the words, the human accepts the product decision, and an independent reviewer challenges the result. The structure keeps those distinctions stable. Alongside named reviewed sources and coverage, it lets Codex reason from new prose to the project surfaces that appear to be affected—for example, from a visitor-facing decision to a workflow guide and a durable design principle—without Pinboard encoding an impact graph or requiring every file to be revisited. Human acceptance and review decide whether that connection is real. That is information architecture refined through experience, not semantic enforcement.
 
 ## Pinboard makes the first delivery slower
 
