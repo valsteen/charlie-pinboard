@@ -38,9 +38,7 @@ Terminal state remains queryable as history and does not appear as live work.
 
 Coordination is a short-lived exclusive SQLite lease, not a permanent task role. Prefer the one-shot command that borrows it for one exact mutation and releases it before returning. Its 60-second default is an upper recovery bound, not permission to retain authority between steps. Another task may acquire it after release or expiry.
 
-For the exceptional manual sequence, prepare every stable value and the exact command first. After acquisition, do only the preselected current-state read that an immediate preparation-start mutation genuinely requires, apply that mutation, and release. Never use a manual coordination lease while discovering commands, inspecting schemas or raw SQLite rows, broadly troubleshooting, waiting, or asking for input. If a supported read does not expose a required value, release and preserve the missing read or one-shot mutation as a product defect.
-
-The ledger remains transactionally safe during ordinary contention: an exact transition commits completely or the prior revision remains. Short contention is therefore silent retry control flow. A manual lease retained for minutes can still block timely preparation and make visible item state lag actual work; treat that delay as a flow defect even when the ledger remains valid.
+The ledger remains transactionally safe during ordinary contention: an exact transition commits completely or the prior revision remains. A manual lease retained for minutes can still block timely preparation and make visible item state lag actual work; treat that delay as a flow defect even when the ledger remains valid.
 
 Attempt ownership is renewable and fenced. A worker presents its current attempt lease for item-local transitions. Replacing the attempt owner fences actions retained by the previous owner.
 
