@@ -18,7 +18,6 @@ from pinboard.adapters.sqlite.database import initialize_database, open_database
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.adapters.sqlite.models import OpenMode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
-from pinboard.application import stored_state
 from pinboard.application.artifacts import EvidenceArtifactRef
 from pinboard.application.decision_projection import project_decision_snapshot
 from pinboard.domain import authority_models, decision_models, work_models
@@ -39,9 +38,7 @@ class SQLiteEffectContractTest(unittest.TestCase):
     def test_checkpoint_artifact_identity_is_exact(self) -> None:
         path, store = self._store()
         state = store.snapshot()
-        existing = next(
-            value for value in state.artifact_references if value.kind == stored_state.ArtifactKind.EVIDENCE
-        )
+        existing = next(value for value in state.artifact_references if value.kind == work_models.ArtifactKind.EVIDENCE)
         published = EvidenceArtifactRef(
             existing.key,
             existing.revision,

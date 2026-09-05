@@ -13,8 +13,8 @@ from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.errors import StorageError, StorageErrorCode
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
-from pinboard.application import stored_state
 from pinboard.application.artifacts import NewArtifact
+from pinboard.domain import work_models
 from pinboard.interfaces.cli import main
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes, render_work_brief_markdown
 from pinboard.interfaces.work_state import initialize_work_state
@@ -100,7 +100,7 @@ class SQLiteValidationTest(unittest.TestCase):
         published = write_revision(
             roots,
             NewArtifact(
-                stored_state.ArtifactKind.BRIEF,
+                work_models.ArtifactKind.BRIEF,
                 brief.attempt_id,
                 1,
                 ".json",
@@ -224,7 +224,7 @@ class SQLiteValidationTest(unittest.TestCase):
                 content = content_factory(project)
                 published = write_revision(
                     roots,
-                    NewArtifact(stored_state.ArtifactKind.BRIEF, "work-a-1", 1, ".json", content),
+                    NewArtifact(work_models.ArtifactKind.BRIEF, "work-a-1", 1, ".json", content),
                 )
                 state = complete_sqlite_state()
                 reference = replace(

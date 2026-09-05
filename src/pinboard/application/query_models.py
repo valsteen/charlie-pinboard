@@ -5,11 +5,10 @@ from typing import Literal
 import msgspec
 
 from pinboard.application import stored_state
-from pinboard.domain import work_models
+from pinboard.domain import authority_models, work_models
 
 type ItemStatusSchema = Literal["pinboard-item-status/v1"]
 type ItemStatusAuthority = Literal["sqlite-v3"]
-type PreparationStatus = Literal["active", "expired", "released", "revoked"]
 
 
 class ItemStatusAttempt(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
@@ -26,7 +25,7 @@ class PreparationStatusView(msgspec.Struct, frozen=True, forbid_unknown_fields=T
     lease_id: str
     generation: int
     expires_at: str
-    status: PreparationStatus
+    status: authority_models.PreparationLeaseStatus
 
 
 class ItemStatus(msgspec.Struct, frozen=True, forbid_unknown_fields=True):

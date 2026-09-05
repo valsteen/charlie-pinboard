@@ -1,12 +1,12 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pinboard.application import stored_state
+from pinboard.domain import work_models
 
 
 @dataclass(frozen=True, slots=True)
 class NewArtifact:
-    kind: stored_state.ArtifactKind
+    kind: work_models.ArtifactKind
     key: str
     revision: int
     suffix: str
@@ -15,7 +15,7 @@ class NewArtifact:
 
 @dataclass(frozen=True, slots=True)
 class ArtifactRef:
-    kind: stored_state.ArtifactKind
+    kind: work_models.ArtifactKind
     key: str
     revision: int
     selector: str
@@ -30,7 +30,7 @@ class ResultArtifactRef:
     selector: str
     content_sha256: str
     size_bytes: int
-    kind: Literal[stored_state.ArtifactKind.RESULT] = field(init=False, default=stored_state.ArtifactKind.RESULT)
+    kind: Literal[work_models.ArtifactKind.RESULT] = field(init=False, default=work_models.ArtifactKind.RESULT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +40,7 @@ class EvidenceArtifactRef:
     selector: str
     content_sha256: str
     size_bytes: int
-    kind: Literal[stored_state.ArtifactKind.EVIDENCE] = field(init=False, default=stored_state.ArtifactKind.EVIDENCE)
+    kind: Literal[work_models.ArtifactKind.EVIDENCE] = field(init=False, default=work_models.ArtifactKind.EVIDENCE)
 
 
 @dataclass(frozen=True, slots=True)

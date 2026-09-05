@@ -20,7 +20,7 @@ from pinboard.application import stored_state
 from pinboard.application.actions import discover_actions
 from pinboard.application.artifacts import ArtifactRef, NewArtifact
 from pinboard.application.dispatch_models import DispatchEnvironment, DispatchPermission
-from pinboard.domain import decision_models
+from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionResult
 from pinboard.domain.identifiers import ReviewId
 from pinboard.interfaces import work_brief_models
@@ -122,7 +122,7 @@ class DispatchTest(unittest.TestCase):
         published = write_revision(
             roots,
             NewArtifact(
-                stored_state.ArtifactKind.BRIEF,
+                work_models.ArtifactKind.BRIEF,
                 brief.attempt_id,
                 brief.artifact_revision,
                 ".json",
@@ -448,7 +448,7 @@ class DispatchTest(unittest.TestCase):
         ready = tuple(
             reference
             for reference in after_first.artifact_references
-            if reference.kind == stored_state.ArtifactKind.EVIDENCE and "brief-review" in reference.key
+            if reference.kind == work_models.ArtifactKind.EVIDENCE and "brief-review" in reference.key
         )
         self.assertEqual(1, len(ready))
         self.assertTrue(ready[0].selector.endswith(".json"))
@@ -524,7 +524,7 @@ class DispatchTest(unittest.TestCase):
                     write_revision(
                         roots,
                         NewArtifact(
-                            stored_state.ArtifactKind.EVIDENCE,
+                            work_models.ArtifactKind.EVIDENCE,
                             "unrelated-dispatch-revision",
                             1,
                             ".json",
@@ -569,7 +569,7 @@ class DispatchTest(unittest.TestCase):
                     write_revision(
                         roots,
                         NewArtifact(
-                            stored_state.ArtifactKind.EVIDENCE,
+                            work_models.ArtifactKind.EVIDENCE,
                             "prepublication-unrelated-revision",
                             1,
                             ".json",
@@ -602,7 +602,7 @@ class DispatchTest(unittest.TestCase):
             store.accept_artifact_reference(
                 roots.work_root,
                 write_revision(
-                    roots, NewArtifact(stored_state.ArtifactKind.EVIDENCE, "revision-bump", 1, ".json", b"{}\n")
+                    roots, NewArtifact(work_models.ArtifactKind.EVIDENCE, "revision-bump", 1, ".json", b"{}\n")
                 ),
                 datetime.now(UTC),
             )

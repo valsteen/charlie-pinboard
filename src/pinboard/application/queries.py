@@ -5,7 +5,6 @@ current facts without reading files, mutating state, or presenting output.
 """
 
 from datetime import datetime
-from typing import assert_never
 
 from pinboard.application import query_models, stored_state
 from pinboard.domain import authority_models, work_models
@@ -52,17 +51,11 @@ def _project_preparation_status(
     lease, anchor = retained
     if anchor is None:
         return None
-    match lease.state:
-        case authority_models.PreparationLeaseStatus.ACTIVE:
-            status: query_models.PreparationStatus = "expired" if lease.expires_at <= now else "active"
-        case authority_models.PreparationLeaseStatus.EXPIRED:
-            status = "expired"
-        case authority_models.PreparationLeaseStatus.RELEASED:
-            status = "released"
-        case authority_models.PreparationLeaseStatus.REVOKED:
-            status = "revoked"
-        case _ as unreachable:
-            assert_never(unreachable)
+    status = (
+        authority_models.PreparationLeaseStatus.EXPIRED
+        if lease.state == authority_models.PreparationLeaseStatus.ACTIVE and lease.expires_at <= now
+        else lease.state
+    )
     return query_models.PreparationStatusView(
         lease.definition_revision,
         lease.definition_digest,
@@ -171,7 +164,7 @@ def project_overview(state: stored_state.StoredWorkState, now: datetime) -> quer
         item.item_id
         for item in items
         if item.eligible
-        and (item.preparation is None or item.preparation.status != "active")
+        and (item.preparation is None or item.preparation.status != authority_models.PreparationLeaseStatus.ACTIVE)
         and (
             item.state in {work_models.WorkState.INTAKE, work_models.WorkState.READY, work_models.WorkState.DEFERRED}
             or item.state in {work_models.WorkState.PAUSED, work_models.WorkState.BLOCKED}

@@ -411,7 +411,7 @@ def _activate(
         (candidate for candidate in snapshot.artifacts if candidate.artifact_ref_id == value.brief_artifact_ref_id),
         None,
     )
-    if artifact is None or artifact.kind != "brief":
+    if artifact is None or artifact.kind != work_models.ArtifactKind.BRIEF:
         return DecisionFailure(
             DecisionFailureCode.TRANSITION_INPUT_INVALID,
             "Activation requires one existing brief artifact reference.",
@@ -619,7 +619,7 @@ def _resume(
             (candidate for candidate in snapshot.artifacts if candidate.artifact_ref_id == value.brief_artifact_ref_id),
             None,
         )
-        if artifact is None or artifact.kind != "brief":
+        if artifact is None or artifact.kind != work_models.ArtifactKind.BRIEF:
             return DecisionFailure(
                 DecisionFailureCode.TRANSITION_INPUT_INVALID,
                 "Resuming with a revised brief requires one existing brief artifact reference.",

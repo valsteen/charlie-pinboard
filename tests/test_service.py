@@ -339,11 +339,11 @@ class ServiceTest(unittest.TestCase):
         )
         result_artifact = write_revision(
             roots,
-            NewArtifact(stored_state.ArtifactKind.RESULT, "work-a-1-checkpoint-a-result", 1, ".md", b"result\n"),
+            NewArtifact(work_models.ArtifactKind.RESULT, "work-a-1-checkpoint-a-result", 1, ".md", b"result\n"),
         )
         review_artifact = write_revision(
             roots,
-            NewArtifact(stored_state.ArtifactKind.EVIDENCE, "work-a-1-checkpoint-a-review", 1, ".md", b"review\n"),
+            NewArtifact(work_models.ArtifactKind.EVIDENCE, "work-a-1-checkpoint-a-review", 1, ".md", b"review\n"),
         )
         checkpoint_artifacts = CheckpointArtifacts(
             ResultArtifactRef(
@@ -400,7 +400,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(before_acceptance.lifecycle.project.revision + 1, reloaded.lifecycle.project.revision)
         self.assertEqual(len(before_acceptance.transition_receipts) + 1, len(reloaded.transition_receipts))
         result_reference = next(
-            value for value in reloaded.artifact_references if value.kind == stored_state.ArtifactKind.RESULT
+            value for value in reloaded.artifact_references if value.kind == work_models.ArtifactKind.RESULT
         )
         review_reference = next(
             value for value in reloaded.artifact_references if value.key == "work-a-1-checkpoint-a-review"

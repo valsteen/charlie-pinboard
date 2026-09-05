@@ -202,11 +202,11 @@ def publish_checkpoint_artifacts(
             f"Cannot read current checkpoint result.md and review.md: {error}",
         )
     result = artifacts.publish(
-        NewArtifact(stored_state.ArtifactKind.RESULT, f"{attempt_id}-{checkpoint_id}-result", 1, ".md", result_bytes)
+        NewArtifact(work_models.ArtifactKind.RESULT, f"{attempt_id}-{checkpoint_id}-result", 1, ".md", result_bytes)
     )
     review = artifacts.publish(
         NewArtifact(
-            stored_state.ArtifactKind.EVIDENCE,
+            work_models.ArtifactKind.EVIDENCE,
             f"{attempt_id}-{checkpoint_id}-review",
             1,
             ".md",

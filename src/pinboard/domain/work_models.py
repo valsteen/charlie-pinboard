@@ -54,6 +54,13 @@ class Timing(Enum):
     SAFE_TO_DEFER = "safe-to-defer"
 
 
+class ArtifactKind(Enum):
+    REQUIREMENTS = "requirements"
+    BRIEF = "brief"
+    RESULT = "result"
+    EVIDENCE = "evidence"
+
+
 class ProposalRelationKind(Enum):
     INDEPENDENT = "independent"
     PREREQUISITE = "prerequisite"
@@ -270,7 +277,7 @@ class ReviseItemDefinitionInput:
 @dataclass(frozen=True, slots=True)
 class ArtifactRecord:
     artifact_ref_id: ArtifactRefId
-    kind: str
+    kind: ArtifactKind
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,7 +5,7 @@ from typing import Protocol
 from pinboard.application import stored_state
 from pinboard.application.artifacts import ArtifactRef, NewArtifact, WorkBriefIdentity
 from pinboard.application.ports import WorkStore
-from pinboard.domain import decision_models
+from pinboard.domain import decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 
 
@@ -63,7 +63,7 @@ def validate_transition_work_brief(
         case _:
             return None
     reference = transition_work_brief_reference(state, command)
-    if reference is None or reference.kind != stored_state.ArtifactKind.BRIEF:
+    if reference is None or reference.kind != work_models.ArtifactKind.BRIEF:
         return None
     if identity is None:
         return DecisionFailure(
@@ -124,7 +124,7 @@ def transition_work_brief_reference(
         (
             candidate
             for candidate in state.artifact_references
-            if candidate.artifact_ref_id == artifact_ref_id and candidate.kind == stored_state.ArtifactKind.BRIEF
+            if candidate.artifact_ref_id == artifact_ref_id and candidate.kind == work_models.ArtifactKind.BRIEF
         ),
         None,
     )

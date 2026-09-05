@@ -12,12 +12,13 @@ from pinboard.adapters.files.file_io import (
 )
 from pinboard.application import stored_state
 from pinboard.application.artifacts import ArtifactRef, NewArtifact
+from pinboard.domain import work_models
 
-_DIRECTORIES: dict[stored_state.ArtifactKind, str] = {
-    stored_state.ArtifactKind.REQUIREMENTS: "requirements",
-    stored_state.ArtifactKind.BRIEF: "briefs",
-    stored_state.ArtifactKind.RESULT: "results",
-    stored_state.ArtifactKind.EVIDENCE: "evidence",
+_DIRECTORIES: dict[work_models.ArtifactKind, str] = {
+    work_models.ArtifactKind.REQUIREMENTS: "requirements",
+    work_models.ArtifactKind.BRIEF: "briefs",
+    work_models.ArtifactKind.RESULT: "results",
+    work_models.ArtifactKind.EVIDENCE: "evidence",
 }
 
 
@@ -36,7 +37,7 @@ def _validate_suffix(value: str) -> str:
     return value
 
 
-def _build_selector(kind: stored_state.ArtifactKind, key: str, revision: int, suffix: str) -> str:
+def _build_selector(kind: work_models.ArtifactKind, key: str, revision: int, suffix: str) -> str:
     if revision < 1:
         raise ArtifactError(ArtifactErrorCode.STORAGE_INVARIANT_VIOLATION, "Artifact revision must be positive.")
     return PurePosixPath(

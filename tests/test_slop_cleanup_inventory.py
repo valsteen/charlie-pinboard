@@ -23,7 +23,7 @@ class SlopCleanupInventoryTest(unittest.TestCase):
         self.write(
             "src/models.py",
             """from enum import Enum
-from typing import Literal
+from typing import Literal, assert_never
 
 import msgspec
 
@@ -114,6 +114,14 @@ def equivalent(value: Result) -> str:
             return "same"
         case Closed():
             return "same"
+
+
+def exhaustive_passthrough(value: Result) -> str:
+    match value:
+        case Opened() | Closed():
+            return str(value)
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 EMBEDDED_SCHEMA = "CREATE VIEW current_items AS SELECT * FROM item_artifacts"
@@ -426,6 +434,11 @@ def test_helper() -> None:
         self.assertIn(
             {"Opened()", "Closed()"},
             [set(self.json_strings(candidate["patterns"])) for candidate in equivalent_matches],
+        )
+        exhaustive_passthroughs = self.json_objects(candidates["exhaustive_passthrough_matches"])
+        self.assertEqual(
+            ["src/models.py::exhaustive_passthrough"],
+            [self.json_string(candidate["selector"]) for candidate in exhaustive_passthroughs],
         )
         duplicated_matches = self.json_objects(candidates["duplicated_match_structures"])
         self.assertIn(

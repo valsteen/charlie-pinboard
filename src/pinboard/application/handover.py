@@ -191,7 +191,7 @@ class HandoverTransition(msgspec.Struct, frozen=True, forbid_unknown_fields=True
 class HandoverItemArtifactLink(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     item_id: str
     artifact_ref_id: int
-    role: stored_state.ArtifactKind
+    role: work_models.ArtifactKind
     position: int
 
 
@@ -199,7 +199,7 @@ class HandoverArtifactReference(msgspec.Struct, frozen=True, forbid_unknown_fiel
     artifact_ref_id: int
     logical_name: str
     revision: int
-    kind: stored_state.ArtifactKind
+    kind: work_models.ArtifactKind
     selector: str
     filename: str
     media_type: str
@@ -292,11 +292,11 @@ def _project_item_artifact_links(state: stored_state.StoredWorkState) -> tuple[H
     attempts = {str(value.attempt_id): value for value in state.lifecycle.attempts}
     item_ids = {str(value.item_id) for value in state.lifecycle.work_items}
     references = {value.artifact_ref_id: value for value in state.artifact_references}
-    links: list[tuple[str, int, stored_state.ArtifactKind]] = []
+    links: list[tuple[str, int, work_models.ArtifactKind]] = []
     for attempt in state.lifecycle.attempts:
-        links.append((str(attempt.item_id), int(attempt.brief_artifact_ref_id), stored_state.ArtifactKind.BRIEF))
+        links.append((str(attempt.item_id), int(attempt.brief_artifact_ref_id), work_models.ArtifactKind.BRIEF))
         if attempt.result_artifact_ref_id is not None:
-            links.append((str(attempt.item_id), int(attempt.result_artifact_ref_id), stored_state.ArtifactKind.RESULT))
+            links.append((str(attempt.item_id), int(attempt.result_artifact_ref_id), work_models.ArtifactKind.RESULT))
     for transition in state.transition_receipts:
         if transition.artifact_ref_id is None:
             continue
@@ -305,7 +305,7 @@ def _project_item_artifact_links(state: stored_state.StoredWorkState) -> tuple[H
         if item_id is not None:
             links.append((item_id, int(transition.artifact_ref_id), references[transition.artifact_ref_id].kind))
 
-    positions: dict[tuple[str, stored_state.ArtifactKind], int] = {}
+    positions: dict[tuple[str, work_models.ArtifactKind], int] = {}
     unique: list[HandoverItemArtifactLink] = []
     for item_id, artifact_ref_id, role in dict.fromkeys(links):
         key = item_id, role

@@ -97,7 +97,7 @@ def select_dispatch(
         (
             value
             for value in state.artifact_references
-            if value.artifact_ref_id == attempt.brief_artifact_ref_id and value.kind == stored_state.ArtifactKind.BRIEF
+            if value.artifact_ref_id == attempt.brief_artifact_ref_id and value.kind == work_models.ArtifactKind.BRIEF
         ),
         None,
     )
@@ -116,7 +116,7 @@ def _find_ready_review_reference(
         (
             value
             for value in store.snapshot().artifact_references
-            if value.kind == stored_state.ArtifactKind.EVIDENCE and value.key == key and value.revision == 1
+            if value.kind == work_models.ArtifactKind.EVIDENCE and value.key == key and value.revision == 1
         ),
         None,
     )
@@ -150,7 +150,7 @@ def publish_dispatch_review(
             return AcceptedDispatchReview(existing, None)
         rejected = artifacts.publish(
             NewArtifact(
-                stored_state.ArtifactKind.EVIDENCE,
+                work_models.ArtifactKind.EVIDENCE,
                 f"{key}-rejected-{review_id}",
                 1,
                 ".json",
@@ -168,7 +168,7 @@ def publish_dispatch_review(
             DispatchRejectionCode.REVIEW_COLLISION,
             f"Ready review already differs; later evidence is preserved at '{rejected.selector}'.",
         )
-    published = artifacts.publish(NewArtifact(stored_state.ArtifactKind.EVIDENCE, key, 1, ".json", candidate))
+    published = artifacts.publish(NewArtifact(work_models.ArtifactKind.EVIDENCE, key, 1, ".json", candidate))
     accepted = store.accept_artifact_reference(
         artifacts.work_root,
         published,

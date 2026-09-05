@@ -181,6 +181,15 @@ class EquivalentMatchArms:
 
 
 @dataclass(frozen=True)
+class ExhaustivePassthroughMatch:
+    selector: str
+    path: str
+    line: int
+    patterns: tuple[str, ...]
+    expression: str
+
+
+@dataclass(frozen=True)
 class MatchSite:
     selector: str
     path: str
@@ -380,61 +389,48 @@ def is_enum_class(node: ast.ClassDef) -> bool:
     )
 
 
-def python_enum_family(node: ast.ClassDef, source: SourceFile, qualified_name: str) -> ClosedFamily | None:
+def python_enum_families(node: ast.ClassDef, source: SourceFile, qualified_name: str) -> tuple[ClosedFamily, ...]:
     if not is_enum_class(node):
-        return None
-    atoms = tuple(
-        target.id
-        for member in node.body
-        if isinstance(member, (ast.Assign, ast.AnnAssign))
-        for target in (
-            [member.targets[0]]
-            if isinstance(member, ast.Assign) and len(member.targets) == 1
-            else [member.target]
-            if isinstance(member, ast.AnnAssign)
-            else []
+        return ()
+    names: list[str] = []
+    values: list[str] = []
+    for member in node.body:
+        if isinstance(member, ast.Assign) and len(member.targets) == 1:
+            target, value = member.targets[0], member.value
+        elif isinstance(member, ast.AnnAssign) and isinstance(member.target, ast.Name):
+            target, value = member.target, member.value
+        else:
+            continue
+        if isinstance(target, ast.Name) and not target.id.startswith("_"):
+            names.append(target.id)
+        if isinstance(value, ast.Constant) and isinstance(value.value, (str, int)):
+            values.append(str(value.value))
+    families: list[ClosedFamily] = []
+    if names:
+        families.append(
+            ClosedFamily(
+                selector=f"{source.path}::{qualified_name}",
+                path=source.path,
+                line=node.lineno,
+                language="python",
+                kind="enum",
+                name=node.name,
+                atoms=tuple(names),
+            )
         )
-        if isinstance(target, ast.Name) and not target.id.startswith("_")
-    )
-    if not atoms:
-        return None
-    return ClosedFamily(
-        selector=f"{source.path}::{qualified_name}",
-        path=source.path,
-        line=node.lineno,
-        language="python",
-        kind="enum",
-        name=node.name,
-        atoms=atoms,
-    )
-
-
-def python_enum_value_family(node: ast.ClassDef, source: SourceFile, qualified_name: str) -> ClosedFamily | None:
-    if not is_enum_class(node):
-        return None
-    atoms = tuple(
-        str(value.value)
-        for member in node.body
-        for value in (
-            [member.value]
-            if isinstance(member, ast.Assign) and len(member.targets) == 1
-            else [member.value]
-            if isinstance(member, ast.AnnAssign) and isinstance(member.target, ast.Name)
-            else []
+    if len(values) > 1:
+        families.append(
+            ClosedFamily(
+                selector=f"{source.path}::{qualified_name}.value",
+                path=source.path,
+                line=node.lineno,
+                language="python",
+                kind="enum-values",
+                name=f"{node.name}.value",
+                atoms=tuple(values),
+            )
         )
-        if isinstance(value, ast.Constant) and isinstance(value.value, (str, int))
-    )
-    if len(atoms) <= 1:
-        return None
-    return ClosedFamily(
-        selector=f"{source.path}::{qualified_name}.value",
-        path=source.path,
-        line=node.lineno,
-        language="python",
-        kind="enum-values",
-        name=f"{node.name}.value",
-        atoms=atoms,
-    )
+    return tuple(families)
 
 
 def python_union_family(node: ast.TypeAlias, source: SourceFile) -> ClosedFamily | None:
@@ -524,10 +520,7 @@ def visit_python_body(
             qualified_name = f"{owner}.{node.name}" if owner else node.name
             if tagged := msgspec_tag(node):
                 tagged_structs[qualified_name] = tagged
-            if family := python_enum_family(node, source, qualified_name):
-                families.append(family)
-            if family := python_enum_value_family(node, source, qualified_name):
-                families.append(family)
+            families.extend(python_enum_families(node, source, qualified_name))
             visit_python_body(
                 node.body,
                 source,
@@ -580,22 +573,16 @@ def python_ast_inventory(source: SourceFile) -> tuple[list[Declaration], list[Cl
     return declarations, families
 
 
-class MatchCollector(ast.NodeVisitor):
-    def __init__(self) -> None:
-        self.matches: list[ast.Match] = []
-
-    def visit_Match(self, node: ast.Match) -> None:
-        self.matches.append(node)
-        self.generic_visit(node)
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        pass
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        pass
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        pass
+def nested_matches(body: list[ast.stmt]) -> list[ast.Match]:
+    pending: list[ast.AST] = list(body)
+    matches: list[ast.Match] = []
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Match):
+            matches.append(node)
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            pending.extend(ast.iter_child_nodes(node))
+    return sorted(matches, key=lambda match: match.lineno)
 
 
 def function_parameters(node: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
@@ -639,18 +626,27 @@ def trivial_callable_body(
     )
 
 
+def unreachable_capture(pattern: ast.pattern) -> str | None:
+    if (
+        isinstance(pattern, ast.MatchAs)
+        and isinstance(pattern.pattern, ast.MatchAs)
+        and pattern.pattern.pattern is None
+        and pattern.pattern.name is None
+    ):
+        return pattern.name
+    return None
+
+
 def match_candidates(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     source: SourceFile,
     qualified_name: str,
-) -> tuple[list[EquivalentMatchArms], list[MatchSite]]:
-    collector = MatchCollector()
-    for statement in node.body:
-        collector.visit(statement)
+) -> tuple[list[EquivalentMatchArms], list[ExhaustivePassthroughMatch], list[MatchSite]]:
     equivalent: list[EquivalentMatchArms] = []
+    passthroughs: list[ExhaustivePassthroughMatch] = []
     sites: list[MatchSite] = []
     selector = f"{source.path}::{qualified_name}"
-    for match in collector.matches:
+    for match in nested_matches(node.body):
         cases_by_body: dict[str, list[ast.match_case]] = {}
         for case in match.cases:
             fingerprint = ast.dump(ast.Module(body=case.body, type_ignores=[]), include_attributes=False)
@@ -665,6 +661,38 @@ def match_candidates(
             for cases in cases_by_body.values()
             if len(cases) > 1
         )
+        if (
+            isinstance(match.subject, ast.Name)
+            and len(match.cases) == 2
+            and isinstance(first_pattern := match.cases[0].pattern, ast.MatchOr)
+            and len(match.cases[0].body) == 1
+            and isinstance(return_statement := match.cases[0].body[0], ast.Return)
+            and return_statement.value is not None
+            and match.subject.id
+            in {
+                child.id
+                for child in ast.walk(return_statement.value)
+                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+            }
+            and (unreachable_name := unreachable_capture(match.cases[1].pattern)) is not None
+            and len(match.cases[1].body) == 1
+            and isinstance(unreachable_statement := match.cases[1].body[0], ast.Expr)
+            and isinstance(unreachable_call := unreachable_statement.value, ast.Call)
+            and isinstance(unreachable_call.func, ast.Name)
+            and unreachable_call.func.id == "assert_never"
+            and len(unreachable_call.args) == 1
+            and isinstance(unreachable_argument := unreachable_call.args[0], ast.Name)
+            and unreachable_argument.id == unreachable_name
+        ):
+            passthroughs.append(
+                ExhaustivePassthroughMatch(
+                    selector=selector,
+                    path=source.path,
+                    line=match.lineno,
+                    patterns=tuple(ast.unparse(pattern) for pattern in first_pattern.patterns),
+                    expression=ast.unparse(return_statement.value),
+                )
+            )
         sites.append(
             MatchSite(
                 selector=selector,
@@ -673,7 +701,7 @@ def match_candidates(
                 fingerprint=ast.dump(match, include_attributes=False),
             )
         )
-    return equivalent, sites
+    return equivalent, passthroughs, sites
 
 
 def visit_python_structural_smells(
@@ -681,48 +709,66 @@ def visit_python_structural_smells(
     source: SourceFile,
     trivial: list[TrivialCallableBody],
     equivalent: list[EquivalentMatchArms],
+    passthroughs: list[ExhaustivePassthroughMatch],
     matches: list[MatchSite],
     owner: str | None = None,
 ) -> None:
     for node in body:
         if isinstance(node, ast.ClassDef):
             qualified_name = f"{owner}.{node.name}" if owner else node.name
-            visit_python_structural_smells(node.body, source, trivial, equivalent, matches, qualified_name)
+            visit_python_structural_smells(
+                node.body, source, trivial, equivalent, passthroughs, matches, qualified_name
+            )
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             qualified_name = f"{owner}.{node.name}" if owner else node.name
             if candidate := trivial_callable_body(node, source, qualified_name):
                 trivial.append(candidate)
-            function_equivalent, function_matches = match_candidates(node, source, qualified_name)
+            function_equivalent, function_passthroughs, function_matches = match_candidates(
+                node, source, qualified_name
+            )
             equivalent.extend(function_equivalent)
+            passthroughs.extend(function_passthroughs)
             matches.extend(function_matches)
-            visit_python_structural_smells(node.body, source, trivial, equivalent, matches, qualified_name)
+            visit_python_structural_smells(
+                node.body, source, trivial, equivalent, passthroughs, matches, qualified_name
+            )
 
 
 def python_structural_smells(
     source: SourceFile,
-) -> tuple[list[TrivialCallableBody], list[EquivalentMatchArms], list[MatchSite]]:
+) -> tuple[
+    list[TrivialCallableBody],
+    list[EquivalentMatchArms],
+    list[ExhaustivePassthroughMatch],
+    list[MatchSite],
+]:
     if source.text is None:
-        return [], [], []
+        return [], [], [], []
     tree = ast.parse(source.text, filename=source.path)
     trivial: list[TrivialCallableBody] = []
     equivalent: list[EquivalentMatchArms] = []
+    passthroughs: list[ExhaustivePassthroughMatch] = []
     matches: list[MatchSite] = []
-    visit_python_structural_smells(tree.body, source, trivial, equivalent, matches)
-    return trivial, equivalent, matches
+    visit_python_structural_smells(tree.body, source, trivial, equivalent, passthroughs, matches)
+    return trivial, equivalent, passthroughs, matches
 
 
 def duplicated_match_structures(matches: list[MatchSite]) -> list[DuplicatedMatchStructure]:
     grouped: dict[str, list[MatchSite]] = {}
     for match in matches:
         grouped.setdefault(match.fingerprint, []).append(match)
-    return [
-        DuplicatedMatchStructure(
-            selectors=tuple(match.selector for match in sorted(group, key=lambda item: (item.path, item.line))),
-            lines=tuple(match.line for match in sorted(group, key=lambda item: (item.path, item.line))),
+    duplicates: list[DuplicatedMatchStructure] = []
+    for group in grouped.values():
+        if len(group) <= 1:
+            continue
+        ordered = sorted(group, key=lambda item: (item.path, item.line))
+        duplicates.append(
+            DuplicatedMatchStructure(
+                selectors=tuple(match.selector for match in ordered),
+                lines=tuple(match.line for match in ordered),
+            )
         )
-        for group in grouped.values()
-        if len(group) > 1
-    ]
+    return duplicates
 
 
 def union_atoms(node: ast.expr) -> tuple[str, ...]:
@@ -1097,7 +1143,8 @@ def coverage(mode: str) -> tuple[Coverage, ...]:
         Coverage(
             "python-structural-smells",
             "complete" if mode == "python-ast" else "unsupported",
-            "stdlib ast trivial callable bodies, equivalent match arms, and duplicated match structures"
+            "stdlib ast trivial callable bodies, equivalent match arms, exhaustive pass-through matches, and "
+            "duplicated match structures"
             if mode == "python-ast"
             else "mode disabled; use the language-portable structural sweep",
         ),
@@ -1122,6 +1169,7 @@ def main() -> None:
     families: list[ClosedFamily] = []
     trivial_callables: list[TrivialCallableBody] = []
     equivalent_matches: list[EquivalentMatchArms] = []
+    exhaustive_passthroughs: list[ExhaustivePassthroughMatch] = []
     match_sites: list[MatchSite] = []
     for source in sources:
         if source.role != "production":
@@ -1130,9 +1178,10 @@ def main() -> None:
             python_declarations, python_families = python_ast_inventory(source)
             declarations.extend(python_declarations)
             families.extend(python_families)
-            source_trivial, source_equivalent, source_matches = python_structural_smells(source)
+            source_trivial, source_equivalent, source_passthroughs, source_matches = python_structural_smells(source)
             trivial_callables.extend(source_trivial)
             equivalent_matches.extend(source_equivalent)
+            exhaustive_passthroughs.extend(source_passthroughs)
             match_sites.extend(source_matches)
         else:
             declarations.extend(generic_declarations(source))
@@ -1181,6 +1230,7 @@ def main() -> None:
         "unreferenced_assets": unreferenced_assets(sources),
         "trivial_callable_bodies": [asdict(item) for item in trivial_callables],
         "equivalent_match_arms": [asdict(item) for item in equivalent_matches],
+        "exhaustive_passthrough_matches": [asdict(item) for item in exhaustive_passthroughs],
         "duplicated_match_structures": [asdict(item) for item in duplicated_match_structures(match_sites)],
     }
     report = {

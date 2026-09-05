@@ -52,7 +52,7 @@ Only distribution version lookup and command composition live at the package roo
 
 | Owner group | Responsibility |
 | --- | --- |
-| `work_models.py`, `ledger.py`, `identifiers.py`, `errors.py` | Work-ledger values, read-only snapshot behavior, opaque identifiers, and expected decision failures |
+| `work_models.py`, `ledger.py`, `identifiers.py`, `errors.py` | Work-ledger values and canonical artifact kinds, read-only snapshot behavior, opaque identifiers, and expected decision failures |
 | `decision_models.py`, `decisions.py` | Closed item and attempt commands, explicit lifecycle-change variants, and lifecycle, focus, dependency, requirement, and review legality |
 | `authority_models.py`, `authority_decisions.py` | Closed authority operations plus coordination, ready-item preparation, and attempt authority lifecycle and fencing |
 | `proposal_models.py`, `proposal_decisions.py` | Closed proposal intake values, intake queue placement, and relation-derived dependency decisions |
@@ -66,7 +66,7 @@ Expected rejections return typed failure values. Domain and stale-persistence pa
 
 | Owner group | Responsibility |
 | --- | --- |
-| `stored_state.py` | Complete typed read aggregate plus explicit storage vocabulary |
+| `stored_state.py` | Complete typed read aggregate plus storage-specific vocabulary |
 | `mutation_models.py`, `mutations.py`, `ports.py` | Closed focused mutation records, exhaustive decision-to-relational conversion, and storage-independent transactional capabilities |
 | `decision_projection.py`, `service.py` | Shared-index projection of complete stored collections into domain decision facts and locked mutation orchestration |
 | `actions.py`, `query_models.py`, `queries.py`, `handover.py` | Legal-action discovery plus current overview, exact item-status, current-definition, bounded definition-history, parallel-preview records, and the strict versioned portable handover projection from one complete stored snapshot |

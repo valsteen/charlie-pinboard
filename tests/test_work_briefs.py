@@ -14,7 +14,6 @@ from msgspec.structs import replace
 from pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
-from pinboard.application import stored_state
 from pinboard.application.artifact_publication import validate_transition_work_brief
 from pinboard.application.artifacts import NewArtifact
 from pinboard.domain import decision_models, work_models
@@ -345,7 +344,7 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                 published = write_revision(
                     roots,
                     NewArtifact(
-                        stored_state.ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)
+                        work_models.ArtifactKind.BRIEF, value.attempt_id, 1, ".json", canonical_work_brief_bytes(value)
                     ),
                 )
                 state = complete_sqlite_state()
@@ -426,7 +425,7 @@ class WorkBriefBoundaryTest(unittest.TestCase):
                 mismatch = write_revision(
                     roots,
                     NewArtifact(
-                        stored_state.ArtifactKind.BRIEF,
+                        work_models.ArtifactKind.BRIEF,
                         f"{value.attempt_id}-mismatch",
                         1,
                         ".json",
