@@ -182,7 +182,7 @@ DIAGRAM = Diagram(
             "IMPLEMENTATION · REVIEW · RESUME RECEIVE THE SAME DISTINCTIONS — CODE PROVES THE ENVELOPE, NOT THE MEANING",
             700,
             825,
-            11,
+            12,
             "middle",
             True,
         ),

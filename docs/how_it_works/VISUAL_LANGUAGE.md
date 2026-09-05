@@ -15,6 +15,8 @@ The generated diagrams are static reading aids for a visitor who is scrolling th
 
 Cards are flat and rectangular, with a surface that remains distinct from the canvas in both reading themes. A narrow left bar establishes the structural accent. Small monospaced labels identify a state, layer, table, or source symbol; the main title states the human meaning; supporting facts remain visually quieter.
 
+The quietest text must remain readable at normal GitHub content width on a 1920×1080 display without browser zoom. When a larger shared type scale exposes a crowded card or route, rephrase or adjust that composition instead of shrinking the text below the common scale.
+
 Every text line stays inside the card's content area with a deliberate right margin. Merely avoiding literal overflow is not enough: a title, detail, or source name must not appear to bump into the border.
 
 Text is painted after geometry. Free-standing labels use a canvas-colored clearance edge, and authored line breaks keep them off meaningful routes, so no grid, guide, connector, card, or frame can consume a glyph.

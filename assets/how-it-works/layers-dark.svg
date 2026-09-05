@@ -12,15 +12,15 @@
     <style>
       text { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #edf1f2; }
       .section-label, .box-label, .box-meta, .connector-label, .note-meta { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-      .section-label, .box-label { font-size: 11px; font-weight: 700; letter-spacing: 0.11em; fill: #b7c0c5; }
-      .section-subtitle { font-size: 11px; fill: #c5cdd0; }
+      .section-label, .box-label { font-size: 12px; font-weight: 700; letter-spacing: 0.11em; fill: #b7c0c5; }
+      .section-subtitle { font-size: 12px; fill: #c5cdd0; }
       .guide { stroke: #333b42; stroke-width: 1; }
       .connector { fill: none; stroke: #9ba8b1; stroke-width: 1.9; stroke-linecap: round; }
-      .connector-label { font-size: 10px; font-weight: 700; fill: #9ba8b1; }
+      .connector-label { font-size: 11px; font-weight: 700; fill: #9ba8b1; }
       .box { fill: #242b32; stroke: #5e6a74; stroke-width: 1.2; }
       .box-title { font-size: 15px; font-weight: 700; }
-      .box-body { font-size: 11px; fill: #c5cdd0; }
-      .box-meta { font-size: 10px; fill: #9ba8b1; }
+      .box-body { font-size: 12px; fill: #c5cdd0; }
+      .box-meta { font-size: 11px; fill: #9ba8b1; }
       .note { fill: #c5cdd0; }
       .note-meta { font-weight: 700; letter-spacing: 0.08em; fill: #b7c0c5; }
       .canvas-text { paint-order: stroke fill; stroke: #1c2127; stroke-width: 4px; stroke-linejoin: round; }

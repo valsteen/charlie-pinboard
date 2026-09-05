@@ -139,7 +139,7 @@ DIAGRAM = Diagram(
         Box("proposal-freshness", "", "Assumptions", ("facts to recheck",), ("proposal_freshness",), 210, 260, 170, 90),
         Box("work-items", "", "Work items", ("durable identity",), ("work_items",), 430, 110, 140, 90),
         Box("attempts", "", "Attempts", ("one execution",), ("attempts",), 640, 110, 140, 90),
-        Box("focus", "", "Current focus", ("advisory pointer",), ("item + optional attempt",), 500, 270, 180, 80),
+        Box("focus", "", "Current focus", ("advisory pointer",), ("item + optional attempt",), 500, 270, 200, 80),
         Box("definitions", "", "Accepted versions", ("current definition",), ("plus its history",), 830, 110, 175, 90),
         Box("dependencies", "", "Dependencies", ("item → prerequisite",), ("item_dependencies",), 1020, 110, 160, 90),
         Box(
@@ -157,7 +157,7 @@ DIAGRAM = Diagram(
             "coordination",
             "",
             "Shared authority",
-            ("any task borrows briefly", "exclusive graph change"),
+            ("borrowed briefly", "exclusive graph change"),
             ("coordination_lease",),
             415,
             500,
@@ -168,7 +168,7 @@ DIAGRAM = Diagram(
             "attempt-authority",
             "",
             "Attempt authority",
-            ("worker owns active attempt", "fenced generations"),
+            ("worker owns attempt", "fenced generations"),
             ("attempt_lease_*",),
             600,
             500,
@@ -192,13 +192,13 @@ DIAGRAM = Diagram(
         ),
     ),
     notes=(
-        Note("SELECTED RELATIONSHIPS SHOWN · EVERY FOREIGN KEY STILL CHECKED BY THE SEED", 28, 790, 11, meta=True),
+        Note("SELECTED RELATIONSHIPS SHOWN · EVERY FOREIGN KEY STILL CHECKED BY THE SEED", 28, 790, 12, meta=True),
         Note(
             "Briefs and accepted results link to attempts. Ready-review evidence is reused by exact identity. Accepted checkpoint review evidence links to history.",
             28,
             816,
-            11,
+            12,
         ),
-        Note("Shared authority coordinates the graph; preparation and attempt authority are item-scoped.", 28, 834, 11),
+        Note("Shared authority coordinates the graph; preparation and attempt authority are item-scoped.", 28, 834, 12),
     ),
 )

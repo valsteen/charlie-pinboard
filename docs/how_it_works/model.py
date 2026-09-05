@@ -123,8 +123,8 @@ _CARD_CLEARANCE = 12
 _BOX_TEXT_INSET = 16
 _BOX_TEXT_RIGHT_MARGIN = 16
 _TEXT_WIDTH_FACTORS = {
-    "label": 7.5,
-    "meta": 6.2,
+    "label": 8.2,
+    "meta": 6.8,
 }
 _NARROW_GLYPHS = frozenset(" !'(),.:;I[]`fijlt|")
 _WIDE_GLYPHS = frozenset("%&@GMOQVWmw")
@@ -161,7 +161,7 @@ def _text_fits_width(box: Box, text: str, style: str) -> bool:
         em_width = sum(
             0.34 if character in _NARROW_GLYPHS else 0.78 if character in _WIDE_GLYPHS else 0.56 for character in text
         )
-        estimated = em_width * (15.9 if style == "title" else 11)
+        estimated = em_width * (15.9 if style == "title" else 12)
     return estimated <= available
 
 
@@ -356,15 +356,15 @@ def render_svg(diagram: Diagram, palette: Palette) -> str:
     <style>
       text {{ font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: {palette.text}; }}
       .section-label, .box-label, .box-meta, .connector-label, .note-meta {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
-      .section-label, .box-label {{ font-size: 11px; font-weight: 700; letter-spacing: 0.11em; fill: {palette.label}; }}
-      .section-subtitle {{ font-size: 11px; fill: {palette.muted_text}; }}
+      .section-label, .box-label {{ font-size: 12px; font-weight: 700; letter-spacing: 0.11em; fill: {palette.label}; }}
+      .section-subtitle {{ font-size: 12px; fill: {palette.muted_text}; }}
       .guide {{ stroke: {palette.guide}; stroke-width: 1; }}
       .connector {{ fill: none; stroke: {palette.connector}; stroke-width: 1.9; stroke-linecap: round; }}
-      .connector-label {{ font-size: 10px; font-weight: 700; fill: {palette.connector}; }}
+      .connector-label {{ font-size: 11px; font-weight: 700; fill: {palette.connector}; }}
       .box {{ fill: {palette.card}; stroke: {palette.card_border}; stroke-width: 1.2; }}
       .box-title {{ font-size: 15px; font-weight: 700; }}
-      .box-body {{ font-size: 11px; fill: {palette.muted_text}; }}
-      .box-meta {{ font-size: 10px; fill: {palette.connector}; }}
+      .box-body {{ font-size: 12px; fill: {palette.muted_text}; }}
+      .box-meta {{ font-size: 11px; fill: {palette.connector}; }}
       .note {{ fill: {palette.muted_text}; }}
       .note-meta {{ font-weight: 700; letter-spacing: 0.08em; fill: {palette.label}; }}
       .canvas-text {{ paint-order: stroke fill; stroke: {palette.canvas}; stroke-width: 4px; stroke-linejoin: round; }}
