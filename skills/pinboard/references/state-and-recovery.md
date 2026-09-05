@@ -36,7 +36,11 @@ Terminal state remains queryable as history and does not appear as live work.
 
 ## Leases and revocation
 
-Coordination is a short-lived exclusive SQLite lease, not a permanent task role. Acquire it only for a graph-wide atomic change, use its lease identity and generation in the action, then release it. Another chat may acquire it after release or expiry.
+Coordination is a short-lived exclusive SQLite lease, not a permanent task role. Prefer the one-shot command that borrows it for one exact mutation and releases it before returning. Its 60-second default is an upper recovery bound, not permission to retain authority between steps. Another task may acquire it after release or expiry.
+
+For the exceptional manual sequence, prepare every stable value and the exact command first. After acquisition, do only the preselected current-state read that an immediate preparation-start mutation genuinely requires, apply that mutation, and release. Never use a manual coordination lease while discovering commands, inspecting schemas or raw SQLite rows, broadly troubleshooting, waiting, or asking for input. If a supported read does not expose a required value, release and preserve the missing read or one-shot mutation as a product defect.
+
+The ledger remains transactionally safe during ordinary contention: an exact transition commits completely or the prior revision remains. Short contention is therefore silent retry control flow. A manual lease retained for minutes can still block timely preparation and make visible item state lag actual work; treat that delay as a flow defect even when the ledger remains valid.
 
 Attempt ownership is renewable and fenced. A worker presents its current attempt lease for item-local transitions. Replacing the attempt owner fences actions retained by the previous owner.
 
@@ -63,7 +67,7 @@ For a task interrupted around a mutation:
 
 1. Run `pinboard validate --json`.
 2. Run one `pinboard status --json` or `pinboard overview --json` read. If the intended item still has its prior state, no transition committed. If it has the intended next state, the SQLite transition committed completely even if the task stopped before reporting it.
-3. If coordination is still active for the interrupted task, wait for its recorded expiry when practical. One-shot coordinated transitions default to 60 seconds and perform best-effort release.
+3. If coordination is still active for the interrupted task, retry silently only within the bounded short-recovery window. One-shot coordinated transitions default to 60 seconds and perform best-effort release; do not interpret that upper bound as a normal planned wait.
 4. Use forced revocation only with explicit user authority when waiting is unsuitable.
 5. Acquire fresh coordination only after release, expiry, or authorized revocation. Its higher generation fences actions retained by the interrupted task.
 6. Resume from the authoritative item and attempt state. Never reconstruct ownership from the stopped task's prose, generated views, archived files, or temporary payloads.

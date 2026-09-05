@@ -13,6 +13,8 @@ Intake may be standalone or embedded in ongoing Pinboard coordination. Standalon
 
 When the same request says `start`, `begin`, `work on`, `implement`, `fix now`, or otherwise clearly asks for immediate execution, treat intake as the first atomic step rather than the requested outcome. After persistence, continue through `$pinboard` to admit, prepare, and activate the same-identity item, then use `$pinboard-deliver` to complete its accepted work. Do not end with a save-for-later receipt merely because the user explicitly named `$pinboard-intake`.
 
+Follow the coordination skill's user-facing detail threshold during that continuation. Preserve every higher-level required first-use skill disclosure, keep each one concise and outcome-oriented, and add no separate Pinboard explanation of companion-skill selection or internal routing.
+
 Immediate-start language authorizes continuing now; it does not prove that the human agreed with an unspoken magnitude interpretation. When the work is broad, route through Pinboard's one-sentence scope confirmation before preparation: state the outcome, principal read and touch surfaces, approximate magnitude, and any surprising exclusion, then continue without asking redundant permission. Ask only if that sentence exposes a real unresolved choice.
 
 Ask one quick confirmation only when the human phrasing leaves a material choice between queueing for later and beginning now. An explicit immediate-work verb is sufficient and needs no confirmation. Intake remains standalone when the request only asks to add, queue, preserve, or save work for later.

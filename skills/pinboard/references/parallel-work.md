@@ -46,7 +46,7 @@ Work through the authorized items in the presented order. Before each external c
 For a **Visible task**:
 
 1. Use the environment's native user-visible task creation capability. This is authorized by the user's exact batch request.
-2. Give it the repository root, item identity, fresh preview revision, and an instruction to use the pinboard to inspect the item and borrow coordination only for its own legal transition.
+2. Give it the repository root, item identity, fresh preview revision, and an instruction to use the pinboard to inspect the item and borrow coordination only for its own legal transition. When its checkout or worktree must be selected, use the main skill's project-specific baseline inference and confirmation rule; do not assume that a local branch named `main` is current or that any fixed remote name is authoritative.
 3. Tell the human to follow that independent outcome in the new task. It reports and requests decisions there; do not use task-to-task messaging to return its result to the current task.
 4. Do not replace it with a subagent when visible-task creation is unavailable, because the human selected a separate outcome and conversation.
 

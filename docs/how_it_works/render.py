@@ -65,9 +65,10 @@ The practical path is short enough to tell without the data model:
 2. **Accept exact work.** Coordination decides which proposal belongs in the product, records the complete current definition, and keeps unaccepted ideas visibly separate.
 3. **Prepare the brief.** A renewable preparation claim reserves that exact ready definition while one canonical brief is compiled and reviewed. The item does not become active yet.
 4. **Implement that brief.** Activation binds the accepted brief to one attempt. The worker claims the attempt, rereads the brief, and changes the ordinary repository in its assigned checkout.
-5. **Submit one candidate.** The worker records the exact candidate and its evidence. Submission protects that identity instead of asking review to infer what changed from the latest files.
-6. **Review the same decision.** A separate Codex reviewer compares that candidate with the same accepted brief and returns it for correction, accepts a checkpoint, continues the attempt, or completes the work.
-7. **Recover without retelling.** Pause and block preserve the attempt and its evidence. Resume requires a brief matching the current definition, so a later task cannot quietly continue obsolete scope.
+5. **Reconcile late direction.** Before candidate presentation or acceptance, the owning task accounts for user direction and repository changes since the accepted brief. A changed product target replaces the complete definition and brief, invalidates stale candidate or review identity, and requires another exact candidate and review.
+6. **Submit one candidate.** The worker records the exact candidate and its evidence. Submission protects that identity instead of asking review to infer what changed from the latest files.
+7. **Review the same decision.** A separate Codex reviewer compares that candidate with the same accepted brief and returns it for correction, accepts a checkpoint, or continues the attempt. The human-facing task then asks the human to choose repository disposition and confirm completion before the work becomes terminal.
+8. **Recover without retelling.** Pause and block preserve the attempt and its evidence. Resume requires a brief matching the current definition, so a later task cannot quietly continue obsolete scope.
 
 This normally takes more turns than asking Codex to implement and review a prompt directly. The extra work is the mechanism: discoveries remain proposals, implementation rereads accepted scope, and review receives the exact brief and candidate. Pinboard trades first-delivery speed for a durable boundary between the product you accepted and the plausible additions an agent could otherwise accumulate.
 
@@ -81,7 +82,7 @@ When the only shared target is the evolving conversation and latest diff, each p
 
 {_picture("review-loop", "An ordinary Codex implementation and review loop beside the same loop anchored by one accepted Pinboard brief, exact candidate, and evidence")}
 
-Pinboard gives both sides a stable reference. The implementer rereads the accepted brief, submits one exact candidate with evidence, and a separate reviewer receives that same brief and candidate. Correction returns to the same attempt, with blocking findings tied to accepted scope, criteria, or reviewed project authority. The loop still depends on LLM and human judgment and can still be wrong; its corrections remain aimed at an explicit accepted target instead of whatever prose happens to be most recent.
+Pinboard gives both sides a stable reference. The implementer rereads the accepted brief, submits one exact candidate with evidence, and a separate reviewer receives that same brief and candidate. Correction returns to the same attempt, with blocking findings tied to accepted scope, criteria, or reviewed project authority. If later accepted direction changes the target, the old candidate and review no longer qualify for wrap-up: the complete definition and brief are replaced before another exact candidate and review. The loop still depends on LLM and human judgment and can still be wrong; its corrections remain aimed at an explicit accepted target instead of whatever prose happens to be most recent.
 
 ### Strict shape, semantic judgment
 
@@ -103,7 +104,7 @@ A work item is the durable project decision. An attempt is one execution of that
 
 {_picture("product", "A work item lifecycle above the legal branches of an active attempt, with related facts shown separately")}
 
-**The main lifecycle stays familiar.** Intake becomes ready, active work enters review, and accepted work reaches a terminal outcome. Deferred, paused, and blocked work are optional branches. Review can request correction, pause at an accepted checkpoint, accept the candidate and continue, or complete the work. Completion can also be accepted directly from active work.
+**The main lifecycle stays familiar.** Intake becomes ready, active work enters review, and accepted work reaches a terminal outcome. Deferred, paused, and blocked work are optional branches. Review can request correction, pause at an accepted checkpoint, or accept the candidate and continue. The human-facing task reconciles later direction, presents the accepted candidate for a repository decision, and records terminal completion only after the human confirms that disposition. Completion can also be accepted directly from active work after the same reconciliation and confirmation.
 
 **Recovery preserves the right identity.** Resume makes a retained attempt active, while an item without one becomes ready. Reopen returns deferred work to intake with new evidence. Continue is advisory: it confirms that active work proceeds without changing lifecycle state or accepting mutation input. The action record's stable `effect` field describes that lifecycle effect; it does not claim that a wider command such as dispatch performs no artifact I/O. Dispatch can publish or reuse review evidence while leaving lifecycle unchanged.
 
