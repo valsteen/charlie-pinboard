@@ -10,6 +10,10 @@ File size is a signal, not the objective. A smaller orchestration file is useful
 
 Treat agent-facing schemas, values, and entry points as product surfaces when agents can adopt them to steer work. Unless a public API or CLI already makes the contract obvious, keep the intended consumer, semantic effect or deliberate non-effect, and owner locally discoverable from the definition or its direct entry point. Remove an unused or unclear surface rather than preserving a value that survives only because a schema can carry it.
 
+When an agent-facing artifact must survive several reasoning stages, prefer a strict semantic scaffold to an unstructured prose packet. Give outcome, provenance, scope, non-goals, acceptance criteria, reviewed sources, verification, and remaining work stable named places when those distinctions matter. Mechanically validate required shape, cross-references, identity, and canonical bytes. Do not claim that a validator can prove the prose under a label is semantically true.
+
+Let the agent use that structured context to propose which code, documentation, architecture, or durable principles a decision affects. That cross-surface mapping remains reasoning, not enforcement: human acceptance and independent review confirm whether the relationship is real. Add a hard-coded impact map only when the repository owns an actual deterministic contract; otherwise it replaces useful judgment with a second source of truth.
+
 ## Separate decisions, conversions, and effects
 
 A decision determines whether an operation is legal and what accepted change it describes. It should not read files, issue SQL, obtain time, or depend on a concrete adapter.

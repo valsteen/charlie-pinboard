@@ -7,37 +7,65 @@
 
 <img align="right" width="430" src="assets/pinboard-investigation-board.png" alt="Pixel-art bard explaining a fantasy investigation board covered with maps, clues, and red thread">
 
-Long-running coding-agent work rarely stays in one conversation. A feature uncovers a prerequisite, a review sends implementation back for correction, an interruption leaves work unfinished, and the next task has to recover what the project actually decided.
+## Keep Codex building the product you meant
 
-Pinboard gives one repository a durable work ledger. Proposed work, priorities, dependencies, accepted briefs, current ownership, pauses, and review outcomes stay consistent across Codex tasks. A concern can survive the conversation that uncovered it, and an implementation can reach another task without its brief being retold.
+Pinboard is a repository-local work ledger for long-running Codex projects, built first for solo developers whose requirements arrive while they build. It preserves the difference between what you requested, what an agent proposed, what you accepted, what was implemented, and what was reviewed.
 
-Pinboard does not decide the product, choose priorities, or create Codex tasks. It records project decisions, rejects changes that no longer fit the current state, and keeps current ownership explicit. A short isolated change probably does not need it. Work that spans tasks, interruptions, dependencies, or independent review often does.
+**Codex-only today · Solo-project first · Usually unnecessary for one short, isolated change**
 
-For the most reliable Codex workflow, use one user-facing task per outcome from selection through the final repository decision. Let that task delegate bounded research, implementation, and review to subagents, whose results return automatically. Open a separate visible task only for an independent outcome you intend to follow there; it reports in its own conversation and is not a child expected to message results back.
+## The first pass is easy. Drift starts on the second.
 
-## A campaign that survives the conversation
+A clear prompt can produce an impressive first version. The trouble often starts a few iterations later: implementation uncovers adjacent ideas, review suggests extra hardening, another task resumes with partial context, and useful discoveries begin to look like requirements simply because they are now written down.
 
-Imagine you are building *Ashfall Keep*, a small action RPG. One Codex task is working on the dragon boss's second phase. Two scouts return with useful but distracting discoveries: save games capture temporary animation state, and controller mappings identify abilities by inventory position.
+Human requests, agent suggestions, technical hypotheses, and accepted product decisions gradually blend together. The code can remain tested and technically plausible while the product grows away from what you meant to build. AI does not create this problem, but it can turn a familiar slow accumulation of product and code slop into a large diff within hours.
 
-Without shared project state, the original conversation becomes an accidental backlog. Useful conclusions disappear into old tasks, and a focused feature quietly turns into several unrelated changes. Pinboard gives each concern an explicit place while keeping the current work honest.
+## Codex already runs the development loop
 
-![Pixel-art quest scroll](assets/quest-scroll.png) **Preserve proposed work without changing the plan.** The scout invokes `$pinboard-intake` to record the save-game problem with its trigger, evidence, and likely consequence. It enters intake, the state for unstarted work awaiting a decision. It does not become ready, replace the current focus, or interrupt the dragon attempt. A coordinating task can later decide whether it belongs in the plan.
+Codex can plan, delegate, implement, test, review, use isolated worktrees, and carry a task over time. Pinboard does not replace that harness or make the model more capable. It gives those activities one repository-local ledger of proposals, accepted work, attempts, and evidence shared across tasks and interruptions.
 
-The scout gets a compact receipt:
+With Pinboard, a discovery can remain a proposal instead of quietly joining the feature. An implementation attempt stays tied to an exact accepted definition and brief. Current ownership is explicit, stale actions are rejected, and review examines one exact candidate with its evidence. In AI-native SDLC terms, Codex performs the work; Pinboard keeps planning, implementation, and review about the same product decision.
+
+Pinboard still does not decide the product, choose priorities, or create Codex tasks. It makes the human and agent decisions around those capabilities durable and distinguishable.
+
+## The format is strict. The meaning is still yours.
+
+A Pinboard brief has named places for the outcome, accepted scope, provenance, non-goals, acceptance criteria, reviewed sources, verification, and remaining work. Code enforces the shape, cross-references, identity, and exact artifact bytes. It cannot know whether a sentence filed under `non_goals` truly belongs there or route that sentence to the right file.
+
+The model interprets the words, the human accepts the product decision, and an independent reviewer challenges the result. The structure keeps those distinctions stable and gives Codex enough context to propose that a visitor-facing decision also affects a workflow guide or durable design principle. Human acceptance and review decide whether that connection is real. That is information architecture refined through experience, not semantic enforcement.
+
+## Pinboard makes the first delivery slower
+
+Pinboard usually makes managed work take longer than sending the same request directly to Codex. It spends additional turns preserving discoveries, agreeing on exact scope, acquiring work, rereading the brief before implementation, recording evidence, and reviewing one exact candidate against that brief. That overhead is real.
+
+Pinboard is not designed to win the first-prompt race. It is designed for the fifth, fifteenth, and fiftieth change, when losing or confusing a decision can lead to long sessions reconstructing intent, separating accepted requirements from agent suggestions, removing incidental features, and rebuilding trust in the code. Use Codex directly when that risk costs less than the process.
+
+## A campaign that keeps discoveries out of the feature
+
+Imagine you are building *Ashfall Keep*, a small action RPG. While one Codex task works on the dragon boss's second phase, two useful but distracting discoveries arrive: save games capture temporary animation state, and controller mappings identify abilities by inventory position.
+
+![Pixel-art quest scroll](assets/quest-scroll.png) **Capture an idea without expanding the feature.** `$pinboard-intake` records the save-game concern with its trigger, evidence, and likely consequence. It enters intake without becoming ready, replacing the current focus, or interrupting the dragon attempt.
 
 > **Saved for later — the animation-state concern is now in `save-game-animation-state` (`intake`); dragon work continues.**
 
 <img align="right" width="390" src="assets/party-crossroads.png" alt="Pixel-art bard and adventurers considering routes toward a river village, a dragon keep, and a crystal cave">
 
-![Pixel-art open quest ledger](assets/quick-quest-log.png) **See the current work before deciding what moves.** Ask `$pinboard` where things stand and it reads one revision-stamped live overview: the dragon phase is active, controller mapping is ready, and the save-game work remains in intake. The coordinating task can mark work ready, defer it, close it, connect a dependency, or preview which independent items could move together. Reading the map does not change it.
+![Pixel-art open quest ledger](assets/quick-quest-log.png) **Decide from one current project view.** `$pinboard` shows the dragon phase as active, controller mapping as ready, and the save-game concern as intake. Coordination can accept, defer, connect, or close work without asking each conversation to reconstruct the plan.
 
-![Pixel-art campfire checkpoint](assets/safe-camp.png) **Pause and resume without reconstructing the journey.** If stable ability IDs become a real prerequisite, the dragon attempt records where it stopped, why it cannot continue, and what would make it resumable. After the prerequisite is completed and accepted, the same attempt resumes from preserved evidence instead of asking a new conversation to infer the missing history.
+![Pixel-art campfire checkpoint](assets/safe-camp.png) **Resume the decision, not the conversation.** If stable ability IDs become a real prerequisite, the dragon attempt records where it stopped and what must change. The same attempt later resumes from its accepted brief and evidence.
 
-Resume restores paused or blocked work, returning a retained attempt to active or unstarted work to ready. Reopen is different: it returns deferred work to intake for reconsideration. Continue only confirms that an already-active attempt proceeds; it does not change lifecycle state.
+![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **Review what was approved, not merely what now exists.** `$pinboard-deliver` claims the active attempt, follows its exact definition and brief, records the candidate and evidence, and returns them for review by a separate Codex reviewer. If the definition changed, the old brief cannot quietly stand in for it.
 
-![Pixel-art crossed sword and hammer](assets/ready-to-build.png) **Deliver the work that was actually accepted.** Before reading implementation sources, coordination gives one task a renewable preparation claim pinned to the ready item's exact definition. The item stays ready while that task publishes and reviews the canonical brief. Activation consumes the claim and creates the attempt atomically; `$pinboard-deliver` then claims that active attempt, follows the exact definition and checks, and records the result for review by a separate Codex reviewer. If the definition changes after preparation stops, coordination transfers a fresh claim and republishes the matching brief before activation.
+The code, branch, and conversation remain ordinary Codex work. Pinboard keeps their product decisions connected. [How Pinboard works](HOW_IT_WORKS.md) starts with this workflow, then follows it into the detailed lifecycle, persistence model, and package boundaries.
 
-The code, branch, and conversation remain ordinary repository work. Pinboard keeps the decisions and execution around them durable. [How Pinboard works](HOW_IT_WORKS.md) follows these ideas through the product, package layers, and relational ledger.
+## Pinboard became its own use case
+
+Pinboard is used to build Pinboard. Its product decisions, parallel work, exact briefs, implementation evidence, and reviews move through the same workflow it ships.
+
+Its bundled Slop Cleanup skill has also been applied to this repository: tracing residue from revised features, removing test-only production paths, reconciling names and documentation, and repeating the scan until it found no new candidates. The optional storytelling pass was developed here, stress-tested against an earlier revision by fresh Codex reviewers, and then applied across the repository.
+
+That makes this codebase one concrete case study, not proof that Pinboard eliminates every mistake or makes every repository clean.
+
+> Eventually, the conspiracy board needed its own conspiracy board.
 
 ## What it covers
 
@@ -53,6 +81,8 @@ The code, branch, and conversation remain ordinary repository work. Pinboard kee
 - **Optional storytelling review:** after you choose it, proof-read one representative flow or the complete supported repository so the code, its names, and the product overview tell the same accurate story without casually breaking compatibility or deliberate identity; then remove any ceremony introduced by the readability work before calling the pass complete.
 
 The `$pinboard`, `$pinboard-intake`, and `$pinboard-deliver` skills provide the conversational workflows. The `pinboard` command validates and updates the repository-local ledger, rejects stale actions, and keeps unrelated attempts from invalidating one another.
+
+For the most reliable workflow, keep one user-facing Codex task responsible for an outcome through its final repository decision. Let it delegate bounded research, implementation, and review to subagents whose results return automatically. Open another visible task only for a genuinely independent outcome you intend to follow there.
 
 Private working state stays in ignored local files:
 
