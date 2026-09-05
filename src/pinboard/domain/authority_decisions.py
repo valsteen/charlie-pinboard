@@ -10,12 +10,12 @@ from pinboard.domain.ledger import LedgerSnapshot
 
 def _coordination_token(value: work_models.CoordinationLeaseAuthority) -> work_models.CoordinationCommandAuthority:
     return work_models.CoordinationCommandAuthority(
-        value.host_epoch,
-        value.task_id,
-        value.host_id,
-        value.lease_id,
-        value.generation,
-        value.expires_at,
+        host_epoch=value.host_epoch,
+        task_id=value.task_id,
+        host_id=value.host_id,
+        lease_id=value.lease_id,
+        generation=value.generation,
+        expires_at=value.expires_at,
     )
 
 
@@ -68,16 +68,16 @@ def decide_coordination_authority(
                 )
             generation = 1 if retained is None else retained.generation + 1
             return authority_models.CoordinationAuthorityDecision(
-                retained,
-                work_models.CoordinationLeaseAuthority(
-                    host_epoch,
-                    task_id,
-                    host_id,
-                    lease_id,
-                    generation,
-                    acquired_at,
-                    expires_at,
-                    work_models.CoordinationLeaseStatus.ACTIVE,
+                expected_retained=retained,
+                proposed_replacement=work_models.CoordinationLeaseAuthority(
+                    host_epoch=host_epoch,
+                    task_id=task_id,
+                    host_id=host_id,
+                    lease_id=lease_id,
+                    generation=generation,
+                    acquired_at=acquired_at,
+                    expires_at=expires_at,
+                    state=work_models.CoordinationLeaseStatus.ACTIVE,
                 ),
             )
         case authority_models.RenewCoordinationAuthority(
@@ -91,14 +91,21 @@ def decide_coordination_authority(
                     DecisionFailureCode.TRANSITION_INPUT_INVALID,
                     "Coordination renewal must extend its bounded expiry.",
                 )
-            return authority_models.CoordinationAuthorityDecision(current, replace(current, expires_at=expires_at))
+            return authority_models.CoordinationAuthorityDecision(
+                expected_retained=current,
+                proposed_replacement=replace(current, expires_at=expires_at),
+            )
         case authority_models.ReleaseCoordinationAuthority(authority=authority, released_at=released_at):
             current = _current_coordination_authority(retained, authority, released_at)
             if isinstance(current, DecisionFailure):
                 return current
             return authority_models.CoordinationAuthorityDecision(
-                current,
-                replace(current, expires_at=released_at, state=work_models.CoordinationLeaseStatus.RELEASED),
+                expected_retained=current,
+                proposed_replacement=replace(
+                    current,
+                    expires_at=released_at,
+                    state=work_models.CoordinationLeaseStatus.RELEASED,
+                ),
             )
         case authority_models.RevokeCoordinationAuthority(
             lease_id=lease_id, generation=generation, revoked_at=revoked_at
@@ -111,8 +118,8 @@ def decide_coordination_authority(
             if (retained.lease_id, retained.generation) != (lease_id, generation):
                 return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Coordination authority is fenced.")
             return authority_models.CoordinationAuthorityDecision(
-                retained,
-                replace(
+                expected_retained=retained,
+                proposed_replacement=replace(
                     retained,
                     generation=retained.generation + 1,
                     expires_at=revoked_at,
@@ -125,16 +132,16 @@ def decide_coordination_authority(
 
 def _attempt_token(value: authority_models.AttemptLeaseAuthority) -> work_models.CommandAttemptAuthority:
     return work_models.CommandAttemptAuthority(
-        value.host_epoch,
-        value.item,
-        "",
-        value.attempt,
-        "",
-        value.task_id,
-        value.host_id,
-        value.lease_id,
-        value.generation,
-        value.expires_at,
+        host_epoch=value.host_epoch,
+        item=value.item,
+        item_subject_revision="",
+        attempt=value.attempt,
+        attempt_subject_revision="",
+        task_id=value.task_id,
+        host_id=value.host_id,
+        lease_id=value.lease_id,
+        generation=value.generation,
+        expires_at=value.expires_at,
     )
 
 
@@ -201,19 +208,25 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                     DecisionFailureCode.TRANSITION_INPUT_INVALID,
                     "Attempt authority requires a positive bounded interval.",
                 )
-            after = authority_models.AttemptLeaseAuthority(
-                host_epoch,
-                attempt,
-                item,
-                task_id,
-                host_id,
-                lease_id,
-                1,
-                acquired_at,
-                expires_at,
-                authority_models.AttemptLeaseStatus.ACTIVE,
+            proposed_replacement = authority_models.AttemptLeaseAuthority(
+                host_epoch=host_epoch,
+                attempt=attempt,
+                item=item,
+                task_id=task_id,
+                host_id=host_id,
+                lease_id=lease_id,
+                generation=1,
+                acquired_at=acquired_at,
+                expires_at=expires_at,
+                state=authority_models.AttemptLeaseStatus.ACTIVE,
             )
-            return authority_models.AttemptAuthorityDecision(attempt, 0, 1, retained, after)
+            return authority_models.AttemptAuthorityDecision(
+                attempt=attempt,
+                counter_before=0,
+                counter_after=1,
+                expected_retained=retained,
+                proposed_replacement=proposed_replacement,
+            )
         case authority_models.TransferAttemptAuthority(
             current=current,
             coordination=supplied_coordination,
@@ -238,7 +251,7 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                     DecisionFailureCode.TRANSITION_INPUT_INVALID,
                     "Transferred attempt authority requires a positive bounded interval.",
                 )
-            after = replace(
+            proposed_replacement = replace(
                 retained,
                 task_id=task_id,
                 host_id=host_id,
@@ -249,11 +262,11 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                 state=authority_models.AttemptLeaseStatus.ACTIVE,
             )
             return authority_models.AttemptAuthorityDecision(
-                retained.attempt,
-                counter,
-                counter + 1,
-                retained,
-                after,
+                attempt=retained.attempt,
+                counter_before=counter,
+                counter_after=counter + 1,
+                expected_retained=retained,
+                proposed_replacement=proposed_replacement,
             )
         case authority_models.RenewAttemptAuthority(current=current, renewed_at=renewed_at, expires_at=expires_at):
             if (failure := _validate_attempt_change(retained, current, renewed_at)) is not None:
@@ -265,28 +278,28 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                     "Attempt renewal must extend its bounded expiry.",
                 )
             return authority_models.AttemptAuthorityDecision(
-                retained.attempt,
-                counter,
-                counter,
-                retained,
-                replace(retained, expires_at=expires_at),
+                attempt=retained.attempt,
+                counter_before=counter,
+                counter_after=counter,
+                expected_retained=retained,
+                proposed_replacement=replace(retained, expires_at=expires_at),
             )
         case authority_models.ReleaseAttemptAuthority(current=current, released_at=released_at):
             if (failure := _validate_attempt_change(retained, current, released_at)) is not None:
                 return failure
             assert retained is not None
-            after = replace(
+            proposed_replacement = replace(
                 retained,
                 generation=counter + 1,
                 expires_at=released_at,
                 state=authority_models.AttemptLeaseStatus.RELEASED,
             )
             return authority_models.AttemptAuthorityDecision(
-                retained.attempt,
-                counter,
-                counter + 1,
-                retained,
-                after,
+                attempt=retained.attempt,
+                counter_before=counter,
+                counter_after=counter + 1,
+                expected_retained=retained,
+                proposed_replacement=proposed_replacement,
             )
         case authority_models.RevokeAttemptAuthority(
             attempt=attempt,
@@ -303,18 +316,18 @@ def decide_attempt_authority(  # noqa: C901, PLR0912
                 generation,
             ):
                 return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Attempt authority is fenced.")
-            after = replace(
+            proposed_replacement = replace(
                 retained,
                 generation=counter + 1,
                 expires_at=revoked_at,
                 state=authority_models.AttemptLeaseStatus.REVOKED,
             )
             return authority_models.AttemptAuthorityDecision(
-                attempt,
-                counter,
-                counter + 1,
-                retained,
-                after,
+                attempt=attempt,
+                counter_before=counter,
+                counter_after=counter + 1,
+                expected_retained=retained,
+                proposed_replacement=proposed_replacement,
             )
         case _ as unreachable:
             assert_never(unreachable)
@@ -355,15 +368,15 @@ def _validate_attempt_transfer(
     }:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_LEASE_REQUIRED, "Attempt authority is not inactive.")
     expected = authority_models.InactiveAttemptAuthority(
-        retained.host_epoch,
-        retained.attempt,
-        retained.item,
-        retained.task_id,
-        retained.host_id,
-        retained.lease_id,
-        retained.generation,
-        retained.expires_at,
-        expected_state,
+        host_epoch=retained.host_epoch,
+        attempt=retained.attempt,
+        item=retained.item,
+        task_id=retained.task_id,
+        host_id=retained.host_id,
+        lease_id=retained.lease_id,
+        generation=retained.generation,
+        expires_at=retained.expires_at,
+        state=expected_state,
     )
     if current != expected:
         return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Attempt authority is fenced.")
@@ -387,15 +400,15 @@ def _validate_coordination(
 
 def _preparation_token(value: authority_models.PreparationLeaseAuthority) -> work_models.PreparationCommandAuthority:
     return work_models.PreparationCommandAuthority(
-        value.host_epoch,
-        value.item,
-        value.definition_revision,
-        value.definition_digest,
-        value.task_id,
-        value.host_id,
-        value.lease_id,
-        value.generation,
-        value.expires_at,
+        host_epoch=value.host_epoch,
+        item=value.item,
+        definition_revision=value.definition_revision,
+        definition_digest=value.definition_digest,
+        task_id=value.task_id,
+        host_id=value.host_id,
+        lease_id=value.lease_id,
+        generation=value.generation,
+        expires_at=value.expires_at,
     )
 
 
@@ -428,16 +441,16 @@ def _validate_preparation_transfer(
         else retained.state
     )
     expected = authority_models.InactivePreparationAuthority(
-        retained.host_epoch,
-        retained.item,
-        retained.definition_revision,
-        retained.definition_digest,
-        retained.task_id,
-        retained.host_id,
-        retained.lease_id,
-        retained.generation,
-        retained.expires_at,
-        state,
+        host_epoch=retained.host_epoch,
+        item=retained.item,
+        definition_revision=retained.definition_revision,
+        definition_digest=retained.definition_digest,
+        task_id=retained.task_id,
+        host_id=retained.host_id,
+        lease_id=retained.lease_id,
+        generation=retained.generation,
+        expires_at=retained.expires_at,
+        state=state,
     )
     if (
         state
@@ -502,20 +515,26 @@ def decide_preparation_authority(  # noqa: C901, PLR0912
                     DecisionFailureCode.TRANSITION_INPUT_INVALID,
                     "Preparation authority requires a positive bounded interval.",
                 )
-            after = authority_models.PreparationLeaseAuthority(
-                host_epoch,
-                item,
-                definition.revision,
-                definition.digest,
-                task_id,
-                host_id,
-                lease_id,
-                1,
-                acquired_at,
-                expires_at,
-                authority_models.PreparationLeaseStatus.ACTIVE,
+            proposed_replacement = authority_models.PreparationLeaseAuthority(
+                host_epoch=host_epoch,
+                item=item,
+                definition_revision=definition.revision,
+                definition_digest=definition.digest,
+                task_id=task_id,
+                host_id=host_id,
+                lease_id=lease_id,
+                generation=1,
+                acquired_at=acquired_at,
+                expires_at=expires_at,
+                state=authority_models.PreparationLeaseStatus.ACTIVE,
             )
-            return authority_models.PreparationAuthorityDecision(item, 0, 1, None, after)
+            return authority_models.PreparationAuthorityDecision(
+                item=item,
+                counter_before=0,
+                counter_after=1,
+                expected_retained=None,
+                proposed_replacement=proposed_replacement,
+            )
         case authority_models.TransferPreparationAuthority(
             current=current,
             coordination=supplied_coordination,
@@ -541,7 +560,7 @@ def decide_preparation_authority(  # noqa: C901, PLR0912
                 or expires_at <= acquired_at
             ):
                 return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Preparation cannot be transferred.")
-            after = replace(
+            proposed_replacement = replace(
                 retained,
                 definition_revision=definition.revision,
                 definition_digest=definition.digest,
@@ -553,7 +572,13 @@ def decide_preparation_authority(  # noqa: C901, PLR0912
                 expires_at=expires_at,
                 state=authority_models.PreparationLeaseStatus.ACTIVE,
             )
-            return authority_models.PreparationAuthorityDecision(retained.item, counter, counter + 1, retained, after)
+            return authority_models.PreparationAuthorityDecision(
+                item=retained.item,
+                counter_before=counter,
+                counter_after=counter + 1,
+                expected_retained=retained,
+                proposed_replacement=proposed_replacement,
+            )
         case authority_models.RenewPreparationAuthority(current=current, renewed_at=renewed_at, expires_at=expires_at):
             if (failure := _validate_preparation_change(retained, current, now)) is not None:
                 return failure
@@ -564,18 +589,22 @@ def decide_preparation_authority(  # noqa: C901, PLR0912
                     "Preparation renewal must extend its bounded expiry.",
                 )
             return authority_models.PreparationAuthorityDecision(
-                retained.item, counter, counter, retained, replace(retained, expires_at=expires_at)
+                item=retained.item,
+                counter_before=counter,
+                counter_after=counter,
+                expected_retained=retained,
+                proposed_replacement=replace(retained, expires_at=expires_at),
             )
         case authority_models.ReleasePreparationAuthority(current=current, released_at=released_at):
             if (failure := _validate_preparation_change(retained, current, now)) is not None:
                 return failure
             assert retained is not None
             return authority_models.PreparationAuthorityDecision(
-                retained.item,
-                counter,
-                counter + 1,
-                retained,
-                replace(
+                item=retained.item,
+                counter_before=counter,
+                counter_after=counter + 1,
+                expected_retained=retained,
+                proposed_replacement=replace(
                     retained,
                     generation=counter + 1,
                     expires_at=released_at,
@@ -602,11 +631,11 @@ def decide_preparation_authority(  # noqa: C901, PLR0912
             ):
                 return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "Preparation authority is fenced.")
             return authority_models.PreparationAuthorityDecision(
-                item,
-                counter,
-                counter + 1,
-                retained,
-                replace(
+                item=item,
+                counter_before=counter,
+                counter_after=counter + 1,
+                expected_retained=retained,
+                proposed_replacement=replace(
                     retained,
                     generation=counter + 1,
                     expires_at=revoked_at,

@@ -4,9 +4,17 @@ This test audits structural navigation and repeated routing ownership. For the s
 
 Use this test when a command or closed-variant family crosses several production owners. First apply the shared [developer-navigation lens](../../pinboard/references/developer-navigation.md). This cleanup-specific test extends that bounded prevention check across the complete production surface and adds fixed-point evidence.
 
+For an explicitly selected whole-repository storytelling pass, inventory every supported product, agent, documentation, tooling, packaging, CI, and test-evidence surface first. Derive every distinct routing or narrative shape from that inventory, then require one English-only trace and one sibling simulation per shape. A representative path may establish one shape but cannot stand for the complete surface.
+
 ## Trace one supported value
 
 Choose a representative command or variant with a real production entry point and effect and record the trace required by the shared lens. Repeat for another family only when it has a distinct routing shape, such as state mutation versus read projection or direct versus borrowed authority; stop adding traces when a new shape exposes no new owner category. In cleanup, every same-meaning pass-through or remap in those traces becomes a candidate whose semantic responsibility must be inspected and dispositioned.
+
+## Audit what names promise
+
+Use the reachability inventory's complete name surface rather than sampling identifiers that happen to appear in a trace. For each in-scope name, ask what an ordinary English reading claims about provenance, timing, success, durability, authority, capability, intelligence, autonomy, universality, prestige, and identity. Compare that claim with the responsibility the implementation, boundary, or product actually demonstrates. Symmetric spelling across sibling paths does not clear a name whose meaning is false in both places.
+
+Record every mismatch with its selector, claimed meaning, demonstrated responsibility, mismatch, normal reading cost, affected consumers, and evidence. Then use the [storytelling readability](storytelling-readability.md) classification and disposition method. A stable or identity-sensitive name remains a reported finding even when immediate rename would be unsafe.
 
 ## Generate candidates mechanically
 
@@ -67,7 +75,7 @@ Before claiming a fixed point, include one separate receipt row for every catego
 | Defaults, fallbacks, optional handlers, and inherited behavior | Every closed dispatch mechanism and protocol implementation |
 | Test-only public roots and their private helper chains | Production definitions referenced from tests and their transitive callees |
 | Base and composite protocol overlap | All production protocols and their concrete substitution consumers |
-| Archaeological names, defaults, versions, and capability labels | Production source, schema, presentation, documentation, and tooling |
+| Archaeological and misleading names, defaults, versions, identities, and capability labels | Every inventoried production, API, wire, schema, storage, history, generated, presentation, documentation, metadata, and tooling name |
 
 Each row must name the method or analyzer, exact scope, candidate count with selectors or an explicit zero, and disposition. A fallback row must also link its complete structural-ledger counts and zero-failure receipt. A candidate mentioned elsewhere in the report does not satisfy the row unless this evidence is present.
 
@@ -96,4 +104,4 @@ The same test can justify superficially repeated work. Selecting an advertised c
 
 ## Evidence and stop condition
 
-Report the before-and-after traces, sibling edit sites, retained exhaustive sites with their owned distinction, semantic sweep receipts, and deleted pass-through sites. Stop when fresh traces for each distinct routing shape find no same-meaning routing fact repeated outside a boundary, decision, effect, or presentation owner, the sibling simulations expose no ceremonial edit site in scope, and every sweep above has a concrete zero-result or disposition receipt.
+Report the before-and-after traces, sibling edit sites, retained exhaustive sites with their owned distinction, all eight separate semantic sweep receipts, and deleted pass-through sites. Stop when a fresh complete inventory and trace pass finds no new in-scope candidate, every distinct routing shape has an English-only trace, no same-meaning routing fact repeats outside a boundary, decision, effect, or presentation owner, the sibling simulations expose no ceremonial edit site in scope, and every sweep above has a concrete zero-result or disposition receipt.

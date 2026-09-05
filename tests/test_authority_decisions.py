@@ -72,13 +72,13 @@ class AuthorityDecisionTest(unittest.TestCase):
         assert current is not None
         token = replace(
             current,
-            task_id=acquired.after.task_id,
-            lease_id=acquired.after.lease_id,
-            generation=acquired.after.generation,
-            expires_at=acquired.after.expires_at,
+            task_id=acquired.proposed_replacement.task_id,
+            lease_id=acquired.proposed_replacement.lease_id,
+            generation=acquired.proposed_replacement.generation,
+            expires_at=acquired.proposed_replacement.expires_at,
         )
         renewed = decide_coordination_authority(
-            acquired.after,
+            acquired.proposed_replacement,
             authority_models.RenewCoordinationAuthority(
                 token,
                 SQLITE_NOW + timedelta(seconds=10),
@@ -87,19 +87,19 @@ class AuthorityDecisionTest(unittest.TestCase):
         )
         self.assertNotIsInstance(renewed, DecisionFailure)
         released = decide_coordination_authority(
-            acquired.after,
+            acquired.proposed_replacement,
             authority_models.ReleaseCoordinationAuthority(token, SQLITE_NOW + timedelta(seconds=20)),
         )
         self.assertNotIsInstance(released, DecisionFailure)
         revoked = decide_coordination_authority(
-            released.after,
+            released.proposed_replacement,
             authority_models.RevokeCoordinationAuthority(
                 token.lease_id, token.generation, SQLITE_NOW + timedelta(seconds=20)
             ),
         )
         self.assertNotIsInstance(revoked, DecisionFailure)
         stale = decide_coordination_authority(
-            acquired.after,
+            acquired.proposed_replacement,
             authority_models.RenewCoordinationAuthority(
                 replace(token, generation=token.generation + 1),
                 SQLITE_NOW + timedelta(seconds=10),

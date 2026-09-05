@@ -35,7 +35,7 @@ def _guide() -> str:
 
 Pinboard keeps repository work coherent across tasks and interruptions. It preserves what the project decided, which execution is acting on it, who may change it now, and what evidence another task can trust later.
 
-The five views move from the work-item lifecycle to package responsibilities, then follow one change, show the durable relationships underneath, and carry one complete project snapshot across a read-only handover boundary.
+The five views move from the work-item lifecycle to package responsibilities, then follow one change, carry one project-facts package across a read-only handover boundary, and show the durable relationships underneath.
 
 ## What moves
 
@@ -47,7 +47,7 @@ The primary path is intentionally familiar: intake becomes ready, active work en
 
 Resume restores paused or blocked work: a retained attempt becomes active, while an item without one becomes ready. Reopen returns deferred work to intake with new evidence. Continue is advisory: it confirms that an already-active attempt proceeds without changing lifecycle state or accepting mutation input.
 
-Proposals and dependencies are not extra states. Accepted scope is the exact authorized revision an attempt uses. Mutation ownership records who may act now: one graph-wide coordination holder, one ready-item preparation claim, or one active-attempt lease. A review candidate identifies the exact result under review, and evidence supports its acceptance.
+Proposals and dependencies are not extra states. Proposal intake stores the original proposal facts and creates same-identity `intake` work immediately. Accept keeps that item and applies its selected work details; merge supersedes it in favor of another item; return keeps it in intake and exposes the reason as clarification; reject drops it. Accepted scope is the exact authorized revision an attempt uses. Mutation ownership records who may act now: one graph-wide coordination holder, one ready-item preparation claim, or one active-attempt lease. A review candidate identifies the exact result under review, and evidence supports its acceptance.
 
 ## What each transition preserves
 
@@ -56,7 +56,7 @@ The lifecycle is accompanied by four guarantees:
 - **Work survives conversations.** A later task can continue from accepted scope and evidence instead of reconstructing intent from chat history.
 - **Mutation ownership is current.** An expired or replaced worker cannot apply an action it discovered earlier.
 - **Review is about one candidate.** Correction, checkpoint acceptance, continuation, and terminal completion preserve different outcomes without changing which work they belong to.
-- **Transitions are atomic.** An accepted change updates its related facts and history together; a rejected or failed change leaves the previous ledger intact.
+- **Each authoritative change is atomic.** An accepted change updates its related facts and history together; a rejected or failed change leaves the previous ledger intact.
 
 These guarantees explain why seemingly similar words remain distinct.
 
@@ -68,6 +68,16 @@ The package is split into four layers because each removes a different kind of a
 
 Every arrow in this view means “may depend on”; the next view shows runtime flow. Interfaces absorb the variability of command lines, JSON, project files, and human-readable output. A small exhaustive entry point routes exact commands, while thematic interface modules own composition that needs concrete adapters. Application code reads complete stored state through capabilities and projects an accepted decision into one focused storage mutation. The domain decides legality as pure data. Adapters make accepted facts durable and recoverable. These transformations prevent one layer from silently interpreting facts owned by another.
 
+## Read, validate, initialize, and repair
+
+Installed inspection commands repeat one short read-only story. The command line decodes one exact leaf, root resolution selects the source checkout, shared repository, and work directory, and the interface samples time when lease expiry matters. It then reads one complete SQLite snapshot, asks application code to project the requested status, overview, item, definition, history, action, or parallel view, and presents that result. These commands neither refresh generated files nor change authority. `input-contract` is deliberately different: it describes static action semantics and payload shape from the selected action kind without opening project state.
+
+`status` is a bounded summary of that one current SQLite snapshot; it is not the full integrity check. `validate` reads one snapshot, reads and verifies accepted brief content needed to derive attempt views, verifies every accepted artifact against its recorded identity, and then compares every replaceable generated view with the bytes that snapshot should produce. Authoritative defects are errors. Missing or stale generated views are warnings because SQLite and accepted artifacts remain the source of truth. Validation only reports; `views rebuild` separately reads one snapshot and verified brief content, derives every expected queue, focus, item, attempt, and history view, and replaces those projections.
+
+Initialization begins with the same explicit roots and one operation time. For the default work directory it records the repository-local Git exclusion. A new ledger is built and verified in a staging file before atomic publication. A returning ledger is schema-checked before Pinboard reconciles only its own same-file publication residue and ensures its directories. Both routes then read the current snapshot, verify accepted brief content, rebuild all generated views, and present the initialization receipt. If view rebuilding fails after database publication, the command reports failure while the authoritative database remains available for a later retry.
+
+Reviewed source planning is another read-only path. `brief-sources` reads one strict manifest, selects whole files or unique Markdown headings from the chosen source checkout, normalizes heading-selected text, rejects overlaps and oversized lines, assigns every selected byte to one ordered segment and batch, and then presents either the complete plan or exactly one requested batch. It never opens the work ledger or edits the project.
+
 ## Follow one change
 
 Acquiring a preparation claim shows one complete changing-command story. The command-line boundary first decodes an exact acquisition command. The preparation interface observes stored context, then resolves the caller's supplied coordination claim and requested lease details into one requested preparation change. This observation can explain an absent claim, but it is not the authoritative state used to approve the change.
@@ -78,13 +88,23 @@ The application opens the write transaction and rereads locked current state. A 
 
 After the authoritative commit, the interface refreshes replaceable views. An interrupted refresh can warn without undoing the successful ledger change because the views can be rebuilt. The interface then reloads the latest committed state and presents it. The representative code repeats these verbs and provenance distinctions directly: observed state becomes a requested change; the application owns locked state, accepted decision, focused mutation, and commit; refresh and latest-state presentation happen afterward.
 
+## Borrow coordination for one shared change
+
+Some installed commands need temporary graph-wide authority without becoming its long-term owner. Close first builds its transition payload. Item revision first reads and validates the complete proposed definition. Coordination apply first reads the supplied bytes. Each then enters the same borrowed-coordination sequence.
+
+The transition interface observes stored state and requests a temporary coordination acquisition. That acquisition is one authoritative SQLite transaction. If it is rejected, the command stops without cleanup. After a successful acquisition, the interface rereads the retained lease, discovers the currently legal coordinator actions, selects the exact requested action, and only then decodes its matching payload. The selected product transition is decided and committed in a second, separately atomic transaction.
+
+The interface then attempts to release the borrowed lease in a third transaction, whether the product transition succeeded, returned an expected rejection, or raised an exception. These three changes are not one transaction, and release is not guaranteed. A release failure after a successful product transition leaves that transition committed, identifies its revision, and can leave the temporary lease active. When an expected transition rejection and release both fail, the release failure is reported with the original rejection. When the transition raises unexpectedly, that exception remains primary and any cleanup rejection or exception is attached as a note.
+
+Only a successful product transition followed by a successful release reaches the full generated-view rebuild. A rebuild warning is repairable: both authoritative commits remain stored, and `pinboard views rebuild` can recreate the files. The command presents the product-transition revision, not the later release revision.
+
 ## Carry the project into another tool
 
-Local continuity and external handover are different jobs. `pinboard handover --json` reads one complete ledger snapshot, verifies every accepted artifact against its recorded identity and bytes, and emits one revision-stamped portable JSON package only after the full package is ready.
+Local continuity and external handover are different jobs. `pinboard handover --json` captures one ledger revision, projects the supported project facts from it, verifies every referenced accepted artifact against its recorded identity and bytes, and emits one revision-stamped portable JSON package only after the exported package is ready.
 
-{_picture("handover", "A complete Pinboard snapshot and its verified artifacts becoming one portable JSON package for a user-selected downstream tool")}
+{_picture("handover", "Exported Pinboard project facts and verified artifacts becoming one portable JSON package while live authority stays local")}
 
-The package carries admitted work, pending proposals, relationships, decisions, and accepted evidence without choosing how another system represents them. Handover changes no Pinboard state and does not choose or write to the receiving tool; a human or another tool owns that mapping.
+The package carries admitted work, focus, accepted definitions, attempts, pending proposals, relationships, decisions, and accepted evidence without choosing how another system represents them. Live coordination, preparation claims, attempt leases, and their generations remain in Pinboard and are not exported. Handover changes no Pinboard state and does not choose or write to the receiving tool; a human or another tool owns that mapping.
 
 ## The durable memory underneath
 
@@ -92,9 +112,11 @@ The relational ledger groups eighteen tables into six kinds of memory: current w
 
 {_picture("database", "Six groups of SQLite tables showing current work, scope, discovery, durable knowledge, mutation ownership, and history")}
 
-A work item survives attempts. Accepted versions preserve current scope and its revision history. Proposal evidence records why possible work was raised, while its freshness assumptions record which facts must be checked again.
+A work item survives attempts. Accepted versions preserve current scope and its revision history. Proposal evidence records why intake work was raised, while its freshness assumptions record which facts must be checked again. The original proposal facts remain attached to that work while disposition columns record the later accept, merge, return, or reject decision.
 
-Pinboard publishes immutable artifacts along three current paths. A canonical work brief is published before an item is activated or resumed. The attempt selects that brief, and dispatch later resolves its accepted reference and verifies the exact bytes. Independent ready-review evidence can be published during dispatch preparation, then verified and reused by exact identity.
+Pinboard publishes immutable artifacts along three current paths. A canonical work brief is published before an item is activated or resumed. Brief publication reads the selected candidate, strictly decodes and cross-validates it, canonicalizes its bytes, publishes the immutable file, accepts its reference in SQLite, rebuilds generated views, and presents the stable accepted reference. The attempt selects that accepted brief.
+
+Dispatch preparation reads the strict environment and any optional prompt or review files, selects the exact current action, resolves and verifies the accepted brief, validates its complete identity and reviewed sources, chooses the local, existing-review, or new-review path, publishes or reuses review evidence, renders the exact prompt, rechecks authority, and only then emits it. Independent ready-review evidence can be published during dispatch preparation and then reused by exact identity. Dispatch prepares a prompt; it does not create a task. Declared permissions are forwarded to the worker as coordinator declarations rather than granted or enforced by Pinboard.
 
 Checkpoint acceptance publishes the exact result and independent review as immutable artifacts. It then atomically records the result on the attempt, the review on the accepted history receipt, the lifecycle change, and the single receipt. Publication alone does not change lifecycle state; a rejected or rolled-back acceptance leaves the prior ledger relationships intact.
 
@@ -104,7 +126,7 @@ For installation and the product story, return to the [README](README.md). For c
 
 ---
 
-<sub>This guide and its SVG diagrams are generated from the executable seeds in <code>docs/how_it_works/</code>. The repository check requires their committed outputs to match current workflow, architecture, journey, and schema authorities.</sub>
+<sub>This guide and its SVG diagrams are generated from the executable seeds in <code>docs/how_it_works/</code>. The repository check proves that committed output is fresh and that the specific source relationships encoded by those seeds still hold.</sub>
 """
 
 

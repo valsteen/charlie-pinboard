@@ -97,7 +97,8 @@ class MutationPersistenceTest(unittest.TestCase):
         retained = project_decision_snapshot(before, SQLITE_NOW).coordination_lease
         assert retained is not None
         return authority_models.CoordinationAuthorityDecision(
-            retained, replace(retained, expires_at=retained.expires_at + extension)
+            expected_retained=retained,
+            proposed_replacement=replace(retained, expires_at=retained.expires_at + extension),
         )
 
     def _attempt_renewal_decision(

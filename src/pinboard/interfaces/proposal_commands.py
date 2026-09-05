@@ -21,7 +21,7 @@ from pinboard.interfaces import cli_commands, proposal_models, proposals, work_v
 from pinboard.interfaces.errors import ProposalFailure, ProposalResult
 
 
-def _domain_proposal_relation(value: proposal_models.ProposalRelation) -> work_models.ProposalRelation:
+def _convert_proposal_relation(value: proposal_models.ProposalRelation) -> work_models.ProposalRelation:
     match value:
         case proposal_models.IndependentProposalRelation():
             return work_models.IndependentProposalRelation()
@@ -43,47 +43,57 @@ def create_proposal(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ProposalCommand,
 ) -> ProposalResult[int]:
-    path = command.file
+    proposal_path = command.file
     try:
-        data = path.read_bytes()
+        encoded_proposal = proposal_path.read_bytes()
     except OSError as error:
-        return ProposalFailure(DecisionFailureCode.PROPOSAL_INVALID, f"Cannot read proposal at '{path}': {error}")
-    proposal = proposals.parse_proposal(data)
-    if isinstance(proposal, ProposalFailure):
-        return proposal
-    intake = domain_proposal_models.ProposalIntake(
-        ProposalId(proposal.proposal_id),
-        proposal.created_at_utc(),
-        TaskId(proposal.source_task_id),
-        proposal.user_label,
-        proposal.trigger,
-        proposal.why_it_matters,
-        proposal.effect,
-        proposal.unlock,
-        _domain_proposal_relation(proposal.relation),
-        proposal.urgency_evidence,
-        proposal.evidence,
-        proposal.freshness_assumptions,
-        proposal.position,
+        return ProposalFailure(
+            DecisionFailureCode.PROPOSAL_INVALID,
+            f"Cannot read proposal at '{proposal_path}': {error}",
+        )
+    decoded_proposal = proposals.parse_proposal(encoded_proposal)
+    if isinstance(decoded_proposal, ProposalFailure):
+        return decoded_proposal
+    requested_intake = domain_proposal_models.ProposalIntake(
+        ProposalId(decoded_proposal.proposal_id),
+        decoded_proposal.created_at_utc(),
+        TaskId(decoded_proposal.source_task_id),
+        decoded_proposal.user_label,
+        decoded_proposal.trigger,
+        decoded_proposal.why_it_matters,
+        decoded_proposal.effect,
+        decoded_proposal.unlock,
+        _convert_proposal_relation(decoded_proposal.relation),
+        decoded_proposal.urgency_evidence,
+        decoded_proposal.evidence,
+        decoded_proposal.freshness_assumptions,
+        decoded_proposal.position,
     )
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
-    result = service.create_proposal(
+    creation_result = service.create_proposal(
         store,
-        domain_proposal_models.CreateProposalOperation(intake),
+        domain_proposal_models.CreateProposalOperation(requested_intake),
         datetime.now(UTC),
     )
-    if isinstance(result, DecisionFailure):
-        return ProposalFailure(result.code, result.message)
+    if isinstance(creation_result, DecisionFailure):
+        return ProposalFailure(creation_result.code, creation_result.message)
+    committed_state = store.snapshot()
+    changed_items = [ItemId(decoded_proposal.proposal_id)]
+    if isinstance(decoded_proposal.relation, proposal_models.PrerequisiteProposalRelation):
+        changed_items.append(ItemId(decoded_proposal.relation.item))
     view_result = work_views.refresh(
-        roots, store, file_models.AffectedViews(queue=True, history=True), datetime.now(UTC)
+        roots,
+        store,
+        file_models.AffectedViews(queue=True, history=True, items=tuple(changed_items)),
+        datetime.now(UTC),
     )
     if view_result.warning is not None:
         print(view_result.warning.message, file=sys.stderr)
     intake_item = next(
-        value for value in store.snapshot().lifecycle.work_items if str(value.item_id) == proposal.proposal_id
+        value for value in committed_state.lifecycle.work_items if str(value.item_id) == decoded_proposal.proposal_id
     )
     print(
-        f"OK PROPOSAL_CREATED {proposal.proposal_id} "
+        f"OK PROPOSAL_CREATED {decoded_proposal.proposal_id} "
         f"position={intake_item.queue_position} state={intake_item.state.value}"
     )
     return 0

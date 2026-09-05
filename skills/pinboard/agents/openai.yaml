@@ -1,4 +1,4 @@
 interface:
   display_name: "Pinboard"
   short_description: "Orient and coordinate one project work ledger"
-  default_prompt: "Use $pinboard to give a compact live-work overview first, offer natural-language expansions with optional numbered quick replies, and preview safe parallel work when requested."
+  default_prompt: "Use $pinboard to give a compact live-work overview first, confirm broad scope and magnitude in one declarative sentence before preparation, offer natural-language expansions with optional numbered quick replies, and preview safe parallel work when requested."

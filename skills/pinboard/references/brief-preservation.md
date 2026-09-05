@@ -2,6 +2,8 @@
 
 Use this procedure only for a typed `cross-boundary` checkpoint. It projects named architecture, plans, and accepted evidence into a reviewable execution contract before implementation. A `local` checkpoint does not add contracts, reviewed-authority coverage, lifecycle declarations, or an independent brief review.
 
+For broad autonomous work, require the Pinboard workflow's short human-facing scope confirmation before preparation begins. Compile the canonical brief to preserve that stated outcome, principal read and touch surfaces, approximate magnitude, and surprising exclusions; never use the private brief to introduce a consequential narrowing or widening that the human did not see. The confirmation is declarative and does not repeat an authorization question already answered.
+
 ## Close the authority set
 
 Before writing contracts or coverage rows, derive the authority set from the accepted effects rather than guessing files. For each behavior, rejection, or live-state change, identify its canonical decision owner, every operation capable of mutating the protected state, lifecycle siblings, storage and migration path, direct production callers, installed consumers, generated projections and their generators, and the evidence that can falsify agreement. Include the observation-time boundary when expiry or staleness matters. Include schema identity, initialization, backup, validation, and reopen owners when persistent data changes.

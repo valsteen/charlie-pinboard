@@ -69,10 +69,10 @@ def _sync_directory(path: Path) -> None:
 
 
 def ensure_directory_chain(roots: DurableRoots) -> None:
-    current = roots.anchor
+    current_directory = roots.anchor
     for component in (*roots.work_components, "artifacts"):
         _validate_component(component)
-        child = current / component
+        child = current_directory / component
         try:
             child.mkdir()
         except FileExistsError:
@@ -87,8 +87,8 @@ def ensure_directory_chain(roots: DurableRoots) -> None:
                 FileIOErrorCode.DIRECTORY_INVALID,
                 f"Durable-root component is not a real directory: {child}",
             )
-        _sync_directory(current)
-        current = child
+        _sync_directory(current_directory)
+        current_directory = child
 
 
 def ensure_child_directory(parent: Path, component: str) -> Path:

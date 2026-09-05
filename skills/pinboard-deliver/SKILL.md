@@ -28,7 +28,7 @@ When reacquiring an attempt returned from review, read the durable correction re
 - Treat a stale instruction as an instruction defect before reshaping working code around it.
 - Do not edit generated views, SQLite authority, coordination leases, or another item's lifecycle state outside the executable workflow.
 - Do not accept or complete your own item.
-- Prepare the stable candidate for independent review, then follow the current ownership and review-return rules below. No permanent coordinator task is required.
+- Prepare the stable candidate for independent review, then follow the current ownership and review-return rules below. `pinboard dispatch` prepares the exact launch prompt but does not create the worker task. No permanent coordinator task is required.
 
 Worker diff inspection, requirement mapping, and fresh verification are pre-review evidence. They do not replace independent review.
 

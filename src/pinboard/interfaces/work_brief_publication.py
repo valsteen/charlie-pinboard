@@ -1,8 +1,9 @@
 """Publish one canonical work brief and present its accepted reference.
 
-The command function reads the selected candidate, opens the concrete artifact
-repository and SQLite store, accepts the immutable artifact, and rebuilds
-generated views. It returns advertised decision failures and lets filesystem,
+The command function reads the selected candidate, strictly decodes and
+cross-validates it, canonicalizes its bytes, publishes the immutable artifact,
+accepts its reference in SQLite, rebuilds generated views, and presents that
+stable reference. It returns advertised decision failures and lets filesystem,
 storage, and malformed boundary data remain exact exceptions.
 """
 
@@ -37,46 +38,47 @@ def publish_brief(
     command: cli_commands.BriefPublishCommand,
 ) -> CommandResult[int]:
     try:
-        candidate = command.file.read_bytes()
+        candidate_bytes = command.file.read_bytes()
     except OSError as error:
         raise WorkBriefError(
             WorkBriefErrorCode.BRIEF_INVALID,
             f"Cannot read work brief candidate '{command.file}': {error}",
         ) from error
-    brief = work_briefs.decode_work_brief(candidate)
+    validated_brief = work_briefs.decode_work_brief(candidate_bytes)
+    canonical_brief_bytes = work_briefs.canonical_work_brief_bytes(validated_brief)
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
-    accepted = artifact_publication.publish_accepted_artifact(
+    accepted_reference = artifact_publication.publish_accepted_artifact(
         store,
         artifact_files.ArtifactRepository(file_io.resolve_durable_roots(roots.shared_repository, roots.work)),
         artifacts.NewArtifact(
             stored_state.ArtifactKind.BRIEF,
-            brief.attempt_id,
-            brief.artifact_revision,
+            validated_brief.attempt_id,
+            validated_brief.artifact_revision,
             ".json",
-            work_briefs.canonical_work_brief_bytes(brief),
+            canonical_brief_bytes,
         ),
         datetime.now(UTC),
     )
-    if isinstance(accepted, DecisionFailure):
-        return CommandFailure(accepted.code, accepted.message)
-    view_result = work_views.rebuild(roots, store, datetime.now(UTC))
-    if view_result.warning is not None:
-        print(view_result.warning.message, file=sys.stderr)
-    view = BriefPublicationView(
-        int(accepted.artifact_ref_id),
-        accepted.kind.value,
-        accepted.key,
-        accepted.revision,
-        accepted.selector,
-        accepted.content_sha256,
-        accepted.size_bytes,
-        accepted.accepted_revision,
+    if isinstance(accepted_reference, DecisionFailure):
+        return CommandFailure(accepted_reference.code, accepted_reference.message)
+    rebuilt_views = work_views.rebuild(roots, store, datetime.now(UTC))
+    if rebuilt_views.warning is not None:
+        print(rebuilt_views.warning.message, rebuilt_views.warning.repair, sep="\n", file=sys.stderr)
+    publication_view = BriefPublicationView(
+        int(accepted_reference.artifact_ref_id),
+        accepted_reference.kind.value,
+        accepted_reference.key,
+        accepted_reference.revision,
+        accepted_reference.selector,
+        accepted_reference.content_sha256,
+        accepted_reference.size_bytes,
+        accepted_reference.accepted_revision,
     )
     if command.json:
-        write_json(view)
+        write_json(publication_view)
     else:
         print(
-            f"OK BRIEF_PUBLISHED artifact_ref_id={view.artifact_ref_id} selector={view.selector} "
-            f"accepted_revision={view.accepted_revision}"
+            f"OK BRIEF_PUBLISHED artifact_ref_id={publication_view.artifact_ref_id} "
+            f"selector={publication_view.selector} accepted_revision={publication_view.accepted_revision}"
         )
     return 0

@@ -6,22 +6,16 @@ from pinboard.domain.ledger import LedgerSnapshot
 from pinboard.domain.proposal_models import (
     CreateProposalOperation,
     IntakeWorkItem,
-    LocalIntakeAuthority,
     PrerequisiteDependencyChange,
     ProposalCreationDecision,
 )
 
 
 def decide_proposal_creation(
-    authority: LocalIntakeAuthority,
-    current_project_revision: int,
-    current_host_epoch: int,
     snapshot: LedgerSnapshot,
     operation: CreateProposalOperation,
 ) -> DecisionResult[ProposalCreationDecision]:
     intake = operation.intake
-    if authority != LocalIntakeAuthority(current_project_revision, current_host_epoch):
-        return DecisionFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "Local intake authority is stale.")
     if snapshot.proposal(intake.proposal_id) is not None:
         return DecisionFailure(DecisionFailureCode.PROPOSAL_ALREADY_EXISTS, "Proposal identity already exists.")
     item_id = ItemId(intake.proposal_id)

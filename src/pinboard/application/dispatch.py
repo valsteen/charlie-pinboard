@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from pinboard.application import stored_state
@@ -16,14 +16,27 @@ from pinboard.domain.errors import DecisionFailure
 from pinboard.domain.identifiers import AttemptId, ReviewId
 
 
+@dataclass(frozen=True, slots=True)
+class SelectedDispatch:
+    attempt: stored_state.StoredAttempt
+    brief_reference: stored_state.ArtifactReference
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedDispatchReview:
+    reference: stored_state.ArtifactReference
+    own_publication_revision: int | None
+
+
 def _rediscover_dispatch_action(
     store: WorkStore,
     supplied: decision_models.DispatchAction,
     now: datetime,
 ) -> DispatchResult[decision_models.Action | None]:
     capability = supplied.capability
+    state = store.snapshot()
     actions = discover_actions(
-        store,
+        state,
         decision_models.Role.COORDINATOR,
         lease_id=capability.lease_id,
         generation=capability.coordinator_generation,
@@ -66,7 +79,7 @@ def select_dispatch(
     store: WorkStore,
     action: decision_models.Action,
     now: datetime,
-) -> DispatchResult[tuple[stored_state.StoredAttempt, stored_state.ArtifactReference]]:
+) -> DispatchResult[SelectedDispatch]:
     if not isinstance(action, decision_models.DispatchAction):
         return DispatchFailure(
             DispatchRejectionCode.ACTION_UNAVAILABLE,
@@ -90,10 +103,10 @@ def select_dispatch(
     )
     if reference is None:
         return DispatchFailure(DispatchRejectionCode.BRIEF_MISSING, "The attempt has no accepted brief artifact.")
-    return attempt, reference
+    return SelectedDispatch(attempt, reference)
 
 
-def _ready_review(
+def _find_ready_review_reference(
     store: WorkStore,
     attempt_id: AttemptId,
     checkpoint_sha256: str,
@@ -114,7 +127,7 @@ def find_dispatch_review(
     attempt_id: AttemptId,
     checkpoint_sha256: str,
 ) -> DispatchResult[stored_state.ArtifactReference]:
-    existing = _ready_review(store, attempt_id, checkpoint_sha256)
+    existing = _find_ready_review_reference(store, attempt_id, checkpoint_sha256)
     if existing is None:
         return DispatchFailure(DispatchRejectionCode.REVIEW_MISSING, "The exact ready brief review is absent.")
     return existing
@@ -128,13 +141,13 @@ def publish_dispatch_review(
     candidate: bytes,
     review_id: ReviewId,
     accepted_at: datetime,
-) -> DispatchResult[tuple[stored_state.ArtifactReference, int | None]]:
+) -> DispatchResult[AcceptedDispatchReview]:
     key = f"{attempt_id}-brief-review-{checkpoint_sha256}"
-    existing = _ready_review(store, attempt_id, checkpoint_sha256)
+    existing = _find_ready_review_reference(store, attempt_id, checkpoint_sha256)
     if existing is not None:
         artifacts.verify(existing)
         if artifacts.path(existing).read_bytes() == candidate:
-            return existing, None
+            return AcceptedDispatchReview(existing, None)
         rejected = artifacts.publish(
             NewArtifact(
                 stored_state.ArtifactKind.EVIDENCE,
@@ -163,13 +176,13 @@ def publish_dispatch_review(
     )
     if isinstance(accepted, DecisionFailure):
         return DispatchFailure(DispatchRejectionCode.STALE_ACTION, accepted.message)
-    return accepted, accepted.accepted_revision
+    return AcceptedDispatchReview(accepted, accepted.accepted_revision)
 
 
-def confirm_dispatch_authority(
+def recheck_dispatch_authority(
     store: WorkStore,
     supplied: decision_models.DispatchAction,
-    publication_revision: int | None,
+    own_review_publication_revision: int | None,
     now: datetime,
 ) -> DispatchFailure | None:
     capability = supplied.capability
@@ -178,9 +191,10 @@ def confirm_dispatch_authority(
         return rediscovered
     current = rediscovered if isinstance(rediscovered, decision_models.DispatchAction) else None
     current_matches = current == supplied
-    if current is not None and publication_revision is not None:
+    if current is not None and own_review_publication_revision is not None:
         current_matches = (
-            current.capability.expected_revision == str(publication_revision)
+            capability.expected_revision == str(own_review_publication_revision - 1)
+            and current.capability.expected_revision == str(own_review_publication_revision)
             and replace(
                 current,
                 capability=replace(current.capability, expected_revision=capability.expected_revision),

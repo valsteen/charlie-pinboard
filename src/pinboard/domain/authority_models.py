@@ -46,8 +46,8 @@ type CoordinationAuthorityOperation = (
 
 @dataclass(frozen=True, slots=True)
 class CoordinationAuthorityDecision:
-    before: work_models.CoordinationLeaseAuthority | None
-    after: work_models.CoordinationLeaseAuthority
+    expected_retained: work_models.CoordinationLeaseAuthority | None
+    proposed_replacement: work_models.CoordinationLeaseAuthority
 
 
 class AttemptLeaseStatus(Enum):
@@ -156,8 +156,8 @@ class PreparationAuthorityDecision:
     item: ItemId
     counter_before: int
     counter_after: int
-    current_before: PreparationLeaseAuthority | None
-    current_after: PreparationLeaseAuthority
+    expected_retained: PreparationLeaseAuthority | None
+    proposed_replacement: PreparationLeaseAuthority
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,5 +246,5 @@ class AttemptAuthorityDecision:
     attempt: AttemptId
     counter_before: int
     counter_after: int
-    current_before: AttemptLeaseAuthority | None
-    current_after: AttemptLeaseAuthority
+    expected_retained: AttemptLeaseAuthority | None
+    proposed_replacement: AttemptLeaseAuthority

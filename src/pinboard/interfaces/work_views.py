@@ -1,3 +1,10 @@
+"""Read accepted brief content and refresh replaceable generated views.
+
+Each refresh or rebuild reads one SQLite snapshot, derives complete attempt
+brief projections from verified artifacts, and then writes only generated view
+files. SQLite and accepted artifacts remain authoritative.
+"""
+
 from datetime import datetime
 
 from pinboard.adapters.files.artifacts import ArtifactRepository
@@ -13,14 +20,12 @@ from pinboard.interfaces.errors import WorkBriefError
 from pinboard.interfaces.work_briefs import build_attempt_brief_views
 
 
-def attempt_brief_views(
+def read_attempt_brief_views(
     roots: cli_commands.ResolvedRoots,
-    store: SQLiteWorkStore,
-    *,
-    state: stored_state.StoredWorkState | None = None,
+    state: stored_state.StoredWorkState,
 ) -> dict[AttemptId, bytes]:
     return build_attempt_brief_views(
-        state if state is not None else store.snapshot(),
+        state,
         ArtifactRepository(resolve_durable_roots(roots.shared_repository, roots.work)),
     )
 
@@ -31,32 +36,42 @@ def refresh(
     affected: AffectedViews,
     now: datetime,
 ) -> ViewRefreshResult:
-    state = store.snapshot()
+    current_state = store.snapshot()
     try:
-        briefs = attempt_brief_views(roots, store, state=state)
+        attempt_briefs = read_attempt_brief_views(roots, current_state)
     except WorkBriefError as error:
         return ViewRefreshResult(
-            state.lifecycle.project.revision,
+            current_state.lifecycle.project.revision,
             ViewWarning(
                 f"The SQLite transition succeeded, but generated views need repair: {error} "
                 "Run 'pinboard views rebuild'.",
                 "Run 'pinboard views rebuild'.",
             ),
         )
-    return refresh_file_views(state, roots.work, affected, briefs, now=now)
+    return refresh_file_views(current_state, roots.work, affected, attempt_briefs, now=now)
+
+
+def refresh_shared_authority_views(
+    roots: cli_commands.ResolvedRoots,
+    store: SQLiteWorkStore,
+    now: datetime,
+) -> ViewRefreshResult:
+    """Refresh the queue, focus, and history affected by shared authority changes."""
+
+    return refresh(roots, store, AffectedViews(queue=True, current_focus=True, history=True), now)
 
 
 def rebuild(roots: cli_commands.ResolvedRoots, store: SQLiteWorkStore, now: datetime) -> ViewRefreshResult:
-    state = store.snapshot()
+    current_state = store.snapshot()
     try:
-        briefs = attempt_brief_views(roots, store, state=state)
+        attempt_briefs = read_attempt_brief_views(roots, current_state)
     except WorkBriefError as error:
         return ViewRefreshResult(
-            state.lifecycle.project.revision,
+            current_state.lifecycle.project.revision,
             ViewWarning(
                 f"Generated views could not be rebuilt: {error} "
                 "Resolve the accepted work-brief problem and run 'pinboard views rebuild' again.",
                 "Resolve the accepted work-brief problem and run 'pinboard views rebuild' again.",
             ),
         )
-    return rebuild_file_views(state, roots.work, briefs, now=now)
+    return rebuild_file_views(current_state, roots.work, attempt_briefs, now=now)

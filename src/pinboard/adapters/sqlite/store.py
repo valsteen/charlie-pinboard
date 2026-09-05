@@ -524,8 +524,8 @@ def _persist_state_change(
         case CoordinationAuthorityMutation(decision=decision):
             return write_coordination_authority(
                 connection,
-                decision.before,
-                decision.after,
+                decision.expected_retained,
+                decision.proposed_replacement,
                 "The coordination authority changed before persistence.",
             )
         case AttemptAuthorityMutation(decision=decision):

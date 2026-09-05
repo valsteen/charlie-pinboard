@@ -1,8 +1,13 @@
+"""Project read-only application views from one already-loaded stored snapshot.
+
+Callers own SQLite access and time sampling. These functions select and compose
+current facts without reading files, mutating state, or presenting output.
+"""
+
 from datetime import datetime
 from typing import assert_never
 
 from pinboard.application import query_models, stored_state
-from pinboard.application.ports import WorkStore
 from pinboard.domain import authority_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.identifiers import ItemId
@@ -20,7 +25,7 @@ def _item_key(value: stored_state.StoredWorkItem) -> tuple[int, str]:
     return value.queue_position or 0, str(value.item_id)
 
 
-def _live_items(
+def _select_live_items(
     state: stored_state.StoredWorkState,
 ) -> tuple[tuple[stored_state.StoredWorkItem, work_models.WorkState], ...]:
     return tuple(
@@ -38,7 +43,7 @@ def _parallel_item_key(value: query_models.ParallelItem) -> str:
     return value.item_id
 
 
-def _preparation_status(
+def _project_preparation_status(
     state: stored_state.StoredWorkState, item_id: ItemId, now: datetime
 ) -> query_models.PreparationStatusView | None:
     retained = stored_state.retained_preparation(state, item_id)
@@ -70,7 +75,7 @@ def _preparation_status(
     )
 
 
-def overview_from_state(state: stored_state.StoredWorkState, now: datetime) -> query_models.WorkOverview:
+def project_overview(state: stored_state.StoredWorkState, now: datetime) -> query_models.WorkOverview:
     definitions = {value.item_id: value.definition for value in state.lifecycle.definition_revisions}
     attempts = {
         attempt.item_id: attempt.attempt_id
@@ -88,7 +93,7 @@ def overview_from_state(state: stored_state.StoredWorkState, now: datetime) -> q
         for item in state.lifecycle.work_items
     }
     proposals = {ItemId(proposal.proposal_id): proposal for proposal in state.proposals.proposals}
-    live_items = _live_items(state)
+    live_items = _select_live_items(state)
     live_ids = frozenset(item.item_id for item, _live_state in live_items)
 
     def dependency_reason(item_id: ItemId, link: stored_state.ItemDependency) -> query_models.DependencyReason:
@@ -159,7 +164,7 @@ def overview_from_state(state: stored_state.StoredWorkState, now: datetime) -> q
             str(attempts[item.item_id]) if item.item_id in attempts else None,
             item.next_action,
             item.notes or "",
-            _preparation_status(state, item.item_id, now),
+            _project_preparation_status(state, item.item_id, now),
         )
         for item, live_state in live_items
     )
@@ -189,8 +194,11 @@ def overview_from_state(state: stored_state.StoredWorkState, now: datetime) -> q
     )
 
 
-def item_status(store: WorkStore, item_id: ItemId, now: datetime) -> DecisionResult[query_models.ItemStatus]:
-    state = store.snapshot()
+def project_item_status(
+    state: stored_state.StoredWorkState,
+    item_id: ItemId,
+    now: datetime,
+) -> DecisionResult[query_models.ItemStatus]:
     item = next((candidate for candidate in state.lifecycle.work_items if candidate.item_id == item_id), None)
     if item is None:
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' was not found.")
@@ -219,11 +227,11 @@ def item_status(store: WorkStore, item_id: ItemId, now: datetime) -> DecisionRes
         item.next_action,
         item.notes or "",
         attempts,
-        _preparation_status(state, item_id, now),
+        _project_preparation_status(state, item_id, now),
     )
 
 
-def _definition_view(definition: work_models.WorkItemDefinition) -> query_models.WorkItemDefinitionView:
+def _project_definition(definition: work_models.WorkItemDefinition) -> query_models.WorkItemDefinitionView:
     return query_models.WorkItemDefinitionView(
         "pinboard-work-item-definition/v1",
         definition.title,
@@ -239,15 +247,17 @@ def _definition_view(definition: work_models.WorkItemDefinition) -> query_models
     )
 
 
-def item_definition(store: WorkStore, item_id: ItemId) -> DecisionResult[query_models.ItemDefinition]:
-    state = store.snapshot()
+def project_item_definition(
+    state: stored_state.StoredWorkState,
+    item_id: ItemId,
+) -> DecisionResult[query_models.ItemDefinition]:
     if not any(item.item_id == item_id for item in state.lifecycle.work_items):
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
-    current = next(
+    current_definition = next(
         (value for value in reversed(state.lifecycle.definition_revisions) if value.item_id == item_id),
         None,
     )
-    if current is None:
+    if current_definition is None:
         return DecisionFailure(
             DecisionFailureCode.ITEM_DEFINITION_INVALID,
             f"Item '{item_id}' has no accepted definition.",
@@ -257,20 +267,19 @@ def item_definition(store: WorkStore, item_id: ItemId) -> DecisionResult[query_m
         "sqlite-v3",
         state.lifecycle.project.revision,
         item_id,
-        current.revision,
-        current.digest,
-        _definition_view(current.definition),
+        current_definition.revision,
+        current_definition.digest,
+        _project_definition(current_definition.definition),
     )
 
 
-def item_definition_history(
-    store: WorkStore,
+def project_item_definition_history(
+    state: stored_state.StoredWorkState,
     item_id: ItemId,
     *,
     limit: int = 20,
     before_revision: int | None = None,
 ) -> DecisionResult[query_models.ItemDefinitionHistory]:
-    state = store.snapshot()
     if not any(item.item_id == item_id for item in state.lifecycle.work_items):
         return DecisionFailure(DecisionFailureCode.ITEM_NOT_FOUND, f"Item '{item_id}' does not exist.")
     available = tuple(
@@ -283,7 +292,7 @@ def item_definition_history(
         query_models.ItemDefinitionHistoryRow(
             value.revision,
             value.digest,
-            _definition_view(value.definition),
+            _project_definition(value.definition),
             value.reason,
             value.source_task_id,
             value.accepted_at.isoformat(),
@@ -303,11 +312,11 @@ def item_definition_history(
     )
 
 
-def _parallel_reasons(
+def _classify_parallel_exclusion_reasons(
     state: stored_state.StoredWorkState,
     item_id: ItemId,
     live_items: frozenset[str],
-    current: datetime,
+    operation_time: datetime,
 ) -> tuple[query_models.ParallelReason, ...]:
     item = next(value for value in state.lifecycle.work_items if value.item_id == item_id)
     if item.state not in {stored_state.StoredWorkItemState.READY, stored_state.StoredWorkItemState.ACTIVE}:
@@ -324,7 +333,7 @@ def _parallel_reasons(
     if (
         preparation is not None
         and preparation.state == authority_models.PreparationLeaseStatus.ACTIVE
-        and preparation.expires_at > current
+        and preparation.expires_at > operation_time
     ):
         return (
             query_models.ParallelReason(
@@ -360,7 +369,7 @@ def _parallel_reasons(
         if (
             lease is not None
             and lease.state == authority_models.AttemptLeaseStatus.ACTIVE
-            and current < lease.expires_at
+            and operation_time < lease.expires_at
         ):
             return (
                 query_models.ParallelReason(
@@ -371,14 +380,13 @@ def _parallel_reasons(
     return ()
 
 
-def preview_parallel(
-    store: WorkStore,
+def project_parallel_preview(
+    state: stored_state.StoredWorkState,
     *,
     selected: tuple[str, ...] = (),
     now: datetime,
 ) -> query_models.ParallelPreview | query_models.ParallelSelectionInvalid:
-    state = store.snapshot()
-    live = _live_items(state)
+    live = _select_live_items(state)
     by_id = {str(item.item_id): (item, live_state) for item, live_state in live}
     if any(item_id not in by_id for item_id in selected):
         return query_models.ParallelSelectionInvalid("Selected item identities must be current items.")
@@ -387,7 +395,7 @@ def preview_parallel(
     live_ids = frozenset(by_id)
     items: list[query_models.ParallelItem] = []
     for item, live_state in candidates:
-        reasons = _parallel_reasons(state, item.item_id, live_ids, now)
+        reasons = _classify_parallel_exclusion_reasons(state, item.item_id, live_ids, now)
         common = (
             str(item.item_id),
             definitions[item.item_id].title,
