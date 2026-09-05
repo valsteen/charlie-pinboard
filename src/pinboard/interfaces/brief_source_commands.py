@@ -13,7 +13,7 @@ from pinboard.interfaces.cli_output import write_json
 from pinboard.interfaces.errors import BriefSourceError, BriefSourceErrorCode
 
 
-def _brief_source_segment_view(
+def _project_brief_source_segment(
     segment: brief_source_models.BriefSourceSegment,
 ) -> brief_source_models.BriefSourceSegmentView:
     return brief_source_models.BriefSourceSegmentView(
@@ -27,7 +27,7 @@ def _brief_source_segment_view(
     )
 
 
-def _brief_source_view(source: brief_source_models.PlannedBriefSource) -> brief_source_models.BriefSourceView:
+def _project_brief_source(source: brief_source_models.PlannedBriefSource) -> brief_source_models.BriefSourceView:
     return brief_source_models.BriefSourceView(
         source.authority_id,
         source.selector,
@@ -37,50 +37,54 @@ def _brief_source_view(source: brief_source_models.PlannedBriefSource) -> brief_
         source.start_line,
         source.end_line,
         source.whole_file,
-        tuple(_brief_source_segment_view(segment) for segment in source.segments),
+        tuple(_project_brief_source_segment(segment) for segment in source.segments),
     )
 
 
-def _brief_source_batch_view(batch: brief_source_models.BriefSourceBatch) -> brief_source_models.BriefSourceBatchView:
+def _project_brief_source_batch(
+    batch: brief_source_models.BriefSourceBatch,
+) -> brief_source_models.BriefSourceBatchView:
     return brief_source_models.BriefSourceBatchView(
         batch.index,
         batch.content_byte_count,
         batch.estimated_rendered_byte_count,
-        tuple(_brief_source_segment_view(segment) for segment in batch.segments),
+        tuple(_project_brief_source_segment(segment) for segment in batch.segments),
     )
 
 
-def _brief_source_plan_view(plan: brief_source_models.BriefSourcePlan) -> brief_source_models.BriefSourcePlanView:
+def _project_brief_source_plan(plan: brief_source_models.BriefSourcePlan) -> brief_source_models.BriefSourcePlanView:
     return brief_source_models.BriefSourcePlanView(
         plan.schema,
         plan.manifest_sha256,
         plan.max_batch_bytes,
-        tuple(_brief_source_view(source) for source in plan.sources),
-        tuple(_brief_source_batch_view(batch) for batch in plan.batches),
+        tuple(_project_brief_source(source) for source in plan.sources),
+        tuple(_project_brief_source_batch(batch) for batch in plan.batches),
     )
 
 
-def run_brief_sources(
+def plan_or_emit_brief_sources(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.BriefSourcesPlanCommand | cli_commands.BriefSourcesEmitCommand,
 ) -> int:
     try:
-        raw_manifest = command.file.read_bytes()
+        manifest_bytes = command.file.read_bytes()
     except OSError as error:
         raise BriefSourceError(
             BriefSourceErrorCode.MANIFEST_INVALID,
             f"Cannot read brief source manifest '{command.file}': {error}",
         ) from error
-    plan = brief_sources.plan_brief_sources(
+    decoded_manifest = brief_sources.decode_brief_source_manifest(manifest_bytes)
+    source_plan = brief_sources.plan_brief_sources(
         roots.source_checkout,
-        brief_sources.decode_brief_source_manifest(raw_manifest),
+        decoded_manifest,
         command.max_batch_bytes,
     )
     match command:
         case cli_commands.BriefSourcesPlanCommand():
-            write_json(_brief_source_plan_view(plan))
+            write_json(_project_brief_source_plan(source_plan))
         case cli_commands.BriefSourcesEmitCommand(emit_batch=batch_index):
-            sys.stdout.write(brief_sources.render_brief_source_batch(plan, batch_index).decode("utf-8"))
+            rendered_batch = brief_sources.render_brief_source_batch(source_plan, batch_index)
+            sys.stdout.write(rendered_batch.decode("utf-8"))
         case _ as unreachable:
             assert_never(unreachable)
     return 0

@@ -12,7 +12,8 @@ from unittest.mock import patch
 
 from msgspec.structs import replace as replace_struct
 
-from pinboard.adapters.files.artifacts import write_revision
+from pinboard.adapters.files import views as file_views
+from pinboard.adapters.files.artifacts import ArtifactRepository, write_revision
 from pinboard.adapters.files.errors import FileIOError, FileIOErrorCode
 from pinboard.adapters.files.file_io import resolve_durable_roots
 from pinboard.adapters.sqlite.database import initialize_database
@@ -26,10 +27,10 @@ from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode, DecisionResult
 from pinboard.domain.history import work_item_definition_digest
 from pinboard.domain.identifiers import AttemptId, HostId, ItemId, LeaseId, TaskId
+from pinboard.interfaces import cli_commands, work_brief_models
 from pinboard.interfaces import transitions as transition_interface
-from pinboard.interfaces import work_brief_models
 from pinboard.interfaces.cli import build_parser, main
-from pinboard.interfaces.errors import CommandFailure, WorkBriefError, WorkBriefErrorCode
+from pinboard.interfaces.errors import CommandFailure, CommandResult, WorkBriefError, WorkBriefErrorCode
 from pinboard.interfaces.work_briefs import canonical_work_brief_bytes
 
 from .domain_support import expect_success
@@ -211,7 +212,7 @@ class CliTest(unittest.TestCase):
         observed_at = retained_preparation.expires_at - timedelta(microseconds=1)
         available = expect_success(
             discover_actions(
-                store,
+                store.snapshot(),
                 decision_models.Role.PREPARER,
                 lease_id=LeaseId(str(action["lease_id"])),
                 generation=self.json_int(action["coordinator_generation"]),
@@ -809,7 +810,7 @@ class CliTest(unittest.TestCase):
         )
 
         with patch(
-            "pinboard.interfaces.work_views.attempt_brief_views",
+            "pinboard.interfaces.work_views.read_attempt_brief_views",
             side_effect=WorkBriefError(WorkBriefErrorCode.BRIEF_INVALID, "injected revision projection failure"),
         ):
             result, stdout, stderr = self.run_cli(
@@ -1474,6 +1475,81 @@ class CliTest(unittest.TestCase):
             self.run_json_cli(*common, "brief", "publish", "--file", str(brief_path))
         self.assertEqual(2, publication_clock.now.call_count)
 
+    def test_installed_brief_publication_repairs_a_post_acceptance_attempt_view_failure(self) -> None:
+        project, work, _store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+        candidate = replace_struct(work_a_brief(project), artifact_revision=2)
+        canonical_candidate = canonical_work_brief_bytes(candidate)
+        brief_path = project / "repairable-brief.json"
+        brief_path.write_bytes(canonical_candidate)
+        attempt_view = work / "views/attempts/work-a-1.md"
+        atomic_replace = file_views.atomic_replace
+
+        def fail_attempt_view(path: Path, content: bytes) -> None:
+            if path == attempt_view:
+                raise FileIOError(FileIOErrorCode.FILE_PUBLISH_FAILED, "injected attempt-view failure")
+            atomic_replace(path, content)
+
+        with patch("pinboard.adapters.files.views.atomic_replace", side_effect=fail_attempt_view):
+            result, stdout, stderr = self.run_cli(
+                *common,
+                "brief",
+                "publish",
+                "--file",
+                str(brief_path),
+                "--json",
+            )
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("injected attempt-view failure", stderr)
+        self.assertIn("pinboard views rebuild", stderr)
+        publication = self.json_object(json.loads(stdout))
+        fresh_state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
+        accepted_reference = next(
+            reference
+            for reference in fresh_state.artifact_references
+            if int(reference.artifact_ref_id) == self.json_int(publication["artifact_ref_id"])
+        )
+        self.assertEqual(
+            (
+                accepted_reference.kind.value,
+                accepted_reference.key,
+                accepted_reference.revision,
+                accepted_reference.selector,
+                accepted_reference.content_sha256,
+                accepted_reference.size_bytes,
+                accepted_reference.accepted_revision,
+            ),
+            (
+                publication["kind"],
+                publication["key"],
+                publication["revision"],
+                publication["selector"],
+                publication["content_sha256"],
+                publication["size_bytes"],
+                publication["accepted_revision"],
+            ),
+        )
+        self.assertEqual(canonical_candidate, (work / accepted_reference.selector).read_bytes())
+
+        rebuild_result, rebuild_stdout, rebuild_stderr = self.run_cli(*common, "views", "rebuild")
+        self.assertEqual(0, rebuild_result, f"{rebuild_stdout}\n{rebuild_stderr}")
+        repaired_views = tuple(
+            (path.relative_to(work / "views"), path.read_bytes())
+            for path in sorted((work / "views").rglob("*"))
+            if path.is_file()
+        )
+        clean_result, clean_stdout, clean_stderr = self.run_cli(*common, "views", "rebuild")
+        self.assertEqual(0, clean_result, f"{clean_stdout}\n{clean_stderr}")
+        self.assertEqual(
+            repaired_views,
+            tuple(
+                (path.relative_to(work / "views"), path.read_bytes())
+                for path in sorted((work / "views").rglob("*"))
+                if path.is_file()
+            ),
+        )
+
     def test_installed_read_render_and_validation_matrix_agrees_before_at_and_after_preparation_expiry(self) -> None:
         expires_at = SQLITE_NOW + timedelta(minutes=1)
         for label, observed_at, expected_status, expected_available in (
@@ -1501,6 +1577,7 @@ class CliTest(unittest.TestCase):
                         "--action-id",
                         "activate:work-c",
                     )
+                self.assertEqual(4, inspection_clock.now.call_count)
                 overview_item = next(
                     self.json_object(value)
                     for value in self.json_list(overview["items"])
@@ -2442,7 +2519,7 @@ Not launchable:
         project, work, store = self.initialized_state(state)
 
         with patch(
-            "pinboard.interfaces.work_views.attempt_brief_views",
+            "pinboard.interfaces.work_views.read_attempt_brief_views",
             side_effect=WorkBriefError(WorkBriefErrorCode.BRIEF_INVALID, "injected projection failure"),
         ):
             result, stdout, stderr = self.run_cli(
@@ -2511,7 +2588,7 @@ Not launchable:
         payload.write_text('{"candidate":"projection-failure-candidate"}\n', encoding="utf-8")
 
         with patch(
-            "pinboard.interfaces.work_views.attempt_brief_views",
+            "pinboard.interfaces.work_views.read_attempt_brief_views",
             side_effect=WorkBriefError(WorkBriefErrorCode.BRIEF_INVALID, "injected projection failure"),
         ):
             result, stdout, stderr = self.run_transition(common, action, payload)
@@ -2561,7 +2638,7 @@ Not launchable:
         payload.write_text('{"candidate":"unexpected-projection-candidate"}\n', encoding="utf-8")
 
         with (
-            patch("pinboard.interfaces.work_views.attempt_brief_views", side_effect=RuntimeError("unexpected")),
+            patch("pinboard.interfaces.work_views.read_attempt_brief_views", side_effect=RuntimeError("unexpected")),
             self.assertRaisesRegex(RuntimeError, "unexpected"),
         ):
             self.run_transition(common, action, payload)
@@ -2797,6 +2874,50 @@ Not launchable:
         assert coordination is not None
         self.assertEqual("released", coordination.state.value)
 
+    def test_borrowed_coordination_stops_without_cleanup_when_acquisition_is_rejected(self) -> None:
+        state = complete_sqlite_state()
+        retained_authority = state.authority.coordination
+        assert retained_authority is not None
+        state = replace(
+            state,
+            authority=replace(
+                state.authority,
+                coordination=replace(retained_authority, expires_at=datetime.now(UTC) + timedelta(minutes=5)),
+            ),
+        )
+        project, work, store = self.initialized_state(state)
+        before = store.snapshot()
+
+        with (
+            patch(
+                "pinboard.interfaces.transitions.decide_and_commit_coordination_authority_change",
+                wraps=transition_interface.decide_and_commit_coordination_authority_change,
+            ) as authority_commit,
+            patch("pinboard.interfaces.transitions.work_views.rebuild") as rebuild,
+        ):
+            result, _, stderr = self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "close",
+                "work-c",
+                "--outcome",
+                "done",
+                "--reason",
+                "The prerequisite outcome is already complete.",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+            )
+
+        self.assertEqual(11, result)
+        self.assertIn("COORDINATION_LEASE_BUSY", stderr)
+        self.assertEqual(1, authority_commit.call_count)
+        rebuild.assert_not_called()
+        self.assertEqual(before, store.snapshot())
+
     def test_borrowed_coordination_rejects_retained_authority_transfer_and_releases_its_lease(self) -> None:
         state = complete_sqlite_state()
         state = replace(state, authority=replace(state.authority, coordination=None))
@@ -2843,9 +2964,9 @@ Not launchable:
         with (
             patch("pinboard.interfaces.transitions.datetime") as clock,
             patch(
-                "pinboard.interfaces.transitions.change_coordination_authority",
-                wraps=transition_interface.change_coordination_authority,
-            ) as authority_call,
+                "pinboard.interfaces.transitions.decide_and_commit_coordination_authority_change",
+                wraps=transition_interface.decide_and_commit_coordination_authority_change,
+            ) as authority_commit,
             patch(
                 "pinboard.interfaces.transitions.discover_actions", wraps=transition_interface.discover_actions
             ) as discovery,
@@ -2873,8 +2994,8 @@ Not launchable:
             )
 
         self.assertEqual(0, result, stderr)
-        acquired_operation = authority_call.call_args_list[0].args[1]
-        released_operation = authority_call.call_args_list[1].args[1]
+        acquired_operation = authority_commit.call_args_list[0].args[1]
+        released_operation = authority_commit.call_args_list[1].args[1]
         assert isinstance(acquired_operation, authority_models.AcquireCoordinationAuthority)
         assert isinstance(released_operation, authority_models.ReleaseCoordinationAuthority)
         self.assertEqual(samples[0], acquired_operation.acquired_at)
@@ -2883,12 +3004,84 @@ Not launchable:
         self.assertEqual(samples[3], released_operation.released_at)
         self.assertEqual(samples[4], rebuild.call_args.args[2])
 
+    def test_borrowed_coordination_reports_its_transition_revision_across_a_disjoint_commit(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, store = self.initialized_state(state)
+        common = ("--project-root", str(project), "--work-root", str(work))
+        proposal_path = project / "interleaved-proposal.json"
+        proposal_path.write_text(
+            json.dumps(
+                {
+                    "schema": "pinboard-proposal/v1",
+                    "proposal_id": "interleaved-proposal",
+                    "created_at": "2026-08-25T12:00:00+02:00",
+                    "source_task_id": "discovering-task",
+                    "user_label": "Interleaved proposal",
+                    "trigger": "A disjoint commit must not change the wrapped transition receipt.",
+                    "evidence": ["source:cli"],
+                    "why_it_matters": "The command must report the revision it committed.",
+                    "relation": {"kind": "independent", "item": None},
+                    "effect": "The proposal commits between close and coordination release.",
+                    "unlock": "Prove exact revision attribution.",
+                    "urgency_evidence": "The borrowed command exposes a revision.",
+                    "freshness_assumptions": ["SQLite remains authoritative."],
+                }
+            ),
+            encoding="utf-8",
+        )
+        execute_transition = transition_interface._execute_transition_command
+
+        def execute_then_commit_disjoint_proposal(
+            selected_roots: cli_commands.ResolvedRoots,
+            selected_store: SQLiteWorkStore,
+            artifacts: ArtifactRepository,
+            command: decision_models.TransitionCommand,
+        ) -> CommandResult[decision_models.TransitionReceipt]:
+            transition_result = execute_transition(selected_roots, selected_store, artifacts, command)
+            if isinstance(transition_result, CommandFailure):
+                return transition_result
+            proposal_result, _, proposal_stderr = self.run_cli(*common, "proposal", "--file", str(proposal_path))
+            self.assertEqual(0, proposal_result, proposal_stderr)
+            return transition_result
+
+        with patch(
+            "pinboard.interfaces.transitions._execute_transition_command",
+            side_effect=execute_then_commit_disjoint_proposal,
+        ):
+            result, stdout, stderr = self.run_cli(
+                *common,
+                "close",
+                "work-c",
+                "--outcome",
+                "done",
+                "--reason",
+                "The prerequisite outcome is already complete.",
+                "--task-id",
+                "coordinator-task",
+                "--host-id",
+                "studio",
+            )
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK WORK_ITEM_CLOSED item=work-c outcome=done revision=14", stdout)
+        receipts = store.snapshot().transition_receipts
+        self.assertEqual(
+            (
+                (stored_state.TransitionHistoryActionKind.CLOSE, 14),
+                (stored_state.TransitionHistoryActionKind.INSPECT, 15),
+                (stored_state.TransitionHistoryActionKind.CONTINUE, 16),
+            ),
+            tuple((receipt.action_kind, receipt.project_revision) for receipt in receipts[-3:]),
+        )
+
     def test_borrowed_coordination_reports_release_failure_after_the_transition_applies(self) -> None:
         state = complete_sqlite_state()
         state = replace(state, authority=replace(state.authority, coordination=None))
         project, work, store = self.initialized_state(state)
         common = ("--project-root", str(project), "--work-root", str(work))
-        original = service.change_coordination_authority
+        original = service.decide_and_commit_coordination_authority_change
 
         def fail_release(
             selected_store: WorkStore,
@@ -2898,7 +3091,10 @@ Not launchable:
                 return DecisionFailure(DecisionFailureCode.LEASE_FENCED, "injected release failure")
             return original(selected_store, operation)
 
-        with patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=fail_release):
+        with patch(
+            "pinboard.interfaces.transitions.decide_and_commit_coordination_authority_change",
+            side_effect=fail_release,
+        ):
             result, _, stderr = self.run_cli(
                 *common,
                 "close",
@@ -2932,7 +3128,7 @@ Not launchable:
         project, work, _store = self.initialized_state(state)
         payload = project / "payload.json"
         payload.write_text("{}\n", encoding="utf-8")
-        original = service.change_coordination_authority
+        original = service.decide_and_commit_coordination_authority_change
 
         def reject_release(
             selected_store: WorkStore,
@@ -2944,10 +3140,13 @@ Not launchable:
 
         with (
             patch(
-                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                "pinboard.interfaces.transitions._select_decode_and_commit_borrowed_transition",
                 return_value=CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "transition rejected"),
             ),
-            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=reject_release),
+            patch(
+                "pinboard.interfaces.transitions.decide_and_commit_coordination_authority_change",
+                side_effect=reject_release,
+            ),
         ):
             result, _, stderr = self.run_cli(
                 "--project-root",
@@ -2980,7 +3179,7 @@ Not launchable:
         project, work, _store = self.initialized_state(state)
         payload = project / "payload.json"
         payload.write_text("{}\n", encoding="utf-8")
-        original = service.change_coordination_authority
+        original = service.decide_and_commit_coordination_authority_change
 
         def reject_release(
             selected_store: WorkStore,
@@ -2992,10 +3191,13 @@ Not launchable:
 
         with (
             patch(
-                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                "pinboard.interfaces.transitions._select_decode_and_commit_borrowed_transition",
                 side_effect=RuntimeError("transition broke"),
             ),
-            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=reject_release),
+            patch(
+                "pinboard.interfaces.transitions.decide_and_commit_coordination_authority_change",
+                side_effect=reject_release,
+            ),
             self.assertRaises(RuntimeError) as raised,
         ):
             self.run_cli(
@@ -3021,6 +3223,46 @@ Not launchable:
             raised.exception.__notes__,
         )
 
+    def test_borrowed_coordination_releases_after_a_transition_exception(self) -> None:
+        state = replace(
+            complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
+        )
+        project, work, store = self.initialized_state(state)
+        payload = project / "payload.json"
+        payload.write_text("{}\n", encoding="utf-8")
+
+        with (
+            patch(
+                "pinboard.interfaces.transitions._select_decode_and_commit_borrowed_transition",
+                side_effect=RuntimeError("transition broke"),
+            ),
+            patch("pinboard.interfaces.transitions.work_views.rebuild") as rebuild,
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            self.run_cli(
+                "--project-root",
+                str(project),
+                "--work-root",
+                str(work),
+                "coordination",
+                "apply",
+                "--task-id",
+                "borrowing-task",
+                "--host-id",
+                "borrowing-host",
+                "--action-id",
+                "close:work-c",
+                "--payload",
+                str(payload),
+            )
+
+        self.assertEqual("transition broke", str(raised.exception))
+        self.assertEqual([], getattr(raised.exception, "__notes__", []))
+        retained_authority = store.snapshot().authority.coordination
+        assert retained_authority is not None
+        self.assertEqual(work_models.CoordinationLeaseStatus.RELEASED, retained_authority.state)
+        rebuild.assert_not_called()
+
     def test_borrowed_coordination_raises_cleanup_exception_over_transition_rejection(self) -> None:
         state = replace(
             complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
@@ -3028,7 +3270,7 @@ Not launchable:
         project, work, _store = self.initialized_state(state)
         payload = project / "payload.json"
         payload.write_text("{}\n", encoding="utf-8")
-        original = service.change_coordination_authority
+        original = service.decide_and_commit_coordination_authority_change
 
         def raise_on_release(
             selected_store: WorkStore,
@@ -3040,10 +3282,13 @@ Not launchable:
 
         with (
             patch(
-                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                "pinboard.interfaces.transitions._select_decode_and_commit_borrowed_transition",
                 return_value=CommandFailure(DecisionFailureCode.ACTION_NOT_AVAILABLE, "transition rejected"),
             ),
-            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=raise_on_release),
+            patch(
+                "pinboard.interfaces.transitions.decide_and_commit_coordination_authority_change",
+                side_effect=raise_on_release,
+            ),
             self.assertRaises(RuntimeError) as raised,
         ):
             self.run_cli(
@@ -3076,7 +3321,7 @@ Not launchable:
         project, work, _store = self.initialized_state(state)
         payload = project / "payload.json"
         payload.write_text("{}\n", encoding="utf-8")
-        original = service.change_coordination_authority
+        original = service.decide_and_commit_coordination_authority_change
 
         def raise_on_release(
             selected_store: WorkStore,
@@ -3088,10 +3333,13 @@ Not launchable:
 
         with (
             patch(
-                "pinboard.interfaces.transitions.apply_borrowed_transition",
+                "pinboard.interfaces.transitions._select_decode_and_commit_borrowed_transition",
                 side_effect=RuntimeError("transition broke"),
             ),
-            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=raise_on_release),
+            patch(
+                "pinboard.interfaces.transitions.decide_and_commit_coordination_authority_change",
+                side_effect=raise_on_release,
+            ),
             self.assertRaises(RuntimeError) as raised,
         ):
             self.run_cli(
@@ -3122,7 +3370,7 @@ Not launchable:
             complete_sqlite_state(), authority=replace(complete_sqlite_state().authority, coordination=None)
         )
         project, work, _store = self.initialized_state(state)
-        original = service.change_coordination_authority
+        original = service.decide_and_commit_coordination_authority_change
 
         def raise_on_release(
             selected_store: WorkStore,
@@ -3133,7 +3381,10 @@ Not launchable:
             return original(selected_store, operation)
 
         with (
-            patch("pinboard.interfaces.transitions.change_coordination_authority", side_effect=raise_on_release),
+            patch(
+                "pinboard.interfaces.transitions.decide_and_commit_coordination_authority_change",
+                side_effect=raise_on_release,
+            ),
             self.assertRaises(RuntimeError) as raised,
         ):
             self.run_cli(
@@ -3250,6 +3501,102 @@ Not launchable:
         self.assertEqual(13, duplicate_result)
         self.assertIn("PROPOSAL_ALREADY_EXISTS", duplicate_stderr)
 
+    def test_proposal_changes_refresh_the_same_items_as_a_full_rebuild(self) -> None:
+        def assert_partial_matches_full(
+            work: Path,
+            common: tuple[str, ...],
+            selectors: tuple[str, ...],
+        ) -> None:
+            partial = {selector: (work / "views" / selector).read_bytes() for selector in selectors}
+            rebuilt, _stdout, stderr = self.run_cli(*common, "views", "rebuild")
+            self.assertEqual(0, rebuilt, stderr)
+            self.assertEqual(
+                partial,
+                {selector: (work / "views" / selector).read_bytes() for selector in selectors},
+            )
+
+        for relation, proposal_id, changed_items in (
+            ({"kind": "independent", "item": None}, "view-independent", ("view-independent",)),
+            (
+                {"kind": "prerequisite", "item": "work-c"},
+                "view-prerequisite",
+                ("view-prerequisite", "work-c"),
+            ),
+        ):
+            with self.subTest(operation="create", relation=relation["kind"]):
+                project, work, _store = self.initialized_state(complete_sqlite_state())
+                common = ("--project-root", str(project), "--work-root", str(work))
+                rebuilt, _stdout, stderr = self.run_cli(*common, "views", "rebuild")
+                self.assertEqual(0, rebuilt, stderr)
+                for item_id in changed_items:
+                    path = work / "views" / "items" / f"{item_id}.md"
+                    if path.exists():
+                        path.write_bytes(b"stale projection\n")
+                proposal_path = project / f"{proposal_id}.json"
+                proposal_path.write_text(
+                    json.dumps(
+                        {
+                            "schema": "pinboard-proposal/v1",
+                            "proposal_id": proposal_id,
+                            "created_at": SQLITE_NOW.isoformat(),
+                            "source_task_id": "discovering-task",
+                            "user_label": f"View {proposal_id}",
+                            "trigger": "A changed item projection must be republished.",
+                            "evidence": ["source:cli"],
+                            "why_it_matters": "Partial refresh must agree with rebuild.",
+                            "relation": relation,
+                            "effect": "The proposal and its intake work are stored together.",
+                            "unlock": "Readers see current item facts immediately.",
+                            "urgency_evidence": "The installed path owns generated views.",
+                            "freshness_assumptions": ["SQLite remains authoritative."],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                created, _stdout, stderr = self.run_cli(*common, "proposal", "--file", str(proposal_path))
+
+                self.assertEqual(0, created, stderr)
+                assert_partial_matches_full(
+                    work,
+                    common,
+                    tuple(f"items/{item_id}.md" for item_id in changed_items),
+                )
+
+        for action_id, payload in (
+            (
+                "accept-proposal:zz-proposal-a",
+                {
+                    "item": "zz-proposal-a",
+                    "state": "ready",
+                    "next_action": "activate",
+                    "timing": None,
+                    "depends_on": (),
+                },
+            ),
+            ("merge-proposal:zz-proposal-a", {"target": "work-c"}),
+            ("return-proposal:zz-proposal-a", {"reason": "Clarify the evidence."}),
+            ("reject-proposal:zz-proposal-a", {"reason": "The proposal is obsolete."}),
+        ):
+            with self.subTest(operation=action_id):
+                project, work, _store = self.initialized_state(complete_sqlite_state())
+                common = ("--project-root", str(project), "--work-root", str(work))
+                rebuilt, _stdout, stderr = self.run_cli(*common, "views", "rebuild")
+                self.assertEqual(0, rebuilt, stderr)
+                item_view = work / "views" / "items" / "zz-proposal-a.md"
+                item_view.write_bytes(b"stale projection\n")
+                actions = self.json_list(self.run_json_cli(*common, "actions", "--role", "coordinator")["actions"])
+                action = next(
+                    self.json_object(value) for value in actions if self.json_object(value)["action_id"] == action_id
+                )
+                payload_path = project / f"{action_id.split(':', 1)[0]}.json"
+                payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+                applied, _stdout, stderr = self.run_transition(common, action, payload_path)
+
+                self.assertEqual(0, applied, stderr)
+                assert_partial_matches_full(work, common, ("items/zz-proposal-a.md",))
+
     def test_proposal_file_failure_is_stable(self) -> None:
         project, work, _store = self.initialized_state(complete_sqlite_state())
         common = ("--project-root", str(project), "--work-root", str(work))
@@ -3278,6 +3625,63 @@ Not launchable:
         result, _, stderr = self.run_cli(*common, "parallel", "preview", "--item", "missing")
         self.assertEqual(11, result)
         self.assertIn("PARALLEL_SELECTION_INVALID", stderr)
+
+    def test_validate_uses_one_snapshot_for_authority_and_projection_diagnostics(self) -> None:
+        project = Path(tempfile.mkdtemp()).resolve()
+        work = project / ".codex" / "work"
+        common = ("--project-root", str(project), "--work-root", str(work))
+        initialized, _stdout, stderr = self.run_cli(*common, "init")
+        self.assertEqual(0, initialized, stderr)
+        original_snapshot = SQLiteWorkStore.snapshot
+        calls = 0
+
+        def counted(store: SQLiteWorkStore) -> stored_state.StoredWorkState:
+            nonlocal calls
+            calls += 1
+            return original_snapshot(store)
+
+        with patch.object(SQLiteWorkStore, "snapshot", counted):
+            result, stdout, stderr = self.run_cli(*common, "validate")
+
+        self.assertEqual(0, result, stderr)
+        self.assertIn("OK WORK_STATE_VALID", stdout)
+        self.assertEqual(1, calls)
+
+    def test_each_installed_inspection_reads_one_snapshot_while_input_contract_reads_none(self) -> None:
+        project, work, _store = self.initialized_state(complete_sqlite_state())
+        common = ("--project-root", str(project), "--work-root", str(work))
+        original_snapshot = SQLiteWorkStore.snapshot
+
+        for arguments in (
+            ("overview", "--json"),
+            ("item", "status", "--item-id", "work-a", "--json"),
+            ("item", "definition", "--item-id", "work-a", "--json"),
+            ("item", "definition-history", "--item-id", "work-a", "--json"),
+            ("actions", "--role", "observer", "--json"),
+            ("parallel", "preview", "--json"),
+        ):
+            calls = 0
+
+            def counted(store: SQLiteWorkStore) -> stored_state.StoredWorkState:
+                nonlocal calls
+                calls += 1
+                return original_snapshot(store)
+
+            with self.subTest(command=arguments[0]), patch.object(SQLiteWorkStore, "snapshot", counted):
+                result, _stdout, stderr = self.run_cli(*common, *arguments)
+            self.assertEqual(0, result, stderr)
+            self.assertEqual(1, calls)
+
+        with (
+            patch.object(SQLiteWorkStore, "snapshot", side_effect=AssertionError("unexpected SQLite read")),
+            patch(
+                "pinboard.interfaces.cli.work_state_commands.resolve_roots",
+                side_effect=AssertionError("unexpected project-root read"),
+            ),
+        ):
+            result, stdout, stderr = self.run_cli("input-contract", "inspect", "--json")
+        self.assertEqual(0, result, stderr)
+        self.assertIn('"action_kind": "inspect"', stdout)
 
     def test_item_status_emits_exact_json_and_text_from_one_snapshot(self) -> None:
         state = complete_sqlite_state()

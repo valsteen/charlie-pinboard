@@ -13,8 +13,13 @@ Maintain a private scratch ledger with:
 - one atom row per closed-family member with an exact production producer selector, production consumer selector, boundary or compatibility reason, and disposition;
 - candidate selector, references, producer, consumer, persisted or protocol responsibility, provenance, disposition, and next observation;
 - retained exceptions and their exact reopen condition.
+- a whole-surface name inventory spanning internal symbols, API and wire fields, schema and stored labels, historical compatibility names, generated presentation, documentation, tooling, metadata, and deliberate product or personal identity.
 
 Keep paths, symbols, counts, and short conclusions. Do not paste full source files or unfiltered analyzer output into context. Work through one coherent candidate family at a time. Re-run only affected inventories during recursion, then run the complete set once at the fixed point.
+
+For a whole-repository pass, declare roots that span every supported runtime and installed entry point, agent skill and metadata surface, product and contributor document, generated projection and generator, development tool and configuration, package and release surface, dependency and lockfile, and CI assurance path. Declare tests, fixtures, examples, and prototypes separately as evidence roots rather than production. Record that root list in the private ledger and use the identical ordered `--production-root` and `--test-root` arguments for generic and enriched runs; differing input digests invalidate the comparison.
+
+Enumerate names as a separate surface because definition reachability does not reveal what a name promises to a reader. Include identifiers, route and command labels, public fields, protocol and serializer tags, database objects and columns, history labels, generated titles and arrows, documentation terms, metadata capabilities, defaults, versions, and product or personal identities. Assign each name to an owning surface and a concrete consumer, then pass the complete inventory to the storytelling and navigation promise test. Do not discard a misleading name because it is stable or sensitive; record its classification and safe disposition instead.
 
 ## Run the bundled inventory
 
@@ -29,7 +34,7 @@ python inventory.py --repository <repo> --production-root <root> --test-root <ro
 python inventory.py --repository <repo> --production-root <root> --test-root <root> --mode python-ast --output <private-scratch>/python-ast.json
 ```
 
-Run each mode once per input digest. Require the two reports to have the same `input_digest`. Use the generic run as the portability baseline and the AST run as additional Python evidence. Compare candidate selectors and closed-family atoms in both directions. When evaluating a language-portable structural fallback, also compare its complete frozen construct universe with the AST counts and selectors category by category; any mismatch invalidates the fallback receipt even when its candidate groups agree. Investigate useful generic findings that disappear under enrichment, and record which additional candidates depend on AST precision. Do not silently replace the generic run with the richer one.
+Run each mode once per input digest. Require the two reports to have the same `input_digest` and the recorded whole-repository root declaration. Use the generic run as the portability baseline and the AST run as additional Python evidence. Compare candidate selectors and closed-family atoms in both directions. When evaluating a language-portable structural fallback, also compare its complete frozen construct universe with the AST counts and selectors category by category; any mismatch invalidates the fallback receipt even when its candidate groups agree. Investigate useful generic findings that disappear under enrichment, and record which additional candidates depend on AST precision. Do not silently replace the generic run with the richer one.
 
 In both modes, inspect `singleton_closed_families` after every member removal and record the external or persisted boundary contract for any retained singleton. In Python AST mode, begin the navigation pass with `trivial_callable_bodies`, `equivalent_match_arms`, and `duplicated_match_structures`. These are syntax candidates, not deletion decisions. Verify whether each site owns validation, policy, an independently meaningful boundary, or another real responsibility before changing it.
 

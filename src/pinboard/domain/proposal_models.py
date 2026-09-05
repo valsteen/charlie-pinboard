@@ -6,12 +6,6 @@ from pinboard.domain.identifiers import ItemId, ProposalId, TaskId
 
 
 @dataclass(frozen=True, slots=True)
-class LocalIntakeAuthority:
-    project_revision: int
-    host_epoch: int
-
-
-@dataclass(frozen=True, slots=True)
 class ProposalIntake:
     proposal_id: ProposalId
     created_at: datetime

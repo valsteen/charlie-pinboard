@@ -205,7 +205,15 @@ DIAGRAM = Diagram(
             100,
         ),
         Box(
-            "proposal", "Proposal", "Why the work exists", ("trigger · evidence · consequence",), (), 50, 780, 250, 105
+            "proposal",
+            "Proposal facts",
+            "Why intake work was raised",
+            ("stored with same-identity work",),
+            ("trigger · evidence · effect",),
+            50,
+            780,
+            250,
+            105,
         ),
         Box(
             "scope",

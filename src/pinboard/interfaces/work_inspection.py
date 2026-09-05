@@ -15,14 +15,14 @@ import msgspec
 
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import actions as action_queries
-from pinboard.application import queries, query_models
+from pinboard.application import queries, query_models, stored_state
 from pinboard.domain import decision_models, work_models
 from pinboard.domain import errors as domain_errors
 from pinboard.interfaces import cli_commands, errors, transition_input, work_inspection_models
 from pinboard.interfaces.cli_output import write_json
 
 
-def input_contract_view(
+def describe_input_contract(
     kind: decision_models.ActionKind,
 ) -> errors.TransitionInputResult[work_inspection_models.InputContractView]:
     semantics = decision_models.action_semantics(kind)
@@ -36,7 +36,7 @@ def input_contract_view(
     return work_inspection_models.InputContractView(kind.value, semantics, payload_schema)
 
 
-def action_view(
+def project_action(
     action: decision_models.Action,
     *,
     include_input_contract: bool = False,
@@ -44,7 +44,7 @@ def action_view(
     capability = action.capability
     input_contract: work_inspection_models.InputContractView | None = None
     if include_input_contract:
-        contract = input_contract_view(action.kind)
+        contract = describe_input_contract(action.kind)
         if isinstance(contract, errors.TransitionInputFailure):
             return contract
         input_contract = contract
@@ -63,7 +63,7 @@ def action_view(
     )
 
 
-def parallel_preview_view(
+def project_parallel_preview(
     preview: query_models.ParallelPreview,
 ) -> work_inspection_models.ParallelPreviewView:
     launchable: list[work_inspection_models.ParallelItemView] = []
@@ -104,11 +104,14 @@ def parallel_preview_view(
     )
 
 
-def status_view(
-    work: Path, source_checkout: Path, shared_repository: Path, now: datetime
+def compose_status(
+    state: stored_state.StoredWorkState,
+    work: Path,
+    source_checkout: Path,
+    shared_repository: Path,
+    now: datetime,
 ) -> work_inspection_models.StatusView:
-    state = SQLiteWorkStore(work / "state.sqlite3").snapshot()
-    overview_value = queries.overview_from_state(state, now)
+    overview_value = queries.project_overview(state, now)
     coordinator = state.authority.coordination
     return work_inspection_models.StatusView(
         valid=True,
@@ -138,27 +141,35 @@ def status_view(
     )
 
 
-def status(roots: cli_commands.ResolvedRoots, command: cli_commands.StatusCommand) -> int:
-    value = status_view(roots.work, roots.source_checkout, roots.shared_repository, datetime.now(UTC))
+def show_status(roots: cli_commands.ResolvedRoots, command: cli_commands.StatusCommand) -> int:
+    operation_time = datetime.now(UTC)
+    current_state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
+    status_projection = compose_status(
+        current_state, roots.work, roots.source_checkout, roots.shared_repository, operation_time
+    )
     if command.json:
-        write_json(value)
+        write_json(status_projection)
     else:
-        print(f"OK WORK_STATE_VALID revision={value.revision}")
-        print(f"focus_item={value.focus_item or 'none'} focus_attempt={value.focus_attempt or 'none'}")
-        print(f"next_action={value.next_action} intake_items={value.intake_item_count}")
+        print(f"OK WORK_STATE_VALID revision={status_projection.revision}")
+        print(
+            f"focus_item={status_projection.focus_item or 'none'} "
+            f"focus_attempt={status_projection.focus_attempt or 'none'}"
+        )
+        print(f"next_action={status_projection.next_action} intake_items={status_projection.intake_item_count}")
     return 0
 
 
-def overview(roots: cli_commands.ResolvedRoots, command: cli_commands.OverviewCommand) -> int:
-    now = datetime.now(UTC)
-    value = queries.overview_from_state(SQLiteWorkStore(roots.work / "state.sqlite3").snapshot(), now)
+def show_overview(roots: cli_commands.ResolvedRoots, command: cli_commands.OverviewCommand) -> int:
+    operation_time = datetime.now(UTC)
+    current_state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
+    overview_projection = queries.project_overview(current_state, operation_time)
     if command.json:
-        write_json(value)
+        write_json(overview_projection)
         return 0
-    print(f"OK WORK_OVERVIEW revision={value.revision} authority={value.authority}")
-    if not value.items:
+    print(f"OK WORK_OVERVIEW revision={overview_projection.revision} authority={overview_projection.authority}")
+    if not overview_projection.items:
         print("live_work=none")
-    for item in value.items:
+    for item in overview_projection.items:
         attempt = f" attempt={item.attempt_id}" if item.attempt_id is not None else ""
         preparation = (
             " preparation=none"
@@ -176,87 +187,96 @@ def overview(roots: cli_commands.ResolvedRoots, command: cli_commands.OverviewCo
             f"\tnext={next_action}{attempt}{preparation}\t{item.label}"
         )
     print(
-        f"intake_items={sum(1 for item in value.items if item.state == work_models.WorkState.INTAKE)} "
-        f"immediate_options={len(value.immediate_options)}"
+        f"intake_items={sum(1 for item in overview_projection.items if item.state == work_models.WorkState.INTAKE)} "
+        f"immediate_options={len(overview_projection.immediate_options)}"
     )
     return 0
 
 
-def item_status(
+def show_item_status(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ItemStatusCommand,
 ) -> errors.CommandResult[int]:
-    value = queries.item_status(SQLiteWorkStore(roots.work / "state.sqlite3"), command.item_id, datetime.now(UTC))
-    if isinstance(value, domain_errors.DecisionFailure):
-        return errors.CommandFailure(value.code, value.message)
+    operation_time = datetime.now(UTC)
+    current_state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
+    item_projection = queries.project_item_status(current_state, command.item_id, operation_time)
+    if isinstance(item_projection, domain_errors.DecisionFailure):
+        return errors.CommandFailure(item_projection.code, item_projection.message)
     if command.json:
-        write_json(value)
+        write_json(item_projection)
         return 0
     print(
-        f"OK ITEM_STATUS item={value.item_id} state={value.state.value} "
-        f"revision={value.revision} authority={value.authority}"
+        f"OK ITEM_STATUS item={item_projection.item_id} state={item_projection.state.value} "
+        f"revision={item_projection.revision} authority={item_projection.authority}"
     )
     print(
-        f"label={value.label} timing={value.timing.value if value.timing is not None else 'none'} "
-        f"next_action={value.next_action or 'none'}"
+        f"label={item_projection.label} "
+        f"timing={item_projection.timing.value if item_projection.timing is not None else 'none'} "
+        f"next_action={item_projection.next_action or 'none'}"
     )
-    print(f"outcome_evidence={value.outcome_evidence or 'none'} notes={value.notes or 'none'}")
-    if value.preparation is None:
+    print(f"outcome_evidence={item_projection.outcome_evidence or 'none'} notes={item_projection.notes or 'none'}")
+    if item_projection.preparation is None:
         print("preparation=none")
     else:
         print(
-            f"preparation={value.preparation.status} preparer={value.preparation.task_id}@{value.preparation.host_id} "
-            f"lease_id={value.preparation.lease_id} generation={value.preparation.generation} "
-            f"expires_at={value.preparation.expires_at} definition_revision={value.preparation.definition_revision} "
-            f"definition_digest={value.preparation.definition_digest}"
+            f"preparation={item_projection.preparation.status} "
+            f"preparer={item_projection.preparation.task_id}@{item_projection.preparation.host_id} "
+            f"lease_id={item_projection.preparation.lease_id} generation={item_projection.preparation.generation} "
+            f"expires_at={item_projection.preparation.expires_at} "
+            f"definition_revision={item_projection.preparation.definition_revision} "
+            f"definition_digest={item_projection.preparation.definition_digest}"
         )
-    if not value.attempts:
+    if not item_projection.attempts:
         print("attempts=none")
-    for attempt in value.attempts:
+    for attempt in item_projection.attempts:
         print(
             f"attempt={attempt.attempt_id} state={attempt.state.value} candidate={attempt.candidate_revision or 'none'}"
         )
     return 0
 
 
-def item_definition(
+def show_item_definition(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ItemDefinitionCommand,
 ) -> errors.CommandResult[int]:
-    value = queries.item_definition(SQLiteWorkStore(roots.work / "state.sqlite3"), command.item_id)
-    if isinstance(value, domain_errors.DecisionFailure):
-        return errors.CommandFailure(value.code, value.message)
+    current_state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
+    definition_projection = queries.project_item_definition(current_state, command.item_id)
+    if isinstance(definition_projection, domain_errors.DecisionFailure):
+        return errors.CommandFailure(definition_projection.code, definition_projection.message)
     if command.json:
-        write_json(value)
+        write_json(definition_projection)
     else:
         print(
-            f"OK ITEM_DEFINITION item={value.item_id} definition_revision={value.definition_revision} "
-            f"definition_digest={value.definition_digest} project_revision={value.project_revision}"
+            f"OK ITEM_DEFINITION item={definition_projection.item_id} "
+            f"definition_revision={definition_projection.definition_revision} "
+            f"definition_digest={definition_projection.definition_digest} "
+            f"project_revision={definition_projection.project_revision}"
         )
-        print(f"title={value.definition.title}")
+        print(f"title={definition_projection.definition.title}")
     return 0
 
 
-def item_definition_history(
+def show_item_definition_history(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ItemDefinitionHistoryCommand,
 ) -> errors.CommandResult[int]:
-    value = queries.item_definition_history(
-        SQLiteWorkStore(roots.work / "state.sqlite3"),
+    current_state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
+    history_projection = queries.project_item_definition_history(
+        current_state,
         command.item_id,
         limit=command.limit,
         before_revision=command.before_revision,
     )
-    if isinstance(value, domain_errors.DecisionFailure):
-        return errors.CommandFailure(value.code, value.message)
+    if isinstance(history_projection, domain_errors.DecisionFailure):
+        return errors.CommandFailure(history_projection.code, history_projection.message)
     if command.json:
-        write_json(value)
+        write_json(history_projection)
     else:
         print(
-            f"OK ITEM_DEFINITION_HISTORY item={value.item_id} revisions={len(value.revisions)} "
-            f"project_revision={value.project_revision}"
+            f"OK ITEM_DEFINITION_HISTORY item={history_projection.item_id} "
+            f"revisions={len(history_projection.revisions)} project_revision={history_projection.project_revision}"
         )
-        for revision in value.revisions:
+        for revision in history_projection.revisions:
             print(
                 f"revision={revision.revision} digest={revision.digest} "
                 f"source_task={revision.source_task} timestamp={revision.timestamp}"
@@ -264,7 +284,7 @@ def item_definition_history(
     return 0
 
 
-def actions(
+def show_actions(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ActionsCommand | cli_commands.LeasedActionsCommand,
 ) -> errors.CommandResult[int]:
@@ -276,62 +296,65 @@ def actions(
             pass
         case _ as unreachable:
             assert_never(unreachable)
-    available = action_queries.discover_actions(
-        SQLiteWorkStore(roots.work / "state.sqlite3"),
+    operation_time = datetime.now(UTC)
+    current_state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
+    available_actions = action_queries.discover_actions(
+        current_state,
         command.role,
         lease_id=lease_id,
         generation=generation,
-        now=datetime.now(UTC),
+        now=operation_time,
     )
-    if isinstance(available, domain_errors.DecisionFailure):
-        return errors.CommandFailure(available.code, available.message)
+    if isinstance(available_actions, domain_errors.DecisionFailure):
+        return errors.CommandFailure(available_actions.code, available_actions.message)
     exact_action_id = command.action_id
     if exact_action_id is not None:
-        available = tuple(action for action in available if decision_models.action_id(action) == exact_action_id)
-        if not available:
+        available_actions = tuple(
+            action for action in available_actions if decision_models.action_id(action) == exact_action_id
+        )
+        if not available_actions:
             return errors.CommandFailure(
                 domain_errors.DecisionFailureCode.ACTION_NOT_AVAILABLE,
                 f"Action '{exact_action_id}' is not currently legal for this role and lease.",
             )
     if command.json:
         action_views: list[work_inspection_models.ActionView] = []
-        for action in available:
-            view = action_view(action, include_input_contract=exact_action_id is not None)
-            if isinstance(view, errors.TransitionInputFailure):
-                return errors.CommandFailure(view.code, view.message)
-            action_views.append(view)
+        for action in available_actions:
+            projected_action = project_action(action, include_input_contract=exact_action_id is not None)
+            if isinstance(projected_action, errors.TransitionInputFailure):
+                return errors.CommandFailure(projected_action.code, projected_action.message)
+            action_views.append(projected_action)
         write_json(work_inspection_models.ActionsView(tuple(action_views)))
-    elif not available:
+    elif not available_actions:
         print("OK NO_ACTIONS_AVAILABLE")
     else:
-        for action in available:
+        for action in available_actions:
             print(f"{decision_models.action_id(action)}\t{action.capability.label}")
     return 0
 
 
-def input_contract(
-    _roots: cli_commands.ResolvedRoots,
+def show_input_contract(
     command: cli_commands.InputContractCommand,
 ) -> errors.CommandResult[int]:
-    value = input_contract_view(command.action_kind)
-    if isinstance(value, errors.TransitionInputFailure):
-        return errors.CommandFailure(value.code, value.message)
+    contract = describe_input_contract(command.action_kind)
+    if isinstance(contract, errors.TransitionInputFailure):
+        return errors.CommandFailure(contract.code, contract.message)
     if command.json:
-        write_json(value)
+        write_json(contract)
     else:
-        print(f"OK INPUT_CONTRACT action_kind={value.action_kind}")
-        print(f"use_case={value.semantics.use_case}")
+        print(f"OK INPUT_CONTRACT action_kind={contract.action_kind}")
+        print(f"use_case={contract.semantics.use_case}")
         print(
-            f"effect={value.semantics.effect.value} "
-            f"permitted_roles={','.join(role.value for role in value.semantics.permitted_roles)} "
-            f"subject_kind={value.semantics.subject_kind.value} "
-            f"lifecycle_precondition={value.semantics.lifecycle_precondition.value}"
+            f"effect={contract.semantics.effect.value} "
+            f"permitted_roles={','.join(role.value for role in contract.semantics.permitted_roles)} "
+            f"subject_kind={contract.semantics.subject_kind.value} "
+            f"lifecycle_precondition={contract.semantics.lifecycle_precondition.value}"
         )
-        print(f"practical_result={value.semantics.practical_result}")
-        if value.payload_schema is None:
+        print(f"practical_result={contract.semantics.practical_result}")
+        if contract.payload_schema is None:
             print("payload_schema=none")
         else:
-            sys.stdout.write(msgspec.json.format(bytes(value.payload_schema), indent=2).decode() + "\n")
+            sys.stdout.write(msgspec.json.format(bytes(contract.payload_schema), indent=2).decode() + "\n")
     return 0
 
 
@@ -347,18 +370,20 @@ def _print_parallel_group(title: str, items: tuple[work_inspection_models.Parall
         print(f"- {item.item_id} ({item.state}{attempt}){suffix}")
 
 
-def parallel(
+def show_parallel_preview(
     roots: cli_commands.ResolvedRoots,
     command: cli_commands.ParallelPreviewCommand,
 ) -> errors.CommandResult[int]:
-    preview = queries.preview_parallel(
-        SQLiteWorkStore(roots.work / "state.sqlite3"),
+    operation_time = datetime.now(UTC)
+    current_state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
+    preview = queries.project_parallel_preview(
+        current_state,
         selected=tuple(command.item),
-        now=datetime.now(UTC),
+        now=operation_time,
     )
     if isinstance(preview, query_models.ParallelSelectionInvalid):
         return errors.CommandFailure(errors.CommandErrorCode.PARALLEL_SELECTION_INVALID, preview.message)
-    view = parallel_preview_view(preview)
+    view = project_parallel_preview(preview)
     if command.json:
         write_json(view)
     else:

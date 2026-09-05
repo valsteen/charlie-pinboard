@@ -7,8 +7,9 @@ from .model import Box, Connector, Diagram, Guide, Note, Section
 SOURCE_SYMBOL_NAMES: dict[str, str] = {
     "StoredWorkState": stored_state.StoredWorkState.__name__,
     "HandoverCommand": cli_commands.HandoverCommand.__name__,
-    "export": project_handover.export.__name__,
+    "export_project_handover": project_handover.export_project_handover.__name__,
     "ProjectHandover": application_handover.ProjectHandover.__name__,
+    "project_handover_from_state": application_handover.project_handover_from_state.__name__,
 }
 
 
@@ -20,16 +21,17 @@ def validate() -> None:
 
 DIAGRAM = Diagram(
     slug="handover",
-    title="One complete snapshot crosses a read-only boundary",
+    title="One project-facts package crosses a read-only boundary",
     description=(
-        "The handover command reads one complete SQLite snapshot, verifies every accepted artifact, and emits one "
-        "revision-stamped portable JSON package. A human or another tool decides how to use it; export changes no "
+        "The handover command captures one SQLite revision, projects the supported project facts, verifies every "
+        "referenced accepted artifact, and emits one revision-stamped portable JSON package. Live coordination and "
+        "lease authority stay local. A human or another tool decides how to use the package; export changes no "
         "Pinboard state and writes to no receiving system."
     ),
     width=1200,
     height=560,
     sections=(
-        Section("Pinboard authority", "current state and accepted evidence", 28, 54),
+        Section("Pinboard authority", "project facts and accepted evidence", 28, 54),
         Section("Read-only handover", "complete before any output", 420, 54),
         Section("Portable boundary", "the recipient owns the next step", 760, 54),
     ),
@@ -38,9 +40,9 @@ DIAGRAM = Diagram(
         Guide((730, 42), (730, 470)),
     ),
     connectors=(
-        Connector(((300, 200), (420, 200)), "ledger", "validation", "complete snapshot", (360, 186)),
-        Connector(((300, 390), (350, 390), (350, 280), (420, 280)), "artifacts", "validation", "verify", (330, 338)),
-        Connector(((670, 235), (740, 235)), "validation", "package", "emit", (705, 221)),
+        Connector(((300, 200), (420, 200)), "ledger", "materialize", "read once", (360, 186)),
+        Connector(((300, 390), (350, 390), (350, 280), (420, 280)), "artifacts", "materialize", "verify", (330, 338)),
+        Connector(((670, 235), (740, 235)), "materialize", "package", "then emit", (705, 221)),
         Connector(((970, 235), (1010, 235)), "package", "consumer", "use", (990, 221)),
     ),
     boxes=(
@@ -48,7 +50,7 @@ DIAGRAM = Diagram(
             "ledger",
             "One stored revision",
             "SQLite ledger",
-            ("work · proposals · decisions", "relationships · current ownership"),
+            ("work · proposals · decisions", "focus · relationships · history"),
             ("StoredWorkState",),
             50,
             120,
@@ -67,10 +69,10 @@ DIAGRAM = Diagram(
             100,
         ),
         Box(
-            "validation",
+            "materialize",
             "Read-only command",
-            "Validate one snapshot",
-            ("load all stored facts", "verify every artifact"),
+            "Build exported package",
+            ("project facts from revision", "verify + encode artifacts"),
             ("pinboard handover --json",),
             420,
             170,
@@ -92,7 +94,7 @@ DIAGRAM = Diagram(
             "consumer",
             "User-selected",
             "Team tool",
-            ("human or LLM maps", "the complete package"),
+            ("human or LLM maps", "the exported package"),
             (),
             1010,
             170,
@@ -101,5 +103,14 @@ DIAGRAM = Diagram(
             "muted",
         ),
     ),
-    notes=(Note("NO LIFECYCLE CHANGE · NO REMOTE WRITE · NO TOOL CHOSEN BY PINBOARD", 600, 505, 11, "middle", True),),
+    notes=(
+        Note(
+            "LIVE AUTHORITY NOT EXPORTED · NO LIFECYCLE CHANGE · NO REMOTE WRITE · NO TOOL CHOSEN BY PINBOARD",
+            600,
+            505,
+            11,
+            "middle",
+            True,
+        ),
+    ),
 )

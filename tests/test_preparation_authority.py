@@ -7,13 +7,13 @@ from threading import Event, Thread
 from time import sleep
 
 from pinboard.adapters.files.file_io import resolve_durable_roots
-from pinboard.adapters.files.views import expected_view_bytes
+from pinboard.adapters.files.views import derive_expected_view_bytes
 from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.errors import StorageError
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import query_models, stored_state
 from pinboard.application.decision_projection import project_decision_snapshot
-from pinboard.application.queries import overview_from_state, preview_parallel
+from pinboard.application.queries import project_overview, project_parallel_preview
 from pinboard.application.service import create_proposal, decide_and_commit_preparation_authority_change
 from pinboard.domain import authority_models, decision_models, work_models
 from pinboard.domain.authority_decisions import decide_preparation_authority
@@ -97,9 +97,9 @@ class PreparationAuthorityTest(unittest.TestCase):
         self.assertEqual(work_models.WorkState.READY, retained_item.state)
         self.assertEqual(
             (definition.revision, definition.digest),
-            (decision.current_after.definition_revision, decision.current_after.definition_digest),
+            (decision.proposed_replacement.definition_revision, decision.proposed_replacement.definition_digest),
         )
-        self.assertEqual(authority_models.PreparationLeaseStatus.ACTIVE, decision.current_after.state)
+        self.assertEqual(authority_models.PreparationLeaseStatus.ACTIVE, decision.proposed_replacement.state)
 
     def test_renew_and_release_require_the_exact_live_token(self) -> None:
         current = authority_models.PreparationLeaseAuthority(
@@ -215,8 +215,8 @@ class PreparationAuthorityTest(unittest.TestCase):
 
         reloaded = SQLiteWorkStore(database_path).snapshot()
         self.assertEqual((ItemId("work-c"),), tuple(value.item_id for value in reloaded.authority.preparation_leases))
-        before = overview_from_state(reloaded, expires_at - timedelta(microseconds=1))
-        at = overview_from_state(reloaded, expires_at)
+        before = project_overview(reloaded, expires_at - timedelta(microseconds=1))
+        at = project_overview(reloaded, expires_at)
         before_item = next(value for value in before.items if value.item_id == "work-c")
         at_item = next(value for value in at.items if value.item_id == "work-c")
         assert before_item.preparation is not None
@@ -225,14 +225,17 @@ class PreparationAuthorityTest(unittest.TestCase):
         self.assertEqual("expired", at_item.preparation.status)
         self.assertNotIn("work-c", before.immediate_options)
         self.assertIn("work-c", at.immediate_options)
-        before_parallel = preview_parallel(store, selected=("work-c",), now=expires_at - timedelta(microseconds=1))
-        at_parallel = preview_parallel(store, selected=("work-c",), now=expires_at)
+        loaded = store.snapshot()
+        before_parallel = project_parallel_preview(
+            loaded, selected=("work-c",), now=expires_at - timedelta(microseconds=1)
+        )
+        at_parallel = project_parallel_preview(loaded, selected=("work-c",), now=expires_at)
         assert not isinstance(before_parallel, query_models.ParallelSelectionInvalid)
         assert not isinstance(at_parallel, query_models.ParallelSelectionInvalid)
         self.assertFalse(before_parallel.safe)
         self.assertTrue(at_parallel.safe)
-        before_views = expected_view_bytes(reloaded, now=expires_at - timedelta(microseconds=1))
-        at_views = expected_view_bytes(reloaded, now=expires_at)
+        before_views = derive_expected_view_bytes(reloaded, now=expires_at - timedelta(microseconds=1))
+        at_views = derive_expected_view_bytes(reloaded, now=expires_at)
         self.assertIn(b"- Preparation: active", before_views["items/work-c.md"])
         self.assertIn(b"- Preparation: expired", at_views["items/work-c.md"])
         self.assertNotEqual(before_views["queue.md"], at_views["queue.md"])
@@ -348,12 +351,12 @@ class PreparationAuthorityTest(unittest.TestCase):
         self.assertNotIsInstance(transferred, DecisionFailure)
         assert not isinstance(transferred, DecisionFailure)
         revoked = decide_preparation_authority(
-            transferred.current_after,
+            transferred.proposed_replacement,
             transferred.counter_after,
             authority_models.RevokePreparationAuthority(
                 transferred.item,
-                transferred.current_after.lease_id,
-                transferred.current_after.generation,
+                transferred.proposed_replacement.lease_id,
+                transferred.proposed_replacement.generation,
                 coordination,
                 SQLITE_NOW + timedelta(seconds=1),
             ),
@@ -362,8 +365,8 @@ class PreparationAuthorityTest(unittest.TestCase):
         )
         self.assertNotIsInstance(revoked, DecisionFailure)
         assert not isinstance(revoked, DecisionFailure)
-        self.assertEqual(authority_models.PreparationLeaseStatus.REVOKED, revoked.current_after.state)
-        self.assertGreater(revoked.current_after.generation, transferred.current_after.generation)
+        self.assertEqual(authority_models.PreparationLeaseStatus.REVOKED, revoked.proposed_replacement.state)
+        self.assertGreater(revoked.proposed_replacement.generation, transferred.proposed_replacement.generation)
 
     def test_operation_start_time_remains_authoritative_while_write_lock_crosses_expiry(self) -> None:
         state = complete_sqlite_state()

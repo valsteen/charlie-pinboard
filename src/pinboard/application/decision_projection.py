@@ -33,15 +33,15 @@ def project_inactive_attempt_authority(
     else:
         return DecisionFailure(DecisionFailureCode.ATTEMPT_AUTHORITY_REQUIRED, "Attempt authority is not inactive.")
     return authority_models.InactiveAttemptAuthority(
-        state.lifecycle.project.host_epoch,
-        attempt_id,
-        attempt.item_id,
-        anchor.task_id,
-        anchor.host_id,
-        anchor.lease_id,
-        anchor.generation,
-        lease.expires_at,
-        status,
+        host_epoch=state.lifecycle.project.host_epoch,
+        attempt=attempt_id,
+        item=attempt.item_id,
+        task_id=anchor.task_id,
+        host_id=anchor.host_id,
+        lease_id=anchor.lease_id,
+        generation=anchor.generation,
+        expires_at=lease.expires_at,
+        state=status,
     )
 
 
@@ -130,16 +130,16 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
     )
     command_attempt_authorities = tuple(
         work_models.CommandAttemptAuthority(
-            state.lifecycle.project.host_epoch,
-            attempt_by_id[lease.attempt_id].item_id,
-            str(stored_items_by_id[attempt_by_id[lease.attempt_id].item_id].subject_revision),
-            lease.attempt_id,
-            str(attempt_by_id[lease.attempt_id].subject_revision),
-            anchor.task_id,
-            anchor.host_id,
-            anchor.lease_id,
-            lease.generation,
-            lease.expires_at,
+            host_epoch=state.lifecycle.project.host_epoch,
+            item=attempt_by_id[lease.attempt_id].item_id,
+            item_subject_revision=str(stored_items_by_id[attempt_by_id[lease.attempt_id].item_id].subject_revision),
+            attempt=lease.attempt_id,
+            attempt_subject_revision=str(attempt_by_id[lease.attempt_id].subject_revision),
+            task_id=anchor.task_id,
+            host_id=anchor.host_id,
+            lease_id=anchor.lease_id,
+            generation=lease.generation,
+            expires_at=lease.expires_at,
         )
         for lease in state.authority.attempt_leases
         if lease.state == authority_models.AttemptLeaseStatus.ACTIVE and lease.expires_at > now
@@ -162,15 +162,15 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
     )
     command_preparation_authorities = tuple(
         work_models.PreparationCommandAuthority(
-            state.lifecycle.project.host_epoch,
-            lease.item_id,
-            lease.definition_revision,
-            lease.definition_digest,
-            anchor.task_id,
-            anchor.host_id,
-            anchor.lease_id,
-            lease.generation,
-            lease.expires_at,
+            host_epoch=state.lifecycle.project.host_epoch,
+            item=lease.item_id,
+            definition_revision=lease.definition_revision,
+            definition_digest=lease.definition_digest,
+            task_id=anchor.task_id,
+            host_id=anchor.host_id,
+            lease_id=anchor.lease_id,
+            generation=lease.generation,
+            expires_at=lease.expires_at,
         )
         for lease in state.authority.preparation_leases
         if lease.state == authority_models.PreparationLeaseStatus.ACTIVE and lease.expires_at > now
@@ -178,12 +178,12 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
     )
     coordination_authority = (
         work_models.CoordinationCommandAuthority(
-            state.lifecycle.project.host_epoch,
-            state.authority.coordination.task_id,
-            state.authority.coordination.host_id,
-            state.authority.coordination.lease_id,
-            state.authority.coordination.generation,
-            state.authority.coordination.expires_at,
+            host_epoch=state.lifecycle.project.host_epoch,
+            task_id=state.authority.coordination.task_id,
+            host_id=state.authority.coordination.host_id,
+            lease_id=state.authority.coordination.lease_id,
+            generation=state.authority.coordination.generation,
+            expires_at=state.authority.coordination.expires_at,
         )
         if state.authority.coordination is not None
         and state.authority.coordination.state == work_models.CoordinationLeaseStatus.ACTIVE
@@ -264,14 +264,14 @@ def project_decision_snapshot(state: stored_state.StoredWorkState, now: datetime
         can_transfer_coordinator=coordination_authority is not None,
         coordination_lease=(
             work_models.CoordinationLeaseAuthority(
-                state.lifecycle.project.host_epoch,
-                coordination.task_id,
-                coordination.host_id,
-                coordination.lease_id,
-                coordination.generation,
-                coordination.acquired_at,
-                coordination.expires_at,
-                coordination.state,
+                host_epoch=state.lifecycle.project.host_epoch,
+                task_id=coordination.task_id,
+                host_id=coordination.host_id,
+                lease_id=coordination.lease_id,
+                generation=coordination.generation,
+                acquired_at=coordination.acquired_at,
+                expires_at=coordination.expires_at,
+                state=coordination.state,
             )
             if (coordination := state.authority.coordination) is not None
             else None

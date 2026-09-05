@@ -130,29 +130,31 @@ def select_current_action(
 ) -> CommandResult[decision_models.Action]:
     supplied_action = supplied.action
     supplied_capability = supplied_action.capability
-    available = discover_actions(
-        SQLiteWorkStore(roots.work / "state.sqlite3"),
+    operation_time = datetime.now(UTC)
+    current_state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
+    current_actions = discover_actions(
+        current_state,
         supplied.role,
         lease_id=supplied_capability.lease_id,
         generation=supplied_capability.coordinator_generation,
-        now=datetime.now(UTC),
+        now=operation_time,
     )
-    if isinstance(available, DecisionFailure):
-        return CommandFailure(available.code, available.message)
-    current = next(
+    if isinstance(current_actions, DecisionFailure):
+        return CommandFailure(current_actions.code, current_actions.message)
+    current_action = next(
         (
             value
-            for value in available
+            for value in current_actions
             if decision_models.action_id(value) == decision_models.action_id(supplied_action)
         ),
         None,
     )
-    if current is None:
+    if current_action is None:
         return CommandFailure(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             f"Action '{decision_models.action_id(supplied_action)}' is not currently legal.",
         )
-    current_capability = current.capability
+    current_capability = current_action.capability
     if current_capability.expected_revision != supplied_capability.expected_revision:
         return CommandFailure(CommandErrorCode.STALE_ACTION, "The work ledger changed after this action was selected.")
     supplied_authority = (
@@ -172,4 +174,4 @@ def select_current_action(
             DecisionFailureCode.ACTION_NOT_AVAILABLE,
             f"Action '{decision_models.action_id(supplied_action)}' no longer has exact current authority.",
         )
-    return current
+    return current_action

@@ -42,7 +42,7 @@ RELATION_ROLES: dict[tuple[str, str], str] = {
     ("work_item_definition_revisions", "work_items"): "definition history belongs to an item",
     ("proposal_evidence", "proposals"): "discovery retains its evidence",
     ("proposal_freshness", "proposals"): "discovery retains assumptions",
-    ("proposals", "work_items"): "proposal may relate to or resolve as work",
+    ("proposals", "work_items"): "proposal relation or disposition targets work",
     ("transition_history", "artifact_refs"): "history may retain accepted evidence",
 }
 
@@ -91,7 +91,7 @@ DIAGRAM = Diagram(
     width=1200,
     height=850,
     sections=(
-        Section("Proposals", "proposal facts before and after scheduling", 28, 42),
+        Section("Proposals", "original intake facts plus later disposition", 28, 42),
         Section("Current work", "identity that survives execution", 424, 42),
         Section("Definitions + relationships", "accepted intent and dependency", 824, 42),
         Section("Accepted files", "briefs · ready reviews · checkpoint evidence", 28, 432),
@@ -104,7 +104,7 @@ DIAGRAM = Diagram(
         Guide((24, 390), (1176, 390)),
     ),
     connectors=(
-        Connector(((270, 155), (430, 155)), "proposals", "work-items", "may become work", (350, 143)),
+        Connector(((270, 155), (430, 155)), "proposals", "work-items", "relation / target", (350, 143)),
         Connector(((640, 155), (570, 155)), "attempts", "work-items", "executes", (605, 143)),
         Connector(((780, 155), (830, 155)), "attempts", "definitions", "definition", (805, 143)),
         Connector(((500, 110), (500, 80), (1100, 80), (1100, 110)), "work-items", "dependencies"),
@@ -124,7 +124,17 @@ DIAGRAM = Diagram(
         Connector(((975, 590), (975, 650)), "meta", "history", "each revision", (1017, 620)),
     ),
     boxes=(
-        Box("proposals", "", "Proposals", ("possible work",), ("may relate to an item",), 90, 110, 180, 90),
+        Box(
+            "proposals",
+            "",
+            "Proposal facts",
+            ("same-id intake work",),
+            ("later disposition",),
+            90,
+            110,
+            180,
+            90,
+        ),
         Box("proposal-evidence", "", "Evidence", ("why it was raised",), ("proposal_evidence",), 40, 260, 150, 90),
         Box("proposal-freshness", "", "Assumptions", ("facts to recheck",), ("proposal_freshness",), 210, 260, 170, 90),
         Box("work-items", "", "Work items", ("durable identity",), ("work_items",), 430, 110, 140, 90),

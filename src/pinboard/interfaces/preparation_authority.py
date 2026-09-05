@@ -20,12 +20,12 @@ from pinboard.domain import authority_models, work_models
 from pinboard.domain.errors import DecisionFailure, DecisionFailureCode
 from pinboard.domain.identifiers import ItemId, LeaseId
 from pinboard.interfaces import cli_commands, work_views
-from pinboard.interfaces.cli_output import write_json
+from pinboard.interfaces.cli_output import retained_authority_lease_fields, write_json
 from pinboard.interfaces.errors import CommandErrorCode, CommandFailure, CommandResult
 
 
 def _find_retained_preparation_claim(
-    state: stored_state.StoredWorkState, item_id: ItemId, now: datetime
+    state: stored_state.StoredWorkState, item_id: ItemId, evaluated_at: datetime
 ) -> CommandResult[tuple[stored_state.StoredPreparationLease, stored_state.PreparationLeaseGeneration]]:
     retained = stored_state.retained_preparation(state, item_id)
     if retained is None:
@@ -33,7 +33,7 @@ def _find_retained_preparation_claim(
     lease, anchor = retained
     if anchor is None:
         return CommandFailure(CommandErrorCode.WORK_STATE_INVALID, "Preparation authority has no identity anchor.")
-    if lease.state == authority_models.PreparationLeaseStatus.ACTIVE and lease.expires_at <= now:
+    if lease.state == authority_models.PreparationLeaseStatus.ACTIVE and lease.expires_at <= evaluated_at:
         lease = replace(lease, state=authority_models.PreparationLeaseStatus.EXPIRED)
     return lease, anchor
 
@@ -41,25 +41,19 @@ def _find_retained_preparation_claim(
 def _present_latest_preparation_authority(
     state: stored_state.StoredWorkState,
     item_id: ItemId,
-    now: datetime,
+    presented_at: datetime,
     *,
     json: bool,
 ) -> CommandResult[int]:
-    retained = _find_retained_preparation_claim(state, item_id, now)
+    retained = _find_retained_preparation_claim(state, item_id, presented_at)
     if isinstance(retained, CommandFailure):
         return retained
-    lease, anchor = retained
+    lease, _anchor = retained
     values: dict[str, str | int] = {
         "item_id": str(item_id),
         "definition_revision": lease.definition_revision,
         "definition_digest": lease.definition_digest,
-        "task_id": str(anchor.task_id),
-        "host_id": str(anchor.host_id),
-        "lease_id": str(anchor.lease_id),
-        "generation": lease.generation,
-        "acquired_at": lease.acquired_at.isoformat(),
-        "expires_at": lease.expires_at.isoformat(),
-        "status": lease.state.value,
+        **retained_authority_lease_fields(retained),
     }
     if json:
         write_json(values)
@@ -68,12 +62,14 @@ def _present_latest_preparation_authority(
     return 0
 
 
-def preparation_status(
+def show_preparation_authority_status(
     roots: cli_commands.ResolvedRoots, command: cli_commands.PreparationStatusCommand
 ) -> CommandResult[int]:
-    now = datetime.now(UTC)
-    state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
-    return _present_latest_preparation_authority(state, command.item_id, now, json=command.json)
+    presented_at = datetime.now(UTC)
+    latest_committed_state = SQLiteWorkStore(roots.work / "state.sqlite3").snapshot()
+    return _present_latest_preparation_authority(
+        latest_committed_state, command.item_id, presented_at, json=command.json
+    )
 
 
 def _resolve_supplied_coordination_authority(
@@ -99,12 +95,12 @@ def _resolve_supplied_preparation_authority(
     item_id: ItemId,
     lease_id: LeaseId,
     generation: int,
-    now: datetime,
+    requested_at: datetime,
 ) -> CommandResult[work_models.PreparationCommandAuthority]:
     observed_authority = next(
         (
             value
-            for value in project_decision_snapshot(observed_state, now).command_preparation_authorities
+            for value in project_decision_snapshot(observed_state, requested_at).command_preparation_authorities
             if value.item == item_id
         ),
         None,
@@ -123,7 +119,7 @@ def _resolve_requested_preparation_change(  # noqa: C901, PLR0912
         | cli_commands.PreparationReleaseCommand
         | cli_commands.PreparationRevokeCommand
     ),
-    now: datetime,
+    requested_at: datetime,
 ) -> CommandResult[authority_models.PreparationAuthorityOperation]:
     match command:
         case cli_commands.CoordinatorPreparationAcquireCommand():
@@ -143,11 +139,11 @@ def _resolve_requested_preparation_change(  # noqa: C901, PLR0912
                 task_id=command.task_id,
                 host_id=command.host_id,
                 lease_id=LeaseId(uuid4().hex),
-                acquired_at=now,
-                expires_at=now + timedelta(seconds=command.ttl_seconds),
+                acquired_at=requested_at,
+                expires_at=requested_at + timedelta(seconds=command.ttl_seconds),
             )
         case cli_commands.CoordinatedPreparationTransferCommand():
-            retained = _find_retained_preparation_claim(observed_state, command.item_id, now)
+            retained = _find_retained_preparation_claim(observed_state, command.item_id, requested_at)
             if isinstance(retained, CommandFailure):
                 return retained
             lease, anchor = retained
@@ -175,29 +171,27 @@ def _resolve_requested_preparation_change(  # noqa: C901, PLR0912
                 task_id=command.task_id,
                 host_id=command.host_id,
                 lease_id=LeaseId(uuid4().hex),
-                acquired_at=now,
-                expires_at=now + timedelta(seconds=command.ttl_seconds),
+                acquired_at=requested_at,
+                expires_at=requested_at + timedelta(seconds=command.ttl_seconds),
             )
         case cli_commands.PreparationRenewCommand():
             supplied_authority = _resolve_supplied_preparation_authority(
-                observed_state, command.item_id, command.lease_id, command.generation, now
+                observed_state, command.item_id, command.lease_id, command.generation, requested_at
             )
             if isinstance(supplied_authority, CommandFailure):
                 return supplied_authority
             return authority_models.RenewPreparationAuthority(
                 current=supplied_authority,
-                renewed_at=now,
-                expires_at=now + timedelta(seconds=command.ttl_seconds),
+                renewed_at=requested_at,
+                expires_at=requested_at + timedelta(seconds=command.ttl_seconds),
             )
         case cli_commands.PreparationReleaseCommand():
             supplied_authority = _resolve_supplied_preparation_authority(
-                observed_state, command.item_id, command.lease_id, command.generation, now
+                observed_state, command.item_id, command.lease_id, command.generation, requested_at
             )
             if isinstance(supplied_authority, CommandFailure):
                 return supplied_authority
-            return authority_models.ReleasePreparationAuthority(
-                current=supplied_authority, released_at=now
-            )
+            return authority_models.ReleasePreparationAuthority(current=supplied_authority, released_at=requested_at)
         case cli_commands.PreparationRevokeCommand():
             coordination = _resolve_supplied_coordination_authority(
                 observed_state, command.coordination_lease_id, command.coordination_generation
@@ -209,7 +203,7 @@ def _resolve_requested_preparation_change(  # noqa: C901, PLR0912
                 lease_id=command.lease_id,
                 generation=command.generation,
                 coordination=coordination,
-                revoked_at=now,
+                revoked_at=requested_at,
             )
         case _ as unreachable:
             assert_never(unreachable)

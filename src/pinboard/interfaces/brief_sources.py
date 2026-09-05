@@ -1,3 +1,10 @@
+"""Select reviewed source bytes and plan exact context-bounded batches.
+
+Selection reads only project-relative files from the caller's chosen source
+checkout. Planning normalizes, segments, and batches those bytes without
+opening Pinboard work state or writing project files.
+"""
+
 import hashlib
 import re
 from pathlib import Path
@@ -33,7 +40,7 @@ def decode_brief_source_manifest(raw: bytes) -> BriefSourceManifest:
     return manifest
 
 
-def _selected_heading(lines: tuple[str, ...], heading: str, path: Path) -> tuple[int, int]:
+def _find_heading_range(lines: tuple[str, ...], heading: str, path: Path) -> tuple[int, int]:
     matches: list[tuple[int, int]] = []
     for index, line in enumerate(lines):
         match = MARKDOWN_HEADING.fullmatch(line)
@@ -94,7 +101,7 @@ def select_brief_source(
             f"Heading-selected authority '{path}' is not UTF-8 text.",
         ) from error
     text_lines = tuple(text.splitlines())
-    start, end = _selected_heading(text_lines, selector.heading, path)
+    start, end = _find_heading_range(text_lines, selector.heading, path)
     selected_lines = tuple(BriefSourceLine(index + 1, f"{text_lines[index]}\n".encode()) for index in range(start, end))
     return SelectedBriefSource(
         selector,
@@ -119,7 +126,7 @@ def _reject_overlaps(selected: tuple[tuple[BriefSourceRequest, SelectedBriefSour
                 )
 
 
-def _segment(
+def _compose_segment(
     request: BriefSourceRequest,
     index: int,
     lines: tuple[BriefSourceLine, ...],
@@ -137,16 +144,16 @@ def _segment(
     )
 
 
-def _segments(
+def _split_source_into_segments(
     request: BriefSourceRequest,
     selected: SelectedBriefSource,
     max_batch_bytes: int,
 ) -> tuple[BriefSourceSegment, ...]:
     if not selected.lines:
-        return (_segment(request, 0, ()),)
+        return (_compose_segment(request, 0, ()),)
     segments: list[BriefSourceSegment] = []
-    current: list[BriefSourceLine] = []
-    current_bytes = 0
+    current_segment_lines: list[BriefSourceLine] = []
+    current_segment_bytes = 0
     for line in selected.lines:
         line_bytes = len(line.content)
         if line_bytes > max_batch_bytes:
@@ -155,14 +162,14 @@ def _segments(
                 f"Line {line.number} selected by '{request.authority_id}' is {line_bytes} bytes; "
                 f"the limit is {max_batch_bytes}.",
             )
-        if current and current_bytes + line_bytes > max_batch_bytes:
-            segments.append(_segment(request, len(segments), tuple(current)))
-            current = []
-            current_bytes = 0
-        current.append(line)
-        current_bytes += line_bytes
-    if current:
-        segments.append(_segment(request, len(segments), tuple(current)))
+        if current_segment_lines and current_segment_bytes + line_bytes > max_batch_bytes:
+            segments.append(_compose_segment(request, len(segments), tuple(current_segment_lines)))
+            current_segment_lines = []
+            current_segment_bytes = 0
+        current_segment_lines.append(line)
+        current_segment_bytes += line_bytes
+    if current_segment_lines:
+        segments.append(_compose_segment(request, len(segments), tuple(current_segment_lines)))
     return tuple(segments)
 
 
@@ -184,7 +191,7 @@ def _render_segments(segments: tuple[BriefSourceSegment, ...]) -> bytes:
     return b"".join(rendered)
 
 
-def _batch(index: int, segments: tuple[BriefSourceSegment, ...]) -> BriefSourceBatch:
+def _compose_batch(index: int, segments: tuple[BriefSourceSegment, ...]) -> BriefSourceBatch:
     return BriefSourceBatch(
         index,
         sum(segment.content_byte_count for segment in segments),
@@ -193,19 +200,21 @@ def _batch(index: int, segments: tuple[BriefSourceSegment, ...]) -> BriefSourceB
     )
 
 
-def _batches(segments: tuple[BriefSourceSegment, ...], max_batch_bytes: int) -> tuple[BriefSourceBatch, ...]:
+def _group_segments_into_batches(
+    segments: tuple[BriefSourceSegment, ...], max_batch_bytes: int
+) -> tuple[BriefSourceBatch, ...]:
     batches: list[BriefSourceBatch] = []
-    current: list[BriefSourceSegment] = []
-    current_bytes = 0
+    current_batch_segments: list[BriefSourceSegment] = []
+    current_batch_bytes = 0
     for segment in segments:
-        if current and current_bytes + segment.content_byte_count > max_batch_bytes:
-            batches.append(_batch(len(batches), tuple(current)))
-            current = []
-            current_bytes = 0
-        current.append(segment)
-        current_bytes += segment.content_byte_count
-    if current:
-        batches.append(_batch(len(batches), tuple(current)))
+        if current_batch_segments and current_batch_bytes + segment.content_byte_count > max_batch_bytes:
+            batches.append(_compose_batch(len(batches), tuple(current_batch_segments)))
+            current_batch_segments = []
+            current_batch_bytes = 0
+        current_batch_segments.append(segment)
+        current_batch_bytes += segment.content_byte_count
+    if current_batch_segments:
+        batches.append(_compose_batch(len(batches), tuple(current_batch_segments)))
     return tuple(batches)
 
 
@@ -229,7 +238,7 @@ def plan_brief_sources(
     planned_sources: list[PlannedBriefSource] = []
     all_segments: list[BriefSourceSegment] = []
     for request, authority in selected:
-        segments = _segments(request, authority, max_batch_bytes)
+        segments = _split_source_into_segments(request, authority, max_batch_bytes)
         all_segments.extend(segments)
         planned_sources.append(
             PlannedBriefSource(
@@ -250,7 +259,7 @@ def plan_brief_sources(
         hashlib.sha256(canonical_manifest).hexdigest(),
         max_batch_bytes,
         tuple(planned_sources),
-        _batches(tuple(all_segments), max_batch_bytes),
+        _group_segments_into_batches(tuple(all_segments), max_batch_bytes),
     )
 
 

@@ -132,7 +132,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
                 ActionLifecyclePrecondition.INTAKE_PROPOSAL,
-                "Accept the proposal into its same-identity work item and dispose the proposal record.",
+                "Record accepted disposition and apply the selected details to its same-identity work item.",
             )
         case ActionKind.ACTIVATE:
             return ActionSemantics(
@@ -240,7 +240,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
                 ActionLifecyclePrecondition.INTAKE_PROPOSAL,
-                "Dispose the proposal as merged and remove its duplicate intake item.",
+                "Record merged disposition and supersede its same-identity intake item for the existing target.",
             )
         case ActionKind.PAUSE:
             return ActionSemantics(
@@ -258,7 +258,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
                 ActionLifecyclePrecondition.INTAKE_PROPOSAL,
-                "Dispose the proposal as rejected and remove its intake item.",
+                "Record rejected disposition and drop its same-identity intake item from live work.",
             )
         case ActionKind.REOPEN:
             return ActionSemantics(
@@ -294,7 +294,7 @@ def action_semantics(kind: ActionKind) -> ActionSemantics:  # noqa: C901, PLR091
                 (Role.COORDINATOR,),
                 ActionSubjectKind.PROPOSAL,
                 ActionLifecyclePrecondition.INTAKE_PROPOSAL,
-                "Dispose the proposal as returned and remove its intake item.",
+                "Record returned disposition, retain its same-identity intake item, and expose the reason as clarification.",
             )
         case ActionKind.REVISE_ITEM:
             return ActionSemantics(

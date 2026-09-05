@@ -232,7 +232,7 @@ class ProjectHandover(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     artifact_contents: tuple[HandoverArtifactContent, ...]
 
 
-def artifact_reference(
+def project_artifact_reference(
     reference: stored_state.ArtifactReference,
     *,
     media_type: str,
@@ -252,7 +252,7 @@ def artifact_reference(
     )
 
 
-def _definition(value: work_models.WorkItemDefinition) -> query_models.WorkItemDefinitionView:
+def _project_definition(value: work_models.WorkItemDefinition) -> query_models.WorkItemDefinitionView:
     return query_models.WorkItemDefinitionView(
         "pinboard-work-item-definition/v1",
         value.title,
@@ -268,7 +268,7 @@ def _definition(value: work_models.WorkItemDefinition) -> query_models.WorkItemD
     )
 
 
-def _proposal_relation(value: stored_state.StoredProposal) -> HandoverProposalRelation:
+def _project_proposal_relation(value: stored_state.StoredProposal) -> HandoverProposalRelation:
     proposal_id = str(value.proposal_id)
     match value.relation:
         case work_models.IndependentProposalRelation():
@@ -287,7 +287,7 @@ def _proposal_relation(value: stored_state.StoredProposal) -> HandoverProposalRe
             assert_never(unreachable)
 
 
-def _item_artifact_links(state: stored_state.StoredWorkState) -> tuple[HandoverItemArtifactLink, ...]:
+def _project_item_artifact_links(state: stored_state.StoredWorkState) -> tuple[HandoverItemArtifactLink, ...]:
     attempts = {str(value.attempt_id): value for value in state.lifecycle.attempts}
     item_ids = {str(value.item_id) for value in state.lifecycle.work_items}
     references = {value.artifact_ref_id: value for value in state.artifact_references}
@@ -314,20 +314,20 @@ def _item_artifact_links(state: stored_state.StoredWorkState) -> tuple[HandoverI
     return tuple(unique)
 
 
-def project_handover(
+def project_handover_from_state(
     state: stored_state.StoredWorkState,
     artifact_references: tuple[HandoverArtifactReference, ...],
     artifact_contents: tuple[HandoverArtifactContent, ...],
 ) -> ProjectHandover:
-    """Project one already-materialized stored snapshot without outer effects."""
+    """Project one already-loaded stored snapshot without outer effects."""
 
-    open_proposals = tuple(value for value in state.proposals.proposals if value.disposition is None)
-    proposal_ids = frozenset(value.proposal_id for value in open_proposals)
-    evidence = {
+    pending_proposals = tuple(value for value in state.proposals.proposals if value.disposition is None)
+    proposal_ids = frozenset(value.proposal_id for value in pending_proposals)
+    proposal_evidence = {
         proposal_id: tuple(value.selector for value in state.proposals.evidence if value.proposal_id == proposal_id)
         for proposal_id in proposal_ids
     }
-    freshness = {
+    proposal_freshness = {
         proposal_id: tuple(value.assumption for value in state.proposals.freshness if value.proposal_id == proposal_id)
         for proposal_id in proposal_ids
     }
@@ -368,7 +368,7 @@ def project_handover(
                 str(value.item_id),
                 value.revision,
                 value.digest,
-                _definition(value.definition),
+                _project_definition(value.definition),
                 value.reason,
                 str(value.source_task_id),
                 value.before_digest,
@@ -415,12 +415,12 @@ def project_handover(
                 value.unlock,
                 value.urgency_evidence,
                 value.subject_revision,
-                evidence[value.proposal_id],
-                freshness[value.proposal_id],
+                proposal_evidence[value.proposal_id],
+                proposal_freshness[value.proposal_id],
             )
-            for value in open_proposals
+            for value in pending_proposals
         ),
-        tuple(_proposal_relation(value) for value in open_proposals),
+        tuple(_project_proposal_relation(value) for value in pending_proposals),
         tuple(
             HandoverTransition(
                 int(value.history_id),
@@ -440,7 +440,7 @@ def project_handover(
             )
             for value in state.transition_receipts
         ),
-        _item_artifact_links(state),
+        _project_item_artifact_links(state),
         artifact_references,
         artifact_contents,
     )

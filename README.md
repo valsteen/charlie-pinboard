@@ -50,6 +50,7 @@ The code, branch, and conversation remain ordinary repository work. Pinboard kee
 - **Review:** keep the submitted candidate and its evidence exact, then use a separate Codex reviewer—normally a subagent that returns to the owning task—to accept it or return it for correction.
 - **Handover:** export one complete revision-stamped JSON package containing admitted work, pending proposals, relationships, decisions, and verified review evidence without choosing a team-tool vendor.
 - **Recursive cleanup:** use `$slop-cleanup` to trace residue from revised or abandoned features, remove an approved family, and repeat until a fresh pass finds nothing new.
+- **Optional storytelling review:** after you choose it, proof-read one representative flow or the complete supported repository so the code, its names, and the product overview tell the same accurate story without casually breaking compatibility or deliberate identity.
 
 The `$pinboard`, `$pinboard-intake`, and `$pinboard-deliver` skills provide the conversational workflows. The `pinboard` command validates and updates the repository-local ledger, rejects stale actions, and keeps unrelated attempts from invalidating one another.
 

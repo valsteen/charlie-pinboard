@@ -1,9 +1,12 @@
 __pycache__/
 *.egg-info/
 .coverage
+.DS_Store
+.idea/
 .pytest_cache/
 .ruff_cache/
 .venv/
+.vscode/
 node_modules/
 build/
 dist/

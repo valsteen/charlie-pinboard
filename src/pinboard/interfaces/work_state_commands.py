@@ -5,12 +5,15 @@ from pathlib import Path
 
 from pinboard.adapters.files.errors import ArtifactError, FileIOError, FileIOErrorCode, RootError, RootErrorCode
 from pinboard.adapters.files.root import resolve_shared_repository_root, resolve_source_checkout_root
-from pinboard.adapters.sqlite.errors import StorageError
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.interfaces import cli_commands, work_views
 from pinboard.interfaces.cli_output import write_json
 from pinboard.interfaces.errors import WorkBriefError
-from pinboard.interfaces.work_state import initialize_work_state, validate_work_state
+from pinboard.interfaces.work_state import (
+    initialize_work_state,
+    read_state_for_validation,
+    validate_loaded_work_state,
+)
 from pinboard.interfaces.work_state_models import (
     Diagnostic,
     DiagnosticView,
@@ -37,7 +40,7 @@ def resolve_roots(selection: cli_commands.RootSelection) -> cli_commands.Resolve
     return cli_commands.ResolvedRoots(source_checkout, shared_repository, work, work_argument is not None)
 
 
-def _diagnostic_view(report: ValidationReport) -> ValidationView:
+def _project_validation(report: ValidationReport) -> ValidationView:
     return ValidationView(
         valid=report.valid,
         diagnostics=tuple(
@@ -53,43 +56,54 @@ def _diagnostic_view(report: ValidationReport) -> ValidationView:
     )
 
 
-def root(roots: cli_commands.ResolvedRoots, _command: cli_commands.RootCommand) -> int:
+def show_roots(roots: cli_commands.ResolvedRoots, _command: cli_commands.RootCommand) -> int:
     write_json(RootView(str(roots.source_checkout), str(roots.shared_repository), str(roots.work)))
     return 0
 
 
-def validate(roots: cli_commands.ResolvedRoots, command: cli_commands.ValidateCommand) -> int:
-    now = datetime.now(UTC)
-    store = SQLiteWorkStore(roots.work / "state.sqlite3")
-    try:
-        attempt_briefs = work_views.attempt_brief_views(roots, store)
-    except WorkBriefError as error:
-        report = validate_work_state(roots.work, now=now)
-        report = ValidationReport(
-            (*report.diagnostics, Diagnostic(error.code.value, Severity.ERROR, roots.work, error.message))
-        )
-    except ArtifactError, StorageError:
-        report = validate_work_state(roots.work, now=now)
+def validate_state(roots: cli_commands.ResolvedRoots, command: cli_commands.ValidateCommand) -> int:
+    operation_time = datetime.now(UTC)
+    loaded_state = read_state_for_validation(roots.work)
+    if isinstance(loaded_state, ValidationReport):
+        validation_report = loaded_state
     else:
-        report = validate_work_state(roots.work, attempt_briefs, now=now)
+        current_state = loaded_state
+        brief_error: WorkBriefError | None = None
+        try:
+            attempt_briefs = work_views.read_attempt_brief_views(roots, current_state)
+        except WorkBriefError as error:
+            brief_error = error
+            attempt_briefs = None
+        except ArtifactError:
+            attempt_briefs = None
+        validation_report = validate_loaded_work_state(roots.work, current_state, attempt_briefs, now=operation_time)
+        if brief_error is not None:
+            validation_report = ValidationReport(
+                (
+                    *validation_report.diagnostics,
+                    Diagnostic(brief_error.code.value, Severity.ERROR, roots.work, brief_error.message),
+                )
+            )
     if command.json:
-        write_json(_diagnostic_view(report))
+        write_json(_project_validation(validation_report))
     else:
-        print(report.render())
-    return 0 if report.valid else 10
+        print(validation_report.render())
+    return 0 if validation_report.valid else 10
 
 
-def initialize(roots: cli_commands.ResolvedRoots, _command: cli_commands.InitializeCommand) -> int:
+def initialize_state(roots: cli_commands.ResolvedRoots, _command: cli_commands.InitializeCommand) -> int:
     selected_work = roots.work if roots.explicit_work_root else None
-    receipt = initialize_work_state(roots.shared_repository, selected_work, now=datetime.now(UTC))
+    operation_time = datetime.now(UTC)
+    receipt = initialize_work_state(roots.shared_repository, selected_work, now=operation_time)
     print(f"OK WORK_STATE_INITIALIZED {receipt.work_root}")
     return 0
 
 
 def rebuild_views(roots: cli_commands.ResolvedRoots, _command: cli_commands.RebuildViewsCommand) -> int:
     store = SQLiteWorkStore(roots.work / "state.sqlite3")
-    result = work_views.rebuild(roots, store, datetime.now(UTC))
-    if result.warning is not None:
-        raise FileIOError(FileIOErrorCode.VIEW_REFRESH_FAILED, result.warning.message)
-    print(f"OK VIEWS_REBUILT revision={result.database_revision}")
+    operation_time = datetime.now(UTC)
+    rebuild_result = work_views.rebuild(roots, store, operation_time)
+    if rebuild_result.warning is not None:
+        raise FileIOError(FileIOErrorCode.VIEW_REFRESH_FAILED, rebuild_result.warning.message)
+    print(f"OK VIEWS_REBUILT revision={rebuild_result.database_revision}")
     return 0

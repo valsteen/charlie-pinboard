@@ -18,9 +18,10 @@ from pinboard.adapters.sqlite.database import initialize_database
 from pinboard.adapters.sqlite.store import SQLiteWorkStore
 from pinboard.application import stored_state
 from pinboard.application.actions import discover_actions
-from pinboard.application.artifacts import NewArtifact
+from pinboard.application.artifacts import ArtifactRef, NewArtifact
 from pinboard.application.dispatch_models import DispatchEnvironment, DispatchPermission
 from pinboard.domain import decision_models
+from pinboard.domain.errors import DecisionResult
 from pinboard.domain.identifiers import ReviewId
 from pinboard.interfaces import work_brief_models
 from pinboard.interfaces.cli import main
@@ -154,7 +155,7 @@ class DispatchTest(unittest.TestCase):
         def action() -> decision_models.DispatchAction:
             actions = expect_success(
                 discover_actions(
-                    store,
+                    store.snapshot(),
                     decision_models.Role.COORDINATOR,
                     lease_id=coordination.lease_id,
                     generation=coordination.generation,
@@ -466,6 +467,20 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(prompt, reused)
         self.assertEqual(after_first, store.snapshot())
 
+        identical_retry = expect_dispatch_success(
+            prepare_dispatch(
+                store,
+                ArtifactRepository(roots),
+                project,
+                action(),
+                CHECKPOINT_ID,
+                environment,
+                supplied_review=SuppliedDispatchReview(first_review, ReviewId("identical-review")),
+            )
+        )
+        self.assertEqual(prompt, identical_retry)
+        self.assertEqual(after_first, store.snapshot())
+
         collision = prepare_dispatch(
             store,
             ArtifactRepository(roots),
@@ -482,6 +497,104 @@ class DispatchTest(unittest.TestCase):
         self.assertTrue(
             any("rejected-later-review" in reference.key for reference in store.snapshot().artifact_references)
         )
+
+    def test_dispatch_rechecks_authority_after_an_unrelated_revision(self) -> None:
+        project, roots, store, value, action, environment = self.initialized()
+        selected_action = action()
+        render_prompt = _render_dispatch_prompt
+
+        def render_then_accept_unrelated_revision(
+            brief: work_brief_models.WorkBrief,
+            attempt_path: Path,
+            checkpoint: str,
+            supplied_environment: DispatchEnvironment,
+            accepted_review: bytes | None,
+            supplied_prompt: bytes | None,
+        ) -> DispatchResult[str]:
+            rendered = render_prompt(
+                brief,
+                attempt_path,
+                checkpoint,
+                supplied_environment,
+                accepted_review,
+                supplied_prompt,
+            )
+            expect_success(
+                store.accept_artifact_reference(
+                    roots.work_root,
+                    write_revision(
+                        roots,
+                        NewArtifact(
+                            stored_state.ArtifactKind.EVIDENCE,
+                            "unrelated-dispatch-revision",
+                            1,
+                            ".json",
+                            b"{}\n",
+                        ),
+                    ),
+                    datetime.now(UTC),
+                )
+            )
+            return rendered
+
+        with patch(
+            "pinboard.interfaces.dispatch_brief._render_dispatch_prompt",
+            side_effect=render_then_accept_unrelated_revision,
+        ):
+            result = prepare_dispatch(
+                store,
+                ArtifactRepository(roots),
+                project,
+                selected_action,
+                CHECKPOINT_ID,
+                environment,
+                supplied_review=SuppliedDispatchReview(ready_review(value), ReviewId("raced-review")),
+            )
+
+        expect_dispatch_failure(result, DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE)
+
+    def test_dispatch_rejects_an_unrelated_revision_before_review_publication(self) -> None:
+        project, roots, store, value, action, environment = self.initialized()
+        selected_action = action()
+        self.assertEqual("12", selected_action.capability.expected_revision)
+        accept_reference = store.accept_artifact_reference
+
+        def accept_after_unrelated_revision(
+            work_root: Path,
+            published: ArtifactRef,
+            accepted_at: datetime,
+        ) -> DecisionResult[stored_state.ArtifactReference]:
+            expect_success(
+                accept_reference(
+                    work_root,
+                    write_revision(
+                        roots,
+                        NewArtifact(
+                            stored_state.ArtifactKind.EVIDENCE,
+                            "prepublication-unrelated-revision",
+                            1,
+                            ".json",
+                            b"{}\n",
+                        ),
+                    ),
+                    accepted_at,
+                )
+            )
+            return accept_reference(work_root, published, accepted_at)
+
+        with patch.object(store, "accept_artifact_reference", side_effect=accept_after_unrelated_revision):
+            result = prepare_dispatch(
+                store,
+                ArtifactRepository(roots),
+                project,
+                selected_action,
+                CHECKPOINT_ID,
+                environment,
+                supplied_review=SuppliedDispatchReview(ready_review(value), ReviewId("prepublication-race")),
+            )
+
+        self.assertEqual(14, store.snapshot().lifecycle.project.revision)
+        expect_dispatch_failure(result, DispatchErrorCode.DISPATCH_ACTION_UNAVAILABLE)
 
     def test_sqlite_dispatch_rejects_stale_action_and_cli_verifies_prompt(self) -> None:
         project, roots, store, value, action, environment = self.initialized()

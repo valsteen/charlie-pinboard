@@ -7,7 +7,36 @@ import yaml
 
 ROOT: Final = Path(__file__).resolve().parent.parent
 PLUGIN_NAME: Final = "pinboard"
+PROJECT_VERSION: Final = "0.1.0"
+EXPECTED_LICENSE_TEXT: Final = """MIT License
+
+Copyright (c) 2026 Vincent Alsteen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
 EXPECTED_SKILLS: Final = frozenset({"pinboard", "pinboard-deliver", "pinboard-intake", "slop-cleanup"})
+EXPECTED_SKILL_DISPLAY_NAMES: Final = {
+    "pinboard": "Pinboard",
+    "pinboard-deliver": "Pinboard: Deliver",
+    "pinboard-intake": "Pinboard: Intake",
+    "slop-cleanup": "Slop Cleanup",
+}
 EXPECTED_ENTRY_POINTS: Final = {
     "pinboard": "pinboard.interfaces.cli:main",
 }
@@ -52,8 +81,15 @@ class PluginManifest(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     interface: PluginInterface
 
 
-class ProjectMetadata(msgspec.Struct, frozen=True):
+class ProjectMetadata(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
     name: str
+    version: str
+    description: NonBlankText
+    readme: str
+    license: str
+    license_files: tuple[str, ...] = msgspec.field(name="license-files")
+    requires_python: str = msgspec.field(name="requires-python")
+    dependencies: tuple[str, ...]
     scripts: dict[str, str]
 
 
@@ -119,10 +155,26 @@ def decode_skill_agent(text: str, path: Path) -> SkillAgent:
 def validate_plugin() -> None:
     path = ROOT / ".codex-plugin" / "plugin.json"
     value = msgspec.json.decode(path.read_bytes(), type=PluginManifest)
-    if value.name != PLUGIN_NAME or value.skills != "./skills/":
+    cachebuster_prefix = f"{PROJECT_VERSION}+codex."
+    cachebuster = value.version.removeprefix(cachebuster_prefix)
+    if value.name != PLUGIN_NAME or not value.version.startswith(cachebuster_prefix):
+        raise ValueError("plugin manifest name or cachebuster version is invalid")
+    if len(cachebuster) != 14 or not cachebuster.isdecimal():
+        raise ValueError("plugin manifest cachebuster must be a UTC timestamp")
+    if value.skills != "./skills/":
         raise ValueError("plugin manifest identity or skill root is invalid")
     if value.license != "MIT":
         raise ValueError("plugin manifest license must match the repository license")
+    if (
+        value.interface.display_name,
+        value.interface.developer_name,
+        value.interface.category,
+        value.interface.website_url,
+        value.interface.capabilities,
+    ) != ("Pinboard", value.author.name, "Productivity", value.repository, ("Interactive", "Write")):
+        raise ValueError("plugin interface identity or capabilities are invalid")
+    if value.repository != "https://github.com/valsteen/pinboard" or value.homepage != f"{value.repository}#readme":
+        raise ValueError("plugin repository or homepage is invalid")
 
 
 def validate_project_metadata() -> None:
@@ -132,8 +184,18 @@ def validate_project_metadata() -> None:
         project = msgspec.convert(value["project"], type=ProjectMetadata, strict=True)
     except (KeyError, msgspec.ValidationError) as error:
         raise ValueError(f"{path}: invalid project metadata: {error}") from error
-    if project.name != PLUGIN_NAME:
-        raise ValueError("distribution and plugin identities must match")
+    if (project.name, project.version, project.readme, project.license, project.license_files) != (
+        PLUGIN_NAME,
+        PROJECT_VERSION,
+        "README.md",
+        "MIT",
+        ("LICENSE",),
+    ):
+        raise ValueError("distribution identity, readme, or license publication is invalid")
+    if project.requires_python != ">=3.14,<3.15":
+        raise ValueError("distribution must preserve Python 3.14-only compatibility")
+    if project.dependencies != ("msgspec>=0.21.1",):
+        raise ValueError("msgspec must remain the sole runtime dependency")
     if project.scripts != EXPECTED_ENTRY_POINTS:
         raise ValueError("pinboard must be the only project entry point to the current engine")
 
@@ -167,10 +229,14 @@ def validate_skill(path: Path) -> None:
     if frontmatter.name != path.parent.name:
         raise ValueError(f"{path}: skill name must match its directory")
     agent = path.parent / "agents" / "openai.yaml"
-    decode_skill_agent(agent.read_text(encoding="utf-8"), agent)
+    agent_metadata = decode_skill_agent(agent.read_text(encoding="utf-8"), agent)
+    if agent_metadata.interface.display_name != EXPECTED_SKILL_DISPLAY_NAMES[frontmatter.name]:
+        raise ValueError(f"{agent}: display name does not match the public skill identity")
 
 
 def main() -> None:
+    if (ROOT / "LICENSE").read_text(encoding="utf-8") != EXPECTED_LICENSE_TEXT:
+        raise ValueError("repository license must exactly match the canonical MIT license text")
     validate_plugin()
     validate_project_metadata()
     validate_marketplace()

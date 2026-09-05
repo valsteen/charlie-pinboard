@@ -23,9 +23,9 @@ from pinboard.application.decision_projection import (
     project_inactive_attempt_authority,
 )
 from pinboard.application.service import (
-    change_attempt_authority,
-    change_coordination_authority,
     create_proposal,
+    decide_and_commit_attempt_authority_change,
+    decide_and_commit_coordination_authority_change,
     execute,
     execute_checkpoint_acceptance,
 )
@@ -510,7 +510,7 @@ class ServiceTest(unittest.TestCase):
         store, _database_path = self._store_with_state(state)
         acquired_at = SQLITE_NOW + timedelta(seconds=1)
         with reject_table_deletes("work_items"):
-            acquired = change_coordination_authority(
+            acquired = decide_and_commit_coordination_authority_change(
                 store,
                 authority_models.AcquireCoordinationAuthority(
                     state.lifecycle.project.host_epoch,
@@ -525,7 +525,7 @@ class ServiceTest(unittest.TestCase):
         current = project_decision_snapshot(store.snapshot(), SQLITE_NOW).coordination_authority
         assert current is not None
 
-        renewed = change_coordination_authority(
+        renewed = decide_and_commit_coordination_authority_change(
             store,
             authority_models.RenewCoordinationAuthority(
                 current,
@@ -542,7 +542,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(len(state.transition_receipts) + 2, len(after.transition_receipts))
         renewed_authority = project_decision_snapshot(after, SQLITE_NOW).coordination_authority
         assert renewed_authority is not None
-        released = change_coordination_authority(
+        released = decide_and_commit_coordination_authority_change(
             store,
             authority_models.ReleaseCoordinationAuthority(renewed_authority, acquired_at + timedelta(seconds=2)),
         )
@@ -552,7 +552,7 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual("released", released_authority.state.value)
 
         revoke_store, _database_path = self._store_with_state(state)
-        acquired = change_coordination_authority(
+        acquired = decide_and_commit_coordination_authority_change(
             revoke_store,
             authority_models.AcquireCoordinationAuthority(
                 state.lifecycle.project.host_epoch,
@@ -566,7 +566,7 @@ class ServiceTest(unittest.TestCase):
         self.assertNotIsInstance(acquired, DecisionFailure)
         revoke_authority = project_decision_snapshot(revoke_store.snapshot(), SQLITE_NOW).coordination_authority
         assert revoke_authority is not None
-        revoked = change_coordination_authority(
+        revoked = decide_and_commit_coordination_authority_change(
             revoke_store,
             authority_models.RevokeCoordinationAuthority(
                 revoke_authority.lease_id,
@@ -583,7 +583,7 @@ class ServiceTest(unittest.TestCase):
         state = complete_sqlite_state()
         store, _database_path = self._store_with_state(state)
         current = project_decision_snapshot(store.snapshot(), SQLITE_NOW).command_attempt_authorities[0]
-        renewed = change_attempt_authority(
+        renewed = decide_and_commit_attempt_authority_change(
             store,
             authority_models.RenewAttemptAuthority(
                 current,
@@ -595,7 +595,7 @@ class ServiceTest(unittest.TestCase):
         current = project_decision_snapshot(store.snapshot(), SQLITE_NOW).command_attempt_authorities[0]
 
         with reject_table_deletes("work_items"):
-            released = change_attempt_authority(
+            released = decide_and_commit_attempt_authority_change(
                 store,
                 authority_models.ReleaseAttemptAuthority(current, SQLITE_NOW + timedelta(seconds=2)),
             )
@@ -618,7 +618,7 @@ class ServiceTest(unittest.TestCase):
         )
         store, _database_path = self._store_with_state(state)
         attempt = state.lifecycle.attempts[0]
-        acquired = change_attempt_authority(
+        acquired = decide_and_commit_attempt_authority_change(
             store,
             authority_models.AcquireInitialAttemptAuthority(
                 state.lifecycle.project.host_epoch,
@@ -639,7 +639,7 @@ class ServiceTest(unittest.TestCase):
         current = snapshot.command_attempt_authorities[0]
         coordination = snapshot.coordination_authority
         assert coordination is not None
-        released = change_attempt_authority(
+        released = decide_and_commit_attempt_authority_change(
             normal_store,
             authority_models.ReleaseAttemptAuthority(current, SQLITE_NOW + timedelta(seconds=1)),
         )
@@ -651,7 +651,7 @@ class ServiceTest(unittest.TestCase):
         )
         self.assertNotIsInstance(proof, DecisionFailure)
         assert not isinstance(proof, DecisionFailure)
-        transferred = change_attempt_authority(
+        transferred = decide_and_commit_attempt_authority_change(
             normal_store,
             authority_models.TransferAttemptAuthority(
                 proof,
@@ -665,7 +665,7 @@ class ServiceTest(unittest.TestCase):
         )
         self.assertNotIsInstance(transferred, DecisionFailure)
         next_authority = project_decision_snapshot(normal_store.snapshot(), SQLITE_NOW).command_attempt_authorities[0]
-        revoked = change_attempt_authority(
+        revoked = decide_and_commit_attempt_authority_change(
             normal_store,
             authority_models.RevokeAttemptAuthority(
                 next_authority.attempt,
@@ -944,7 +944,7 @@ class ServiceTest(unittest.TestCase):
         coordination = snapshot.coordination_authority
         assert coordination is not None
 
-        rejected = change_attempt_authority(
+        rejected = decide_and_commit_attempt_authority_change(
             store,
             authority_models.TransferAttemptAuthority(
                 proof,

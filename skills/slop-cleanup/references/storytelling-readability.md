@@ -4,7 +4,9 @@ Use this optional pass only after the human chooses it. Its outcome is not “mo
 
 ## Establish the reading contract
 
-Choose one representative supported path and the smallest set of current documentation that claims to explain it. Identify which sources own the current product story and which files are generated projections. Do not treat an old plan, test description, architecture fashion, or generated page as truth merely because it is easier to read.
+Choose the agreed coverage mode. For a representative-flow pass, select one supported path and the smallest set of current documentation that claims to explain it. For a whole-repository pass, first enumerate every supported runtime and entry-point surface, agent skill and metadata surface, product and contributor document, generated projection and generator, development tool and configuration, packaging and dependency surface, CI assurance path, and test-evidence surface. Identify which sources own the current product story and which files are generated projections. Do not treat an old plan, test description, architecture fashion, or generated page as truth merely because it is easier to read.
+
+In whole-repository mode, derive the distinct narrative shapes from differences in responsibility order, ownership, effects, normal exits, or next owner. Do not equate a command count, file count, or architecture layer with a shape. Record one uncoached English-only trace for every distinct shape: use ordinary verbs, value provenance, effects, expected exits, presentation, and the next owner without relying on implementation-language types or syntax. Continue until every enumerated surface is assigned to a trace, an independently explained non-routing role, or an explicit retained disposition.
 
 Agree on the reader: someone who understands ordinary software ideas but may not know the implementation language, type system, framework conventions, or repository history. The reader may follow names and calls, but should not need type inference to discover whether a step reads, validates, decides, writes, refreshes, or presents.
 
@@ -24,6 +26,53 @@ Have a fresh reader start with the overview, then follow the representative code
 - what is finally presented to the caller.
 
 At each call, ask four plain questions: What verb describes this step? Where did this value come from? What can end normally here? Which owner should I read next? Capture uncertainty rather than teaching around it. A guide that supplies answers absent from the code is evidence of a missing-manual problem, not a successful reading.
+
+## Treat names as promises
+
+A name is a claim about the thing it denotes. For every name in the agreed surface, ask what an ordinary English reading promises about:
+
+- provenance and timing: observed, supplied, retained, proposed, locked, current, or final;
+- success and durability: requested, decided, accepted, written, committed, or merely repairable;
+- authority and responsibility: who may decide, change, persist, repair, or present;
+- demonstrated capability: intelligence, autonomy, universality, plurality, prestige, or another implied power;
+- identity: whether the spelling is incidental implementation language, a stable external contract, or a deliberate product or personal choice.
+
+Compare that promise with demonstrated responsibility. A name is misleading when a normal reader must mentally negate or reinterpret it to tell the true story. Mechanical consistency does not excuse a contradiction: two sibling values called `current` can still be proposed replacements, and a value called `accepted` can still contain a rejection.
+
+Keep one compact record for every mismatch:
+
+```text
+selector | claimed meaning | demonstrated responsibility | mismatch | normal reading cost | affected consumers | evidence | classification | disposition | reopen condition
+```
+
+Classify before changing anything:
+
+- **Internal incidental:** an owned implementation or current-story presentation name with no compatibility or deliberate identity role.
+- **Stable contract identity:** a public API, CLI, wire, schema, storage, history, or compatibility spelling whose consumers may depend on it.
+- **Deliberate identity:** a product, project, personal, or emotionally meaningful name whose value is not reducible to technical precision.
+
+Choose exactly one disposition:
+
+- **Direct rename:** repair a low-risk internal name and retain the finding in the review evidence. Reopen if the old contradiction returns or the value's responsibility changes again.
+- **Truthful local translation:** preserve a stable external spelling, translate it once at the nearest owner into vocabulary that tells the internal truth, and record the protected contract and consumers. Reopen when those consumers migrate or the boundary versions.
+- **Migration or versioning deferral:** retain the finding and name the protected contract and consumers, migration or version cost, nearest truthful translation owner, safe reopening condition, and evidence that would justify reconsideration. Risk postpones the rename; it does not erase the mismatch.
+- **Human decision:** describe a deliberate identity neutrally, distinguish harmless identity from a misleading technical promise, explain the concrete reading cost, and ask the human to retain, reinterpret, or rename it. Reopen only on that disposition or on evidence that its product meaning or consumer expectations changed.
+
+These examples test the method rather than prescribe vocabulary:
+
+| Situation | Finding and disposition | Reopen condition |
+| --- | --- | --- |
+| A private temporary says it is current or accepted before currency or success has been established | Keep the selector and evidence, then rename or delay that binding so the local story states its demonstrated role | The contradictory spelling returns or the stage semantics change |
+| A supported wire field overstates what the internal value represents | Keep the external field and finding; translate once at the decoding owner into truthful local vocabulary | All consumers adopt a new version or compatibility ownership ends |
+| A stored or historical label is misleading but changing it requires coordinated migration | Defer explicitly with the protected stores and readers, migration cost, nearest translation owner, and required equivalence evidence | The versioned migration is authorized and the named evidence is available |
+| A product or personal name sounds more capable or prestigious than the implementation | Report the concrete reading cost without treating the identity as defective; let the human decide whether identity or technical clarity wins | The human chooses a disposition or demonstrated capability and audience expectations materially change |
+
+The repository reviews that motivated this test provide two retrospective checks:
+
+- The authority-core selectors used before/after names that claimed current durable state for expected retained and merely proposed authority, and an “accepted” name that claimed success before rejection was excluded. That made maintainers of all three authority families read success and durability too early. The accepted review is the evidence. These were internal incidental names, so direct rename and binding after failure exclusion was safe; reopen if that premature claim returns or the stages change.
+- The journey-diagram arrows and labels claimed that repairable file projections supplied authoritative current state, while the implementation independently reread SQLite before presentation. That made guide readers and maintainers assign authority to the wrong owner. The accepted guide review is the evidence. This was current-story presentation without a compatibility identity, so its generator changed directly; reopen if the dataflow changes or a generated diagram again routes authority through repairable output.
+
+Those repairs belong to their concrete owners. Preserve the questions and disposition method, not their replacement spellings as a universal recipe.
 
 ## Use a stage grammar as a probe
 
@@ -82,7 +131,22 @@ Function length, lint smell categories, duplication reports, and split-by-defaul
 
 Trace at least one sibling operation that shares the same responsibilities. It should use the same verb grammar and provenance distinctions without duplicating a routing fact in every layer. When the flow is a command or closed family, reuse the [developer-navigation lens](../../pinboard/references/developer-navigation.md) and, for an exhaustive cleanup audit, the [developer-navigation stress test](dx-stress-test.md).
 
-Simulate adding one sibling. Count the owners a developer must discover and edit. Keep a site when it owns input decoding, validation, policy, representation conversion, an effect, or presentation. Recommend folding a site when it only repeats a fact already selected elsewhere. A low edit count is evidence of navigation cost, not proof of readable responsibility.
+Simulate adding one sibling. Count the owners a developer must discover and edit. Keep a site when it owns input decoding, validation, policy, representation conversion, an effect, or presentation. Recommend folding a site when it only repeats a fact already selected elsewhere. A low edit count is evidence of navigation cost, not proof of readable responsibility. In whole-repository mode, repeat this simulation for every distinct narrative shape.
+
+## Close whole-repository semantics separately
+
+A whole-repository result includes one separate disposition receipt for each semantic category required by the navigation stress test. Do not combine categories even when one analyzer or search supports several:
+
+1. Same-meaning remaps and pass-through delegation.
+2. Repeated traversal and projection scans.
+3. Duplicated mode, route, effect, or presentation selection.
+4. Equivalent closed-family branches.
+5. Defaults, fallbacks, optional handlers, and inherited behavior.
+6. Test-only public roots and their private helper chains.
+7. Base and composite protocol overlap.
+8. Archaeological names, defaults, versions, and capability labels.
+
+Each receipt names its method, exact scope, candidate count and selectors or explicit zero, and disposition. After repairs, rerun the complete surface and shape inventory from scratch once. Finish only when that fresh pass produces no new in-scope candidate and every surface, shape, sibling simulation, bidirectional documentation comparison, and semantic receipt still closes.
 
 ## Let the human choose the durable rule
 
@@ -94,6 +158,6 @@ Do not turn one repository's layer names or stage vocabulary into a universal ru
 
 Run behavior, expected-rejection, transaction, concurrency, generation, link, and metadata checks appropriate to the changed surface. Do not add unit tests that assert prose wording. Regenerate authoritative documentation projections and inspect meaningful visual output rather than relying only on a generator exit code.
 
-Repeat the fresh reading after the changes. Finish when the reader can tell one accurate ordered story from overview through code, sibling paths are symmetric where their responsibilities match, authoritative and repairable effects remain distinct, and another refactor would only rename already clear work or introduce ceremony.
+Repeat the fresh reading after the changes. In representative-flow mode, finish when the reader can tell one accurate ordered story from overview through code, sibling paths are symmetric where their responsibilities match, authoritative and repairable effects remain distinct, and another refactor would only rename already clear work or introduce ceremony. In whole-repository mode, also require the complete fresh no-new-candidate pass above; one polished trace cannot satisfy that claim.
 
 When validating this cookbook itself, compare two context-isolated readers on the same historical repository snapshot and identical task. Give the control reader the existing cleanup guidance without this cookbook and give the other reader the revised skill. Compare whether they recover the intended sequence, documentation mismatches, effect boundaries, architecture-neutral advice, and bounded next changes. Report only the demonstrated scenario; one successful comparison does not prove universal effectiveness.

@@ -177,11 +177,11 @@ def fence_attempt_authority(
 
 def write_coordination_authority(
     connection: sqlite3.Connection,
-    before: work_models.CoordinationLeaseAuthority | None,
-    after: work_models.CoordinationLeaseAuthority,
+    expected_retained: work_models.CoordinationLeaseAuthority | None,
+    proposed_replacement: work_models.CoordinationLeaseAuthority,
     stale_message: str,
 ) -> DecisionFailure | None:
-    if before is None:
+    if expected_retained is None:
         return require_one_changed_row(
             connection.execute(
                 """
@@ -191,13 +191,13 @@ def write_coordination_authority(
                 ON CONFLICT(singleton) DO NOTHING
                 """,
                 (
-                    after.lease_id,
-                    after.task_id,
-                    after.host_id,
-                    after.generation,
-                    after.acquired_at.isoformat(),
-                    after.expires_at.isoformat(),
-                    after.state.value,
+                    proposed_replacement.lease_id,
+                    proposed_replacement.task_id,
+                    proposed_replacement.host_id,
+                    proposed_replacement.generation,
+                    proposed_replacement.acquired_at.isoformat(),
+                    proposed_replacement.expires_at.isoformat(),
+                    proposed_replacement.state.value,
                 ),
             ),
             stale_message,
@@ -211,20 +211,20 @@ def write_coordination_authority(
                 AND acquired_at = ? AND expires_at = ? AND status = ?
             """,
             (
-                after.lease_id,
-                after.task_id,
-                after.host_id,
-                after.generation,
-                after.acquired_at.isoformat(),
-                after.expires_at.isoformat(),
-                after.state.value,
-                before.lease_id,
-                before.task_id,
-                before.host_id,
-                before.generation,
-                before.acquired_at.isoformat(),
-                before.expires_at.isoformat(),
-                before.state.value,
+                proposed_replacement.lease_id,
+                proposed_replacement.task_id,
+                proposed_replacement.host_id,
+                proposed_replacement.generation,
+                proposed_replacement.acquired_at.isoformat(),
+                proposed_replacement.expires_at.isoformat(),
+                proposed_replacement.state.value,
+                expected_retained.lease_id,
+                expected_retained.task_id,
+                expected_retained.host_id,
+                expected_retained.generation,
+                expected_retained.acquired_at.isoformat(),
+                expected_retained.expires_at.isoformat(),
+                expected_retained.state.value,
             ),
         ),
         stale_message,
@@ -234,7 +234,7 @@ def write_coordination_authority(
 def write_attempt_authority(
     connection: sqlite3.Connection, decision: authority_models.AttemptAuthorityDecision
 ) -> DecisionFailure | None:
-    after = decision.current_after
+    proposed_replacement = decision.proposed_replacement
     retained_counter = connection.execute(
         "SELECT generation_high_water FROM attempt_lease_counters WHERE attempt_id = ?",
         (decision.attempt,),
@@ -277,7 +277,13 @@ def write_attempt_authority(
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(attempt_id, generation) DO NOTHING
         """,
-        (after.attempt, after.generation, after.lease_id, after.task_id, after.host_id),
+        (
+            proposed_replacement.attempt,
+            proposed_replacement.generation,
+            proposed_replacement.lease_id,
+            proposed_replacement.task_id,
+            proposed_replacement.host_id,
+        ),
     )
     anchor = connection.execute(
         """
@@ -285,12 +291,16 @@ def write_attempt_authority(
         FROM attempt_lease_generations
         WHERE attempt_id = ? AND generation = ?
         """,
-        (after.attempt, after.generation),
+        (proposed_replacement.attempt, proposed_replacement.generation),
     ).fetchone()
-    if anchor is None or tuple(anchor) != (after.lease_id, after.task_id, after.host_id):
+    if anchor is None or tuple(anchor) != (
+        proposed_replacement.lease_id,
+        proposed_replacement.task_id,
+        proposed_replacement.host_id,
+    ):
         return stale_write("The retained attempt generation conflicts.")
-    current_before = decision.current_before
-    if current_before is None:
+    expected_retained = decision.expected_retained
+    if expected_retained is None:
         return require_one_changed_row(
             connection.execute(
                 """
@@ -299,11 +309,11 @@ def write_attempt_authority(
                 ON CONFLICT(attempt_id) DO NOTHING
                 """,
                 (
-                    after.attempt,
-                    after.generation,
-                    after.acquired_at.isoformat(),
-                    after.expires_at.isoformat(),
-                    after.state.value,
+                    proposed_replacement.attempt,
+                    proposed_replacement.generation,
+                    proposed_replacement.acquired_at.isoformat(),
+                    proposed_replacement.expires_at.isoformat(),
+                    proposed_replacement.state.value,
                 ),
             ),
             "The current attempt lease already exists.",
@@ -316,15 +326,15 @@ def write_attempt_authority(
             WHERE attempt_id = ? AND generation = ? AND acquired_at = ? AND expires_at = ? AND status = ?
             """,
             (
-                after.generation,
-                after.acquired_at.isoformat(),
-                after.expires_at.isoformat(),
-                after.state.value,
-                current_before.attempt,
-                current_before.generation,
-                current_before.acquired_at.isoformat(),
-                current_before.expires_at.isoformat(),
-                current_before.state.value,
+                proposed_replacement.generation,
+                proposed_replacement.acquired_at.isoformat(),
+                proposed_replacement.expires_at.isoformat(),
+                proposed_replacement.state.value,
+                expected_retained.attempt,
+                expected_retained.generation,
+                expected_retained.acquired_at.isoformat(),
+                expected_retained.expires_at.isoformat(),
+                expected_retained.state.value,
             ),
         ),
         "The current attempt lease changed before persistence.",
@@ -334,7 +344,7 @@ def write_attempt_authority(
 def write_preparation_authority(
     connection: sqlite3.Connection, decision: authority_models.PreparationAuthorityDecision
 ) -> DecisionFailure | None:
-    after = decision.current_after
+    proposed_replacement = decision.proposed_replacement
     retained_counter = connection.execute(
         "SELECT generation_high_water FROM preparation_lease_counters WHERE item_id = ?",
         (decision.item,),
@@ -376,7 +386,13 @@ def write_preparation_authority(
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(item_id, generation) DO NOTHING
         """,
-        (after.item, after.generation, after.lease_id, after.task_id, after.host_id),
+        (
+            proposed_replacement.item,
+            proposed_replacement.generation,
+            proposed_replacement.lease_id,
+            proposed_replacement.task_id,
+            proposed_replacement.host_id,
+        ),
     )
     anchor = connection.execute(
         """
@@ -384,12 +400,16 @@ def write_preparation_authority(
         FROM preparation_lease_generations
         WHERE item_id = ? AND generation = ?
         """,
-        (after.item, after.generation),
+        (proposed_replacement.item, proposed_replacement.generation),
     ).fetchone()
-    if anchor is None or tuple(anchor) != (after.lease_id, after.task_id, after.host_id):
+    if anchor is None or tuple(anchor) != (
+        proposed_replacement.lease_id,
+        proposed_replacement.task_id,
+        proposed_replacement.host_id,
+    ):
         return stale_write("The retained preparation generation conflicts.")
-    before = decision.current_before
-    if before is None:
+    expected_retained = decision.expected_retained
+    if expected_retained is None:
         return require_one_changed_row(
             connection.execute(
                 """
@@ -399,13 +419,13 @@ def write_preparation_authority(
                 ON CONFLICT(item_id) DO NOTHING
                 """,
                 (
-                    after.item,
-                    after.generation,
-                    after.definition_revision,
-                    after.definition_digest,
-                    after.acquired_at.isoformat(),
-                    after.expires_at.isoformat(),
-                    after.state.value,
+                    proposed_replacement.item,
+                    proposed_replacement.generation,
+                    proposed_replacement.definition_revision,
+                    proposed_replacement.definition_digest,
+                    proposed_replacement.acquired_at.isoformat(),
+                    proposed_replacement.expires_at.isoformat(),
+                    proposed_replacement.state.value,
                 ),
             ),
             "The current preparation lease already exists.",
@@ -420,19 +440,19 @@ def write_preparation_authority(
                 AND acquired_at = ? AND expires_at = ? AND status = ?
             """,
             (
-                after.generation,
-                after.definition_revision,
-                after.definition_digest,
-                after.acquired_at.isoformat(),
-                after.expires_at.isoformat(),
-                after.state.value,
-                before.item,
-                before.generation,
-                before.definition_revision,
-                before.definition_digest,
-                before.acquired_at.isoformat(),
-                before.expires_at.isoformat(),
-                before.state.value,
+                proposed_replacement.generation,
+                proposed_replacement.definition_revision,
+                proposed_replacement.definition_digest,
+                proposed_replacement.acquired_at.isoformat(),
+                proposed_replacement.expires_at.isoformat(),
+                proposed_replacement.state.value,
+                expected_retained.item,
+                expected_retained.generation,
+                expected_retained.definition_revision,
+                expected_retained.definition_digest,
+                expected_retained.acquired_at.isoformat(),
+                expected_retained.expires_at.isoformat(),
+                expected_retained.state.value,
             ),
         ),
         "The current preparation lease changed before persistence.",

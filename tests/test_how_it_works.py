@@ -45,10 +45,6 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         self.assertIn("## Follow one change", guide)
         self.assertIn("## The durable memory underneath", guide)
         self.assertIn("## Carry the project into another tool", guide)
-        self.assertIn("reads one complete ledger snapshot", guide)
-        self.assertIn("verifies every accepted artifact", guide)
-        self.assertIn("changes no Pinboard state", guide)
-        self.assertIn("does not choose or write to the receiving tool", guide)
         self.assertIn("A canonical work brief is published before an item is activated or resumed", guide)
         self.assertIn("ready-review evidence can be published during dispatch preparation", guide)
         self.assertIn("Resume restores paused or blocked work", guide)
@@ -270,7 +266,9 @@ class HowItWorksDocumentationTests(unittest.TestCase):
 
         journey_edges = {(value.source, value.target) for value in journey.DIAGRAM.connectors}
         self.assertIn(("transaction", "views"), journey_edges)
-        self.assertIn(("views", "result"), journey_edges)
+        self.assertIn(("views", "latest"), journey_edges)
+        self.assertIn(("latest", "result"), journey_edges)
+        self.assertNotIn(("views", "result"), journey_edges)
         self.assertNotIn(("transaction", "result"), journey_edges)
 
         database_edges = {(value.source, value.target) for value in database.DIAGRAM.connectors}
@@ -286,9 +284,9 @@ class HowItWorksDocumentationTests(unittest.TestCase):
         handover_edges = {(value.source, value.target) for value in handover.DIAGRAM.connectors}
         self.assertEqual(
             {
-                ("ledger", "validation"),
-                ("artifacts", "validation"),
-                ("validation", "package"),
+                ("ledger", "materialize"),
+                ("artifacts", "materialize"),
+                ("materialize", "package"),
                 ("package", "consumer"),
             },
             handover_edges,

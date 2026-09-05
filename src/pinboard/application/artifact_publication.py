@@ -30,8 +30,8 @@ def publish_accepted_artifact(
 ) -> DecisionResult[stored_state.ArtifactReference]:
     """Publish immutable bytes, then accept their verified reference in SQLite."""
 
-    published = publisher.publish(artifact)
-    return store.accept_artifact_reference(publisher.work_root, published, accepted_at)
+    published_reference = publisher.publish(artifact)
+    return store.accept_artifact_reference(publisher.work_root, published_reference, accepted_at)
 
 
 def validate_transition_work_brief(
